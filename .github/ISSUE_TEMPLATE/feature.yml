@@ -1,0 +1,46 @@
+name: Feature / Port request
+description: Request an Optuna feature to be ported, or an enhancement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: overview
+    attributes:
+      label: Overview
+      description: 1-2 sentence summary of what and why.
+    validations:
+      required: true
+
+  - type: textarea
+    id: optuna-behavior
+    attributes:
+      label: Optuna behavior (source of truth)
+      description: What the equivalent Optuna (Python) API does — link the Optuna docs/source, and include a runnable snippet + its output where possible.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What to add/change in OptunaSharp, ideally with a task checklist (`- [ ]`).
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope / Non-goals
+      description: What this issue does NOT cover (prevent scope creep).
+
+  - type: textarea
+    id: breaking
+    attributes:
+      label: Breaking changes
+      description: Any breaking changes and their migration (breaking changes are acceptable to match Optuna).
+
+  - type: textarea
+    id: related
+    attributes:
+      label: Related issues
+      description: Link dependencies.

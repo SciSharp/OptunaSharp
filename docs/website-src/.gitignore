@@ -1,0 +1,5 @@
+# DocFX build intermediates + output
+_site/
+/**/bin/
+/**/obj/
+/**/packages/

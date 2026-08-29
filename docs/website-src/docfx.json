@@ -1,0 +1,60 @@
+{
+  "$schema": "https://raw.githubusercontent.com/dotnet/docfx/main/schemas/docfx.schema.json",
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "../../src",
+          "files": ["OptunaSharp.Core/OptunaSharp.Core.csproj"]
+        }
+      ],
+      "dest": "api",
+      "includePrivateMembers": false,
+      "disableGitFeatures": false,
+      "disableDefaultFilter": false,
+      "noRestore": false,
+      "namespaceLayout": "flattened",
+      "memberLayout": "samePage",
+      "enumSortOrder": "declaringOrder",
+      "allowCompilationErrors": false
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": ["**/*.{md,yml}"],
+        "exclude": ["_site/**", "obj/**", "scripts/**", "filterConfig.yml", "templates/**", "api/overwrites/**"]
+      }
+    ],
+    "resource": [
+      {
+        "files": ["images/**"]
+      }
+    ],
+    "output": "../website",
+    "template": ["default", "modern"],
+    "globalMetadata": {
+      "_appName": "OptunaSharp",
+      "_appTitle": "OptunaSharp Documentation",
+      "_appLogoPath": "images/optunasharp-logo.svg",
+      "_appFooter": "<span>Copyright &copy; 2026 <a href='https://github.com/SciSharp'>SciSharp STACK</a>. A .NET port of <a href='https://github.com/optuna/optuna'>Optuna</a>. Built with <a href='https://dotnet.github.io/docfx'>DocFX</a>.</span>",
+      "_enableSearch": true,
+      "_enableNewTab": true,
+      "_disableContribution": false,
+      "_disableNextArticle": false,
+      "_lang": "en",
+      "_gitContribute": {
+        "repo": "https://github.com/SciSharp/OptunaSharp",
+        "branch": "master"
+      }
+    },
+    "sitemap": {
+      "baseUrl": "https://scisharp.github.io/OptunaSharp",
+      "changefreq": "weekly",
+      "priority": 0.5
+    },
+    "xref": [],
+    "xrefService": ["https://xref.docs.microsoft.com/query?uid={uid}"],
+    "postProcessors": ["ExtractSearchIndex"]
+  }
+}

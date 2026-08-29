@@ -76,3 +76,10 @@ Thumbs.db
 *.snupkg
 **/[Pp]ackages/*
 !**/[Pp]ackages/build/
+
+# DocFX — generated site output + API metadata (docfx.json output: docs/website)
+docs/website/
+**/_site/
+docs/website-src/api/*.yml
+docs/website-src/api/.manifest
+docs/website-src/llms.txt

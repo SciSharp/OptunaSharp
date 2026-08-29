@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+message: >-
+  OptunaSharp is a .NET port of Optuna. If you use OptunaSharp in academic work, please also cite the
+  original Optuna paper (see the reference below).
+title: "OptunaSharp: A .NET port of Optuna"
+abstract: >-
+  OptunaSharp brings Optuna's define-by-run hyperparameter optimization framework — studies, trials,
+  samplers, pruners, distributions, and storages — to the .NET platform (C#/F#), built on top of
+  NumSharp. Optuna is treated as the behavioral source of truth.
+type: software
+authors:
+  - name: "SciSharp STACK Team and OptunaSharp contributors"
+license: MIT
+repository-code: "https://github.com/SciSharp/OptunaSharp"
+url: "https://github.com/SciSharp/OptunaSharp"
+keywords:
+  - hyperparameter-optimization
+  - optuna
+  - automl
+  - dotnet
+  - csharp
+  - machine-learning
+  - scisharp
+references:
+  - type: conference-paper
+    title: "Optuna: A Next-generation Hyperparameter Optimization Framework"
+    authors:
+      - family-names: Akiba
+        given-names: Takuya
+      - family-names: Sano
+        given-names: Shotaro
+      - family-names: Yanase
+        given-names: Toshihiko
+      - family-names: Ohta
+        given-names: Takeru
+      - family-names: Koyama
+        given-names: Masanori
+    collection-title: >-
+      Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery and Data
+      Mining (KDD '19)
+    year: 2019
+    doi: "10.1145/3292500.3330701"

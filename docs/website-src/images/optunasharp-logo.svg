@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="OptunaSharp">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e7490"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#g)"/>
+  <!-- Stylized optimization curve descending toward a minimum -->
+  <path d="M28 40 C 44 96, 60 96, 72 68 S 96 44, 100 88"
+        fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" opacity="0.92"/>
+  <!-- The found minimum -->
+  <circle cx="72" cy="86" r="8" fill="#ffffff"/>
+</svg>

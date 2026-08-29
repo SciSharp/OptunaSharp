@@ -1,0 +1,68 @@
+name: Benchmark
+
+on:
+  push:
+    branches: ["master", "main"]
+    paths:
+      - 'test/OptunaSharp.Benchmark/**'
+      - 'src/**'
+      - '.github/workflows/benchmark.yml'
+  pull_request:
+    branches: ["master", "main"]
+    paths:
+      - 'test/OptunaSharp.Benchmark/**'
+      - 'src/**'
+      - '.github/workflows/benchmark.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Compile gate: the BenchmarkDotNet harness must always build. A full perf run is heavy and — until
+  # algorithms are ported — not meaningful, so it is manual-only (workflow_dispatch) below.
+  build-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+          dotnet-quality: 'preview'
+
+      - name: Build benchmark harness
+        run: dotnet build test/OptunaSharp.Benchmark/OptunaSharp.Benchmark.csproj --configuration Release
+
+  # Manual only: run the (placeholder) benchmarks with the short job so the harness is exercised
+  # end-to-end without spending CI on meaningless numbers.
+  run:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+          dotnet-quality: 'preview'
+
+      - name: Run benchmarks (short)
+        run: |
+          dotnet run --project test/OptunaSharp.Benchmark/OptunaSharp.Benchmark.csproj \
+            -c Release -f net8.0 -- --filter '*' --job short
+
+      - name: Upload BenchmarkDotNet artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-artifacts
+          path: BenchmarkDotNet.Artifacts/**
+          if-no-files-found: ignore
+          retention-days: 5

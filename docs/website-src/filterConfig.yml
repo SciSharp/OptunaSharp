@@ -1,0 +1,17 @@
+# DocFX API Filter Configuration
+# https://dotnet.github.io/docfx/docs/dotnet-api-docs.html#filter-apis
+#
+# To enable: add "filter": "filterConfig.yml" to the metadata section in docfx.json.
+
+apiRules:
+  # Hide compiler-generated members from the public API docs.
+  - include:
+      hasAttribute:
+        uid: System.Runtime.CompilerServices.CompilerGeneratedAttribute
+      type: Member
+    exclude: true
+
+  # Uncomment to hide internal helper namespaces as the port grows:
+  # - exclude:
+  #     uidRegex: ^OptunaSharp\.Internal
+  #     type: Namespace

@@ -1,0 +1,5 @@
+# DocFX-generated API metadata (produced by `docfx metadata` from the .csproj).
+# The hand-written landing page (index.md) is kept; everything generated is ignored.
+*.yml
+*.manifest
+.manifest
