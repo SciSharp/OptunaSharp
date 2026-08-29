@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://github.com/SciSharp/OptunaSharp">
+    <img src="docs/website-src/images/optunasharp-logo.svg" alt="OptunaSharp" height="120">
+  </a>
+</p>
+
 <h1 align="center">OptunaSharp</h1>
 
 <p align="center">

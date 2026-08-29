@@ -2,7 +2,7 @@
   <section class="ns-home-intro">
     <p class="ns-home-kicker">Hyperparameter optimization for .NET</p>
     <div class="ns-home-title-row">
-      <img class="ns-home-logo" src="images/optunasharp-logo.svg" alt="" width="72" height="72">
+      <img class="ns-home-logo" src="images/optunasharp-logo.svg" alt="" height="64">
       <h1>OptunaSharp</h1>
     </div>
     <p class="ns-home-lede">
