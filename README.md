@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/SciSharp/OptunaSharp/actions/workflows/build-and-release.yml"><img alt="Build" src="https://github.com/SciSharp/OptunaSharp/actions/workflows/build-and-release.yml/badge.svg"></a>
+  <a href="https://github.com/SciSharp/OptunaSharp/actions/workflows/docs.yml"><img alt="Docs" src="https://github.com/SciSharp/OptunaSharp/actions/workflows/docs.yml/badge.svg"></a>
   <a href="https://www.nuget.org/packages/OptunaSharp"><img alt="NuGet" src="https://img.shields.io/nuget/v/OptunaSharp.svg"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
@@ -78,14 +79,32 @@ OptunaSharp/
 │   └── OptunaSharp.Core/            # the OptunaSharp package (empty scaffolding; refs NumSharp)
 ├── test/
 │   ├── OptunaSharp.Tests/           # unit tests (MSTest v3 + AwesomeAssertions)
-│   └── OptunaSharp.Tests.Interop/   # live-Optuna parity harness (pythonnet)
+│   ├── OptunaSharp.Tests.Interop/   # live-Optuna parity harness (pythonnet)
+│   └── OptunaSharp.Benchmark/       # BenchmarkDotNet harness (template; grows with the ops)
+├── docs/
+│   └── website-src/                 # DocFX site (docfx.json, conceptual docs, generated API ref)
 ├── .github/
-│   ├── workflows/build-and-release.yml
-│   └── scripts/verify_strong_name.cs
+│   ├── workflows/                   # build-and-release · docs · benchmark
+│   ├── scripts/verify_strong_name.cs
+│   ├── ISSUE_TEMPLATE/ · PULL_REQUEST_TEMPLATE.md · FUNDING.yml · dependabot.yml
 ├── Directory.Build.props            # strong-naming + shared metadata
 ├── Open.snk                         # Microsoft's published OSS key (shared with the SciSharp STACK)
+├── SECURITY.md · CITATION.cff · CONTRIBUTING.md · CODE_OF_CONDUCT.md
 └── SciSharp.OptunaSharp.sln
 ```
+
+## Documentation
+
+The documentation site is built with **DocFX** from `docs/website-src/` and deployed to GitHub Pages
+by `.github/workflows/docs.yml`. Build it locally:
+
+```bash
+dotnet tool install -g docfx
+docfx docs/website-src/docfx.json --serve   # http://localhost:8080
+```
+
+It renders the conceptual docs (`docs/website-src/docs/`) plus an API reference generated from
+`OptunaSharp.Core`.
 
 ## The NumSharp reference: "csproj for now, nuget in future"
 
