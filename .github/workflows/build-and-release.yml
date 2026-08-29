@@ -1,0 +1,393 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch:
+
+permissions: write-all
+
+env:
+  # Suppress noisy XML-doc build warnings that clutter CI annotations. %3B is a URL-encoded
+  # semicolon because the MSBuild CLI treats a raw ; as a property separator.
+  DOTNET_NOWARN: CS1591%3BCS1573%3BCS1572%3BCS1570%3BCS1574%3BCS1587%3BCS1711%3BCS1734
+
+jobs:
+  # ---------------------------------------------------------------------------------------------
+  # Build + unit tests across the three OSes. On a CI runner there is no sibling NumSharp checkout,
+  # so OptunaSharp.Core resolves NumSharp from NuGet (the csproj's Exists(...) fallback).
+  # ---------------------------------------------------------------------------------------------
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, ubuntu-latest, macos-latest ]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+        dotnet-quality: 'preview'
+
+    - name: Build
+      run: dotnet build test/OptunaSharp.Tests/OptunaSharp.Tests.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
+
+    # Filtering:
+    #   - OpenBugs / HighMemory: excluded (known-failing / resource-heavy)
+    #   - WindowsOnly: excluded on non-Windows runners
+    #   - RequiresPython: excluded here — the live-Optuna suite is its own job below
+    - name: Test (net8.0)
+      shell: bash
+      timeout-minutes: 10
+      run: |
+        FILTER="TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython"
+        if [[ "$RUNNER_OS" != "Windows" ]]; then
+          FILTER="$FILTER&TestCategory!=WindowsOnly"
+        fi
+        dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj \
+          --configuration Release --no-build --framework net8.0 \
+          --filter "$FILTER" --logger "trx"
+
+    - name: Test (net10.0)
+      shell: bash
+      timeout-minutes: 10
+      run: |
+        FILTER="TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython"
+        if [[ "$RUNNER_OS" != "Windows" ]]; then
+          FILTER="$FILTER&TestCategory!=WindowsOnly"
+        fi
+        dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj \
+          --configuration Release --no-build --framework net10.0 \
+          --filter "$FILTER" --logger "trx"
+
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-${{ matrix.os }}
+        path: ${{ github.workspace }}/**/TestResults/**/*.trx
+        retention-days: 5
+
+  # ---------------------------------------------------------------------------------------------
+  # Strong-naming gate on EVERY push and PR. Packs a THROWAWAY OptunaSharp into a scratch directory
+  # and asserts every shipped assembly carries the shared SciSharp key — a release-only gate is how
+  # this class of defect (shipping PublicKeyToken=null) survives unnoticed. Publishes nothing.
+  # ---------------------------------------------------------------------------------------------
+  verify-signing:
+    name: Verify strong naming
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+        dotnet-quality: 'preview'
+
+    # The key is committed and marked `binary` in .gitattributes (without which `* text=auto eol=lf`
+    # would rewrite CRLF bytes inside it and corrupt the key). Assert both facts before building.
+    - name: Key is present and intact
+      run: |
+        test -f Open.snk || { echo "::error::Open.snk missing from checkout — signing cannot work."; exit 1; }
+        SIZE=$(stat -c%s Open.snk)
+        SHA=$(sha256sum Open.snk | cut -d' ' -f1)
+        echo "Open.snk: $SIZE bytes, sha256 $SHA"
+        [ "$SIZE" = "596" ] || { echo "::error::Open.snk is $SIZE bytes, expected 596 — likely line-ending corruption; check the '*.snk binary' rule in .gitattributes."; exit 1; }
+        [ "$SHA" = "b897629e0b20090c9219ac80392c037fa4cfcc2bdc21d3c45d9bf74b8df0f671" ] || { echo "::error::Open.snk content changed."; exit 1; }
+
+    - name: Pack (throwaway) and verify the shipped assembly is signed
+      run: |
+        mkdir -p artifacts/signing-check
+        # GeneratePackageOnBuild is not set on OptunaSharp.Core, so a plain `dotnet pack` uses the
+        # normal restore -> build -> pack ordering.
+        dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release \
+          --output artifacts/signing-check \
+          -p:NoWarn=${{ env.DOTNET_NOWARN }}
+        dotnet run .github/scripts/verify_strong_name.cs -- artifacts/signing-check
+
+  # ---------------------------------------------------------------------------------------------
+  # Python.NET interop against LIVE Optuna. Its own job so the embedded-CPython setup cannot slow
+  # down or destabilise the main gate, and a red here is immediately attributable to interop.
+  # Building is itself a gate — this is the only place CI compiles OptunaSharp.Tests.Interop.
+  # ---------------------------------------------------------------------------------------------
+  interop-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, ubuntu-latest, macos-latest ]
+
+    runs-on: ${{ matrix.os }}
+
+    # This job installs Python + Optuna below, so the engine MUST start here. Requiring it turns a
+    # discovery break red instead of green-by-skipping.
+    env:
+      OPTUNASHARP_PYTHONNET_REQUIRE_ENGINE: '1'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+        dotnet-quality: 'preview'
+
+    # 3.12 sits inside pythonnet 3.0.5's supported range (3.7-3.13) and has Optuna wheels everywhere.
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Optuna
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install optuna
+        python -c "import optuna; print('optuna', optuna.__version__)"
+
+    # Compute the libpython path and export it so pythonnet binds deterministically (PythonSession
+    # honors PYTHONNET_PYDLL before its own probe). Works on all three OSes via the runner's python.
+    - name: Resolve libpython (PYTHONNET_PYDLL)
+      shell: bash
+      run: |
+        python - <<'PY' >> "$GITHUB_ENV"
+        import os, sys, sysconfig
+        if os.name == 'nt':
+            p = os.path.join(sys.base_prefix, 'python%d%d.dll' % sys.version_info[:2])
+        else:
+            p = os.path.join(sysconfig.get_config_var('LIBDIR'), sysconfig.get_config_var('INSTSONAME'))
+        print('PYTHONNET_PYDLL=' + p)
+        PY
+        echo "PYTHONNET_PYDLL resolved to: $PYTHONNET_PYDLL"
+
+    - name: Build
+      run: dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
+
+    - name: Test (net8.0)
+      timeout-minutes: 10
+      shell: bash
+      run: |
+        dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
+          --configuration Release --no-build --framework net8.0 --logger "trx"
+
+    - name: Test (net10.0)
+      timeout-minutes: 10
+      shell: bash
+      run: |
+        dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
+          --configuration Release --no-build --framework net10.0 --logger "trx"
+
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: interop-test-results-${{ matrix.os }}
+        path: ${{ github.workspace }}/**/TestResults/**/*.trx
+        retention-days: 5
+
+  # ---------------------------------------------------------------------------------------------
+  # Release pipeline — only on a v* tag pushed from master.
+  # ---------------------------------------------------------------------------------------------
+  validate-release:
+    needs: [test, interop-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    outputs:
+      is_valid: ${{ steps.check.outputs.is_valid }}
+      version: ${{ steps.check.outputs.version }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Verify tag is on master branch
+      id: check
+      run: |
+        TAG_COMMIT=$(git rev-parse HEAD)
+        VERSION="${GITHUB_REF#refs/tags/v}"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        if git merge-base --is-ancestor "$TAG_COMMIT" origin/master; then
+          echo "Tag v$VERSION is on master branch"
+          echo "is_valid=true" >> $GITHUB_OUTPUT
+        else
+          echo "::error::Tag v$VERSION is NOT on master branch. Releases must be tagged from master."
+          echo "is_valid=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+  build-nuget:
+    needs: validate-release
+    if: needs.validate-release.outputs.is_valid == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+        dotnet-quality: 'preview'
+
+    - name: Get version info
+      id: version
+      shell: bash
+      run: |
+        VERSION="${GITHUB_REF#refs/tags/v}"
+        ASSEMBLY_VERSION="${VERSION%%-*}"
+        COMMIT_SHA="${GITHUB_SHA:0:7}"
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "ASSEMBLY_VERSION=$ASSEMBLY_VERSION" >> $GITHUB_OUTPUT
+        echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_OUTPUT
+        echo "Building version $VERSION (assembly: $ASSEMBLY_VERSION) +$COMMIT_SHA"
+
+    - name: Build
+      run: |
+        # -t:Rebuild (NOT incremental): the shipping project emits XML docs (GenerateDocumentationFile)
+        # and the Pack step runs --no-build. An incremental build can declare a stale TFM up-to-date and
+        # skip CoreCompile, leaving no .xml on disk — pack then fails NU5026 or packs stale output.
+        dotnet build src/OptunaSharp.Core/OptunaSharp.Core.csproj \
+          --configuration Release -t:Rebuild \
+          -p:NoWarn=${{ env.DOTNET_NOWARN }} \
+          -p:Version=${{ steps.version.outputs.VERSION }} \
+          -p:AssemblyVersion=${{ steps.version.outputs.ASSEMBLY_VERSION }} \
+          -p:FileVersion=${{ steps.version.outputs.ASSEMBLY_VERSION }} \
+          -p:PackageVersion=${{ steps.version.outputs.VERSION }} \
+          -p:SourceRevisionId=${{ steps.version.outputs.COMMIT_SHA }}
+
+    - name: Pack
+      run: |
+        mkdir -p artifacts/nuget
+        dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj \
+          --configuration Release --no-build --output artifacts/nuget \
+          -p:NoWarn=${{ env.DOTNET_NOWARN }} \
+          -p:Version=${{ steps.version.outputs.VERSION }} \
+          -p:AssemblyVersion=${{ steps.version.outputs.ASSEMBLY_VERSION }} \
+          -p:FileVersion=${{ steps.version.outputs.ASSEMBLY_VERSION }} \
+          -p:PackageVersion=${{ steps.version.outputs.VERSION }}
+        echo "Packages built:"
+        ls -la artifacts/nuget/
+
+    # Last gate before the artifact leaves the machine: every managed assembly in the .nupkg must
+    # carry OptunaSharp's public key AND a real signature (not delay-signed).
+    - name: Verify strong naming of packed assemblies
+      run: dotnet run .github/scripts/verify_strong_name.cs -- artifacts/nuget
+
+    - name: Upload NuGet Packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-packages
+        path: artifacts/nuget/*.nupkg
+        retention-days: 5
+
+  create-release:
+    needs: [validate-release, build-nuget]
+    if: needs.validate-release.outputs.is_valid == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Extract version
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+    - name: Download NuGet Packages
+      uses: actions/download-artifact@v4
+      with:
+        name: nuget-packages
+        path: artifacts
+
+    - name: Generate checksums
+      run: |
+        cd artifacts
+        for f in *.nupkg; do
+          sha256sum "$f" | cut -d' ' -f1 > "${f}.sha256"
+          echo "${f}: $(cat ${f}.sha256)"
+        done
+
+    - name: Check if prerelease
+      id: prerelease
+      run: |
+        if [[ "${{ steps.version.outputs.VERSION }}" == *"-"* ]]; then
+          echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+        else
+          echo "IS_PRERELEASE=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Compose release notes
+      id: notes
+      run: |
+        VERSION="${{ steps.version.outputs.VERSION }}"
+        {
+          echo "## OptunaSharp v${VERSION}"
+          echo ""
+          echo "### Install via NuGet"
+          echo ""
+          echo '```'
+          echo "dotnet add package OptunaSharp --version ${VERSION}"
+          echo '```'
+          echo ""
+          echo "| Package | NuGet |"
+          echo "|---------|-------|"
+          echo "| OptunaSharp | [![NuGet](https://img.shields.io/nuget/v/OptunaSharp.svg)](https://www.nuget.org/packages/OptunaSharp/${VERSION}) |"
+        } > RELEASE_BODY.md
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          artifacts/*.nupkg
+          artifacts/*.sha256
+        draft: false
+        prerelease: ${{ steps.prerelease.outputs.IS_PRERELEASE }}
+        generate_release_notes: true
+        body_path: RELEASE_BODY.md
+
+  publish-nuget:
+    needs: [validate-release, build-nuget]
+    if: needs.validate-release.outputs.is_valid == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download NuGet Packages
+      uses: actions/download-artifact@v4
+      with:
+        name: nuget-packages
+        path: artifacts
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Push to NuGet
+      run: |
+        for package in artifacts/*.nupkg; do
+          echo "Pushing $package..."
+          dotnet nuget push "$package" \
+            --api-key ${{ secrets.NUGETAPIKEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+        done

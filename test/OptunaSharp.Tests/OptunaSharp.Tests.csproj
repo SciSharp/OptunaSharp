@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>OptunaSharp.Tests</RootNamespace>
+    <!-- Strong-naming is set repo-wide in ../../Directory.Build.props. Signed because
+         OptunaSharp.Core grants it InternalsVisibleTo, which names a PublicKey. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- MSTest v3 metapackage: framework + adapter + source-generated discovery. -->
+    <PackageReference Include="MSTest" Version="3.8.3" />
+    <PackageReference Include="AwesomeAssertions" Version="9.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

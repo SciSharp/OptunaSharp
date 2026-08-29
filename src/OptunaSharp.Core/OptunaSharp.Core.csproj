@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp</RootNamespace>
+    <AssemblyName>OptunaSharp</AssemblyName>
+
+    <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/
+         license/version) is centralized in ../../Directory.Build.props. -->
+    <PackageId>OptunaSharp</PackageId>
+    <Description>OptunaSharp is a .NET port of Optuna, the hyperparameter optimization framework. It brings Optuna's define-by-run study/trial API — samplers, pruners, distributions, and storages — to C# and F#, built on top of NumSharp for numerical work. This is early scaffolding: the algorithm surface is not yet ported.</Description>
+    <PackageTags>Optuna;OptunaSharp;HyperparameterOptimization;HPO;AutoML;MachineLearning;Bayesian;TPE;SciSharp;NumSharp</PackageTags>
+
+    <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on missing/malformed
+         doc comments — the surface is ported to match Optuna, not curated per-member. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <!-- Emit the .pdb inside the .nupkg (the release pipeline pushes only *.nupkg). -->
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+
+    <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!-- ================================================================================
+       NumSharp reference — "csproj for now, nuget in future".
+
+       When a SIBLING NumSharp checkout is present (the local dev layout: K:\source\NumSharp
+       beside K:\source\OptunaSharp), reference it by PROJECT so changes flow live. On a
+       standalone checkout / CI runner (no sibling), fall back to the published NuGet package
+       so the repo builds on its own. The two are mutually exclusive on Exists(...), so exactly
+       one applies and pack always records a "NumSharp" package dependency either way.
+       ================================================================================ -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\NumSharp\src\NumSharp.Core\NumSharp.Core.csproj')">
+    <ProjectReference Include="..\..\..\NumSharp\src\NumSharp.Core\NumSharp.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="!Exists('$(MSBuildThisFileDirectory)..\..\..\NumSharp\src\NumSharp.Core\NumSharp.Core.csproj')">
+    <PackageReference Include="NumSharp" Version="0.60.0" />
+  </ItemGroup>
+
+</Project>

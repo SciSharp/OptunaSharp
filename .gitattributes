@@ -1,0 +1,37 @@
+# Auto detect text files and normalize to LF in repo
+* text=auto eol=lf
+
+# Explicit text files
+*.cs text eol=lf
+*.csproj text eol=lf
+*.sln text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.xml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.txt text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+*.py text eol=lf
+*.config text eol=lf
+*.props text eol=lf
+*.targets text eol=lf
+*.editorconfig text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+
+# Binary files
+# NOTE: *.snk MUST be binary — with `* text=auto eol=lf` a strong-name key would be
+# rewritten as if it were text (CRLF->LF inside the key bytes) and corrupted, which
+# silently breaks signing. The CI "Key is present and intact" step asserts its size+sha.
+*.snk binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.dll binary
+*.exe binary
+*.pdb binary
+*.zip binary
