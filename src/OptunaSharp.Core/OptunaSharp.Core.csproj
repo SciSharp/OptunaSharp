@@ -19,7 +19,7 @@
     <!-- Emit the .pdb inside the .nupkg (the release pipeline pushes only *.nupkg). -->
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageIcon>optunasharp-logo.png</PackageIcon>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
     <PackageOutputPath>../../packages</PackageOutputPath>
 
     <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
@@ -27,8 +27,8 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
-    <!-- NuGet package icon (rendered from docs/website-src/images/optunasharp-logo.svg). -->
-    <None Include="..\..\docs\website-src\images\optunasharp-logo.png" Pack="true" PackagePath="\" Visible="false" />
+    <!-- NuGet package icon (256x256 square crop of the OptunaSharp logo image). -->
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 
   <!-- ================================================================================

@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/SciSharp/OptunaSharp">
-    <img src="docs/website-src/images/optunasharp-logo.svg" alt="OptunaSharp" height="120">
+    <img src="docs/website-src/images/optunasharp-logo.png" alt="OptunaSharp" height="120">
   </a>
 </p>
 
