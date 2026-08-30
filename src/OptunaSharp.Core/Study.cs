@@ -159,7 +159,7 @@ public class Study
     ///     flag to <c>false</c>, you shouldn't mutate any fields of the returned trials.
     /// </param>
     /// <param name="states">Trial states to filter on. If <c>null</c>, include all states.</param>
-    public List<FrozenTrial> GetTrials(bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
+    public virtual List<FrozenTrial> GetTrials(bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
         => GetTrialsInternal(deepcopy, states, useCache: false);
 
     /// <summary>Python <c>Study._get_trials</c>.</summary>
@@ -442,7 +442,7 @@ public class Study
     ///     method return immediately after all trials which the method spawned finishes. This
     ///     method only works when it is called inside an objective function or callback.
     /// </summary>
-    public void Stop()
+    public virtual void Stop()
     {
         if (!ThreadLocal.InOptimizeLoop)
             throw new RuntimeError(
