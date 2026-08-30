@@ -19,9 +19,12 @@ to build and in what order**.
 
 ## Reference sources
 
-- **Optuna (the source of truth):** a full clone lives at `K:/source/optuna` (pinned in the plan).
-  Use it as the authoritative reference for API behavior, edge cases, defaults, and error messages.
-  **Run actual Python/Optuna first, observe, then replicate in C#.**
+- **Optuna (the source of truth):** a full clone lives at `K:/source/optuna` (pinned in the plan) and
+  is **vendored in-repo as a pinned git submodule at `src/optuna`** (`github.com/optuna/optuna` @
+  `f6898da`, v5.0.0.dev) — mirrors NumSharp's `src/numpy`, so the reference source restores
+  reproducibly from a clean checkout (`git submodule update --init src/optuna`). Use it as the
+  authoritative reference for API behavior, edge cases, defaults, and error messages. **Run actual
+  Python/Optuna first, observe, then replicate in C#.**
 - **rustuna (accelerator reference):** `K:/source/rustuna` — a Rust Optuna port, useful for the
   SQLite schema and Sobol direction numbers (see the plan).
 - **NumSharp (the numerical foundation + the infra template):** `K:/source/NumSharp`. OptunaSharp's
@@ -72,11 +75,12 @@ Four load-bearing rules from the plan that infra must respect (full detail in
 ```
 OptunaSharp/
 ├── src/
-│   └── OptunaSharp.Core/            # THE package — OptunaSharp (net8.0;net10.0). Empty scaffolding today.
-│       ├── OptunaSharp.Core.csproj  #   packable; PackageIcon; conditional NumSharp reference
-│       ├── Assembly/Properties.cs   #   InternalsVisibleTo (must carry PublicKey) + friend-key const
-│       ├── Version.cs               #   OptunaSharp.OptunaSharpVersion (the only public symbol so far)
-│       └── README.md                #   packed into the .nupkg
+│   ├── OptunaSharp.Core/            # THE package — OptunaSharp (net8.0;net10.0). Empty scaffolding today.
+│   │   ├── OptunaSharp.Core.csproj  #   packable; PackageIcon; conditional NumSharp reference
+│   │   ├── Assembly/Properties.cs   #   InternalsVisibleTo (must carry PublicKey) + friend-key const
+│   │   ├── Version.cs               #   OptunaSharp.OptunaSharpVersion (the only public symbol so far)
+│   │   └── README.md                #   packed into the .nupkg
+│   └── optuna/                      # pinned git submodule — Optuna @ f6898da (v5.0.0.dev), the porting reference
 ├── test/
 │   ├── OptunaSharp.Tests/           # unit tests — MSTest v3 + AwesomeAssertions
 │   ├── OptunaSharp.Tests.Interop/   # LIVE-Optuna parity harness (pythonnet)

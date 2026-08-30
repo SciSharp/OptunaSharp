@@ -1,6 +1,6 @@
 # OptunaSharp — Optuna → C# Conversion Plan
 
-**Source of truth:** `optuna/optuna` @ `f6898da` (v5.0.0.dev, cloned at `K:/source/optuna`) — 24,474 core SLOC
+**Source of truth:** `optuna/optuna` @ `f6898da` (v5.0.0.dev, cloned at `K:/source/optuna`, vendored as a pinned submodule at `src/optuna`) — 24,474 core SLOC
 (tokenizer-counted, comments/docstrings excluded). Secondary reference: `optuna/rustuna` @ `8acb2dd`
 (`K:/source/rustuna`) — used ONLY where it accelerates (SQLite schema, Sobol tables, static-type designs);
 Optuna's Python behavior always wins on conflict.
