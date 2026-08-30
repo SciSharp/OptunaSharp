@@ -252,6 +252,17 @@ public class JournalStorage : BaseStorage
 
     // ------------------------------------------------------------------ trial manipulation
 
+    /// <summary>
+    ///     Python's <c>to_internal_repr</c> returns an int for categoricals (the choice index)
+    ///     and a float otherwise; the journal preserves that distinction byte-for-byte.
+    /// </summary>
+    private static object InternalReprForJournal(BaseDistribution distribution, object? externalValue)
+    {
+        double internalRepr = distribution.ToInternalRepr(externalValue);
+        // The (object) casts stop the conditional from unifying long back to double.
+        return distribution is CategoricalDistribution ? (object)(long)internalRepr : internalRepr;
+    }
+
     public override int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null)
     {
         var datetimeStart = DateTime.UtcNow;
@@ -288,7 +299,7 @@ public class JournalStorage : BaseStorage
 
             var @params = new OrderedDict<string, object?>();
             foreach (var (k, param) in templateTrial.ParamsDict)
-                @params[k] = templateTrial.DistributionsDict[k].ToInternalRepr(param);
+                @params[k] = InternalReprForJournal(templateTrial.DistributionsDict[k], param);
             log["params"] = @params;
 
             log["user_attrs"] = templateTrial.UserAttrsDict;
@@ -320,7 +331,12 @@ public class JournalStorage : BaseStorage
         {
             ["trial_id"] = trialId,
             ["param_name"] = paramName,
-            ["param_value_internal"] = paramValueInternal,
+            // Python's CategoricalDistribution.to_internal_repr returns a raw int index (despite
+            // the float annotation), so its json.dumps emits `0`, not `0.0` — byte-compat follows.
+            // The (object) cast stops the conditional from unifying long back to double.
+            ["param_value_internal"] = distribution is CategoricalDistribution
+                ? (object)(long)paramValueInternal
+                : paramValueInternal,
             ["distribution"] = Distribution.ToJson(distribution),
         };
 
