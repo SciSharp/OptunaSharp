@@ -40,10 +40,15 @@
        so the repo builds on its own. The two are mutually exclusive on Exists(...), so exactly
        one applies and pack always records a "NumSharp" package dependency either way.
        ================================================================================ -->
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\NumSharp\src\NumSharp.Core\NumSharp.Core.csproj')">
-    <ProjectReference Include="..\..\..\NumSharp\src\NumSharp.Core\NumSharp.Core.csproj" />
+  <!-- The sibling path can be overridden (e.g. -p:NumSharpCoreProject=<path> or an env var) to
+       point at a pinned checkout/worktree — useful when the sibling working tree is mid-edit. -->
+  <PropertyGroup>
+    <NumSharpCoreProject Condition="'$(NumSharpCoreProject)' == ''">$(MSBuildThisFileDirectory)..\..\..\NumSharp\src\NumSharp.Core\NumSharp.Core.csproj</NumSharpCoreProject>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(NumSharpCoreProject)')">
+    <ProjectReference Include="$(NumSharpCoreProject)" />
   </ItemGroup>
-  <ItemGroup Condition="!Exists('$(MSBuildThisFileDirectory)..\..\..\NumSharp\src\NumSharp.Core\NumSharp.Core.csproj')">
+  <ItemGroup Condition="!Exists('$(NumSharpCoreProject)')">
     <PackageReference Include="NumSharp" Version="0.60.0" />
   </ItemGroup>
 

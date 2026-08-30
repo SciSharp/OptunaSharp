@@ -1,0 +1,1023 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Threading;
+using NumSharp;
+using OptunaSharp.Collections;
+using OptunaSharp.Distributions;
+using OptunaSharp.Internal;
+using OptunaSharp.Logging;
+
+namespace OptunaSharp.Storages.Journal;
+
+/// <summary>Journal operation codes — Optuna's on-disk values.</summary>
+public enum JournalOperation
+{
+    CreateStudy = 0,
+    DeleteStudy = 1,
+    SetStudyUserAttr = 2,
+    SetStudySystemAttr = 3,
+    CreateTrial = 4,
+    SetTrialParam = 5,
+    SetTrialStateValues = 6,
+    SetTrialIntermediateValue = 7,
+    SetTrialUserAttr = 8,
+    SetTrialSystemAttr = 9,
+    /// <summary>Only supported (written) by Rustuna; skipped on replay.</summary>
+    DiscardTrials = 10,
+}
+
+/// <summary>
+///     Storage class for Journal storage backend.
+///     Port of <c>optuna/storages/journal/_storage.py: JournalStorage</c>.
+///
+///     Journal storage writes a record of every operation to the database as it is executed and
+///     at the same time, keeps a latest snapshot of the database in-memory. If the database
+///     crashes for any reason, the storage can re-establish the contents in memory by replaying
+///     the operations stored from the beginning.
+/// </summary>
+/// <example>
+///     <code>
+///     var storage = new JournalStorage(new JournalFileBackend("./optuna_journal_storage.log"));
+///     var study = Optuna.CreateStudy(storage: storage);
+///     study.Optimize(objective);
+///     </code>
+///     On Windows, prefer the open lock:
+///     <code>
+///     var filePath = "./optuna_journal_storage.log";
+///     var lockObj = new JournalFileOpenLock(filePath);
+///     var storage = new JournalStorage(new JournalFileBackend(filePath, lockObj: lockObj));
+///     </code>
+/// </example>
+public class JournalStorage : BaseStorage
+{
+    internal const string NotFoundMsg = "Record does not exist.";
+    internal const string UnupdatableMsgFormat = "Trial#{0} has already finished and can not be updated.";
+    // A heuristic interval number to dump snapshots.
+    internal const int SnapshotInterval = 100;
+
+    private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.storages.journal._storage");
+
+    private readonly string _workerIdPrefix = Guid.NewGuid() + "-";
+    private readonly BaseJournalBackend _backend;
+    private readonly object _threadLock = new();
+    private JournalStorageReplayResult _replayResult;
+
+    public JournalStorage(BaseJournalBackend logStorage)
+    {
+        _backend = logStorage;
+        _replayResult = new JournalStorageReplayResult(_workerIdPrefix);
+
+        lock (_threadLock)
+        {
+            if (_backend is IBaseJournalSnapshot snapshotBackend)
+            {
+                var snapshot = snapshotBackend.LoadSnapshot();
+                if (snapshot is not null)
+                    RestoreReplayResult(snapshot);
+            }
+            SyncWithBackend();
+        }
+    }
+
+    /// <summary>
+    ///     Restore the in-memory replay state from a snapshot produced by
+    ///     <see cref="JournalStorageReplayResult.Serialize" />.
+    ///     [Misaligned] Python snapshots are pickle bytes; OptunaSharp uses its own JSON form —
+    ///     snapshots are a same-process-family acceleration, never a cross-language artifact
+    ///     (the file backend has no snapshot support on either side).
+    /// </summary>
+    public void RestoreReplayResult(byte[] snapshot)
+    {
+        var r = JournalStorageReplayResult.TryDeserialize(snapshot);
+        if (r is null)
+        {
+            _logger.Warning("Failed to restore `JournalStorageReplayResult`.");
+            return;
+        }
+        r.ResetWorkerState(_workerIdPrefix);
+        _replayResult = r;
+    }
+
+    private void WriteLog(JournalOperation opCode, OrderedDict<string, object?> extraFields)
+    {
+        string workerId = _replayResult.WorkerId;
+        var log = new OrderedDict<string, object?>
+        {
+            ["op_code"] = (int)opCode,
+            ["worker_id"] = workerId,
+        };
+        foreach (var (key, value) in extraFields)
+            log[key] = value;
+        _backend.AppendLogs(new[] { log });
+    }
+
+    private void SyncWithBackend()
+    {
+        var logs = _backend.ReadLogs(_replayResult.LogNumberRead);
+        _replayResult.ApplyLogs(logs);
+    }
+
+    public override int CreateNewStudy(IReadOnlyList<StudyDirection> directions, string? studyName = null)
+    {
+        studyName ??= DefaultStudyNamePrefix + Guid.NewGuid();
+
+        lock (_threadLock)
+        {
+            WriteLog(JournalOperation.CreateStudy, new OrderedDict<string, object?>
+            {
+                ["study_name"] = studyName,
+                ["directions"] = directions.Select(d => (object?)(int)d).ToList(),
+            });
+            SyncWithBackend();
+
+            foreach (var frozenStudy in _replayResult.GetAllStudies())
+            {
+                if (frozenStudy.StudyName != studyName)
+                    continue;
+
+                _logger.Info($"A new study created in Journal with name: {studyName}");
+                int studyId = frozenStudy.StudyId;
+
+                // Dump snapshot here.
+                if (_backend is IBaseJournalSnapshot snapshotBackend
+                    && studyId != 0
+                    && studyId % SnapshotInterval == 0)
+                {
+                    snapshotBackend.SaveSnapshot(_replayResult.Serialize());
+                }
+
+                return studyId;
+            }
+            throw new InvalidOperationException("Should not reach.");
+        }
+    }
+
+    public override void DeleteStudy(int studyId)
+    {
+        lock (_threadLock)
+        {
+            WriteLog(JournalOperation.DeleteStudy, new OrderedDict<string, object?> { ["study_id"] = studyId });
+            SyncWithBackend();
+        }
+    }
+
+    public override void SetStudyUserAttr(int studyId, string key, object? value)
+    {
+        var log = new OrderedDict<string, object?>
+        {
+            ["study_id"] = studyId,
+            ["user_attr"] = new OrderedDict<string, object?> { [key] = value },
+        };
+        lock (_threadLock)
+        {
+            WriteLog(JournalOperation.SetStudyUserAttr, log);
+            SyncWithBackend();
+        }
+    }
+
+    public override void SetStudySystemAttr(int studyId, string key, object? value)
+    {
+        var log = new OrderedDict<string, object?>
+        {
+            ["study_id"] = studyId,
+            ["system_attr"] = new OrderedDict<string, object?> { [key] = value },
+        };
+        lock (_threadLock)
+        {
+            WriteLog(JournalOperation.SetStudySystemAttr, log);
+            SyncWithBackend();
+        }
+    }
+
+    public override int GetStudyIdFromName(string studyName)
+    {
+        lock (_threadLock)
+        {
+            SyncWithBackend();
+            foreach (var study in _replayResult.GetAllStudies())
+            {
+                if (study.StudyName == studyName)
+                    return study.StudyId;
+            }
+            throw new KeyError(NotFoundMsg);
+        }
+    }
+
+    public override string GetStudyNameFromId(int studyId)
+    {
+        lock (_threadLock)
+        {
+            SyncWithBackend();
+            return _replayResult.GetStudy(studyId).StudyName;
+        }
+    }
+
+    public override List<StudyDirection> GetStudyDirections(int studyId)
+    {
+        lock (_threadLock)
+        {
+            SyncWithBackend();
+            return _replayResult.GetStudy(studyId).Directions;
+        }
+    }
+
+    public override OrderedDict<string, object?> GetStudyUserAttrs(int studyId)
+    {
+        lock (_threadLock)
+        {
+            SyncWithBackend();
+            return _replayResult.GetStudy(studyId).UserAttrs;
+        }
+    }
+
+    public override OrderedDict<string, object?> GetStudySystemAttrs(int studyId)
+    {
+        lock (_threadLock)
+        {
+            SyncWithBackend();
+            return _replayResult.GetStudy(studyId).SystemAttrs;
+        }
+    }
+
+    public override List<FrozenStudy> GetAllStudies()
+    {
+        lock (_threadLock)
+        {
+            SyncWithBackend();
+            return _replayResult.GetAllStudies().Select(s => s.DeepCopy()).ToList();
+        }
+    }
+
+    // ------------------------------------------------------------------ trial manipulation
+
+    public override int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null)
+    {
+        var datetimeStart = DateTime.UtcNow;
+        var log = new OrderedDict<string, object?>
+        {
+            ["study_id"] = studyId,
+            ["datetime_start"] = JournalDatetime.ToIsoUtc(datetimeStart),
+        };
+
+        if (templateTrial is not null)
+        {
+            log["state"] = (int)templateTrial.State;
+            if (templateTrial.Values is not null && templateTrial.Values.Count > 1)
+            {
+                log["value"] = null;
+                log["values"] = templateTrial.Values.Cast<object?>().ToList();
+            }
+            else
+            {
+                log["value"] = templateTrial.Values is null ? null : templateTrial.Value;
+                log["values"] = null;
+            }
+            if (templateTrial.DatetimeStart is not null)
+                log["datetime_start"] = JournalDatetime.ToIsoUtc(templateTrial.DatetimeStart.Value.ToUniversalTime());
+            else
+                log["datetime_start"] = null;
+            if (templateTrial.DatetimeComplete is not null)
+                log["datetime_complete"] = JournalDatetime.ToIsoUtc(templateTrial.DatetimeComplete.Value.ToUniversalTime());
+
+            var distributions = new OrderedDict<string, object?>();
+            foreach (var (k, dist) in templateTrial.DistributionsDict)
+                distributions[k] = Distribution.ToJson(dist);
+            log["distributions"] = distributions;
+
+            var @params = new OrderedDict<string, object?>();
+            foreach (var (k, param) in templateTrial.ParamsDict)
+                @params[k] = templateTrial.DistributionsDict[k].ToInternalRepr(param);
+            log["params"] = @params;
+
+            log["user_attrs"] = templateTrial.UserAttrsDict;
+            log["system_attrs"] = templateTrial.SystemAttrsDict;
+            log["intermediate_values"] = templateTrial.IntermediateValues;
+        }
+
+        lock (_threadLock)
+        {
+            WriteLog(JournalOperation.CreateTrial, log);
+            SyncWithBackend();
+            int trialId = _replayResult.LastCreatedTrialIdByThisProcess;
+
+            // Dump snapshot here.
+            if (_backend is IBaseJournalSnapshot snapshotBackend
+                && trialId != 0
+                && trialId % SnapshotInterval == 0)
+            {
+                snapshotBackend.SaveSnapshot(_replayResult.Serialize());
+            }
+            return trialId;
+        }
+    }
+
+    public override void SetTrialParam(
+        int trialId, string paramName, double paramValueInternal, BaseDistribution distribution)
+    {
+        var log = new OrderedDict<string, object?>
+        {
+            ["trial_id"] = trialId,
+            ["param_name"] = paramName,
+            ["param_value_internal"] = paramValueInternal,
+            ["distribution"] = Distribution.ToJson(distribution),
+        };
+
+        lock (_threadLock)
+        {
+            WriteLog(JournalOperation.SetTrialParam, log);
+            SyncWithBackend();
+        }
+    }
+
+    public override int GetTrialIdFromStudyIdTrialNumber(int studyId, int trialNumber)
+    {
+        lock (_threadLock)
+        {
+            SyncWithBackend();
+            var trialIds = _replayResult.GetStudyTrialIds(studyId);
+            if (trialIds.Count <= trialNumber)
+                throw new KeyError(
+                    $"No trial with trial_number={trialNumber} exists in study with study_id={studyId}.");
+            return trialIds[trialNumber];
+        }
+    }
+
+    public override bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null)
+    {
+        var log = new OrderedDict<string, object?>
+        {
+            ["trial_id"] = trialId,
+            ["state"] = (int)state,
+            ["values"] = values?.Cast<object?>().ToList(),
+        };
+
+        if (state == TrialState.Running)
+            log["datetime_start"] = JournalDatetime.ToIsoUtc(DateTime.UtcNow);
+        else if (state.IsFinished())
+            log["datetime_complete"] = JournalDatetime.ToIsoUtc(DateTime.UtcNow);
+
+        lock (_threadLock)
+        {
+            if (state == TrialState.Running)
+            {
+                // NOTE(nabenabe): This sync is kept to avoid confusion (see the Python source for
+                // the full rationale). This section is only triggered by enqueue_trial pops.
+                SyncWithBackend();
+                var existingTrial = _replayResult.TryGetTrial(trialId);
+                System.Diagnostics.Debug.Assert(
+                    existingTrial is not null,
+                    "Please report your bug on GitHub if this line fails your script.");
+                if (existingTrial!.State.IsFinished())
+                    throw new UpdateFinishedTrialError(
+                        string.Format(CultureInfo.InvariantCulture, UnupdatableMsgFormat, existingTrial.Number));
+                if (existingTrial.State != TrialState.Waiting)
+                {
+                    // This line is equivalent to `existingTrial.State == TrialState.Running`.
+                    return false;
+                }
+            }
+            WriteLog(JournalOperation.SetTrialStateValues, log);
+            SyncWithBackend();
+            return state != TrialState.Running || trialId == _replayResult.OwnedTrialId;
+        }
+    }
+
+    public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
+    {
+        var log = new OrderedDict<string, object?>
+        {
+            ["trial_id"] = trialId,
+            ["step"] = step,
+            ["intermediate_value"] = intermediateValue,
+        };
+
+        lock (_threadLock)
+        {
+            WriteLog(JournalOperation.SetTrialIntermediateValue, log);
+            SyncWithBackend();
+        }
+    }
+
+    public override void SetTrialUserAttr(int trialId, string key, object? value)
+    {
+        var log = new OrderedDict<string, object?>
+        {
+            ["trial_id"] = trialId,
+            ["user_attr"] = new OrderedDict<string, object?> { [key] = value },
+        };
+
+        lock (_threadLock)
+        {
+            WriteLog(JournalOperation.SetTrialUserAttr, log);
+            SyncWithBackend();
+        }
+    }
+
+    public override void SetTrialSystemAttr(int trialId, string key, object? value)
+    {
+        var log = new OrderedDict<string, object?>
+        {
+            ["trial_id"] = trialId,
+            ["system_attr"] = new OrderedDict<string, object?> { [key] = value },
+        };
+
+        lock (_threadLock)
+        {
+            WriteLog(JournalOperation.SetTrialSystemAttr, log);
+            SyncWithBackend();
+        }
+    }
+
+    public override FrozenTrial GetTrial(int trialId)
+    {
+        lock (_threadLock)
+        {
+            SyncWithBackend();
+            return _replayResult.GetTrial(trialId);
+        }
+    }
+
+    public override List<FrozenTrial> GetAllTrials(
+        int studyId, bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
+    {
+        lock (_threadLock)
+        {
+            SyncWithBackend();
+            var frozenTrials = _replayResult.GetAllTrials(studyId, states);
+            if (deepcopy)
+                return frozenTrials.Select(t => t.DeepCopy()).ToList();
+            return frozenTrials;
+        }
+    }
+}
+
+/// <summary>ISO-8601 datetime helpers matching Python's journal serialization exactly.</summary>
+internal static class JournalDatetime
+{
+    /// <summary>Python <c>datetime.now(tz=timezone.utc).isoformat(timespec="microseconds")</c>.</summary>
+    internal static string ToIsoUtc(DateTime utc)
+        => utc.ToString("yyyy-MM-dd'T'HH:mm:ss.ffffff", CultureInfo.InvariantCulture) + "+00:00";
+
+    /// <summary>Python <c>datetime.fromisoformat(s).astimezone().replace(tzinfo=None)</c>: to naive local time.</summary>
+    internal static DateTime FromIsoToLocalNaive(string iso)
+    {
+        var dto = DateTimeOffset.Parse(iso, CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeLocal);
+        return dto.ToLocalTime().DateTime;
+    }
+}
+
+/// <summary>Port of <c>JournalStorageReplayResult</c>.</summary>
+internal sealed class JournalStorageReplayResult
+{
+    internal int LogNumberRead;
+    private string _workerIdPrefix;
+    private readonly Dictionary<int, FrozenStudy> _studies = new();
+    private readonly Dictionary<int, FrozenTrial> _trials = new();
+
+    private readonly Dictionary<int, List<int>> _studyIdToTrialIds = new();
+    private readonly Dictionary<int, int> _trialIdToStudyId = new();
+    private int _nextStudyId;
+    private Dictionary<string, int> _workerIdToOwnedTrialId = new();
+
+    internal int LastCreatedTrialIdByThisProcess = -1;
+
+    internal JournalStorageReplayResult(string workerIdPrefix)
+    {
+        _workerIdPrefix = workerIdPrefix;
+    }
+
+    internal void ResetWorkerState(string workerIdPrefix)
+    {
+        _workerIdPrefix = workerIdPrefix;
+        _workerIdToOwnedTrialId = new Dictionary<string, int>();
+        LastCreatedTrialIdByThisProcess = -1;
+    }
+
+    internal void ApplyLogs(IEnumerable<OrderedDict<string, object?>> logs)
+    {
+        foreach (var log in logs)
+        {
+            LogNumberRead += 1;
+            var op = (JournalOperation)Convert.ToInt32(log["op_code"], CultureInfo.InvariantCulture);
+            switch (op)
+            {
+                case JournalOperation.CreateStudy:
+                    ApplyCreateStudy(log);
+                    break;
+                case JournalOperation.DeleteStudy:
+                    ApplyDeleteStudy(log);
+                    break;
+                case JournalOperation.SetStudyUserAttr:
+                    ApplySetStudyUserAttr(log);
+                    break;
+                case JournalOperation.SetStudySystemAttr:
+                    ApplySetStudySystemAttr(log);
+                    break;
+                case JournalOperation.CreateTrial:
+                    ApplyCreateTrial(log);
+                    break;
+                case JournalOperation.SetTrialParam:
+                    ApplySetTrialParam(log);
+                    break;
+                case JournalOperation.SetTrialStateValues:
+                    ApplySetTrialStateValues(log);
+                    break;
+                case JournalOperation.SetTrialIntermediateValue:
+                    ApplySetTrialIntermediateValue(log);
+                    break;
+                case JournalOperation.SetTrialUserAttr:
+                    ApplySetTrialUserAttr(log);
+                    break;
+                case JournalOperation.SetTrialSystemAttr:
+                    ApplySetTrialSystemAttr(log);
+                    break;
+                case JournalOperation.DiscardTrials:
+                    // This operation is only supported by Rustuna.
+                    continue;
+                default:
+                    throw new InvalidOperationException("Should not reach.");
+            }
+        }
+    }
+
+    internal FrozenStudy GetStudy(int studyId)
+    {
+        if (!_studies.TryGetValue(studyId, out var study))
+            throw new KeyError(JournalStorage.NotFoundMsg);
+        return study;
+    }
+
+    internal List<FrozenStudy> GetAllStudies() => _studies.Values.ToList();
+
+    internal FrozenTrial GetTrial(int trialId)
+    {
+        if (!_trials.TryGetValue(trialId, out var trial))
+            throw new KeyError(JournalStorage.NotFoundMsg);
+        return trial;
+    }
+
+    internal FrozenTrial? TryGetTrial(int trialId) => _trials.GetValueOrDefault(trialId);
+
+    internal List<int> GetStudyTrialIds(int studyId)
+    {
+        if (!_studyIdToTrialIds.TryGetValue(studyId, out var trialIds))
+            throw new KeyError(studyId.ToString(CultureInfo.InvariantCulture));
+        return trialIds;
+    }
+
+    internal List<FrozenTrial> GetAllTrials(int studyId, IReadOnlyCollection<TrialState>? states)
+    {
+        if (!_studies.ContainsKey(studyId))
+            throw new KeyError(JournalStorage.NotFoundMsg);
+
+        var frozenTrials = new List<FrozenTrial>();
+        foreach (int trialId in _studyIdToTrialIds[studyId])
+        {
+            var trial = _trials[trialId];
+            if (states is null || states.Contains(trial.State))
+                frozenTrials.Add(trial);
+        }
+        return frozenTrials;
+    }
+
+    internal string WorkerId => _workerIdPrefix + Environment.CurrentManagedThreadId.ToString(CultureInfo.InvariantCulture);
+
+    internal int? OwnedTrialId
+        => _workerIdToOwnedTrialId.TryGetValue(WorkerId, out int trialId) ? trialId : null;
+
+    private bool IsIssuedByThisWorker(OrderedDict<string, object?> log)
+        => (string?)log["worker_id"] == WorkerId;
+
+    private bool StudyExists(int studyId, OrderedDict<string, object?> log)
+    {
+        if (_studies.ContainsKey(studyId))
+            return true;
+        if (IsIssuedByThisWorker(log))
+            throw new KeyError(JournalStorage.NotFoundMsg);
+        return false;
+    }
+
+    private void ApplyCreateStudy(OrderedDict<string, object?> log)
+    {
+        string studyName = (string)log["study_name"]!;
+        var directions = ((List<object?>)log["directions"]!)
+            .Select(d => (StudyDirection)Convert.ToInt32(d, CultureInfo.InvariantCulture))
+            .ToList();
+
+        if (_studies.Values.Any(s => s.StudyName == studyName))
+        {
+            if (IsIssuedByThisWorker(log))
+                throw new DuplicatedStudyError();
+            return;
+        }
+
+        int studyId = _nextStudyId;
+        _nextStudyId += 1;
+
+        _studies[studyId] = new FrozenStudy(
+            studyName: studyName,
+            direction: null,
+            userAttrs: new OrderedDict<string, object?>(),
+            systemAttrs: new OrderedDict<string, object?>(),
+            studyId: studyId,
+            directions: directions);
+        _studyIdToTrialIds[studyId] = new List<int>();
+    }
+
+    private void ApplyDeleteStudy(OrderedDict<string, object?> log)
+    {
+        int studyId = ToInt(log["study_id"]);
+
+        if (StudyExists(studyId, log))
+        {
+            var fs = _studies[studyId];
+            _studies.Remove(studyId);
+            System.Diagnostics.Debug.Assert(fs.StudyId == studyId);
+        }
+    }
+
+    private void ApplySetStudyUserAttr(OrderedDict<string, object?> log)
+    {
+        int studyId = ToInt(log["study_id"]);
+
+        if (StudyExists(studyId, log))
+        {
+            var attr = (OrderedDict<string, object?>)log["user_attr"]!;
+            System.Diagnostics.Debug.Assert(attr.Count == 1);
+            var userAttrs = _studies[studyId].UserAttrs.ShallowClone();
+            foreach (var (key, value) in attr)
+                userAttrs[key] = value;
+            _studies[studyId].UserAttrs = userAttrs;
+        }
+    }
+
+    private void ApplySetStudySystemAttr(OrderedDict<string, object?> log)
+    {
+        int studyId = ToInt(log["study_id"]);
+
+        if (StudyExists(studyId, log))
+        {
+            var attr = (OrderedDict<string, object?>)log["system_attr"]!;
+            System.Diagnostics.Debug.Assert(attr.Count == 1);
+            var systemAttrs = _studies[studyId].SystemAttrs.ShallowClone();
+            foreach (var (key, value) in attr)
+                systemAttrs[key] = value;
+            _studies[studyId].SystemAttrs = systemAttrs;
+        }
+    }
+
+    private void ApplyCreateTrial(OrderedDict<string, object?> log)
+    {
+        int studyId = ToInt(log["study_id"]);
+
+        if (!StudyExists(studyId, log))
+            return;
+
+        int trialId = _trials.Count;
+        var distributions = new OrderedDict<string, BaseDistribution>();
+        if (log.ContainsKey("distributions"))
+        {
+            foreach (var (k, v) in (OrderedDict<string, object?>)log["distributions"]!)
+                distributions[k] = Distribution.FromJson((string)v!);
+        }
+        var @params = new OrderedDict<string, object?>();
+        if (log.ContainsKey("params"))
+        {
+            foreach (var (k, p) in (OrderedDict<string, object?>)log["params"]!)
+                @params[k] = distributions[k].ToExternalRepr(ToDouble(p));
+        }
+        DateTime? datetimeStart = log["datetime_start"] is string startIso
+            ? JournalDatetime.FromIsoToLocalNaive(startIso)
+            : null;
+        DateTime? datetimeComplete = log.ContainsKey("datetime_complete") && log["datetime_complete"] is string completeIso
+            ? JournalDatetime.FromIsoToLocalNaive(completeIso)
+            : null;
+
+        var intermediateValues = new OrderedDict<int, double>();
+        if (log.GetValueOrDefault("intermediate_values") is OrderedDict<string, object?> intermediates)
+        {
+            foreach (var (k, v) in intermediates)
+                intermediateValues[int.Parse(k, CultureInfo.InvariantCulture)] = ToDouble(v);
+        }
+
+        var userAttrs = log.GetValueOrDefault("user_attrs") as OrderedDict<string, object?>
+            ?? new OrderedDict<string, object?>();
+        var systemAttrs = log.GetValueOrDefault("system_attrs") as OrderedDict<string, object?>
+            ?? new OrderedDict<string, object?>();
+
+        double? value = log.GetValueOrDefault("value") is { } rawValue ? ToDouble(rawValue) : null;
+        List<double>? values = log.GetValueOrDefault("values") is List<object?> rawValues
+            ? rawValues.Select(v => ToDouble(v)).ToList()
+            : null;
+
+        _trials[trialId] = new FrozenTrial(
+            trialId: trialId,
+            number: _studyIdToTrialIds[studyId].Count,
+            state: (TrialState)(log.GetValueOrDefault("state") is { } rawState
+                ? Convert.ToInt32(rawState, CultureInfo.InvariantCulture)
+                : (int)TrialState.Running),
+            @params: @params,
+            distributions: distributions,
+            userAttrs: userAttrs,
+            systemAttrs: systemAttrs,
+            value: value,
+            intermediateValues: intermediateValues,
+            datetimeStart: datetimeStart,
+            datetimeComplete: datetimeComplete,
+            values: values);
+
+        _studyIdToTrialIds[studyId].Add(trialId);
+        _trialIdToStudyId[trialId] = studyId;
+
+        if (IsIssuedByThisWorker(log))
+        {
+            LastCreatedTrialIdByThisProcess = trialId;
+            if (_trials[trialId].State == TrialState.Running)
+                _workerIdToOwnedTrialId[WorkerId] = trialId;
+        }
+    }
+
+    private void ApplySetTrialParam(OrderedDict<string, object?> log)
+    {
+        int trialId = ToInt(log["trial_id"]);
+
+        if (!TrialExistsAndUpdatable(trialId, log))
+            return;
+
+        string paramName = (string)log["param_name"]!;
+        double paramValueInternal = ToDouble(log["param_value_internal"]);
+        var distribution = Distribution.FromJson((string)log["distribution"]!);
+
+        int studyId = _trialIdToStudyId[trialId];
+
+        foreach (int prevTrialId in _studyIdToTrialIds[studyId])
+        {
+            var prevTrial = _trials[prevTrialId];
+            if (prevTrial.ParamsDict.ContainsKey(paramName))
+            {
+                try
+                {
+                    Distribution.CheckDistributionCompatibility(
+                        prevTrial.DistributionsDict[paramName], distribution);
+                }
+                catch (Exception)
+                {
+                    if (IsIssuedByThisWorker(log))
+                        throw;
+                    return;
+                }
+                break;
+            }
+        }
+
+        var trial = _trials[trialId].ShallowCopy();
+        var @params = trial.ParamsDict.ShallowClone();
+        @params[paramName] = distribution.ToExternalRepr(paramValueInternal);
+        trial.ParamsDict = @params;
+        var distributions = trial.DistributionsDict.ShallowClone();
+        distributions[paramName] = distribution;
+        trial.DistributionsDict = distributions;
+        _trials[trialId] = trial;
+    }
+
+    private void ApplySetTrialStateValues(OrderedDict<string, object?> log)
+    {
+        int trialId = ToInt(log["trial_id"]);
+
+        if (!TrialExistsAndUpdatable(trialId, log))
+            return;
+
+        var state = (TrialState)Convert.ToInt32(log["state"], CultureInfo.InvariantCulture);
+        if (state == _trials[trialId].State && state == TrialState.Running)
+        {
+            // Reject the operation as the popped trial is already run by another process.
+            return;
+        }
+
+        var trial = _trials[trialId].ShallowCopy();
+        if (state == TrialState.Running)
+        {
+            trial.SetDatetimeStart(JournalDatetime.FromIsoToLocalNaive((string)log["datetime_start"]!));
+            if (IsIssuedByThisWorker(log))
+                _workerIdToOwnedTrialId[WorkerId] = trialId;
+        }
+        if (state.IsFinished())
+            trial.DatetimeComplete = JournalDatetime.FromIsoToLocalNaive((string)log["datetime_complete"]!);
+        trial.State = state;
+        if (log["values"] is List<object?> values)
+            trial.SetValues(values.Select(v => ToDouble(v)));
+
+        _trials[trialId] = trial;
+    }
+
+    private void ApplySetTrialIntermediateValue(OrderedDict<string, object?> log)
+    {
+        int trialId = ToInt(log["trial_id"]);
+
+        if (TrialExistsAndUpdatable(trialId, log))
+        {
+            var trial = _trials[trialId].ShallowCopy();
+            trial.IntermediateValues = trial.IntermediateValues.ShallowClone();
+            trial.IntermediateValues[ToInt(log["step"])] = ToDouble(log["intermediate_value"]);
+            _trials[trialId] = trial;
+        }
+    }
+
+    private void ApplySetTrialUserAttr(OrderedDict<string, object?> log)
+    {
+        int trialId = ToInt(log["trial_id"]);
+
+        if (TrialExistsAndUpdatable(trialId, log))
+        {
+            var attr = (OrderedDict<string, object?>)log["user_attr"]!;
+            System.Diagnostics.Debug.Assert(attr.Count == 1);
+            var trial = _trials[trialId].ShallowCopy();
+            trial.UserAttrsDict = trial.UserAttrsDict.ShallowClone();
+            foreach (var (key, value) in attr)
+                trial.UserAttrsDict[key] = value;
+            _trials[trialId] = trial;
+        }
+    }
+
+    private void ApplySetTrialSystemAttr(OrderedDict<string, object?> log)
+    {
+        int trialId = ToInt(log["trial_id"]);
+
+        if (TrialExistsAndUpdatable(trialId, log))
+        {
+            var attr = (OrderedDict<string, object?>)log["system_attr"]!;
+            System.Diagnostics.Debug.Assert(attr.Count == 1);
+            var trial = _trials[trialId].ShallowCopy();
+            trial.SystemAttrsDict = trial.SystemAttrsDict.ShallowClone();
+            foreach (var (key, value) in attr)
+                trial.SystemAttrsDict[key] = value;
+            _trials[trialId] = trial;
+        }
+    }
+
+    private bool TrialExistsAndUpdatable(int trialId, OrderedDict<string, object?> log)
+    {
+        if (!_trials.ContainsKey(trialId))
+        {
+            if (IsIssuedByThisWorker(log))
+                throw new KeyError(JournalStorage.NotFoundMsg);
+            return false;
+        }
+        if (_trials[trialId].State.IsFinished())
+        {
+            if (IsIssuedByThisWorker(log))
+                throw new UpdateFinishedTrialError(
+                    string.Format(CultureInfo.InvariantCulture, JournalStorage.UnupdatableMsgFormat, _trials[trialId].Number));
+            return false;
+        }
+        return true;
+    }
+
+    private static int ToInt(object? value) => Convert.ToInt32(value, CultureInfo.InvariantCulture);
+
+    private static double ToDouble(object? value) => value switch
+    {
+        double d => d,
+        long l => l,
+        bool b => b ? 1.0 : 0.0,
+        _ => Convert.ToDouble(value, CultureInfo.InvariantCulture),
+    };
+
+    // ------------------------------------------------------------------ snapshots
+
+    /// <summary>
+    ///     Serialize the replay state for <see cref="IBaseJournalSnapshot" /> backends.
+    ///     [Misaligned] Not pickle bytes (see <see cref="JournalStorage.RestoreReplayResult" />);
+    ///     the format is an OptunaSharp-internal JSON dump.
+    /// </summary>
+    internal byte[] Serialize()
+    {
+        var studies = new OrderedDict<string, object?>();
+        foreach (var (studyId, study) in _studies)
+        {
+            studies[studyId.ToString(CultureInfo.InvariantCulture)] = new OrderedDict<string, object?>
+            {
+                ["study_name"] = study.StudyName,
+                ["directions"] = study.Directions.Select(d => (object?)(int)d).ToList(),
+                ["user_attrs"] = study.UserAttrs,
+                ["system_attrs"] = study.SystemAttrs,
+                ["trial_ids"] = _studyIdToTrialIds[studyId].Select(t => (object?)t).ToList(),
+            };
+        }
+
+        var trials = new OrderedDict<string, object?>();
+        foreach (var (trialId, trial) in _trials)
+        {
+            var distributions = new OrderedDict<string, object?>();
+            foreach (var (k, dist) in trial.DistributionsDict)
+                distributions[k] = Distribution.ToJson(dist);
+            var @params = new OrderedDict<string, object?>();
+            foreach (var (k, param) in trial.ParamsDict)
+                @params[k] = trial.DistributionsDict[k].ToInternalRepr(param);
+
+            trials[trialId.ToString(CultureInfo.InvariantCulture)] = new OrderedDict<string, object?>
+            {
+                ["number"] = trial.Number,
+                ["state"] = (int)trial.State,
+                ["value"] = trial.Values is { Count: 1 } ? trial.Values[0] : null,
+                ["values"] = trial.Values is { Count: > 1 } ? trial.Values.Cast<object?>().ToList() : null,
+                ["datetime_start"] = trial.DatetimeStart is null
+                    ? null
+                    : JournalDatetime.ToIsoUtc(trial.DatetimeStart.Value.ToUniversalTime()),
+                ["datetime_complete"] = trial.DatetimeComplete is null
+                    ? null
+                    : JournalDatetime.ToIsoUtc(trial.DatetimeComplete.Value.ToUniversalTime()),
+                ["distributions"] = distributions,
+                ["params"] = @params,
+                ["user_attrs"] = trial.UserAttrsDict,
+                ["system_attrs"] = trial.SystemAttrsDict,
+                ["intermediate_values"] = trial.IntermediateValues,
+                ["study_id"] = _trialIdToStudyId[trialId],
+            };
+        }
+
+        var payload = new OrderedDict<string, object?>
+        {
+            ["format"] = "optunasharp-journal-snapshot-v1",
+            ["log_number_read"] = LogNumberRead,
+            ["next_study_id"] = _nextStudyId,
+            ["studies"] = studies,
+            ["trials"] = trials,
+        };
+        return System.Text.Encoding.UTF8.GetBytes(PyJson.DumpsCompact(payload));
+    }
+
+    /// <summary>Deserialize a snapshot produced by <see cref="Serialize" />; <c>null</c> on failure.</summary>
+    internal static JournalStorageReplayResult? TryDeserialize(byte[] snapshot)
+    {
+        try
+        {
+            if (PyJson.Loads(System.Text.Encoding.UTF8.GetString(snapshot)) is not OrderedDict<string, object?> payload
+                || payload.GetValueOrDefault("format") is not "optunasharp-journal-snapshot-v1")
+            {
+                return null;
+            }
+
+            var result = new JournalStorageReplayResult(string.Empty)
+            {
+                LogNumberRead = Convert.ToInt32(payload["log_number_read"], CultureInfo.InvariantCulture),
+                _nextStudyId = Convert.ToInt32(payload["next_study_id"], CultureInfo.InvariantCulture),
+            };
+
+            foreach (var (studyIdStr, rawStudy) in (OrderedDict<string, object?>)payload["studies"]!)
+            {
+                int studyId = int.Parse(studyIdStr, CultureInfo.InvariantCulture);
+                var studyDict = (OrderedDict<string, object?>)rawStudy!;
+                result._studies[studyId] = new FrozenStudy(
+                    studyName: (string)studyDict["study_name"]!,
+                    direction: null,
+                    userAttrs: (OrderedDict<string, object?>)studyDict["user_attrs"]!,
+                    systemAttrs: (OrderedDict<string, object?>)studyDict["system_attrs"]!,
+                    studyId: studyId,
+                    directions: ((List<object?>)studyDict["directions"]!)
+                        .Select(d => (StudyDirection)Convert.ToInt32(d, CultureInfo.InvariantCulture)));
+                result._studyIdToTrialIds[studyId] = ((List<object?>)studyDict["trial_ids"]!)
+                    .Select(t => Convert.ToInt32(t, CultureInfo.InvariantCulture)).ToList();
+            }
+
+            foreach (var (trialIdStr, rawTrial) in (OrderedDict<string, object?>)payload["trials"]!)
+            {
+                int trialId = int.Parse(trialIdStr, CultureInfo.InvariantCulture);
+                var trialDict = (OrderedDict<string, object?>)rawTrial!;
+
+                var distributions = new OrderedDict<string, BaseDistribution>();
+                foreach (var (k, v) in (OrderedDict<string, object?>)trialDict["distributions"]!)
+                    distributions[k] = Distribution.FromJson((string)v!);
+                var @params = new OrderedDict<string, object?>();
+                foreach (var (k, p) in (OrderedDict<string, object?>)trialDict["params"]!)
+                    @params[k] = distributions[k].ToExternalRepr(ToDouble(p));
+                var intermediateValues = new OrderedDict<int, double>();
+                foreach (var (k, v) in (OrderedDict<string, object?>)trialDict["intermediate_values"]!)
+                    intermediateValues[int.Parse(k, CultureInfo.InvariantCulture)] = ToDouble(v);
+
+                result._trials[trialId] = new FrozenTrial(
+                    trialId: trialId,
+                    number: Convert.ToInt32(trialDict["number"], CultureInfo.InvariantCulture),
+                    state: (TrialState)Convert.ToInt32(trialDict["state"], CultureInfo.InvariantCulture),
+                    @params: @params,
+                    distributions: distributions,
+                    userAttrs: (OrderedDict<string, object?>)trialDict["user_attrs"]!,
+                    systemAttrs: (OrderedDict<string, object?>)trialDict["system_attrs"]!,
+                    value: trialDict["value"] is { } v2 ? ToDouble(v2) : null,
+                    values: trialDict["values"] is List<object?> vs ? vs.Select(v => ToDouble(v)) : null,
+                    intermediateValues: intermediateValues,
+                    datetimeStart: trialDict["datetime_start"] is string ds ? JournalDatetime.FromIsoToLocalNaive(ds) : null,
+                    datetimeComplete: trialDict["datetime_complete"] is string dc ? JournalDatetime.FromIsoToLocalNaive(dc) : null);
+                result._trialIdToStudyId[trialId] = Convert.ToInt32(trialDict["study_id"], CultureInfo.InvariantCulture);
+            }
+
+            return result;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+}
