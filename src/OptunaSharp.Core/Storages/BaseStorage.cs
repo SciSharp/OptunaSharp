@@ -1,0 +1,227 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using NumSharp;
+using OptunaSharp.Distributions;
+
+namespace OptunaSharp.Storages;
+
+/// <summary>
+///     Base class for storages. Port of <c>optuna/storages/_base.py: BaseStorage</c>.
+///
+///     This class is not supposed to be directly accessed by library users. It abstracts a
+///     backend database and provides internal interfaces to read/write histories of studies and
+///     trials.
+///
+///     <para><b>Thread safety</b> — a storage class instance can be shared among multiple
+///     threads, and must therefore be thread-safe. It must guarantee that a data instance read
+///     from the storage must not be modified by subsequent writes: a <see cref="FrozenTrial" />
+///     returned by <see cref="GetTrial" /> should not be updated by subsequent
+///     <c>SetTrial...</c> calls. This is usually achieved by replacing the old data with a copy
+///     on write.</para>
+///
+///     <para><b>Ownership of RUNNING trials</b> — trials in finished states are not allowed to
+///     be modified; trials in the WAITING state are not allowed to be modified except for the
+///     state field.</para>
+/// </summary>
+public abstract class BaseStorage
+{
+    public const string DefaultStudyNamePrefix = "no-name-";
+
+    // ------------------------------------------------------------------ study manipulation
+
+    /// <summary>
+    ///     Create a new study from a name. If no name is specified, the storage class generates
+    ///     a name. The returned study ID is unique among all current and deleted studies.
+    /// </summary>
+    /// <exception cref="DuplicatedStudyError">If a study with the same name already exists.</exception>
+    public abstract int CreateNewStudy(IReadOnlyList<StudyDirection> directions, string? studyName = null);
+
+    /// <summary>Delete a study.</summary>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public abstract void DeleteStudy(int studyId);
+
+    /// <summary>Register a user-defined attribute to a study, overwriting any existing value.</summary>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public abstract void SetStudyUserAttr(int studyId, string key, object? value);
+
+    /// <summary>Register an optuna-internal attribute to a study, overwriting any existing value.</summary>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public abstract void SetStudySystemAttr(int studyId, string key, object? value);
+
+    // ------------------------------------------------------------------ study access
+
+    /// <summary>Read the ID of a study.</summary>
+    /// <exception cref="KeyError">If no study with the matching name exists.</exception>
+    public abstract int GetStudyIdFromName(string studyName);
+
+    /// <summary>Read the study name of a study.</summary>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public abstract string GetStudyNameFromId(int studyId);
+
+    /// <summary>Read whether a study maximizes or minimizes an objective.</summary>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public abstract List<StudyDirection> GetStudyDirections(int studyId);
+
+    /// <summary>Read the user-defined attributes of a study.</summary>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public abstract Collections.OrderedDict<string, object?> GetStudyUserAttrs(int studyId);
+
+    /// <summary>Read the optuna-internal attributes of a study.</summary>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public abstract Collections.OrderedDict<string, object?> GetStudySystemAttrs(int studyId);
+
+    /// <summary>Read a list of <see cref="FrozenStudy" /> objects, sorted by study ID.</summary>
+    public abstract List<FrozenStudy> GetAllStudies();
+
+    // ------------------------------------------------------------------ trial manipulation
+
+    /// <summary>
+    ///     Create and add a new trial to a study. The returned trial ID is unique among all
+    ///     current and deleted trials.
+    /// </summary>
+    /// <param name="studyId">ID of the study.</param>
+    /// <param name="templateTrial">
+    ///     Template <see cref="FrozenTrial" /> with default user-attributes, system-attributes,
+    ///     intermediate-values, and a state.
+    /// </param>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public abstract int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null);
+
+    /// <summary>Set a parameter to a trial.</summary>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    public abstract void SetTrialParam(
+        int trialId, string paramName, double paramValueInternal, BaseDistribution distribution);
+
+    /// <summary>Read the trial ID of a trial.</summary>
+    /// <exception cref="KeyError">If no trial with the matching study ID and trial number exists.</exception>
+    public virtual int GetTrialIdFromStudyIdTrialNumber(int studyId, int trialNumber)
+    {
+        var trials = GetAllTrials(studyId, deepcopy: false);
+        if (trials.Count <= trialNumber)
+            throw new KeyError($"No trial with trial_number={trialNumber} exists in study with study_id={studyId}.");
+        return trials[trialNumber].TrialId;
+    }
+
+    /// <summary>Read the trial number of a trial (unique within a study, and sequential).</summary>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    public virtual int GetTrialNumberFromId(int trialId) => GetTrial(trialId).Number;
+
+    /// <summary>Read the internal representation of a trial parameter.</summary>
+    /// <exception cref="KeyError">If no trial with the matching ID exists, or no such parameter exists.</exception>
+    public virtual double GetTrialParam(int trialId, string paramName)
+    {
+        var trial = GetTrial(trialId);
+        return trial.Distributions[paramName].ToInternalRepr(trial.Params[paramName]);
+    }
+
+    /// <summary>
+    ///     Update the state and values of a trial. If <paramref name="values" /> is not
+    ///     <c>null</c>, this method overwrites any existing trial values.
+    /// </summary>
+    /// <returns>
+    ///     <c>true</c> if the state is successfully updated; <c>false</c> if the state is kept
+    ///     the same (which happens when updating a RUNNING trial to RUNNING).
+    /// </returns>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    public abstract bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null);
+
+    /// <summary>
+    ///     Report an intermediate value of an objective function, overwriting any existing value
+    ///     associated with the step.
+    /// </summary>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    public abstract void SetTrialIntermediateValue(int trialId, int step, double intermediateValue);
+
+    /// <summary>Set a user-defined attribute to a trial, overwriting any existing value.</summary>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    public abstract void SetTrialUserAttr(int trialId, string key, object? value);
+
+    /// <summary>Set an optuna-internal attribute to a trial, overwriting any existing value.</summary>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    public abstract void SetTrialSystemAttr(int trialId, string key, object? value);
+
+    // ------------------------------------------------------------------ trial access
+
+    /// <summary>Read a trial.</summary>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    public abstract FrozenTrial GetTrial(int trialId);
+
+    /// <summary>
+    ///     Read all trials in a study, sorted by trial ID.
+    /// </summary>
+    /// <param name="studyId">ID of the study.</param>
+    /// <param name="deepcopy">
+    ///     Whether to copy the list of trials before returning. Set to <c>true</c> if you intend
+    ///     to update the list or elements of the list.
+    /// </param>
+    /// <param name="states">Trial states to filter on. If <c>null</c>, include all states.</param>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public abstract List<FrozenTrial> GetAllTrials(
+        int studyId, bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null);
+
+    /// <summary>Count the number of trials in a study.</summary>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public virtual int GetNTrials(int studyId, IReadOnlyCollection<TrialState>? states = null)
+        => GetAllTrials(studyId, deepcopy: false, states: states).Count;
+
+    /// <summary>
+    ///     Return the trial with the best value in a study. Valid only during single-objective
+    ///     optimization.
+    /// </summary>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <exception cref="RuntimeError">If the study has more than one direction.</exception>
+    /// <exception cref="ValueError">If no trials have been completed.</exception>
+    public virtual FrozenTrial GetBestTrial(int studyId)
+    {
+        var allTrials = GetAllTrials(studyId, deepcopy: false, states: new[] { TrialState.Complete });
+
+        if (allTrials.Count == 0)
+            throw new ValueError("No trials are completed yet.");
+
+        var directions = GetStudyDirections(studyId);
+        if (directions.Count > 1)
+            throw new RuntimeError("Best trial can be obtained only for single-objective optimization.");
+        var direction = directions[0];
+
+        return direction == StudyDirection.Maximize
+            ? allTrials.Aggregate((best, t) => t.Value! > best.Value! ? t : best)
+            : allTrials.Aggregate((best, t) => t.Value! < best.Value! ? t : best);
+    }
+
+    /// <summary>Read the parameter dictionary of a trial (external representations).</summary>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    public virtual IReadOnlyDictionary<string, object?> GetTrialParams(int trialId) => GetTrial(trialId).Params;
+
+    /// <summary>Read the user-defined attributes of a trial.</summary>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    public virtual IReadOnlyDictionary<string, object?> GetTrialUserAttrs(int trialId) => GetTrial(trialId).UserAttrs;
+
+    /// <summary>Read the optuna-internal attributes of a trial.</summary>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    public virtual IReadOnlyDictionary<string, object?> GetTrialSystemAttrs(int trialId) => GetTrial(trialId).SystemAttrs;
+
+    /// <summary>Clean up all connections to a database.</summary>
+    public virtual void RemoveSession()
+    {
+    }
+
+    /// <summary>Check whether a trial state is updatable.</summary>
+    /// <param name="trialId">ID of the trial (only used for an error message).</param>
+    /// <param name="trialState">Trial state to check.</param>
+    /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    public virtual void CheckTrialIsUpdatable(int trialId, TrialState trialState)
+    {
+        if (trialState.IsFinished())
+        {
+            var trial = GetTrial(trialId);
+            throw new UpdateFinishedTrialError(
+                $"Trial#{trial.Number} has already finished and can not be updated.");
+        }
+    }
+}
