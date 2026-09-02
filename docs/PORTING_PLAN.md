@@ -34,12 +34,13 @@ with no external package on either side.
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 2.4** — `PartialFixedSampler` + `GridSampler`
+### ▶ CONTINUE HERE: **Phase 2.5** — `BruteForceSampler`
 
-Phases 0, 1 and the pruner batch (2.1–2.3) are complete, committed, and proven green (210 unit +
-48 live-interop tests, both TFMs, none skipped). The next unstarted work item in plan order is
-**2.4**. Read `src/optuna/optuna/samplers/_partial_fixed.py` and `_grid.py`, run them, then port —
-reuse the interop parity engine (below) to prove each new sampler bit-exact.
+Phases 0, 1 and 2.1–2.4 are complete, committed, and proven green (220 unit + 58 live-interop
+tests, both TFMs, none skipped). The next unstarted work item in plan order is **2.5**. Read
+`src/optuna/optuna/samplers/_brute_force.py`, run it, then port — mind the tree enumeration over
+dynamic (hierarchical) spaces and the categorical-NaN quirk (`_is_nan`); reuse the interop parity
+engine (below) to prove it bit-exact.
 
 ### Phase status
 
@@ -47,7 +48,7 @@ reuse the interop parity engine (below) to prove each new sampler bit-exact.
 |---|---|---|
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
-| 2 — Native features | 🟩 | **2.1–2.3 done**; 2.4 onward not started; 2.10 & prereqs partially landed (see below) |
+| 2 — Native features | 🟩 | **2.1–2.4 done**; 2.5 onward not started; 2.10 & prereqs partially landed (see below) |
 | 3 — Native heavy tail | ⬜ | not started |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
@@ -65,6 +66,13 @@ reuse the interop parity engine (below) to prove each new sampler bit-exact.
   (Median/Percentile/Nop actually landed in Phase 0 since `Study` defaults to `MedianPruner`),
   `SuccessiveHalving`(ASHA)/`Hyperband` (CRC-32 bracket routing), `Wilcoxon` (self-contained
   signed-rank test, no scipy).
+- ✅ **2.4** — `feat(samplers): Phase 2.4 — PartialFixedSampler + GridSampler` (`cbaf90c`).
+  `PartialFixedSampler` (delegating wrapper; base sampler's RNG continues across the fix boundary,
+  bit-exact). `GridSampler` (`itertools.product` enumeration + seeded index-shuffle bit-identical
+  to numpy's list shuffle — `random_interval(i)` == `MT19937.Next(i+1)`; `grid_id`/`search_space`
+  system attrs byte-compatible with Python `json.dumps`; self-stops at grid exhaustion). Grid
+  values use `CategoricalChoice` as the image of Optuna's `GridValueType`. Full-state parity vs
+  live Optuna across seeds/space shapes.
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -110,8 +118,8 @@ reuse the interop parity engine (below) to prove each new sampler bit-exact.
   fails *inside* `NumSharp.Core`, that's the sibling checkout, not OptunaSharp** — point
   `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
   fallback.
-- **Test:** `dotnet test test/OptunaSharp.Tests/...` (210 unit, both TFMs) and
-  `dotnet test test/OptunaSharp.Tests.Interop/...` (48 live-Optuna tests; self-skip Inconclusive
+- **Test:** `dotnet test test/OptunaSharp.Tests/...` (220 unit, both TFMs) and
+  `dotnet test test/OptunaSharp.Tests.Interop/...` (58 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
 - **Reuse the parity engine** for every new sampler/pruner: extend `ParityScenario`'s space/op pools
   and assert with `StudySnapshot.AssertParity` — that is the intended "prove it bit-exact" path.
@@ -238,8 +246,8 @@ Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 led
 | 2.1 | ✅ | Pruners batch 1: `Nop`, `Threshold`, `Patient`, `Median`, `Percentile` | `pruners/*` | ~300 | 700 | 🟢 trivial | 0.5, 0.8 |
 | 2.2 | ✅ | Pruners batch 2: `SuccessiveHalving` (ASHA), `Hyperband` | `pruners/_successive_halving.py`, `_hyperband.py` | ~250 | 650 | 🟢 | 2.1 |
 | 2.3 | ✅ | `WilcoxonPruner` | `pruners/_wilcoxon.py` | ~100 | 300 | 🟢 | self-contained signed-rank test (`Internal/SignedRankTest.cs`, no scipy) |
-| 2.4 | ⬜ **NEXT** | `PartialFixedSampler`, `GridSampler` | `samplers/_partial_fixed.py`, `_grid.py` | ~400 | 900 | 🟢 | 0.7 |
-| 2.5 | ⬜ | `BruteForceSampler` | `samplers/_brute_force.py` | ~480 | 1,000 | 🟢+ | tree enumeration over dynamic spaces; the categorical-NaN quirk (`_is_nan`) |
+| 2.4 | ✅ | `PartialFixedSampler`, `GridSampler` | `samplers/_partial_fixed.py`, `_grid.py` | ~400 | 900 | 🟢 | 0.7 |
+| 2.5 | ⬜ **NEXT** | `BruteForceSampler` | `samplers/_brute_force.py` | ~480 | 1,000 | 🟢+ | tree enumeration over dynamic spaces; the categorical-NaN quirk (`_is_nan`) |
 | 2.6 | ⬜ | Terminator framework + non-GP evaluators (`StaticError`, `BestValueStagnation`, `MedianError`, `CrossValidationError`) | `terminator/*` minus regret/EMMR | ~300 | 700 | 🟢 | 0.8 |
 | 2.7 | ⬜ | Importance framework + **PED-ANOVA** | `importance/__init__.py`, `_ped_anova/*` | ~350 | 800 | 🟢+ | pure-numpy Parzen; NumSharp throughout |
 | 2.8 | ⬜ | **TPE stage 1 — the default sampler, univariate** | `_tpe/_erf.py`, `_truncnorm.py`, `parzen_estimator.py`, `probability_distributions.py`, `sampler.py` core | ~800 | 2,600 | 🟡 | 0.4; **`_erf` already ported** (`Internal/Erf.cs`); port `_truncnorm` exactly; replace the `TPESampler` placeholder; **bit-exact oracle vs Python TPE** is the flagship parity claim |
