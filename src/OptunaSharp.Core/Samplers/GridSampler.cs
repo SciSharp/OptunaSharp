@@ -219,6 +219,13 @@ public class GridSampler : BaseSampler
             }
         }
 
+        // [Misaligned] Python builds `list(set(range(n)) - visited - running)`, whose order is
+        // CPython's set-iteration order; we return ascending order instead. This is observable
+        // ONLY through the concurrency `choice(target_grids)` branch of before_trial (≥2 unvisited
+        // grids while trial.number >= n_min_trials), which single-threaded optimize never reaches
+        // — each trial finishes before the next, so the grid is exhausted (and the study stopped)
+        // by the fast path. Under real concurrency the chosen grid is timing-dependent in Optuna
+        // too, so bit-exact reproduction there is not a meaningful parity target.
         var unvisitedGrids = Enumerable.Range(0, _nMinTrials)
             .Where(g => !visitedGrids.Contains(g) && !runningGrids.Contains(g)).ToList();
 
