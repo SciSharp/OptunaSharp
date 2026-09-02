@@ -36,7 +36,7 @@ with no external package on either side.
 
 ### ▶ CONTINUE HERE: **Phase 2.5** — `BruteForceSampler`
 
-Phases 0, 1 and 2.1–2.4 are complete, committed, and proven green (220 unit + 58 live-interop
+Phases 0, 1 and 2.1–2.4 are complete, committed, and proven green (220 unit + 67 live-interop
 tests, both TFMs, none skipped). The next unstarted work item in plan order is **2.5**. Read
 `src/optuna/optuna/samplers/_brute_force.py`, run it, then port — mind the tree enumeration over
 dynamic (hierarchical) spaces and the categorical-NaN quirk (`_is_nan`); reuse the interop parity
@@ -100,7 +100,12 @@ engine (below) to prove it bit-exact.
   instant-datetime parity), and a seeded **`ParityScenario`** differential fuzzer (mixed spaces;
   NaN/±inf; unicode/nested attrs; constraints; complete/fail/prune; enqueue+waiting). Includes a
   **raw journal line-format gate** (it already caught one real byte-format bug: categorical
-  `param_value_internal` is an int in Python's journal, not a float — fixed).
+  `param_value_internal` is an int in Python's journal, not a float — fixed). A 2026-09-02
+  parity audit added live decision-parity for the **full pruner surface** (Median/Percentile/
+  Patient/Threshold/Hyperband/Wilcoxon — previously only Median+SuccessiveHalving were live) and
+  for the derived **MO Pareto `best_trials`** set; the audit found parity bit-identical everywhere
+  except passing a NaN distribution bound (pathological input → numpy's incidental `OverflowError`
+  in Python vs a clean `ValueError` in C#; both raise, not an Optuna typed error).
 - ⬜ **Committed-corpus oracle** (`test/oracle/gen_optuna_oracle.py` + `OptunaSharp.Tests.Oracle`,
   no-Python-at-test-time replay) — **still deferred**, exactly as §4/CLAUDE.md anticipate. The live
   suite covers the gap for now. Build it when the algorithm surface is large enough to snapshot
@@ -119,7 +124,7 @@ engine (below) to prove it bit-exact.
   `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
   fallback.
 - **Test:** `dotnet test test/OptunaSharp.Tests/...` (220 unit, both TFMs) and
-  `dotnet test test/OptunaSharp.Tests.Interop/...` (58 live-Optuna tests; self-skip Inconclusive
+  `dotnet test test/OptunaSharp.Tests.Interop/...` (67 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
 - **Reuse the parity engine** for every new sampler/pruner: extend `ParityScenario`'s space/op pools
   and assert with `StudySnapshot.AssertParity` — that is the intended "prove it bit-exact" path.
