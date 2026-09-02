@@ -133,11 +133,30 @@ public class BruteForceSamplerTests
     }
 
     [TestMethod]
-    public void StudyOptimize_WithDynamicRangeSearchSpace_Throws()
+    public void StudyOptimize_WithDynamicRangeSearchSpace_Throws_WithVerbatimMessage()
     {
         var study = NewStudy(new BruteForceSampler(), "dyn");
         var act = () => study.Optimize(t => t.SuggestInt("x", -1, t.Number), nTrials: 10);
-        act.Should().Throw<NumSharp.ValueError>();
+        // The reference formats choices_old as a list and choices_new as a tuple:
+        // `list(self.children)` -> [...], `_enumerate_candidates(...)` -> (...).
+        act.Should().Throw<NumSharp.ValueError>()
+            .Which.Message.Should().Be("search_space mismatch in x: [-1, 0, 1] != (-1, 0)");
+    }
+
+    [TestMethod]
+    public void SearchSpaceMismatch_WithSingleNewCandidate_RendersTupleWithTrailingComma()
+    {
+        var study = NewStudy(new BruteForceSampler(), "one-cand");
+        study.AddTrial(FrozenTrial.CreateTrial(
+            value: 0.0,
+            @params: new OrderedDict<string, object?> { ["x"] = 0L },
+            distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new IntDistribution(0, 1) }));
+
+        // suggest_int(0, 0) is single-valued (no sampling), but after_trial rebuilds the tree and
+        // the (0, 0, 1) candidate set — a one-tuple `(0,)` — clashes with the added trial's (0, 1, 1).
+        var act = () => study.Optimize(t => (double)t.SuggestInt("x", 0, 0), nTrials: 3);
+        act.Should().Throw<NumSharp.ValueError>()
+            .Which.Message.Should().Be("search_space mismatch in x: [0, 1] != (0,)");
     }
 
     [TestMethod]

@@ -329,14 +329,22 @@ public class BruteForceSampler : BaseSampler
         return result;
     }
 
-    /// <summary>Python-repr of an enumerated candidate list (for the search-space-mismatch error).</summary>
-    private static string FormatCandidateList(ChoicesArgs args)
+    /// <summary>
+    ///     Python-repr of an enumerated candidate sequence for the search-space-mismatch error.
+    ///     The reference prints <c>choices_old = list(self.children)</c> (a list, <c>[...]</c>) but
+    ///     <c>choices_new = _enumerate_candidates(...)</c> (a tuple, <c>(...)</c>), so the two sides
+    ///     bracket differently.
+    /// </summary>
+    private static string FormatCandidates(ChoicesArgs args, bool asTuple)
     {
         var candidates = EnumerateCandidates(args);
-        IEnumerable<string> parts = args.IsInt
+        var parts = (args.IsInt
             ? candidates.Select(v => ((long)v).ToString(CultureInfo.InvariantCulture))
-            : candidates.Select(PythonRepr.FloatRepr);
-        return "[" + string.Join(", ", parts) + "]";
+            : candidates.Select(PythonRepr.FloatRepr)).ToList();
+        if (!asTuple)
+            return "[" + string.Join(", ", parts) + "]";
+        // Python tuple repr: `()`, `(a,)`, `(a, b, ...)`.
+        return parts.Count == 1 ? $"({parts[0]},)" : "(" + string.Join(", ", parts) + ")";
     }
 
     /// <summary>Python <c>!=</c> on the optional <c>choices_args</c> tuples (<c>None == None</c>).</summary>
@@ -478,8 +486,8 @@ public class BruteForceSampler : BaseSampler
                 throw new ValueError($"param_name mismatch: {ParamName ?? "None"} != {paramName ?? "None"}");
             if (!ArgsEqual(choicesArgs, ChoicesArgsValue))
             {
-                string choicesOld = FormatCandidateList(ChoicesArgsValue!.Value);
-                string choicesNew = FormatCandidateList(choicesArgs!.Value);
+                string choicesOld = FormatCandidates(ChoicesArgsValue!.Value, asTuple: false);
+                string choicesNew = FormatCandidates(choicesArgs!.Value, asTuple: true);
                 throw new ValueError($"search_space mismatch in {paramName ?? "None"}: {choicesOld} != {choicesNew}");
             }
         }
