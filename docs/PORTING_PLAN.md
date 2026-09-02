@@ -34,14 +34,14 @@ with no external package on either side.
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 2.6** — Terminator framework + non-GP evaluators
+### ▶ CONTINUE HERE: **Phase 2.7** — Importance framework + PED-ANOVA
 
-Phases 0, 1 and 2.1–2.5 are complete, committed, and proven green (240 unit + 76 live-interop
-tests, both TFMs, none skipped). The next unstarted work item in plan order is **2.6**. Read
-`src/optuna/optuna/terminator/*` (minus the regret/EMMR improvement evaluators — those ride the GP
-stack in 3.3), run it, then port the `Terminator` + `TerminatorCallback` plus the non-GP evaluators
-(`StaticErrorEvaluator`, `BestValueStagnationEvaluator`, `MedianErrorEvaluator`,
-`CrossValidationErrorEvaluator`); reuse the interop parity engine (below) to prove it bit-exact.
+Phases 0, 1 and 2.1–2.6 are complete, committed, and proven green (260 unit + 82 live-interop
+tests, both TFMs, none skipped). The next unstarted work item in plan order is **2.7**. Read
+`src/optuna/optuna/importance/__init__.py` + `_ped_anova/*`, run it, then port the importance
+framework and the **PED-ANOVA** evaluator (pure-numpy Parzen; NumSharp throughout); reuse the
+interop parity engine (below) to prove it bit-exact. Note: `study/_multi_objective.py` (2.10's first
+half) is already landed as `Internal/MultiObjective.cs`.
 
 ### Phase status
 
@@ -49,7 +49,7 @@ stack in 3.3), run it, then port the `Terminator` + `TerminatorCallback` plus th
 |---|---|---|
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
-| 2 — Native features | 🟩 | **2.1–2.5 done**; 2.6 onward not started; 2.10 & prereqs partially landed (see below) |
+| 2 — Native features | 🟩 | **2.1–2.6 done**; 2.7 onward not started; 2.10 & prereqs partially landed (see below) |
 | 3 — Native heavy tail | ⬜ | not started |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
@@ -86,6 +86,20 @@ stack in 3.3), run it, then port the `Terminator` + `TerminatorCallback` plus th
   which also matters for `OrderedDict<double,_>` keys). 20 unit tests (a port of Optuna's own
   `test_brute_force.py`, incl. the hardcoded seed=42 ask/tell sequences) + 9 live full-state parity
   tests across seeds/spaces.
+- ✅ **2.6** — `feat(terminator): Phase 2.6 — Terminator framework + non-GP evaluators` (`cc7c6e2`).
+  New `OptunaSharp.Terminator` namespace porting `terminator/*` minus the GP improvement evaluators:
+  `BaseTerminator`/`Terminator` (deprecation `FutureWarning` + `min_n_trials` gate + the
+  `BestValueStagnation → StaticErrorEvaluator(0)` error-evaluator selection), `TerminatorCallback`
+  (implicit-convertible to `Action<Study,FrozenTrial>`, calls `study.Stop()`), `BaseErrorEvaluator`/
+  `CrossValidationErrorEvaluator` (best-trial cv-score scaled std; `np.var` reproduced with
+  sequential two-pass summation — bit-exact for the <128-element cv arrays) / `StaticErrorEvaluator`
+  + `TerminatorFunctions.ReportCrossValidationScores`, `BaseImprovementEvaluator`/
+  `BestValueStagnationEvaluator`, `MedianErrorEvaluator` (cached median×ratio; `-sys.float_info.min`/
+  `sys.float_info.max` sentinels reproduced bit-exactly). `RegretBoundEvaluator` (the default
+  improvement evaluator) and `EMMREvaluator` are benign-construction placeholders that throw on
+  `Evaluate` until the GP stack (**3.3**) — same pattern as the `TPESampler` placeholder. 19 unit
+  tests (a port of Optuna's own `tests/terminator_tests/*`) + 6 live parity tests (decision sequence,
+  scaled CV error bit-exact, median threshold) across both directions.
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -144,8 +158,8 @@ stack in 3.3), run it, then port the `Terminator` + `TerminatorCallback` plus th
   fails *inside* `NumSharp.Core`, that's the sibling checkout, not OptunaSharp** — point
   `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
   fallback.
-- **Test:** `dotnet test test/OptunaSharp.Tests/...` (240 unit, both TFMs) and
-  `dotnet test test/OptunaSharp.Tests.Interop/...` (76 live-Optuna tests; self-skip Inconclusive
+- **Test:** `dotnet test test/OptunaSharp.Tests/...` (260 unit, both TFMs) and
+  `dotnet test test/OptunaSharp.Tests.Interop/...` (82 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
 - **Interop Python is pinned to the vendored reference.** The live-interop suite runs against the
   submodule's Optuna **5.0.0.dev** (`pip install -e src/optuna --no-deps`), not the stale PyPI build.
@@ -271,7 +285,7 @@ Prerequisite to everything; order within the phase is the dependency order.
 **Phase 1 ≈ 1.65k py → ~3.55k C#. Estimate: 3–4 weeks.**
 Exit gate: journal-file Python↔C# live interop green — **cross-language persistence with zero external deps on either side**.
 
-## Phase 2 — Native features, easiest first — 🟩 IN PROGRESS (2.1–2.5 done; **next: 2.6**)
+## Phase 2 — Native features, easiest first — 🟩 IN PROGRESS (2.1–2.6 done; **next: 2.7**)
 
 Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 ledger).
 
@@ -282,8 +296,8 @@ Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 led
 | 2.3 | ✅ | `WilcoxonPruner` | `pruners/_wilcoxon.py` | ~100 | 300 | 🟢 | self-contained signed-rank test (`Internal/SignedRankTest.cs`, no scipy) |
 | 2.4 | ✅ | `PartialFixedSampler`, `GridSampler` | `samplers/_partial_fixed.py`, `_grid.py` | ~400 | 900 | 🟢 | 0.7 |
 | 2.5 | ✅ | `BruteForceSampler` | `samplers/_brute_force.py` | ~480 | 1,000 | 🟢+ | tree enumeration over dynamic spaces; the categorical-NaN quirk (`_is_nan`); bit-exact `rng.choice(p=)` via NumPy pairwise-sum + `searchsorted(side='right')`. `758189f` |
-| 2.6 | ⬜ **NEXT** | Terminator framework + non-GP evaluators (`StaticError`, `BestValueStagnation`, `MedianError`, `CrossValidationError`) | `terminator/*` minus regret/EMMR | ~300 | 700 | 🟢 | 0.8 |
-| 2.7 | ⬜ | Importance framework + **PED-ANOVA** | `importance/__init__.py`, `_ped_anova/*` | ~350 | 800 | 🟢+ | pure-numpy Parzen; NumSharp throughout |
+| 2.6 | ✅ | Terminator framework + non-GP evaluators (`StaticError`, `BestValueStagnation`, `MedianError`, `CrossValidationError`) | `terminator/*` minus regret/EMMR | ~300 | 700 | 🟢 | `OptunaSharp.Terminator` namespace; regret/EMMR are GP placeholders (throw until 3.3); `np.var`/`sys.float_info` sentinels bit-exact. `cc7c6e2` |
+| 2.7 | ⬜ **NEXT** | Importance framework + **PED-ANOVA** | `importance/__init__.py`, `_ped_anova/*` | ~350 | 800 | 🟢+ | pure-numpy Parzen; NumSharp throughout |
 | 2.8 | ⬜ | **TPE stage 1 — the default sampler, univariate** | `_tpe/_erf.py`, `_truncnorm.py`, `parzen_estimator.py`, `probability_distributions.py`, `sampler.py` core | ~800 | 2,600 | 🟡 | 0.4; **`_erf` already ported** (`Internal/Erf.cs`); port `_truncnorm` exactly; replace the `TPESampler` placeholder; **bit-exact oracle vs Python TPE** is the flagship parity claim |
 | 2.9 | ⬜ | TPE stage 2 — `multivariate`, `group`, `constant_liar`, weights | `_tpe/sampler.py` rest | ~300 | 900 | 🟡 | 2.8 |
 | 2.10 | 🟩 | **MO machinery**: non-dominated sort, WFG hypervolume, HSSP, box decomposition, Pareto front | `study/_multi_objective.py`, `_hypervolume/*` | ~400 | 1,100 | 🟡 | **`study/_multi_objective.py` half done** (`Internal/MultiObjective.cs`, from 0.8); remaining = `_hypervolume/*` |
