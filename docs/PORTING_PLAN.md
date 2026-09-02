@@ -119,6 +119,14 @@ stack in 3.3), run it, then port the `Terminator` + `TerminatorCallback` plus th
   for the derived **MO Pareto `best_trials`** set; the audit found parity bit-identical everywhere
   except passing a NaN distribution bound (pathological input → numpy's incidental `OverflowError`
   in Python vs a clean `ValueError` in C#; both raise, not an Optuna typed error).
+- ✅ A 2026-09-02 **BruteForceSampler audit** (`f0fdb12`) ran an offline differential fuzz — 205
+  studies / ~7k trials over conditional dynamic spaces, big-int (pairwise-sum n>128),
+  multi-objective, log-int, deep nesting, mixed float/int/categorical, `avoid_premature_stop`, and
+  bool/int/float categoricals — asserting per-trial order/state/values/params (external + internal,
+  bit-level IEEE) against live Optuna 5.0.0.dev, plus verbatim parity of all four error messages and
+  the `reseed_rng`/`before_trial` structural behaviors. Everything matched except one message-format
+  bug (the `search_space mismatch` `choices_new` must render as a Python tuple, not a list), now
+  fixed and regression-tested.
 - ⬜ **Committed-corpus oracle** (`test/oracle/gen_optuna_oracle.py` + `OptunaSharp.Tests.Oracle`,
   no-Python-at-test-time replay) — **still deferred**, exactly as §4/CLAUDE.md anticipate. The live
   suite covers the gap for now. Build it when the algorithm surface is large enough to snapshot
