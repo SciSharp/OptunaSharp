@@ -28,6 +28,96 @@ with no external package on either side.
 
 ---
 
+## 0. Progress ledger — where we are, where to continue
+
+> **Status as of 2026-09-02.** Legend: ✅ done & green · 🟩 partially landed (some sub-parts done as
+> byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
+> agent should read. Per-item detail is in the phase tables below (the same `#` ids).
+
+### ▶ CONTINUE HERE: **Phase 2.4** — `PartialFixedSampler` + `GridSampler`
+
+Phases 0, 1 and the pruner batch (2.1–2.3) are complete, committed, and proven green (210 unit +
+48 live-interop tests, both TFMs, none skipped). The next unstarted work item in plan order is
+**2.4**. Read `src/optuna/optuna/samplers/_partial_fixed.py` and `_grid.py`, run them, then port —
+reuse the interop parity engine (below) to prove each new sampler bit-exact.
+
+### Phase status
+
+| Phase | Status | Notes |
+|---|---|---|
+| 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
+| 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
+| 2 — Native features | 🟩 | **2.1–2.3 done**; 2.4 onward not started; 2.10 & prereqs partially landed (see below) |
+| 3 — Native heavy tail | ⬜ | not started |
+| 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
+| 5 — External integrations (Tier X) | ⬜ | not started |
+
+### Done work items (with the commit that landed them)
+
+- ✅ **0.1–0.9** — `feat(core): Phase 0 complete` (`2763190`). Exceptions/enums/logging seam,
+  distributions + JSON round-trip, `LazyRandomState`, `SearchSpaceTransform`, Trial family,
+  `BaseStorage`+`InMemoryStorage`, sampler contract + `RandomSampler` + intersection/group search
+  spaces, `Study`+optimize/ask/tell, `Optuna.*` module fns. **0.9 gate passed bit-exact.**
+- ✅ **1.1–1.5** — `feat(storage): Phase 1 complete` (`5323849`). `JournalStorage`+file backend+locks
+  (byte-compatible JSON-lines), `CachedStorage`+`ICachedStorageBackend` seam, heartbeat+retry
+  callbacks, artifacts (protocol/FileSystem/backoff/upload-download), copy/delete/summaries.
+- ✅ **2.1–2.3** — `feat(pruners): ...` (`0504dab`). `Nop`/`Threshold`/`Patient`/`Median`/`Percentile`
+  (Median/Percentile/Nop actually landed in Phase 0 since `Study` defaults to `MedianPruner`),
+  `SuccessiveHalving`(ASHA)/`Hyperband` (CRC-32 bracket routing), `Wilcoxon` (self-contained
+  signed-rank test, no scipy).
+- ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
+- ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
+
+### 🟩 Byproducts already landed that later items depend on (don't re-port these)
+
+- **`Internal/Erf.cs`** — full FreeBSD `s_erf.c` `erf`/`erfc` + Optuna's vectorized `_tpe/_erf.py`
+  variant + norm cdf/sf. Built for Wilcoxon; it is also the **2.8 TPE** `_erf` prerequisite — done.
+- **`Internal/SignedRankTest.cs`** — scipy-1.16-exact Wilcoxon signed-rank (exact/permutation/
+  asymptotic branches). Done for 2.3.
+- **`Internal/MultiObjective.cs`** — `study/_multi_objective.py` port: non-dominated sort,
+  `_dominates`, `_fast_non_domination_rank`, `_calculate_nondomination_rank`, 2-D/N-D Pareto front,
+  `np.unique(axis=0)` semantics. Landed for Phase 0.8 `best_trials`. **This is the first half of
+  2.10** — what remains for 2.10 is `_hypervolume/*` (WFG, HSSP, box decomposition).
+- **`Samplers/TPESampler.cs`** — placeholder: constructs fine (so default-sampler `load_study`/
+  `copy_study`/summaries work), but **throws `NotImplementedException` on sample**. Replace its body
+  when porting **2.8**; Optuna's default-sampler identity is intentionally preserved.
+- `trials_dataframe` ships as a dependency-free `TrialsTable` (Core stays pure); the
+  `Microsoft.Data.Analysis` adapter remains Tier X (5.4).
+
+### Validation infra — current state vs. §4 target
+
+- ✅ **Live differential interop** (`OptunaSharp.Tests.Interop`) is the working differential gate and
+  is now substantial: a NumSharp-style Pythonic harness (`OptunaInteropTestBase`), a full-state
+  **`StudySnapshot`** capture/parse/`AssertParity` (bit-exact floats, distribution-JSON equality,
+  instant-datetime parity), and a seeded **`ParityScenario`** differential fuzzer (mixed spaces;
+  NaN/±inf; unicode/nested attrs; constraints; complete/fail/prune; enqueue+waiting). Includes a
+  **raw journal line-format gate** (it already caught one real byte-format bug: categorical
+  `param_value_internal` is an int in Python's journal, not a float — fixed).
+- ⬜ **Committed-corpus oracle** (`test/oracle/gen_optuna_oracle.py` + `OptunaSharp.Tests.Oracle`,
+  no-Python-at-test-time replay) — **still deferred**, exactly as §4/CLAUDE.md anticipate. The live
+  suite covers the gap for now. Build it when the algorithm surface is large enough to snapshot
+  (natural point: alongside/after TPE 2.8, the flagship bit-exact claim).
+- ⬜ **`MisalignedRegistry`** — not yet a formal ledger; documented divergences currently live as
+  in-source `[Misaligned]` comments (e.g. journal snapshot bytes are OptunaSharp JSON, not pickle).
+
+### Build / test notes for the next agent
+
+- **Build:** `dotnet build SciSharp.OptunaSharp.sln -c Release -p:SkipNDScopeWeave=true
+  -p:GeneratePackageOnBuild=false`. NumSharp resolves as sibling `ProjectReference` → NuGet fallback
+  (see main §"NumSharp reference" in CLAUDE.md). A new MSBuild property **`NumSharpCoreProject`**
+  (settable via env var of the same name) pins an alternate NumSharp checkout — added because the
+  sibling working tree was temporarily mid-edit and wouldn't compile during this work. **If a build
+  fails *inside* `NumSharp.Core`, that's the sibling checkout, not OptunaSharp** — point
+  `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
+  fallback.
+- **Test:** `dotnet test test/OptunaSharp.Tests/...` (210 unit, both TFMs) and
+  `dotnet test test/OptunaSharp.Tests.Interop/...` (48 live-Optuna tests; self-skip Inconclusive
+  without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
+- **Reuse the parity engine** for every new sampler/pruner: extend `ParityScenario`'s space/op pools
+  and assert with `StudySnapshot.AssertParity` — that is the intended "prove it bit-exact" path.
+
+---
+
 ## 1. Goals & non-goals
 
 **Goals**
@@ -108,7 +198,7 @@ Copy of NumSharp's differential-fuzz pipeline, adapted:
 
 # TIER N — pure managed (BCL + NumSharp only)
 
-## Phase 0 — Core framework
+## Phase 0 — Core framework — ✅ COMPLETE (`2763190`)
 
 Prerequisite to everything; order within the phase is the dependency order.
 
@@ -126,7 +216,7 @@ Prerequisite to everything; order within the phase is the dependency order.
 
 **Phase 0 ≈ 4.5k py → ~9.9k C#. Estimate: 5–6 weeks.**
 
-## Phase 1 — Native persistence & infra (pure file/memory)
+## Phase 1 — Native persistence & infra (pure file/memory) — ✅ COMPLETE (`5323849`)
 
 | # | Work item | Optuna source | py SLOC | est. C# | Difficulty | Notes |
 |---|---|---|--:|--:|---|---|
@@ -139,32 +229,34 @@ Prerequisite to everything; order within the phase is the dependency order.
 **Phase 1 ≈ 1.65k py → ~3.55k C#. Estimate: 3–4 weeks.**
 Exit gate: journal-file Python↔C# live interop green — **cross-language persistence with zero external deps on either side**.
 
-## Phase 2 — Native features, easiest first
+## Phase 2 — Native features, easiest first — 🟩 IN PROGRESS (2.1–2.3 done; **next: 2.4**)
 
-| # | Feature | Optuna source | py SLOC | est. C# | Difficulty | Depends on |
-|---|---|---|--:|--:|---|---|
-| 2.1 | Pruners batch 1: `Nop`, `Threshold`, `Patient`, `Median`, `Percentile` | `pruners/*` | ~300 | 700 | 🟢 trivial | 0.5, 0.8 |
-| 2.2 | Pruners batch 2: `SuccessiveHalving` (ASHA), `Hyperband` | `pruners/_successive_halving.py`, `_hyperband.py` | ~250 | 650 | 🟢 | 2.1 |
-| 2.3 | `WilcoxonPruner` | `pruners/_wilcoxon.py` | ~100 | 300 | 🟢 | self-contained signed-rank test (no scipy — verified vs scipy in oracle gen) |
-| 2.4 | `PartialFixedSampler`, `GridSampler` | `samplers/_partial_fixed.py`, `_grid.py` | ~400 | 900 | 🟢 | 0.7 |
-| 2.5 | `BruteForceSampler` | `samplers/_brute_force.py` | ~480 | 1,000 | 🟢+ | tree enumeration over dynamic spaces; the categorical-NaN quirk (`_is_nan`) |
-| 2.6 | Terminator framework + non-GP evaluators (`StaticError`, `BestValueStagnation`, `MedianError`, `CrossValidationError`) | `terminator/*` minus regret/EMMR | ~300 | 700 | 🟢 | 0.8 |
-| 2.7 | Importance framework + **PED-ANOVA** | `importance/__init__.py`, `_ped_anova/*` | ~350 | 800 | 🟢+ | pure-numpy Parzen; NumSharp throughout |
-| 2.8 | **TPE stage 1 — the default sampler, univariate** | `_tpe/_erf.py`, `_truncnorm.py`, `parzen_estimator.py`, `probability_distributions.py`, `sampler.py` core | ~800 | 2,600 | 🟡 | 0.4; port `_erf`/`_truncnorm` exactly (they exist so scipy isn't needed); **bit-exact oracle vs Python TPE** is the flagship parity claim |
-| 2.9 | TPE stage 2 — `multivariate`, `group`, `constant_liar`, weights | `_tpe/sampler.py` rest | ~300 | 900 | 🟡 | 2.8 |
-| 2.10 | **MO machinery**: non-dominated sort, WFG hypervolume, HSSP, box decomposition, Pareto front | `study/_multi_objective.py`, `_hypervolume/*` | ~400 | 1,100 | 🟡 | NumSharp array code |
-| 2.11 | TPE stage 3 — MOTPE + constraints | `_tpe/sampler.py` MO split | ~150 | 450 | 🟡 | 2.9, 2.10 |
-| 2.12 | **QMC sampler** (Sobol + Halton, scrambling) | `samplers/_qmc.py` + scipy behavior | ~172 | 1,600 | 🟡 | Sobol direction numbers lifted from `rustuna_sampler/src/qmc/sobol/direction_numbers.rs`; scrambled sequences oracle-pinned vs scipy |
-| 2.13 | **NSGA-II** (6 crossovers, polynomial mutation, elite selection, constraints) | `samplers/nsgaii/*`, `_ga/_base.py` | ~1,000 | 2,400 | 🟡 | 2.10; crossover object-array site → `CategoricalChoice[]` |
-| 2.14 | NSGA-III (reference points, niching) | `samplers/_nsgaiii/*` | ~390 | 950 | 🟡+ | 2.13 |
-| 2.15 | Managed numeric primitives for 2.16/3.2: symmetric `eigh` (cyclic Jacobi), unblocked `cholesky`, `solve_triangular` | — (NumSharp.Core has no managed eigen/cholesky) | — | 500 | 🟡 | small dims (CMA-ES: search-space rank; GP: ≤ trial count) → O(n³) managed is fine. Tolerance oracle vs LAPACK; **byte-exact upgrade switch lives in Tier X (5.5)** |
-| 2.16 | **CMA-ES** — port the external `cmaes` package (CMA, sep-CMA, IPOP/BIPOP restarts, margin, lr-adapt) + `CmaEsSampler` | `samplers/_cmaes.py` + `CyberAgentAILab/cmaes` (~1.8k py) | ~2,300 | 4,500 | 🟠 | 2.15. Trajectory oracle is tolerance-based on the native `eigh` (byte-exact under 5.5). Optimizer state → own JSON (pickle non-goal, `[Misaligned]`) |
+Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 ledger).
+
+| # | St | Feature | Optuna source | py SLOC | est. C# | Difficulty | Depends on |
+|---|---|---|---|--:|--:|---|---|
+| 2.1 | ✅ | Pruners batch 1: `Nop`, `Threshold`, `Patient`, `Median`, `Percentile` | `pruners/*` | ~300 | 700 | 🟢 trivial | 0.5, 0.8 |
+| 2.2 | ✅ | Pruners batch 2: `SuccessiveHalving` (ASHA), `Hyperband` | `pruners/_successive_halving.py`, `_hyperband.py` | ~250 | 650 | 🟢 | 2.1 |
+| 2.3 | ✅ | `WilcoxonPruner` | `pruners/_wilcoxon.py` | ~100 | 300 | 🟢 | self-contained signed-rank test (`Internal/SignedRankTest.cs`, no scipy) |
+| 2.4 | ⬜ **NEXT** | `PartialFixedSampler`, `GridSampler` | `samplers/_partial_fixed.py`, `_grid.py` | ~400 | 900 | 🟢 | 0.7 |
+| 2.5 | ⬜ | `BruteForceSampler` | `samplers/_brute_force.py` | ~480 | 1,000 | 🟢+ | tree enumeration over dynamic spaces; the categorical-NaN quirk (`_is_nan`) |
+| 2.6 | ⬜ | Terminator framework + non-GP evaluators (`StaticError`, `BestValueStagnation`, `MedianError`, `CrossValidationError`) | `terminator/*` minus regret/EMMR | ~300 | 700 | 🟢 | 0.8 |
+| 2.7 | ⬜ | Importance framework + **PED-ANOVA** | `importance/__init__.py`, `_ped_anova/*` | ~350 | 800 | 🟢+ | pure-numpy Parzen; NumSharp throughout |
+| 2.8 | ⬜ | **TPE stage 1 — the default sampler, univariate** | `_tpe/_erf.py`, `_truncnorm.py`, `parzen_estimator.py`, `probability_distributions.py`, `sampler.py` core | ~800 | 2,600 | 🟡 | 0.4; **`_erf` already ported** (`Internal/Erf.cs`); port `_truncnorm` exactly; replace the `TPESampler` placeholder; **bit-exact oracle vs Python TPE** is the flagship parity claim |
+| 2.9 | ⬜ | TPE stage 2 — `multivariate`, `group`, `constant_liar`, weights | `_tpe/sampler.py` rest | ~300 | 900 | 🟡 | 2.8 |
+| 2.10 | 🟩 | **MO machinery**: non-dominated sort, WFG hypervolume, HSSP, box decomposition, Pareto front | `study/_multi_objective.py`, `_hypervolume/*` | ~400 | 1,100 | 🟡 | **`study/_multi_objective.py` half done** (`Internal/MultiObjective.cs`, from 0.8); remaining = `_hypervolume/*` |
+| 2.11 | ⬜ | TPE stage 3 — MOTPE + constraints | `_tpe/sampler.py` MO split | ~150 | 450 | 🟡 | 2.9, 2.10 |
+| 2.12 | ⬜ | **QMC sampler** (Sobol + Halton, scrambling) | `samplers/_qmc.py` + scipy behavior | ~172 | 1,600 | 🟡 | Sobol direction numbers lifted from `rustuna_sampler/src/qmc/sobol/direction_numbers.rs`; scrambled sequences oracle-pinned vs scipy |
+| 2.13 | ⬜ | **NSGA-II** (6 crossovers, polynomial mutation, elite selection, constraints) | `samplers/nsgaii/*`, `_ga/_base.py` | ~1,000 | 2,400 | 🟡 | 2.10; crossover object-array site → `CategoricalChoice[]` |
+| 2.14 | ⬜ | NSGA-III (reference points, niching) | `samplers/_nsgaiii/*` | ~390 | 950 | 🟡+ | 2.13 |
+| 2.15 | ⬜ | Managed numeric primitives for 2.16/3.2: symmetric `eigh` (cyclic Jacobi), unblocked `cholesky`, `solve_triangular` | — (NumSharp.Core has no managed eigen/cholesky) | — | 500 | 🟡 | small dims (CMA-ES: search-space rank; GP: ≤ trial count) → O(n³) managed is fine. Tolerance oracle vs LAPACK; **byte-exact upgrade switch lives in Tier X (5.5)** |
+| 2.16 | ⬜ | **CMA-ES** — port the external `cmaes` package (CMA, sep-CMA, IPOP/BIPOP restarts, margin, lr-adapt) + `CmaEsSampler` | `samplers/_cmaes.py` + `CyberAgentAILab/cmaes` (~1.8k py) | ~2,300 | 4,500 | 🟠 | 2.15. Trajectory oracle is tolerance-based on the native `eigh` (byte-exact under 5.5). Optimizer state → own JSON (pickle non-goal, `[Misaligned]`) |
 
 **Phase 2 ≈ 7.7k py → ~20.1k C#. Estimate: 14–17 weeks.**
 Milestone after 2.11: **"Optuna default experience" complete** — TPE + MedianPruner bit-exact with
 Python, persisted to a journal file Python can open. Zero external deps.
 
-## Phase 3 — Native heavy tail
+## Phase 3 — Native heavy tail — ⬜ NOT STARTED
 
 | # | Feature | Optuna source | py SLOC | est. C# | Difficulty | Notes |
 |---|---|---|--:|--:|---|---|
@@ -179,7 +271,7 @@ Exit gate = **Tier N complete**: the full Optuna algorithm surface, pure managed
 
 # TIER X — external dependencies & integrations (last)
 
-## Phase 4 — External storage & transport
+## Phase 4 — External storage & transport — ⬜ NOT STARTED (Tier X)
 
 | # | Work item | Optuna source | py SLOC | est. C# | Package | Notes |
 |---|---|---|--:|--:|---|---|
@@ -191,7 +283,7 @@ Exit gate = **Tier N complete**: the full Optuna algorithm surface, pure managed
 
 **Phase 4 ≈ 4.4k py → ~7.65k C#. Estimate: 5–6 weeks.**
 
-## Phase 5 — External integrations & upgrades
+## Phase 5 — External integrations & upgrades — ⬜ NOT STARTED (Tier X)
 
 | # | Work item | py SLOC | est. C# | Package | Notes |
 |---|---|--:|--:|---|---|
