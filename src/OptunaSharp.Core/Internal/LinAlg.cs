@@ -25,6 +25,22 @@ internal static class LinAlg
     internal static double[] Solve(double[,] a, double[] b)
         => np.linalg.solve(np.array(a), np.array(b)).ToArray<double>();
 
+    /// <summary>Matrix product <c>a · b</c> — <c>np.dot</c> (CBLAS <c>gemm</c>, byte-identical to NumPy).</summary>
+    internal static double[,] Dot(double[,] a, double[,] b)
+        => To2D(np.dot(np.array(a), np.array(b)), a.GetLength(0), b.GetLength(1));
+
+    /// <summary>Matrix-vector product <c>a · b</c> — <c>np.dot</c> (byte-identical to NumPy).</summary>
+    internal static double[] Dot(double[,] a, double[] b)
+        => np.dot(np.array(a), np.array(b)).ToArray<double>();
+
+    /// <summary>Outer product <c>a ⊗ b</c> — <c>np.outer</c> (an elementwise product, exact).</summary>
+    internal static double[,] Outer(double[] a, double[] b)
+        => To2D(np.outer(np.array(a), np.array(b)), a.Length, b.Length);
+
+    /// <summary>Euclidean norm <c>‖a‖₂</c> — <c>np.linalg.norm</c>.</summary>
+    internal static double Norm(double[] a)
+        => (double)np.linalg.norm(np.array(a));
+
     /// <summary>The rank of <paramref name="a" /> — <c>np.linalg.matrix_rank</c> (SVD-based tolerance).</summary>
     internal static int MatrixRank(double[,] a)
         => (int)Convert.ToInt64(np.linalg.matrix_rank(np.array(a)).GetValue(0));

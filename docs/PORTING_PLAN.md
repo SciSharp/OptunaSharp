@@ -45,24 +45,31 @@ OptunaSharp can share a live journal file with no external package on either sid
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 2.16** — CMA-ES (port the `cmaes` package + `CmaEsSampler`)
+### ▶ CONTINUE HERE: **Phase 2.16 part 2** — SepCMA + CMAwM + Warm-Starting for `CmaEsSampler`
 
-Phases 0, 1 and **2.1–2.15 are complete** (the whole TPE surface, pruners, PED-ANOVA, terminators, the
-MO hypervolume/HSSP machinery, the non-scrambled QMC sampler, the full NSGA-II **and** NSGA-III
-genetic-algorithm samplers, and now the OpenBLAS-backed linalg primitives), committed and proven green
-(**393 unit + 151 live-interop tests**, both TFMs, none skipped). **2.15 landed `Internal/LinAlg.cs`**
-— but the maintainer redirected it (see the ⚠️ dependency-model note above): instead of hand-rolled
-managed eigh/cholesky, Core now references **`NumSharp.Interop.OpenBLAS`** and `LinAlg` delegates to
-NumSharp's `np.linalg.cholesky`/`eigh`/`solve`/`matrix_rank`, which run through LAPACK and are
-**byte-identical to NumPy** (verified: cholesky, eigh values+vectors incl. signs, and solve match numpy
-2.4.2 bit-for-bit over a 90-case sweep). This retro-upgraded NSGA-III's hyperplane solve to byte-exact
-(the 2.14 ULP tolerance point is now gone; the 400-config differential still passes). Next:
-- **2.16 — CMA-ES.** Port the external `cmaes` package (`CyberAgentAILab/cmaes` v0.13.0, pip-installed
-  here — CMA, sep-CMA, IPOP/BIPOP restarts, margin, lr-adapt) + `samplers/_cmaes.py`'s `CmaEsSampler`.
-  The eigendecomposition (`D2, B = np.linalg.eigh(self._C)`) now goes through `LinAlg.Eigh` (byte-exact
-  incl. eigenvector signs), so — unlike the plan's original tolerance expectation — CMA-ES sampling
-  should be **byte-exact**, not tolerance-bounded. Optimizer state → own JSON (pickle non-goal,
-  `[Misaligned]`).
+Phases 0, 1 and **2.1–2.15 are complete**, and **2.16 part 1 — the base CMA-ES sampler — is now done**
+(the whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP machinery, the
+non-scrambled QMC sampler, the full NSGA-II **and** NSGA-III genetic-algorithm samplers, the
+OpenBLAS-backed linalg primitives, and now `CmaEsSampler` over the ported `cmaes.CMA` optimizer),
+committed and proven green (**411 unit + 160 live-interop tests**, both TFMs, none skipped).
+- ✅ **2.16 part 1 — base CMA-ES (`CmaEsSampler` + `Cma`).** Ported `cmaes.CMA` (`Samplers/CmaEs/Cma.cs`,
+  CMA + `lr_adapt`) and `samplers/_cmaes.py`'s `CmaEsSampler` (default + `lr_adapt`, deprecated
+  `x0`/`sigma0`, `popsize`, `consider_pruned_trials`, `n_startup_trials`, independent-sampler fallback,
+  MO guard, verbatim validation errors). **Bit-exact vs cmaes 0.13.0** as the plan predicted (`D2,B =
+  eigh(C)` → `LinAlg.Eigh`/OpenBLAS), NOT tolerance-bounded. Optimizer state → own JSON (`[Misaligned]`,
+  pickle non-goal, no cross-language mid-CMA resume). See the 2.16 done-item below for the two subtle
+  bit-exactness fixes it required (upper-triangle covariance symmetry across the state round-trip; the
+  `y_w` sequential reduction).
+- ⬜ **2.16 part 2 — the experimental backends (NEXT).** All three currently throw
+  `NotSupportedException` from the sampler's `InitOptimizer` (the placeholder pattern); unguard each as
+  it lands. (a) `use_separable_cma` → port `cmaes.SepCMA` (`_sepcma.py`; self-contained diagonal `C`,
+  bit-exactable — **watch the reductions**: its constructor uses Python `sum()` (sequential) for the
+  weights, unlike CMA's `np.sum`, and its `y_w`/`rank_mu` are the same F-contiguous/strided sequential
+  sums the base CMA needed). (b) `source_trials` (Warm-Starting) → `get_warm_start_mgd` (`_warm_start.py`,
+  ~80 LOC; needs a small `LinAlg.Det` over `np.linalg.det`). (c) `with_margin` → `cmaes.CMAwM`
+  (`_cmawm.py`) — its margin correction rides scipy's `chi2.ppf`/`norm.cdf`, so it will be
+  **tolerance-bounded** (an erf-class `[Misaligned]`), not bit-exact. IPOP/BIPOP restarts are
+  deprecated→None in cmaes 0.13.0 and drop out.
 - **2.10 remainder — `box_decomposition.py`** stays deferred with its GP consumer (**3.2**).
 - **2.12 remainder — QMC scrambling** stays deferred (needs scipy's compiled Cython scramble over PCG64).
 - After 2.16: Phase 3 (viz data layer, GP). GP's `torch.linalg.cholesky`/`solve_triangular` map to
@@ -86,7 +93,7 @@ moment OptunaSharp.Core loads. Keep it.
 |---|---|---|
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
-| 2 — Native features | 🟩 | **2.1–2.15 done** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS-backed linalg primitives); box-decomp (3.2) + QMC scrambling deferred; **next: 2.16 CMA-ES** |
+| 2 — Native features | 🟩 | **2.1–2.15 done + 2.16 part 1** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **base CMA-ES `CmaEsSampler` bit-exact**); box-decomp (3.2) + QMC scrambling deferred; **next: 2.16 part 2 — SepCMA/CMAwM/warm-start** |
 | 3 — Native heavy tail | ⬜ | not started |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
@@ -365,6 +372,41 @@ moment OptunaSharp.Core loads. Keep it.
   **393 unit + 151 interop**, both TFMs, none skipped. **Caveat:** `NumSharp.Interop.OpenBLAS` is not on
   nuget.org yet, so the CI/pack PackageReference fallback needs it published; the sibling ProjectReference
   is the working path (pack already records the dependency cleanly for both TFMs).
+- ✅ **2.16 part 1** — `feat(samplers): Phase 2.16 part 1 — base CMA-ES (CmaEsSampler + Cma)`. Ported the
+  external `cmaes.CMA` optimizer into `Samplers/CmaEs/Cma.cs` (ask/tell/should_stop, CMA + learning-rate
+  adaptation, bounds resampling/repair, own-JSON state serialization) and `samplers/_cmaes.py`'s
+  `CmaEsSampler` into `Samplers/CmaEsSampler.cs` (`infer_relative_search_space` — intersection space,
+  drop single/categorical; `sample_relative` — restore-or-init optimizer, generation attribution +
+  solution-trial gathering, tell + store, per-trial reseed `randint(1,2**16)+trial.number`, ask,
+  untransform; `sample_independent`/`before_trial`/`after_trial` delegating to the seeded independent
+  `RandomSampler`; deprecated `x0`/`sigma0` `FutureWarning`s; experimental-argument `ExperimentalWarning`s;
+  verbatim `ValueError` validation for the incompatible-argument combinations; the MO guard). `LinAlg`
+  gained `Dot(m,m)`/`Dot(m,v)`/`Outer`/`Norm` over `np.dot`/`np.outer`/`np.linalg.norm` (CBLAS/OpenBLAS).
+  **Bit-exact vs cmaes 0.13.0** — the plan's byte-exact expectation held (eigh via `LinAlg.Eigh`), NOT
+  tolerance-bounded. Verified over a 23-config offline differential (12 seeds × dim 3 × 50 trials; dims
+  2/6/8/10; lr_adapt; popsize 6/12/20 — every trial's params/values/generation byte-identical) plus live
+  interop. 18 unit tests (hardcoded seed=42 trajectory, reproducibility, minimization, generation
+  attribution, all validation errors, experimental/deprecation warnings, the guarded-backend
+  `NotSupportedException`s, and Cma-state round-trip idempotency/determinism) + 9 live full-state parity
+  tests (float dim 2/3/5, lr_adapt, popsize 10/20, mixed float/int/categorical). Suite: **411 unit + 160
+  interop**, both TFMs, none skipped.
+  - **[Misaligned] optimizer state is our own JSON, not Python `pickle`.** Optuna stores
+    `pickle.dumps(optimizer).hex()` chunked into `cma:optimizer:{i}` system attrs; OptunaSharp stores an
+    equivalent `CmaState` JSON under the same chunked keys, so a study can NOT resume CMA-ES mid-run
+    across the Python/C# boundary. The interop parity tests exclude the `*:optimizer:*` attrs and compare
+    everything else (params, values, distributions, `cma:generation`) bit-for-bit.
+  - **Two subtle numpy-fidelity fixes were required (both verified against live cmaes).** (1) **Covariance
+    symmetry across the state round-trip.** `_C = B·diag(D²)·Bᵀ` via CBLAS is ~1 ULP asymmetric; Optuna's
+    pickle uses `_compress_symmetric`/`_decompress_symmetric` (store the UPPER triangle, mirror into both),
+    so a restored covariance is EXACTLY symmetric-from-upper — otherwise the next eigendecomposition's
+    `(C+Cᵀ)/2` averages `(upper+lower)/2 ≠ upper` and the eigenvectors (hence every ask) diverge. `ToState`
+    stores the covariance symmetrized-from-upper to match. (2) **`y_w` is a sequential reduction.**
+    `np.sum(y_k[:μ].T * w[:μ], axis=1)` reduces over the F-contiguous product's STRIDED axis, so numpy sums
+    it sequentially (its pairwise 8-way only fires on a contiguous/last-axis reduction); a `PairwiseSum`
+    there diverges once μ ≥ 8. `rank_mu` (axis=0 strided) and the `w_io` column norm are likewise
+    sequential, while contiguous 1-D `np.sum`s (weights, `sum_weights`) stay pairwise. General rule for the
+    remaining variants: **numpy `np.sum(..., axis=k)` over a strided axis is sequential; only a contiguous
+    last-axis / 1-D reduction is pairwise.**
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -425,13 +467,22 @@ moment OptunaSharp.Core loads. Keep it.
   `NSGAIISampler` over the shared GA stack) + `NSGAIIIElitePopulationSelectionStrategy` (reference-point
   niching: default-reference-point generation, filter-inf, ideal-point/ASF normalization, association,
   the `defaultdict` niche sweep). Its hyperplane fit calls `Internal/LinAlg` (2.15). Bit-exact vs Optuna.
-- **`Internal/LinAlg.cs` + `Internal/OpenBlasActivation.cs`** — **new in 2.15**. `LinAlg` is the
-  `double[,]`/`double[]` adapter over NumSharp's `np.linalg`: `Solve`/`MatrixRank`/`Cholesky`/`Eigh`
-  delegate to LAPACK via `NumSharp.Interop.OpenBLAS` → **byte-identical to NumPy** (used by NSGA-III now;
-  CMA-ES `Eigh` in 2.16; GP `Cholesky` in 3.2). `SolveTriangular` is the one still-managed primitive
-  (forward/back substitution — no NumSharp `dtrtrs`). `OpenBlasActivation` is a `[ModuleInitializer]` that
+- **`Internal/LinAlg.cs` + `Internal/OpenBlasActivation.cs`** — **new in 2.15**, extended in 2.16. `LinAlg`
+  is the `double[,]`/`double[]` adapter over NumSharp's `np.linalg`: `Solve`/`MatrixRank`/`Cholesky`/`Eigh`
+  delegate to LAPACK via `NumSharp.Interop.OpenBLAS` → **byte-identical to NumPy** (used by NSGA-III and
+  CMA-ES's `Eigh`; GP `Cholesky` in 3.2). **2.16 added** `Dot(m,m)`/`Dot(m,v)` (`np.dot` — CBLAS `gemm`),
+  `Outer` (`np.outer`), `Norm` (`np.linalg.norm`), all byte-exact. `SolveTriangular` is the one
+  still-managed primitive (forward/back substitution — no NumSharp `dtrtrs`); a `Det` (`np.linalg.det`) is
+  still to add for warm-start (2.16 part 2). `OpenBlasActivation` is a `[ModuleInitializer]` that
   force-loads the OpenBLAS backend (a bare reference does not trigger its self-registration — keep it).
   **Any future numpy-linalg site should use `LinAlg`/`np.linalg`, not a hand-rolled managed kernel.**
+- **`Samplers/CmaEs/Cma.cs` + `Samplers/CmaEsSampler.cs`** — **new in 2.16 part 1**. `Cma` is the ported
+  `cmaes.CMA` optimizer (ask/tell/should_stop, lr-adapt, `CmaState` own-JSON serialization with the
+  upper-triangle covariance symmetry); `CmaEsSampler` drives it. **SepCMA/CMAwM (2.16 part 2) reuse the
+  same numeric idioms** (`LinAlg.Dot/Eigh/Outer/Norm`, the strided-sequential vs contiguous-pairwise sum
+  rule, scalar `**2`→`Math.Pow`, `a/scalar`→elementwise divide) and the sampler's own-JSON state pattern.
+  `use_separable_cma`/`with_margin`/`source_trials` currently throw `NotSupportedException` from
+  `CmaEsSampler.InitOptimizer` — unguard each as its backend lands.
 - `trials_dataframe` ships as a dependency-free `TrialsTable`; the `Microsoft.Data.Analysis` adapter
   remains Tier X (5.4).
 
@@ -637,7 +688,8 @@ Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 led
 | 2.13 | ✅ | **NSGA-II** (6 crossovers, polynomial mutation, elite selection, constraints) | `samplers/nsgaii/*`, `_ga/_base.py` | ~1,000 | 2,400 | 🟡 | 2.10. Default + blx/sbx/vsbx/spx **bit-exact** vs live Optuna (full state); UNDX ≥2-D `[Misaligned]` (QR column signs). Crossover object-array → `object?[]`. `NSGAIISampler`+`BaseGASampler`+`Samplers/Nsgaii/*` |
 | 2.14 | ✅ | NSGA-III (reference points, niching) | `samplers/_nsgaiii/*` | ~390 | 950 | 🟡+ | 2.13. Reference-point niching over the reused `BaseGASampler`/crossovers/mutations. **Bit-exact** vs live Optuna — 400-config offline differential (0 divergence) + 11 live parity seeds. Reciprocal-multiplier LU `Solve`/`MatrixRank` (`NsgaiiiLinAlg`); numpy association `einsum` replicated term-by-term; `rng.shuffle` via index permutation. The flagged managed-linalg tolerance point did not surface |
 | 2.15 | ✅ | Numeric primitives for 2.16/3.2: `eigh`, `cholesky`, `solve`, `matrix_rank`, `solve_triangular` | `Internal/LinAlg.cs` + `OpenBlasActivation.cs` | — | 250 | 🟡 | **Redirected to OpenBLAS** (maintainer decision): Core references `NumSharp.Interop.OpenBLAS`; `LinAlg` delegates cholesky/eigh/solve/matrix_rank to `np.linalg` → **byte-identical to NumPy** (verified 90-case sweep). `solve_triangular` stays managed (no NumSharp `dtrtrs`). NSGA-III solve retro-upgraded to byte-exact. `[ModuleInitializer]` force-load required |
-| 2.16 | ⬜ **NEXT** | **CMA-ES** — port the external `cmaes` package (CMA, sep-CMA, IPOP/BIPOP restarts, margin, lr-adapt) + `CmaEsSampler` | `samplers/_cmaes.py` + `CyberAgentAILab/cmaes` (~1.8k py, v0.13.0 pip-installed) | ~2,300 | 4,500 | 🟠 | 2.15. `D2, B = np.linalg.eigh(C)` → `LinAlg.Eigh` (byte-exact incl. eigenvector signs) → CMA-ES sampling should be **byte-exact**, not tolerance-bounded as originally planned. Optimizer state → own JSON (pickle non-goal, `[Misaligned]`) |
+| 2.16 p1 | ✅ | **base CMA-ES** — `cmaes.CMA` (CMA + lr-adapt) + `CmaEsSampler` (default/lr_adapt/x0/sigma0/popsize/consider_pruned/startup) | `samplers/_cmaes.py` + `cmaes/_cma.py` (v0.13.0) | ~900 | 2,300 | ✅ | **byte-exact** vs cmaes 0.13.0 as predicted (`eigh`→`LinAlg.Eigh`). Optimizer state → own JSON (`[Misaligned]`). Fixes: upper-triangle covariance symmetry across round-trip; `y_w` sequential (F-contiguous axis sum) |
+| 2.16 p2 | ⬜ **NEXT** | **experimental backends** — `SepCMA` (`use_separable_cma`), `CMAwM` (`with_margin`), warm-start (`source_trials`) | `cmaes/_sepcma.py` + `_cmawm.py` + `_warm_start.py` | ~1,400 | 2,200 | 🟠 | SepCMA/warm-start bit-exactable; CMAwM rides scipy `chi2.ppf`/`norm.cdf` → tolerance `[Misaligned]`. IPOP/BIPOP dropped (deprecated→None). Currently throw `NotSupportedException` |
 
 **Phase 2 ≈ 7.7k py → ~20.1k C#. Estimate: 14–17 weeks.**
 Milestone after 2.11 — **✅ REACHED (M3): "Optuna default experience" complete** — TPE (univariate/
