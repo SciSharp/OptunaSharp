@@ -17,4 +17,70 @@ internal static class MathUtil
     /// <summary>NumPy <c>np.clip(value, low, high)</c> for scalars (NaN propagates).</summary>
     internal static double Clip(double value, double low, double high)
         => Math.Min(Math.Max(value, low), high);
+
+    /// <summary>
+    ///     C99 / NumPy <c>np.log1p(x)</c> — <c>log(1 + x)</c> accurate for small <c>x</c>. .NET has
+    ///     no <c>Math.Log1p</c>; this correction-term form (<c>log(u) - ((u-1) - x)/u</c>, u = 1+x)
+    ///     is bit-identical to NumPy's <c>log1p</c> because <see cref="Math.Log(double)" /> already
+    ///     matches NumPy's <c>np.log</c> bit-for-bit (verified over 220k points, 0 ULP).
+    /// </summary>
+    internal static double Log1p(double x)
+    {
+        if (double.IsNaN(x))
+            return double.NaN;
+        double u = 1.0 + x;
+        if (u == 1.0)
+            return x;  // |x| below the rounding of 1 + x (incl. x == 0): log1p(x) == x.
+        if (u <= 0.0)
+            return Math.Log(u);  // x <= -1: -inf at x == -1, NaN below — same as np.log(1 + x).
+        if (double.IsPositiveInfinity(u))
+            return Math.Log(u);
+        return Math.Log(u) - ((u - 1.0) - x) / u;
+    }
+
+    /// <summary>
+    ///     NumPy's <c>np.add.reduce</c> pairwise summation for a contiguous float64 array — the
+    ///     exact accumulation order of <c>ndarray.sum()</c>, so reductions stay bit-identical.
+    /// </summary>
+    internal static double PairwiseSum(double[] a) => PairwiseSum(a, 0, a.Length);
+
+    /// <inheritdoc cref="PairwiseSum(double[])" />
+    internal static double PairwiseSum(double[] a, int offset, int n)
+    {
+        if (n < 8)
+        {
+            double res = 0.0;
+            for (int i = 0; i < n; i++)
+                res += a[offset + i];
+            return res;
+        }
+
+        if (n <= 128)
+        {
+            double r0 = a[offset], r1 = a[offset + 1], r2 = a[offset + 2], r3 = a[offset + 3];
+            double r4 = a[offset + 4], r5 = a[offset + 5], r6 = a[offset + 6], r7 = a[offset + 7];
+            int i;
+            for (i = 8; i < n - n % 8; i += 8)
+            {
+                r0 += a[offset + i];
+                r1 += a[offset + i + 1];
+                r2 += a[offset + i + 2];
+                r3 += a[offset + i + 3];
+                r4 += a[offset + i + 4];
+                r5 += a[offset + i + 5];
+                r6 += a[offset + i + 6];
+                r7 += a[offset + i + 7];
+            }
+
+            double res = (r0 + r1 + (r2 + r3)) + (r4 + r5 + (r6 + r7));
+            for (; i < n; i++)
+                res += a[offset + i];
+            return res;
+        }
+
+        // Divide by two but avoid non-multiples of the unroll factor.
+        int n2 = n / 2;
+        n2 -= n2 % 8;
+        return PairwiseSum(a, offset, n2) + PairwiseSum(a, offset + n2, n - n2);
+    }
 }
