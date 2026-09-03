@@ -4,6 +4,7 @@ using System.Linq;
 using AwesomeAssertions;
 using NumSharp;
 using OptunaSharp.Collections;
+using OptunaSharp.Distributions;
 using OptunaSharp.Importance;
 using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
@@ -367,5 +368,132 @@ public class VisualizationDataTests
         info.ImportanceValues.Should().BeEmpty();
         info.ParamNames.Should().BeEmpty();
         info.TargetName.Should().Be("Objective Value");
+    }
+
+    // ------------------------------------------------------------------ slice
+
+    private static Study BuildSliceStudy()
+    {
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(0));
+        study.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            double b = t.SuggestFloat("b", 1e-3, 1e3, log: true);
+            var d = t.SuggestCategorical("d", new CategoricalChoice[] { "x", "y", "z" });
+            return a * a + b + (d.Value as string == "x" ? 1.0 : 0.0);
+        }, nTrials: 12);
+        return study;
+    }
+
+    [TestMethod]
+    public void Slice_SortsSubplots_AndClassifiesParams()
+    {
+        var study = BuildSliceStudy();
+        var info = SlicePlot.GetPlotInfo(study);
+
+        info.TargetName.Should().Be("Objective Value");
+        info.Subplots.Select(s => s.ParamName).Should().Equal("a", "b", "d");
+
+        // 'a': numerical, not log. 'b': numerical, log. 'd': categorical (x_labels present).
+        info.Subplots[0].IsNumerical.Should().BeTrue();
+        info.Subplots[0].IsLog.Should().BeFalse();
+        info.Subplots[0].XLabels.Should().BeNull();
+        info.Subplots[1].IsNumerical.Should().BeTrue();
+        info.Subplots[1].IsLog.Should().BeTrue();
+        info.Subplots[2].IsNumerical.Should().BeFalse();
+        info.Subplots[2].XLabels!.Select(c => c.Value).Should().Equal("x", "y", "z");
+
+        // Non-conditional params → every trial contributes; y == the objective value.
+        foreach (var sub in info.Subplots)
+        {
+            sub.X.Should().HaveCount(12);
+            sub.Y.Should().HaveCount(12);
+            sub.TrialNumbers.Should().Equal(Enumerable.Range(0, 12));
+            sub.Constraints.Should().OnlyContain(c => c);  // no constraints → all feasible.
+        }
+        // The 'a' subplot's x values are exactly the trials' 'a' params.
+        var trials = study.GetTrials();
+        info.Subplots[0].X.Should().Equal(trials.Select(t => t.Params["a"]));
+        info.Subplots[0].Y.Should().Equal(trials.Select(t => t.Value!.Value));
+    }
+
+    [TestMethod]
+    public void Slice_ParamsSubset_SortsAndValidates()
+    {
+        var study = BuildSliceStudy();
+
+        SlicePlot.GetPlotInfo(study, @params: new[] { "d", "a" })
+            .Subplots.Select(s => s.ParamName).Should().Equal("a", "d");
+
+        var act = () => SlicePlot.GetPlotInfo(study, @params: new[] { "zzz" });
+        act.Should().Throw<ValueError>().WithMessage("Parameter zzz does not exist in your study.");
+    }
+
+    [TestMethod]
+    public void Slice_NoCompleteTrials_ReturnsEmpty()
+    {
+        var study = Optuna.CreateStudy();
+        var info = SlicePlot.GetPlotInfo(study);
+        info.Subplots.Should().BeEmpty();
+        info.TargetName.Should().Be("Objective Value");
+    }
+
+    // ------------------------------------------------------------------ pareto front
+
+    [TestMethod]
+    public void ParetoFront_PartitionsBestNonBestInfeasible()
+    {
+        var study = Optuna.CreateStudy(directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+        study.AddTrials(new[]
+        {
+            FrozenTrial.CreateTrial(values: new[] { 1.0, 3.0 }),  // 0: on front
+            FrozenTrial.CreateTrial(values: new[] { 3.0, 1.0 }),  // 1: on front
+            FrozenTrial.CreateTrial(values: new[] { 2.0, 2.0 }),  // 2: on front
+            FrozenTrial.CreateTrial(values: new[] { 3.0, 3.0 }),  // 3: dominated → non-best
+            FrozenTrial.CreateTrial(values: new[] { 0.0, 0.0 },   // 4: infeasible
+                constraints: new OrderedDict<string, double> { { "c", 1.0 } }),
+        });
+
+        var info = ParetoFront.GetInfo(study);
+
+        info.NTargets.Should().Be(2);
+        info.TargetNames.Should().Equal("Objective 0", "Objective 1");
+        info.AxisOrder.Should().Equal(0, 1);
+        info.IncludeDominatedTrials.Should().BeTrue();
+        info.HasConstraints.Should().BeTrue();
+
+        info.BestTrialsWithValues.Select(x => x.Trial.Number).Should().Equal(0, 1, 2);
+        info.NonBestTrialsWithValues.Select(x => x.Trial.Number).Should().Equal(3);
+        info.InfeasibleTrialsWithValues.Select(x => x.Trial.Number).Should().Equal(4);
+        info.BestTrialsWithValues[0].Values.Should().Equal(1.0, 3.0);
+    }
+
+    [TestMethod]
+    public void ParetoFront_IncludeDominatedFalse_EmptyNonBest()
+    {
+        var study = Optuna.CreateStudy(directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+        study.AddTrials(new[]
+        {
+            FrozenTrial.CreateTrial(values: new[] { 1.0, 3.0 }),
+            FrozenTrial.CreateTrial(values: new[] { 3.0, 3.0 }),  // dominated
+        });
+
+        var info = ParetoFront.GetInfo(study, includeDominatedTrials: false);
+        info.NonBestTrialsWithValues.Should().BeEmpty();
+        info.HasConstraints.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void ParetoFront_UnsupportedObjectiveCount_Throws()
+    {
+        var study = Optuna.CreateStudy(directions: new[]
+        {
+            StudyDirection.Minimize, StudyDirection.Minimize,
+            StudyDirection.Minimize, StudyDirection.Minimize,
+        });
+        study.AddTrials(new[] { FrozenTrial.CreateTrial(values: new[] { 1.0, 2.0, 3.0, 4.0 }) });
+
+        var act = () => ParetoFront.GetInfo(study);  // targets=null, 4 objectives → ValueError.
+        act.Should().Throw<ValueError>().WithMessage("*only supports 2 or 3 objective*");
     }
 }

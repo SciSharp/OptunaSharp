@@ -349,7 +349,200 @@ public class VisualizationParityTests : OptunaInteropTestBase
             AssertImportancesInfo(csInfos[k], $"infos[{k}]");
     }
 
+    // ------------------------------------------------------------------ slice
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 30)]
+    [DataRow(7, 45)]
+    public void Slice_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(SliceObjective, nTrials: nTrials);
+        var csInfo = SlicePlot.GetPlotInfo(csStudy);
+
+        PyExec(
+            PySliceObjective +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_slice, n_trials={nTrials})\n" +
+            "from optuna.visualization._slice import _get_slice_plot_info\n" +
+            "info = _get_slice_plot_info(study, None, None, 'Objective Value')\n");
+
+        AssertSliceInfo(csInfo, "info");
+
+        // Subset + reordered params → sorted, deduplicated.
+        var csSubset = SlicePlot.GetPlotInfo(csStudy, @params: new[] { "d", "a", "a" });
+        PyExec("info2 = _get_slice_plot_info(study, ['d', 'a', 'a'], None, 'Objective Value')\n");
+        AssertSliceInfo(csSubset, "info2");
+    }
+
+    // ------------------------------------------------------------------ pareto front
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 40)]
+    [DataRow(7, 60)]
+    public void ParetoFront_TwoObjective_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new RandomSampler(seed));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            t.SetConstraint("c", x);  // some infeasible.
+            return new[] { x * x + y * y, (x - 1.0) * (x - 1.0) + (y - 1.0) * (y - 1.0) };
+        }, nTrials: nTrials);
+        var csInfo = ParetoFront.GetInfo(csStudy);
+
+        PyExec(
+            "def _oss_pf(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    t.set_constraint('c', x)\n" +
+            "    return x*x + y*y, (x-1.0)*(x-1.0) + (y-1.0)*(y-1.0)\n" +
+            $"study = optuna.create_study(directions=['minimize','minimize'], sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_pf, n_trials={nTrials})\n" +
+            "from optuna.visualization._pareto_front import _get_pareto_front_info\n" +
+            "info = _get_pareto_front_info(study)\n");
+
+        AssertParetoFrontInfo(csInfo, "info");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(3, 50)]
+    public void ParetoFront_ThreeObjective_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Maximize, StudyDirection.Minimize },
+            sampler: new RandomSampler(seed));
+        csStudy.Optimize((Func<Trial, System.Collections.Generic.IReadOnlyList<double>>)(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return new[] { x * x, -(y * y), (x - y) * (x - y) };
+        }), nTrials: nTrials);
+        var csInfo = ParetoFront.GetInfo(csStudy);
+
+        PyExec(
+            "def _oss_pf3(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    return x*x, -(y*y), (x-y)*(x-y)\n" +
+            $"study = optuna.create_study(directions=['minimize','maximize','minimize'], sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_pf3, n_trials={nTrials})\n" +
+            "from optuna.visualization._pareto_front import _get_pareto_front_info\n" +
+            "info = _get_pareto_front_info(study)\n");
+
+        AssertParetoFrontInfo(csInfo, "info");
+    }
+
     // ------------------------------------------------------------------ shared assertions
+
+    private const string PySliceObjective =
+        "def _oss_slice(t):\n" +
+        "    a = t.suggest_float('a', -5, 5)\n" +
+        "    b = t.suggest_float('b', 1e-3, 1e3, log=True)\n" +
+        "    c = t.suggest_int('c', 0, 20)\n" +
+        "    d = t.suggest_categorical('d', ['x', 'y', 'z'])\n" +
+        "    t.set_constraint('con', a)\n" +
+        "    return a*a + b/1000.0 + c + (1.0 if d == 'x' else 0.0)\n";
+
+    private static double SliceObjective(Trial t)
+    {
+        double a = t.SuggestFloat("a", -5, 5);
+        double b = t.SuggestFloat("b", 1e-3, 1e3, log: true);
+        long c = t.SuggestInt("c", 0, 20);
+        string? d = t.SuggestCategorical("d", new CategoricalChoice[] { "x", "y", "z" }).Value as string;
+        t.SetConstraint("con", a);
+        return a * a + b / 1000.0 + c + (d == "x" ? 1.0 : 0.0);
+    }
+
+    private void AssertSliceInfo(SlicePlotInfo cs, string pyVar)
+    {
+        PyStr($"{pyVar}.target_name").Should().Be(cs.TargetName);
+
+        int ns = (int)PyLong($"len({pyVar}.subplots)");
+        ns.Should().Be(cs.Subplots.Count);
+        for (int s = 0; s < ns; s++)
+        {
+            var sub = cs.Subplots[s];
+            string p = $"{pyVar}.subplots[{s}]";
+            PyStr($"{p}.param_name").Should().Be(sub.ParamName, $"subplot {s} param_name");
+            PyBool($"{p}.is_log").Should().Be(sub.IsLog, $"subplot {s} is_log");
+            PyBool($"{p}.is_numerical").Should().Be(sub.IsNumerical, $"subplot {s} is_numerical");
+
+            int n = (int)PyLong($"len({p}.x)");
+            n.Should().Be(sub.X.Count);
+            PyLong($"len({p}.y)").Should().Be(sub.Y.Count);
+            PyLong($"len({p}.trial_numbers)").Should().Be(sub.TrialNumbers.Count);
+            PyLong($"len({p}.constraints)").Should().Be(sub.Constraints.Count);
+            for (int i = 0; i < n; i++)
+            {
+                PyLong($"{p}.trial_numbers[{i}]").Should().Be(sub.TrialNumbers[i]);
+                PyFloat($"{p}.y[{i}]").Should().Be(sub.Y[i], $"subplot {s} y[{i}]");
+                PyBool($"{p}.constraints[{i}]").Should().Be(sub.Constraints[i], $"subplot {s} constraints[{i}]");
+                if (sub.IsNumerical)
+                    PyFloat($"float({p}.x[{i}])").Should().Be(System.Convert.ToDouble(sub.X[i]), $"subplot {s} x[{i}]");
+                else
+                    PyStr($"{p}.x[{i}]").Should().Be((string)sub.X[i]!, $"subplot {s} x[{i}]");
+            }
+
+            PyBool($"{p}.x_labels is None").Should().Be(sub.XLabels is null, $"subplot {s} x_labels null");
+            if (sub.XLabels is not null)
+            {
+                int nl = (int)PyLong($"len({p}.x_labels)");
+                nl.Should().Be(sub.XLabels.Count);
+                for (int j = 0; j < nl; j++)
+                    PyStr($"{p}.x_labels[{j}]").Should().Be((string)sub.XLabels[j].Value!, $"subplot {s} x_labels[{j}]");
+            }
+        }
+    }
+
+    private void AssertParetoFrontInfo(ParetoFrontInfo cs, string pyVar)
+    {
+        PyLong($"{pyVar}.n_targets").Should().Be(cs.NTargets);
+        PyBool($"{pyVar}.include_dominated_trials").Should().Be(cs.IncludeDominatedTrials);
+        PyBool($"{pyVar}.has_constraints").Should().Be(cs.HasConstraints);
+
+        int nt = (int)PyLong($"len({pyVar}.target_names)");
+        nt.Should().Be(cs.TargetNames.Count);
+        for (int i = 0; i < nt; i++)
+            PyStr($"{pyVar}.target_names[{i}]").Should().Be(cs.TargetNames[i]);
+
+        int na = (int)PyLong($"len({pyVar}.axis_order)");
+        na.Should().Be(cs.AxisOrder.Count);
+        for (int i = 0; i < na; i++)
+            PyLong($"{pyVar}.axis_order[{i}]").Should().Be(cs.AxisOrder[i]);
+
+        AssertTrialsWithValues(cs.BestTrialsWithValues, $"{pyVar}.best_trials_with_values");
+        AssertTrialsWithValues(cs.NonBestTrialsWithValues, $"{pyVar}.non_best_trials_with_values");
+        AssertTrialsWithValues(cs.InfeasibleTrialsWithValues, $"{pyVar}.infeasible_trials_with_values");
+    }
+
+    private void AssertTrialsWithValues(
+        System.Collections.Generic.IReadOnlyList<(FrozenTrial Trial, System.Collections.Generic.IReadOnlyList<double> Values)> cs,
+        string pyList)
+    {
+        int n = (int)PyLong($"len({pyList})");
+        n.Should().Be(cs.Count, $"{pyList} length");
+        for (int k = 0; k < n; k++)
+        {
+            PyLong($"{pyList}[{k}][0].number").Should().Be(cs[k].Trial.Number, $"{pyList}[{k}] number");
+            int m = (int)PyLong($"len({pyList}[{k}][1])");
+            m.Should().Be(cs[k].Values.Count);
+            for (int j = 0; j < m; j++)
+                PyFloat($"{pyList}[{k}][1][{j}]").Should().Be(cs[k].Values[j], $"{pyList}[{k}][1][{j}]");
+        }
+    }
 
     private const string PyMoObjective =
         "def _oss_mo(t):\n" +
