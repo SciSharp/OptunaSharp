@@ -4,7 +4,9 @@ using System.Linq;
 using AwesomeAssertions;
 using NumSharp;
 using OptunaSharp.Collections;
+using OptunaSharp.Importance;
 using OptunaSharp.Internal;
+using OptunaSharp.Samplers;
 using OptunaSharp.Visualization;
 
 namespace OptunaSharp.Tests.Visualization;
@@ -244,5 +246,126 @@ public class VisualizationDataTests
         a.BestValuesInfo!.Values.Should().Equal(b.BestValuesInfo!.Values);
 
         Edf.GetInfo(study).XValues.Should().Equal(Edf.GetInfo(study).XValues);
+    }
+
+    // ------------------------------------------------------------------ hypervolume history
+
+    [TestMethod]
+    public void HypervolumeHistory_IncrementalHypervolume_MatchesHandComputed()
+    {
+        var study = Optuna.CreateStudy(directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+        study.AddTrials(new[]
+        {
+            FrozenTrial.CreateTrial(values: new[] { 1.0, 3.0 }),
+            FrozenTrial.CreateTrial(values: new[] { 3.0, 1.0 }),
+            FrozenTrial.CreateTrial(values: new[] { 2.0, 2.0 }),
+        });
+
+        var info = HypervolumeHistory.GetInfo(study, new[] { 4.0, 4.0 });
+
+        info.TrialNumbers.Should().Equal(0, 1, 2);
+        // Dominated-hypervolume of the growing Pareto front wrt (4,4): 3 → 5 → 6 (hand-computed).
+        info.Values.Should().Equal(3.0, 5.0, 6.0);
+    }
+
+    [TestMethod]
+    public void HypervolumeHistory_InfeasibleTrial_CarriesPreviousHypervolume()
+    {
+        var study = Optuna.CreateStudy(directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+        study.AddTrials(new[]
+        {
+            FrozenTrial.CreateTrial(values: new[] { 1.0, 3.0 }),
+            // Infeasible (constraint > 0) → its hypervolume value repeats the previous one.
+            FrozenTrial.CreateTrial(values: new[] { 0.5, 0.5 },
+                constraints: new OrderedDict<string, double> { { "c", 1.0 } }),
+            FrozenTrial.CreateTrial(values: new[] { 3.0, 1.0 }),
+        });
+
+        var info = HypervolumeHistory.GetInfo(study, new[] { 4.0, 4.0 });
+
+        info.TrialNumbers.Should().Equal(0, 1, 2);
+        info.Values.Should().Equal(3.0, 3.0, 5.0);  // trial 1 infeasible → repeats 3.
+    }
+
+    [TestMethod]
+    public void HypervolumeHistory_SingleObjective_Throws()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
+        study.AddTrials(new[] { Complete(1.0) });
+
+        var act = () => HypervolumeHistory.GetInfo(study, new[] { 2.0 });
+        act.Should().Throw<ValueError>().WithMessage("Study must be multi-objective.*");
+    }
+
+    [TestMethod]
+    public void HypervolumeHistory_WrongReferenceDimension_Throws()
+    {
+        var study = Optuna.CreateStudy(directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+        study.AddTrials(new[] { FrozenTrial.CreateTrial(values: new[] { 1.0, 2.0 }) });
+
+        var act = () => HypervolumeHistory.GetInfo(study, new[] { 4.0, 4.0, 4.0 });
+        act.Should().Throw<ValueError>()
+            .WithMessage("The dimension of the reference point must be the same*");
+    }
+
+    // ------------------------------------------------------------------ param importances
+
+    [TestMethod]
+    public void ParamImportances_ReversesAndLabels_AgainstImportanceFunctions()
+    {
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(0));
+        study.Optimize(t =>
+        {
+            double x1 = t.SuggestFloat("x1", -5, 5);
+            long x2 = t.SuggestInt("x2", 0, 20);
+            return x1 * x1 + x2;
+        }, nTrials: 60);
+
+        var raw = ImportanceFunctions.GetParamImportances(study);          // descending
+        var info = ParamImportances.GetInfo(study);
+
+        // The info is the reverse of get_param_importances (ascending for a bottom-to-top bar chart).
+        info.ParamNames.Should().Equal(raw.Keys.Reverse());
+        info.ImportanceValues.Should().Equal(raw.Values.Reverse());
+
+        // Labels: "F2" when >= 0.01, else "<0.01".
+        for (int i = 0; i < info.ImportanceValues.Count; i++)
+        {
+            double v = info.ImportanceValues[i];
+            string expected = v >= 0.01 ? v.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) : "<0.01";
+            info.ImportanceLabels[i].Should().Be(expected);
+        }
+
+        info.TargetName.Should().Be("Objective Value");
+    }
+
+    [TestMethod]
+    public void ParamImportances_MultiObjective_OneInfoPerObjective()
+    {
+        var study = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new RandomSampler(0));
+        study.Optimize((System.Func<Trial, System.Collections.Generic.IReadOnlyList<double>>)(t =>
+        {
+            double x = t.SuggestFloat("x", -3, 3);
+            long y = t.SuggestInt("y", 0, 10);
+            return new[] { x * x + y, (x - 1.0) * (x - 1.0) - y };
+        }), nTrials: 50);
+
+        var infos = ParamImportances.GetInfos(study);
+
+        infos.Should().HaveCount(2);
+        infos[0].TargetName.Should().Be("Objective Value 0");
+        infos[1].TargetName.Should().Be("Objective Value 1");
+    }
+
+    [TestMethod]
+    public void ParamImportances_NoCompleteTrials_ReturnsEmptyInfo()
+    {
+        var study = Optuna.CreateStudy();
+        var info = ParamImportances.GetInfo(study);
+        info.ImportanceValues.Should().BeEmpty();
+        info.ParamNames.Should().BeEmpty();
+        info.TargetName.Should().Be("Objective Value");
     }
 }

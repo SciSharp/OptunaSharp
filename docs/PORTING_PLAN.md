@@ -45,20 +45,22 @@ OptunaSharp can share a live journal file with no external package on either sid
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 3.1 part 2** — viz data layer (timeline + hypervolume_history), then the rest of 3.1, then 3.2 GP
+### ▶ CONTINUE HERE: **Phase 3.1 part 3** — viz data layer (slice/pareto_front → rank/contour → parallel_coordinate/timeline), then 3.2 GP
 
 Phases 0, 1 and **2.1–2.16 are complete** — **Phase 2 (all native features) is DONE** — and **Phase 3 is
 now in progress**. The whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP
 machinery, the non-scrambled QMC sampler, the full NSGA-II **and** NSGA-III genetic-algorithm samplers,
 the OpenBLAS-backed linalg primitives, and the complete `CmaEsSampler` over **all four** cmaes backends —
 full-covariance `cmaes.CMA`, separable `cmaes.SepCMA`, Warm-Starting via `get_warm_start_mgd`, and CMAwM
-(`with_margin`) — are committed and proven green. **3.1 part 1 (the visualization data layer's `_utils`
-helpers + the optimization-history/EDF/intermediate-values `_get_*_info` builders) is now done and
-bit-exact vs live Optuna** (**433 unit + 182 live-interop tests**, both TFMs, none skipped). **Next is
-3.1 part 2** (the timeline + hypervolume-history builders), then the remaining 3.1 builders (slice/contour/
-rank/parallel-coordinate/param-importances/pareto-front), then the GP stack (3.2) — see the §7 autodiff
-decision gate and the Phase 3 table. (`_terminator_improvement` rides the GP improvement evaluators →
-deferred to **3.3**; the plotly rendering `plot_*`/`_get_*_plot` is Tier X **5.2**, not ported here.)
+(`with_margin`) — are committed and proven green. **3.1 parts 1–2 are done and bit-exact vs live Optuna**
+(**440 unit + 188 live-interop tests**, both TFMs, none skipped) — part 1 was the `_utils` helpers +
+optimization-history/EDF/intermediate-values builders; part 2 added the hypervolume-history builder
+(reusing `Internal/Hypervolume.cs`, byte-exact 2-obj) and the param-importances builder (riding the done
+`ImportanceFunctions`, erf-tolerance values, exact names/labels/order). **Next is 3.1 part 3** — the
+remaining 3.1 builders (slice/pareto_front → rank/contour → parallel_coordinate/timeline), then the GP
+stack (3.2) — see the §7 autodiff decision gate and the Phase 3 table. (`_terminator_improvement` rides
+the GP improvement evaluators → deferred to **3.3**; the plotly rendering `plot_*`/`_get_*_plot` is Tier X
+**5.2**, not ported here.)
 - ✅ **3.1 part 1 — viz data layer foundations (`OptunaSharp.Visualization`).** Ported the pure (non-plotly)
   half of `_utils.py` (`VisualizationUtils`: `CheckPlotArgs`/`IsLogScale`/`IsNumerical`/`FilterNonfinite`/
   `IsReverseScale`) plus the three simplest `_get_*_info` builders — `_optimization_history.py`
@@ -137,7 +139,7 @@ moment OptunaSharp.Core loads. Keep it.
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
 | 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp (3.2) + QMC scrambling deferred to their consumers |
-| 3 — Native heavy tail | 🟩 | **3.1 part 1 done** (viz data layer: optimization-history/EDF/intermediate-values `_get_*_info` + `_utils` helpers, bit-exact vs live Optuna); **next** 3.1 part 2 (timeline/hypervolume-history), then rest of 3.1, then 3.2 GP (§7 gate); `_terminator_improvement`→3.3; plotly rendering→5.2 |
+| 3 — Native heavy tail | 🟩 | **3.1 parts 1–2 done** (viz data layer: optimization-history/EDF/intermediate-values + `_utils` helpers + hypervolume-history + param-importances `_get_*_info`, bit-exact/erf-tolerance vs live Optuna); **next** 3.1 part 3 (slice/pareto_front → rank/contour → parallel_coordinate/timeline), then 3.2 GP (§7 gate); `_terminator_improvement`→3.3; plotly rendering→5.2 |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
 
@@ -499,6 +501,22 @@ moment OptunaSharp.Core loads. Keep it.
   matches byte-for-byte. 15 unit tests (constructed-study builders + the `MathUtil` helpers) + 13 live
   parity tests (optimization-history single/constraints/error-bar-multistudy, EDF single/multi-study,
   intermediate-values with mixed feasibility). Suite: **433 unit + 182 interop**, both TFMs, none skipped.
+- ✅ **3.1 part 2** — `feat(viz): Phase 3.1 part 2 — hypervolume-history + param-importances data layer`.
+  Two more `_get_*_info` builders. `_hypervolume_history.py` → `HypervolumeHistory.GetInfo` (the incremental
+  running-hypervolume over completed feasible trials — sign-flip to minimization, the weak-domination skip,
+  the out-of-reference skip, `np.prod(ref - v)` box volume, and the inclusion-exclusion correction via
+  `Internal/Hypervolume.ComputeHypervolume` on `np.maximum`-limited solutions; the two `plot_*` argument
+  validations — MO-required + reference-dimension `ValueError`s — folded into `GetInfo`). **Byte-exact vs
+  live Optuna for 2 objectives** (compute_hypervolume rides its dot-free 2-D path); ≥3-obj inherits the 2.10
+  compute_hypervolume machine-eps tolerance. `_param_importances.py` → `ParamImportances.GetInfo`/`GetInfos`
+  (reuses `ImportanceFunctions.GetParamImportances`; `dict(reversed(items))` → ascending; the
+  `f"{v:.2f}"`/`"<0.01"` labels; the SO-vs-MO / `metric_names` `_get_importances_infos` dispatch, one info
+  per objective). Importance values inherit PED-ANOVA's **erf/ucrt few-ULP tolerance** (1e-10 in the parity
+  tests); the param names, ordering, `target_name` and the formatted labels are exact. Info records
+  `HypervolumeHistoryInfo`/`ImportancesInfo` are public. 7 unit tests (hand-computed HV sequence [3,5,6],
+  infeasible-carry, both `ValueError` guards, reverse/label parity vs `ImportanceFunctions`, MO one-info-per-
+  objective, empty-study) + 6 live parity (HV 2-obj minimize + mixed-direction-with-constraints, importances
+  SO × 2 seeds + MO). Suite: **440 unit + 188 interop**, both TFMs, none skipped.
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -804,7 +822,7 @@ Zero external deps.
 
 | # | Feature | Optuna source | py SLOC | est. C# | Difficulty | Notes |
 |---|---|---|--:|--:|---|---|
-| 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | 🟡 | pure numpy → NumSharp; rendering pkg is 5.2. **Part 1 done** (`_utils` helpers + optimization-history/EDF/intermediate-values `_get_*_info`, bit-exact vs live Optuna); parts 2–5 pending (timeline/hypervolume-history → slice/param-importances → contour/rank → parallel-coordinate/pareto-front); `_terminator_improvement`→3.3 |
+| 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | 🟡 | pure numpy → NumSharp; rendering pkg is 5.2. **Parts 1–2 done** (`_utils` helpers + optimization-history/EDF/intermediate-values + hypervolume-history + param-importances `_get_*_info`, bit-exact/erf-tolerance vs live Optuna); parts 3+ pending (slice/pareto_front → rank/contour → parallel_coordinate/timeline); `_terminator_improvement`→3.3 |
 | 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, `batched_lbfgsb` (already pure numpy), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | 🔴 | **Decision gate first (§7), prototyped during Phase 2.** Uses 2.15 cholesky/solve_triangular. Port order: search_space → prior → kernel+MLL → L-BFGS-B → acqf → optim_mixed → sampler |
 | 3.3 | GP terminators: `RegretBoundEvaluator` (default), `EMMREvaluator` | `terminator/improvement/*` | ~230 | 700 | 🔴 | rides 3.2 |
 

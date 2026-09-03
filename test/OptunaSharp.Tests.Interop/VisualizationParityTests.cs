@@ -1,5 +1,6 @@
 using System;
 using AwesomeAssertions;
+using OptunaSharp.Distributions;
 using OptunaSharp.Samplers;
 using OptunaSharp.Visualization;
 
@@ -229,7 +230,186 @@ public class VisualizationParityTests : OptunaInteropTestBase
         }
     }
 
+    // ------------------------------------------------------------------ hypervolume history
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 40)]
+    [DataRow(7, 60)]
+    public void HypervolumeHistory_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new RandomSampler(seed));
+        csStudy.Optimize(MoObjective, nTrials: nTrials);
+        var csInfo = HypervolumeHistory.GetInfo(csStudy, new[] { 100.0, 100.0 });
+
+        PyExec(
+            PyMoObjective +
+            $"study = optuna.create_study(directions=['minimize','minimize'], sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_mo, n_trials={nTrials})\n" +
+            "import numpy as np\n" +
+            "from optuna.visualization._hypervolume_history import _get_hypervolume_history_info\n" +
+            "info = _get_hypervolume_history_info(study, np.asarray([100.0, 100.0], dtype=np.float64))\n");
+
+        AssertHypervolumeHistory(csInfo, "info");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(3, 50)]
+    public void HypervolumeHistory_WithConstraints_MixedDirection_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Maximize, StudyDirection.Minimize },
+            sampler: new RandomSampler(seed));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            t.SetConstraint("c", x);  // infeasible when x > 0.
+            return new[] { -(x * x + y * y), (x - 1.0) * (x - 1.0) + (y - 1.0) * (y - 1.0) };
+        }, nTrials: nTrials);
+        // Maximize objective 0 → reference must dominate; -(x^2+y^2) in [-50, 0], obj1 in [0, 72].
+        var csInfo = HypervolumeHistory.GetInfo(csStudy, new[] { -60.0, 100.0 });
+
+        PyExec(
+            "def _oss_mo_c(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    t.set_constraint('c', x)\n" +
+            "    return -(x*x + y*y), (x-1.0)*(x-1.0) + (y-1.0)*(y-1.0)\n" +
+            $"study = optuna.create_study(directions=['maximize','minimize'], sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_mo_c, n_trials={nTrials})\n" +
+            "import numpy as np\n" +
+            "from optuna.visualization._hypervolume_history import _get_hypervolume_history_info\n" +
+            "info = _get_hypervolume_history_info(study, np.asarray([-60.0, 100.0], dtype=np.float64))\n");
+
+        AssertHypervolumeHistory(csInfo, "info");
+    }
+
+    // ------------------------------------------------------------------ param importances
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0)]
+    [DataRow(7)]
+    public void ParamImportances_SingleObjective_Matches_LiveOptuna(int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(ImpObjective, nTrials: 80);
+        var csInfo = ParamImportances.GetInfo(csStudy);
+
+        PyExec(
+            PyImpObjective +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            "study.optimize(_oss_imp, n_trials=80)\n" +
+            "from optuna.visualization._param_importances import _get_importances_info\n" +
+            "info = _get_importances_info(study, None, None, None, 'Objective Value')\n");
+
+        AssertImportancesInfo(csInfo, "info");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0)]
+    public void ParamImportances_MultiObjective_Matches_LiveOptuna(int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new RandomSampler(seed));
+        csStudy.Optimize((Func<Trial, System.Collections.Generic.IReadOnlyList<double>>)(t =>
+        {
+            double x = t.SuggestFloat("x", -3, 3);
+            long y = t.SuggestInt("y", 0, 10);
+            return new[] { x * x + y, (x - 1.0) * (x - 1.0) - y };
+        }), nTrials: 60);
+        var csInfos = ParamImportances.GetInfos(csStudy);
+
+        PyExec(
+            "def _oss_mo_imp(t):\n" +
+            "    x = t.suggest_float('x', -3, 3)\n" +
+            "    y = t.suggest_int('y', 0, 10)\n" +
+            "    return x*x + y, (x-1.0)*(x-1.0) - y\n" +
+            $"study = optuna.create_study(directions=['minimize','minimize'], sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            "study.optimize(_oss_mo_imp, n_trials=60)\n" +
+            "from optuna.visualization._param_importances import _get_importances_infos\n" +
+            "infos = _get_importances_infos(study, None, None, None, 'Objective Value')\n");
+
+        PyLong("len(infos)").Should().Be(csInfos.Count);
+        for (int k = 0; k < csInfos.Count; k++)
+            AssertImportancesInfo(csInfos[k], $"infos[{k}]");
+    }
+
     // ------------------------------------------------------------------ shared assertions
+
+    private const string PyMoObjective =
+        "def _oss_mo(t):\n" +
+        "    x = t.suggest_float('x', -5, 5)\n" +
+        "    y = t.suggest_float('y', -5, 5)\n" +
+        "    return x*x + y*y, (x-1.0)*(x-1.0) + (y-1.0)*(y-1.0)\n";
+
+    private static System.Collections.Generic.IReadOnlyList<double> MoObjective(Trial t)
+    {
+        double x = t.SuggestFloat("x", -5, 5);
+        double y = t.SuggestFloat("y", -5, 5);
+        return new[] { x * x + y * y, (x - 1.0) * (x - 1.0) + (y - 1.0) * (y - 1.0) };
+    }
+
+    private const string PyImpObjective =
+        "def _oss_imp(t):\n" +
+        "    x1 = t.suggest_float('x1', -5, 5)\n" +
+        "    x2 = t.suggest_int('x2', 0, 20)\n" +
+        "    x3 = t.suggest_categorical('x3', ['a', 'b', 'c'])\n" +
+        "    return x1*x1 + x2 + (1.0 if x3 == 'a' else 0.0)\n";
+
+    private static double ImpObjective(Trial t)
+    {
+        double x1 = t.SuggestFloat("x1", -5, 5);
+        long x2 = t.SuggestInt("x2", 0, 20);
+        string? x3 = t.SuggestCategorical("x3", new CategoricalChoice[] { "a", "b", "c" }).Value as string;
+        return x1 * x1 + x2 + (x3 == "a" ? 1.0 : 0.0);
+    }
+
+    private void AssertHypervolumeHistory(HypervolumeHistoryInfo cs, string pyVar)
+    {
+        int n = (int)PyLong($"len({pyVar}.trial_numbers)");
+        n.Should().Be(cs.TrialNumbers.Count);
+        for (int i = 0; i < n; i++)
+            PyLong($"{pyVar}.trial_numbers[{i}]").Should().Be(cs.TrialNumbers[i]);
+
+        int m = (int)PyLong($"len({pyVar}.values)");
+        m.Should().Be(cs.Values.Count);
+        // Two objectives → compute_hypervolume rides the dot-free 2-D path, so it is byte-exact.
+        for (int i = 0; i < m; i++)
+            PyFloat($"float({pyVar}.values[{i}])").Should().Be(cs.Values[i], $"{pyVar}.values[{i}]");
+    }
+
+    // Importance values inherit PED-ANOVA's erf/ucrt few-ULP tolerance; names/order/labels are exact.
+    private const double ImportanceTolerance = 1e-10;
+
+    private void AssertImportancesInfo(ImportancesInfo cs, string pyVar)
+    {
+        PyStr($"{pyVar}.target_name").Should().Be(cs.TargetName);
+
+        int n = (int)PyLong($"len({pyVar}.param_names)");
+        n.Should().Be(cs.ParamNames.Count);
+        for (int i = 0; i < n; i++)
+        {
+            PyStr($"{pyVar}.param_names[{i}]").Should().Be(cs.ParamNames[i]);
+            PyFloat($"{pyVar}.importance_values[{i}]")
+                .Should().BeApproximately(cs.ImportanceValues[i], ImportanceTolerance, $"{pyVar}.importance_values[{i}]");
+            PyStr($"{pyVar}.importance_labels[{i}]").Should().Be(cs.ImportanceLabels[i], $"{pyVar}.importance_labels[{i}]");
+        }
+    }
 
     private static Study BuildQuadraticStudy(string name, int seed, int nTrials)
     {
