@@ -152,6 +152,40 @@ public class TpeSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [DataRow(0)]
+    [DataRow(7)]
+    [DataRow(42)]
+    public void GroupDecomposedBranchingSpace_TrajectoryMatches(int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // group=True over a branching space: `x` always occurs; `y`/`z` occur only under their
+        // branch, so the search space decomposes into the subspaces {x}, {y}, {z}, each sampled
+        // separately by multivariate TPE. The branch decisions must line up exactly and the
+        // continuous values to the erf tolerance — proving the group RNG draw order matches Python.
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(),
+            sampler: new TPESampler(seed: seed, multivariate: true, group: true, nStartupTrials: 5),
+            studyName: "tpe");
+        csStudy.Optimize(t =>
+        {
+            var x = (string)t.SuggestCategorical("x", new CategoricalChoice[] { "A", "B" }).Value!;
+            return x == "A" ? t.SuggestFloat("y", -10, 10) : t.SuggestFloat("z", -10, 10);
+        }, nTrials: 24);
+
+        AssertTrajectoryParity(csStudy,
+            "study = optuna.create_study(study_name='tpe', sampler=optuna.samplers.TPESampler(" +
+            $"seed={seed}, multivariate=True, group=True, n_startup_trials=5))\n" +
+            "def _obj(t):\n" +
+            "    x = t.suggest_categorical('x', ['A', 'B'])\n" +
+            "    if x == 'A':\n" +
+            "        return t.suggest_float('y', -10, 10)\n" +
+            "    return t.suggest_float('z', -10, 10)\n" +
+            "study.optimize(_obj, n_trials=24)\n");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
     public void StartupPhase_UsesRandomSampling_BitExact()
     {
         PythonSession.EnsureOrInconclusive();

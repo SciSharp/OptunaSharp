@@ -172,17 +172,131 @@ public class TpeSamplerTests
     }
 
     [TestMethod]
-    public void Group_ThrowsNotImplemented()
-    {
-        var act = () => new TPESampler(group: true);
-        act.Should().Throw<NotImplementedException>().WithMessage("*group*");
-    }
-
-    [TestMethod]
     public void GroupWithoutMultivariate_ThrowsValueError()
     {
         var act = () => new TPESampler(group: true, multivariate: false);
         act.Should().Throw<ValueError>().WithMessage("*group*multivariate*");
+    }
+
+    [TestMethod]
+    public void Group_EmitsExperimentalWarning()
+    {
+        // Port of Optuna's test_group_experimental_warning: constructing with group=True warns.
+        string? captured = null;
+        void Handler(string msg, WarningCategory cat)
+        {
+            if (cat == WarningCategory.ExperimentalWarning && msg.Contains("group"))
+                captured = msg;
+        }
+
+        OptunaWarnings.WarningRaised += Handler;
+        try
+        {
+            _ = new TPESampler(multivariate: true, group: true, seed: 0);
+        }
+        finally
+        {
+            OptunaWarnings.WarningRaised -= Handler;
+        }
+
+        captured.Should().NotBeNull();
+        captured.Should().Contain("experimental");
+    }
+
+    [TestMethod]
+    public void Group_InferRelativeSearchSpace_ReturnsUnionOfSubspaceParams()
+    {
+        // Port of Optuna's test_group: disjoint param sets across trials decompose into subspaces
+        // {x} and {y, z}; the inferred relative search space is their union.
+        var sampler = new TPESampler(multivariate: true, group: true, nStartupTrials: 0, seed: 0);
+        var study = Optuna.CreateStudy(sampler: sampler);
+
+        study.Optimize(t => t.SuggestInt("x", 0, 10), nTrials: 1);
+        study.Optimize(t => t.SuggestInt("y", 0, 10) + t.SuggestFloat("z", -3, 3), nTrials: 1);
+
+        var probe = study.Ask();
+        var searchSpace = sampler.InferRelativeSearchSpace(study, probe.CachedFrozenTrial);
+        searchSpace.Keys.Should().BeEquivalentTo(new[] { "x", "y", "z" });
+    }
+
+    [TestMethod]
+    public void GroupWithDefaultMultivariate_SingleObjective_InfersAllParams()
+    {
+        // Port of Optuna's test_group_with_default_multivariate (single-objective): group=True with
+        // multivariate left at its default still enables the multivariate TPE and infers {x, y}.
+        var sampler = new TPESampler(group: true, nStartupTrials: 0, seed: 0);
+        var study = Optuna.CreateStudy(sampler: sampler);
+
+        for (int i = 0; i < 2; i++)
+        {
+            var trial = study.Ask();
+            trial.SuggestFloat("x", 0, 10);
+            trial.SuggestFloat("y", 0, 10);
+            study.Tell(trial, 0.0);
+        }
+
+        var searchSpace = sampler.InferRelativeSearchSpace(study, study.Trials[^1]);
+        searchSpace.Keys.Should().BeEquivalentTo(new[] { "x", "y" });
+    }
+
+    [TestMethod]
+    public void GroupWithDefaultMultivariate_MultiObjective_WarnsAndInfersAllParams()
+    {
+        // Port of Optuna's test_group_with_default_multivariate (multi-objective): the multivariate
+        // default (False for MO) is overridden by group=True, which emits a UserWarning.
+        var sampler = new TPESampler(group: true, nStartupTrials: 0, seed: 0);
+        var study = Optuna.CreateStudy(
+            sampler: sampler,
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+
+        bool warned = false;
+        void Handler(string msg, WarningCategory cat)
+        {
+            if (cat == WarningCategory.UserWarning && msg.Contains("group"))
+                warned = true;
+        }
+
+        OptunaWarnings.WarningRaised += Handler;
+        try
+        {
+            for (int i = 0; i < 2; i++)
+            {
+                var trial = study.Ask();
+                trial.SuggestFloat("x", 0, 10);
+                trial.SuggestFloat("y", 0, 10);
+                study.Tell(trial, new[] { 0.0, 0.0 });
+            }
+        }
+        finally
+        {
+            OptunaWarnings.WarningRaised -= Handler;
+        }
+
+        warned.Should().BeTrue();
+        var searchSpace = sampler.InferRelativeSearchSpace(study, study.Trials[^1]);
+        searchSpace.Keys.Should().BeEquivalentTo(new[] { "x", "y" });
+    }
+
+    [TestMethod]
+    public void Group_Reproducible_SameSeed_ProducesIdenticalTrials()
+    {
+        // The group-decomposed multivariate TPE is deterministic under a fixed seed.
+        List<double> Run()
+        {
+            var study = Optuna.CreateStudy(
+                sampler: new TPESampler(seed: 11, multivariate: true, group: true, nStartupTrials: 5));
+            study.Optimize(t =>
+            {
+                var branch = (string)t.SuggestCategorical(
+                    "c", new CategoricalChoice[] { "left", "right" }).Value!;
+                return branch == "left"
+                    ? t.SuggestFloat("y", -10, 10)
+                    : t.SuggestInt("z", -10, 10);
+            }, nTrials: 20);
+            return study.Trials.Select(t => t.Values![0]).ToList();
+        }
+
+        Run().Should().Equal(Run());
     }
 
     [TestMethod]

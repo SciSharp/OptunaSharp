@@ -20,11 +20,11 @@ namespace OptunaSharp.Samplers;
 ///     parameter values of the best trials, and another GMM <c>g(x)</c> to the rest, then picks the
 ///     value maximizing <c>l(x)/g(x)</c>.</para>
 ///
-///     <para><b>Scope (PORTING_PLAN Phase 2.8/2.9).</b> The univariate (independent) and the
-///     non-group multivariate paths are implemented — so a default <see cref="TPESampler" /> works for
-///     single- and multi-objective studies. <c>group=true</c> (the group-decomposed multivariate TPE)
-///     is deferred to Phase 2.9 and throws at construction. Multi-objective splitting inherits the
-///     Phase 2.10 HSSP tie-break gap (an explicit target avoids it).</para>
+///     <para><b>Scope (PORTING_PLAN Phase 2.8/2.9).</b> The univariate (independent), the
+///     non-group multivariate, and (Phase 2.9) the group-decomposed multivariate (<c>group=true</c>)
+///     paths are implemented — so a default <see cref="TPESampler" /> works for single- and
+///     multi-objective studies. Multi-objective splitting inherits the Phase 2.10 HSSP tie-break gap
+///     (an explicit target avoids it).</para>
 ///
 ///     <para><b>[Misaligned] erf/ucrt tolerance.</b> The sampled values and acquisition densities
 ///     route through <see cref="TruncNorm" /> → <see cref="Erf" /> (FreeBSD <c>s_erf</c>), ~1-3 ULP
@@ -49,6 +49,8 @@ public class TPESampler : BaseSampler
     private readonly RandomSampler _randomSampler;
     private readonly bool? _multivariate;
     private readonly bool _group;
+    private readonly GroupDecomposedSearchSpace? _groupDecomposedSearchSpace;
+    private SearchSpaceGroup? _searchSpaceGroup;
     private readonly IntersectionSearchSpace _searchSpace;
     private readonly bool _constantLiar;
     private readonly Func<FrozenTrial, IEnumerable<double>>? _constraintsFunc;
@@ -66,7 +68,12 @@ public class TPESampler : BaseSampler
     ///     If <c>true</c>, multivariate TPE is used. If <c>null</c> (default), it is <c>true</c> for
     ///     single-objective and <c>false</c> for multi-objective optimization.
     /// </param>
-    /// <param name="group">Group-decomposed multivariate TPE — deferred to Phase 2.9 (throws if <c>true</c>).</param>
+    /// <param name="group">
+    ///     If this and <paramref name="multivariate" /> are <c>true</c>, the multivariate TPE with a
+    ///     group-decomposed search space is used: the search space is partitioned into maximal
+    ///     subspaces from the past trials and each subspace is sampled jointly by multivariate TPE.
+    ///     Requires <paramref name="multivariate" /> to not be <c>false</c> (experimental since v2.8.0).
+    /// </param>
     /// <param name="warnIndependentSampling">Deprecated (v4.9.0). Falls back to <c>false</c>.</param>
     /// <param name="constantLiar">Penalize running trials to avoid nearby suggestions. Defaults to <c>true</c>.</param>
     /// <param name="constraintsFunc">Deprecated (v5.0.0). Optional constraint function evaluated after each trial.</param>
@@ -122,9 +129,10 @@ public class TPESampler : BaseSampler
             if (multivariate == false)
                 throw new ValueError(
                     "``group`` option can only be enabled when ``multivariate`` is enabled.");
-            throw new NotImplementedException(
-                "TPESampler(group: true) — the group-decomposed multivariate TPE — is not ported " +
-                "yet (PORTING_PLAN Phase 2.9). Use group: false (the default).");
+            OptunaWarnings.Warn(
+                "Argument ``group`` is an experimental feature. The interface can change in the future.",
+                WarningCategory.ExperimentalWarning);
+            _groupDecomposedSearchSpace = new GroupDecomposedSearchSpace(includePruned: true);
         }
 
         if (constraintsFunc is not null)
@@ -150,17 +158,47 @@ public class TPESampler : BaseSampler
     {
         if (_multivariate is not null)
             return _multivariate.Value;
-        // group is deferred (rejected at construction), so only the SO/MO default remains.
+        if (_group)
+        {
+            // `group` can only be enabled with the multivariate TPE.
+            if (study.IsMultiObjective())
+                OptunaWarnings.Warn(
+                    "``multivariate`` defaults to False for multi-objective optimization, but"
+                    + " it is treated as True because ``group`` can only be enabled with the"
+                    + " multivariate TPE. Set ``multivariate=True`` explicitly to suppress this"
+                    + " warning.");
+            return true;
+        }
+        // By default, the multivariate TPE is used for single-objective optimization and
+        // the independent TPE is used for multi-objective optimization.
         return !study.IsMultiObjective();
     }
 
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
-        if (!IsMultivariate(study))
+        bool multivariate = IsMultivariate(study);
+        if (!multivariate)
             return new OrderedDict<string, BaseDistribution>();
 
         var searchSpace = new OrderedDict<string, BaseDistribution>();
-        bool useTrialCache = true;  // multivariate || !constant_liar; multivariate is true here.
+        bool useTrialCache = multivariate || !_constantLiar;
+
+        if (_group)
+        {
+            _searchSpaceGroup = _groupDecomposedSearchSpace!.Calculate(study, useTrialCache);
+            foreach (var subSpace in _searchSpaceGroup.SearchSpaces)
+            {
+                // Sort keys because Python's string hashing is nondeterministic.
+                foreach (var name in subSpace.Keys.OrderBy(k => k, StringComparer.Ordinal))
+                {
+                    var distribution = subSpace[name];
+                    if (distribution.Single())
+                        continue;
+                    searchSpace[name] = distribution;
+                }
+            }
+            return searchSpace;
+        }
 
         foreach (var (name, distribution) in _searchSpace.Calculate(study, useTrialCache))
         {
@@ -175,7 +213,34 @@ public class TPESampler : BaseSampler
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
-        var @params = SampleRelativeCore(study, trial, searchSpace);
+        OrderedDict<string, object?> @params;
+        if (_group)
+        {
+            @params = new OrderedDict<string, object?>();
+            foreach (var subSpace in _searchSpaceGroup!.SearchSpaces)
+            {
+                var localSearchSpace = new OrderedDict<string, BaseDistribution>();
+                // Sort keys because Python's string hashing is nondeterministic.
+                foreach (var name in subSpace.Keys.OrderBy(k => k, StringComparer.Ordinal))
+                {
+                    var distribution = subSpace[name];
+                    if (distribution.Single())
+                        continue;
+                    if (!searchSpace.ContainsKey(name))
+                        // When used together with PartialFixedSampler, the search space may be
+                        // smaller than what is inferred from the study.
+                        continue;
+                    localSearchSpace[name] = distribution;
+                }
+
+                foreach (var (name, value) in SampleRelativeCore(study, trial, localSearchSpace))
+                    @params[name] = value;
+            }
+        }
+        else
+        {
+            @params = SampleRelativeCore(study, trial, searchSpace);
+        }
 
         if (@params.Count != 0 && _constantLiar)
         {
@@ -193,7 +258,7 @@ public class TPESampler : BaseSampler
         return @params;
     }
 
-    /// <summary>Python <c>_sample_relative</c> (the non-group branch; group is Phase 2.9).</summary>
+    /// <summary>Python <c>_sample_relative</c> (called once per subspace in the <c>group</c> path).</summary>
     private OrderedDict<string, object?> SampleRelativeCore(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
