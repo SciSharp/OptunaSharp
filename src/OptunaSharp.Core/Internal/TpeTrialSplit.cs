@@ -5,11 +5,10 @@ using System.Linq;
 namespace OptunaSharp.Internal;
 
 /// <summary>
-///     Port of the trial-splitting helpers in <c>optuna/samplers/_tpe/sampler.py</c> that are
-///     shared with <c>PedAnovaImportanceEvaluator</c>. The TPE sampler itself lands in Phase 2.8;
-///     this hosts only the pieces already needed. The HSSP tie-break (and its reference-point
-///     helper) rides on <c>_hypervolume/*</c>, which arrives in Phase 2.10 — until then the
-///     tie-break path throws.
+///     Port of the trial-splitting helpers in <c>optuna/samplers/_tpe/sampler.py</c>, shared with
+///     <c>PedAnovaImportanceEvaluator</c> and the multi-objective TPE split. The HSSP tie-break in
+///     <see cref="SplitCompleteTrialsMultiObjective" /> routes through <see cref="Hypervolume" />
+///     (Phase 2.10).
 /// </summary>
 internal static class TpeTrialSplit
 {
@@ -234,13 +233,22 @@ internal static class TpeTrialSplit
         }
 
         if (belowIndices.Count < nBelow)
-            // Tie-break with the Hypervolume Subset Selection Problem (HSSP) — Phase 2.10.
-            throw new NotImplementedException(
-                "Multi-objective trial splitting with an HSSP tie-break is not ported yet " +
-                "(PORTING_PLAN Phase 2.10, _hypervolume/*). This path is reached by " +
-                "PedAnovaImportanceEvaluator on a multi-objective study when target is null and " +
-                "the non-domination ranks do not partition exactly at the quantile boundary. " +
-                "Pass an explicit target (e.g. target: t => t.Values[0]) in the meantime.");
+        {
+            // Tie-break with the Hypervolume Subset Selection Problem (HSSP).
+            System.Diagnostics.Debug.Assert(
+                lastRankBeforeTiebreak + 1 < ranks.Length
+                && ranks[lastRankBeforeTiebreak + 1] == lastRankBeforeTiebreak + 1);
+            var needTiebreak = new List<int>();
+            for (int i = 0; i < nondominationRanks.Length; i++)
+                if (nondominationRanks[i] == lastRankBeforeTiebreak + 1)
+                    needTiebreak.Add(i);
+
+            var rankILvals = needTiebreak.Select(i => lvals[i]).ToArray();
+            int subsetSize = nBelow - belowIndices.Count;
+            var referencePoint = GetReferencePoint(rankILvals);
+            var selected = Hypervolume.SolveHssp(rankILvals, needTiebreak.ToArray(), subsetSize, referencePoint);
+            belowIndices.AddRange(selected);
+        }
 
         var belowSet = new HashSet<int>(belowIndices);
         var below = new List<FrozenTrial>();
@@ -253,5 +261,21 @@ internal static class TpeTrialSplit
                 above.Add(trials[i]);
         }
         return (below, above);
+    }
+
+    /// <summary>Python <c>_get_reference_point(loss_vals)</c> (sampler.py). <c>EPS = 1e-12</c>.</summary>
+    private static double[] GetReferencePoint(double[][] lossVals)
+    {
+        int m = lossVals[0].Length;
+        var referencePoint = new double[m];
+        for (int k = 0; k < m; k++)
+        {
+            double worst = double.NegativeInfinity;  // np.max(loss_vals, axis=0)[k].
+            foreach (var row in lossVals)
+                worst = Math.Max(worst, row[k]);
+            double r = Math.Max(1.1 * worst, 0.9 * worst);
+            referencePoint[k] = r == 0.0 ? 1e-12 : r;
+        }
+        return referencePoint;
     }
 }

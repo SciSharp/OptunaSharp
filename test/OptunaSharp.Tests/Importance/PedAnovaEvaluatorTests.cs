@@ -202,9 +202,10 @@ public class PedAnovaEvaluatorTests
     }
 
     [TestMethod]
-    public void MultiObjectiveTargetNone_HsspTieBreak_ThrowsUntilPhase210()
+    public void MultiObjectiveTargetNone_HsspTieBreak_Completes()
     {
-        // values with a shared non-domination rank at the quantile boundary force an HSSP tie-break.
+        // values with a shared non-domination rank at the quantile boundary force an HSSP tie-break
+        // in _split_complete_trials_multi_objective (Phase 2.10 — this path used to throw).
         var values = new[]
         {
             new double[] { 0, 0 }, new double[] { 1, 5 }, new double[] { 2, 4 }, new double[] { 3, 3 },
@@ -217,7 +218,8 @@ public class PedAnovaEvaluatorTests
 
         var evaluator = new PedAnovaImportanceEvaluator(targetQuantile: 0.5, regionQuantile: 0.75);
         var act = () => evaluator.Evaluate(study);
-        act.Should().Throw<NotImplementedException>();
+        act.Should().NotThrow();
+        act().Should().BeEmpty();  // The trials carry no parameters.
     }
 
     private static bool ImportancesEqual(OrderedDict<string, double> a, OrderedDict<string, double> b)

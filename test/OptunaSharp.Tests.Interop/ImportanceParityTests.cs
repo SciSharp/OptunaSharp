@@ -139,4 +139,42 @@ public class ImportanceParityTests : OptunaInteropTestBase
         foreach (var (name, csValue) in csImp)
             csValue.Should().BeApproximately(PyFloat($"imp['{name}']"), Tolerance);
     }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(3)]
+    [DataRow(2027)]
+    public void GetParamImportances_MultiObjectiveTargetNull_Matches_LiveOptuna(int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // target=null on a multi-objective study routes through _split_complete_trials_multi_objective,
+        // i.e. the non-domination-rank split with the HSSP tie-break (Phase 2.10 — previously threw).
+        var csStudy = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new RandomSampler(seed));
+        csStudy.Optimize((Func<Trial, IReadOnlyList<double>>)(t =>
+        {
+            double a = t.SuggestFloat("a", -3, 3);
+            long b = t.SuggestInt("b", 0, 10);
+            return new[] { a * a + b, (a - 1) * (a - 1) - b };
+        }), nTrials: 60);
+
+        var csImp = ImportanceFunctions.GetParamImportances(csStudy);  // target=null → HSSP path.
+
+        PyExec(
+            "def _oss_mo_null(t):\n" +
+            "    a = t.suggest_float('a', -3, 3)\n" +
+            "    b = t.suggest_int('b', 0, 10)\n" +
+            "    return a * a + b, (a - 1) * (a - 1) - b\n" +
+            "study = optuna.create_study(directions=['minimize', 'minimize'], " +
+            $"sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            "study.optimize(_oss_mo_null, n_trials=60)\n" +
+            "imp = optuna.importance.get_param_importances(study)\n" +
+            "imp_keys = ','.join(imp.keys())\n");
+
+        string.Join(",", csImp.Keys).Should().Be(PyStr("imp_keys"));
+        foreach (var (name, csValue) in csImp)
+            csValue.Should().BeApproximately(PyFloat($"imp['{name}']"), Tolerance);
+    }
 }

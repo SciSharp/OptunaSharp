@@ -300,6 +300,52 @@ public class TpeSamplerTests
     }
 
     [TestMethod]
+    public void MultiObjective_TpeSampler_Reproducible_SameSeed()
+    {
+        // MO TPE splits below/above by non-domination rank + the HSSP tie-break (Phase 2.10). The
+        // whole run must be deterministic under a fixed seed.
+        List<double[]> Run()
+        {
+            var study = Optuna.CreateStudy(
+                sampler: new TPESampler(seed: 4, nStartupTrials: 8),
+                directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+            study.Optimize((Func<Trial, IReadOnlyList<double>>)(t =>
+            {
+                double x = t.SuggestFloat("x", -5, 5);
+                double y = t.SuggestFloat("y", -5, 5);
+                return new[] { x * x + y, (x - 2) * (x - 2) + y * y };
+            }), nTrials: 30);
+            return study.Trials.Select(t => t.Values!.ToArray()).ToList();
+        }
+
+        var a = Run();
+        var b = Run();
+        a.Count.Should().Be(b.Count);
+        for (int i = 0; i < a.Count; i++)
+            a[i].Should().Equal(b[i]);
+    }
+
+    [TestMethod]
+    public void MultiObjective3d_TpeSampler_CompletesThroughHsspTieBreak()
+    {
+        // Three objectives exercise the n-dimensional HSSP tie-break (was a NotImplementedException
+        // before Phase 2.10). The study must run end-to-end and produce a non-empty Pareto front.
+        var study = Optuna.CreateStudy(
+            sampler: new TPESampler(seed: 1, nStartupTrials: 8),
+            directions: Enumerable.Repeat(StudyDirection.Minimize, 3).ToArray());
+        var act = () => study.Optimize((Func<Trial, IReadOnlyList<double>>)(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return new[] { x * x + y, (x - 2) * (x - 2) + y * y, (x + 1) * (x + 1) + (y - 1) * (y - 1) };
+        }), nTrials: 40);
+
+        act.Should().NotThrow();
+        study.Trials.Should().HaveCount(40);
+        study.BestTrials.Should().NotBeEmpty();
+    }
+
+    [TestMethod]
     public void MultiObjective_InfersEmptyRelativeSearchSpace()
     {
         // multivariate defaults to False for multi-objective, so relative sampling is disabled.

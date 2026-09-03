@@ -301,6 +301,36 @@ internal static class MultiObjective
         return (uniqueRows.ToArray(), orderInv);
     }
 
+    /// <summary>
+    ///     NumPy <c>np.unique(a, axis=0, return_index=True)</c>: rows sorted lexicographically and
+    ///     deduplicated, plus the index of the FIRST occurrence (smallest original index) of each
+    ///     unique row.
+    /// </summary>
+    internal static (double[][] UniqueRows, int[] FirstIndices) UniqueRowsFirstIndex(double[][] rows)
+    {
+        int n = rows.Length;
+        var order = Enumerable.Range(0, n).ToArray();
+        // Tie-break equal rows by original index so the first occurrence is the smallest index.
+        Array.Sort(order, (a, b) =>
+        {
+            int c = CompareRows(rows[a], rows[b]);
+            return c != 0 ? c : a.CompareTo(b);
+        });
+
+        var uniqueRows = new List<double[]>();
+        var firstIndices = new List<int>();
+        for (int i = 0; i < n; i++)
+        {
+            int rowIdx = order[i];
+            if (uniqueRows.Count == 0 || CompareRows(uniqueRows[^1], rows[rowIdx]) != 0)
+            {
+                uniqueRows.Add(rows[rowIdx]);
+                firstIndices.Add(rowIdx);
+            }
+        }
+        return (uniqueRows.ToArray(), firstIndices.ToArray());
+    }
+
     private static int CompareRows(double[] a, double[] b)
     {
         for (int i = 0; i < a.Length; i++)

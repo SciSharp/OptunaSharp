@@ -186,6 +186,48 @@ public class TpeSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [DataRow(2, 0)]
+    [DataRow(2, 7)]
+    [DataRow(2, 42)]
+    [DataRow(3, 0)]
+    [DataRow(3, 42)]
+    public void MultiObjective_TrajectoryMatches(int nObjectives, int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // Multi-objective TPE: below/above split uses non-domination rank + the HSSP tie-break
+        // (Phase 2.10). The whole trajectory must stay in RNG lock-step with Python — branch/state
+        // exact, continuous values to the erf tolerance. (MO defaults to the independent path.)
+        var directions = Enumerable.Repeat(StudyDirection.Minimize, nObjectives).ToArray();
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), directions: directions,
+            sampler: new TPESampler(seed: seed, nStartupTrials: 8), studyName: "tpe");
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            var outs = new System.Collections.Generic.List<double> { x * x + y, (x - 2) * (x - 2) + y * y };
+            if (nObjectives == 3)
+                outs.Add((x + 1) * (x + 1) + (y - 1) * (y - 1));
+            return outs;
+        }, nTrials: 40);
+
+        string pyDirs = "[" + string.Join(", ", Enumerable.Repeat("'minimize'", nObjectives)) + "]";
+        string pyReturn = nObjectives == 3
+            ? "    return x * x + y, (x - 2) ** 2 + y * y, (x + 1) ** 2 + (y - 1) ** 2\n"
+            : "    return x * x + y, (x - 2) ** 2 + y * y\n";
+        AssertTrajectoryParity(csStudy,
+            $"study = optuna.create_study(study_name='tpe', directions={pyDirs}, " +
+            $"sampler=optuna.samplers.TPESampler(seed={seed}, n_startup_trials=8))\n" +
+            "def _obj(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            pyReturn +
+            "study.optimize(_obj, n_trials=40)\n");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
     public void StartupPhase_UsesRandomSampling_BitExact()
     {
         PythonSession.EnsureOrInconclusive();
