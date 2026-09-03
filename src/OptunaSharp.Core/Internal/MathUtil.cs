@@ -125,4 +125,53 @@ internal static class MathUtil
         n2 -= n2 % 8;
         return PairwiseSum(a, offset, n2) + PairwiseSum(a, offset + n2, n - n2);
     }
+
+    /// <summary>
+    ///     NumPy <c>np.linspace(start, stop, num)</c> (endpoint=True) — bit-identical to NumPy for
+    ///     the common case: <c>y[i] = i * step + start</c> with <c>step = (stop - start) / (num - 1)</c>,
+    ///     and the final element pinned to <paramref name="stop" /> exactly.
+    /// </summary>
+    internal static double[] Linspace(double start, double stop, int num)
+    {
+        if (num <= 0)
+            return Array.Empty<double>();
+        if (num == 1)
+            return new[] { start };
+
+        int div = num - 1;
+        double step = (stop - start) / div;
+        var y = new double[num];
+        for (int i = 0; i < num; i++)
+            y[i] = i * step + start;  // arange(num) * step + start.
+        y[^1] = stop;  // endpoint override.
+        return y;
+    }
+
+    /// <summary>
+    ///     NumPy <c>np.mean</c> over a float64 array — <c>PairwiseSum(a) / a.Length</c>, so the
+    ///     accumulation order matches NumPy's <c>add.reduce</c> bit-for-bit. Empty → NaN (as NumPy).
+    /// </summary>
+    internal static double Mean(double[] a)
+        => a.Length == 0 ? double.NaN : PairwiseSum(a) / a.Length;
+
+    /// <summary>
+    ///     NumPy <c>np.std</c> (population, <c>ddof=0</c>) over a float64 array. Reproduces NumPy's
+    ///     algorithm exactly: <c>mean = sum/n</c>; residuals squared via <c>x*x</c> (NumPy array
+    ///     <c>**2</c> is a multiply, not <see cref="Math.Pow(double,double)" />); variance is the
+    ///     pairwise sum of those over <c>n</c>; then <see cref="Math.Sqrt(double)" />. Empty → NaN.
+    /// </summary>
+    internal static double Std(double[] a)
+    {
+        int n = a.Length;
+        if (n == 0)
+            return double.NaN;
+        double mean = PairwiseSum(a) / n;
+        var sq = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            double d = a[i] - mean;
+            sq[i] = d * d;
+        }
+        return Math.Sqrt(PairwiseSum(sq) / n);
+    }
 }
