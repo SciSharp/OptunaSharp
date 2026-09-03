@@ -1,9 +1,19 @@
 using System;
+using System.Globalization;
 
 namespace OptunaSharp.Internal;
 
 internal static class MathUtil
 {
+    /// <summary>
+    ///     Python <c>f"{x:.3g}"</c> — 3 significant figures, C-style <c>%g</c>. .NET's <c>"G3"</c>
+    ///     reproduces C <c>%g</c> exactly (same fixed/scientific threshold, same rounding, same
+    ///     trailing-zero stripping, min-2-digit exponent) except for the uppercase <c>E</c>, so
+    ///     lowercasing it makes the two byte-identical (verified against CPython's <c>format</c>).
+    /// </summary>
+    internal static string FormatG3(double x)
+        => x.ToString("G3", CultureInfo.InvariantCulture).Replace("E", "e");
+
     /// <summary>C99 / NumPy <c>nextafter(x, y)</c>: the next representable double after <paramref name="x" /> toward <paramref name="y" />.</summary>
     internal static double NextAfter(double x, double y)
     {

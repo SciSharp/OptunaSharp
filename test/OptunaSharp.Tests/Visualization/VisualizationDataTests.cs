@@ -669,4 +669,90 @@ public class VisualizationDataTests
         var act = () => Rank.GetInfo(study, @params: new[] { "nope", "x" });
         act.Should().Throw<ValueError>().WithMessage("Parameter nope does not exist in your study.");
     }
+
+    // ------------------------------------------------------------------ parallel coordinate
+
+    [TestMethod]
+    public void MathUtil_FormatG3_MatchesPython()
+    {
+        // C's %g / Python's f"{x:.3g}" — see MathUtil.FormatG3.
+        MathUtil.FormatG3(0.0).Should().Be("0");
+        MathUtil.FormatG3(1.5).Should().Be("1.5");
+        MathUtil.FormatG3(1.23456).Should().Be("1.23");
+        MathUtil.FormatG3(100.0).Should().Be("100");
+        MathUtil.FormatG3(1234.5).Should().Be("1.23e+03");
+        MathUtil.FormatG3(1000.0).Should().Be("1e+03");
+        MathUtil.FormatG3(999.9).Should().Be("1e+03");     // rounds up, bumping the exponent.
+        MathUtil.FormatG3(0.000123).Should().Be("0.000123");
+        MathUtil.FormatG3(9.999e-5).Should().Be("0.0001");  // rounds up to 1e-4 → fixed.
+        MathUtil.FormatG3(1e-5).Should().Be("1e-05");
+        MathUtil.FormatG3(-3.14159).Should().Be("-3.14");
+    }
+
+    [TestMethod]
+    public void ParallelCoordinate_SingleObjective_BuildsObjectivePlusParamDims()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize, sampler: new RandomSampler(0));
+        study.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            double b = t.SuggestFloat("b", -5, 5);
+            return a * a + b * b;
+        }, nTrials: 10);
+
+        var info = ParallelCoordinate.GetInfo(study);
+
+        info.ColorbarTitle.Should().Be("Objective Value");
+        info.IsRankColor.Should().BeFalse();
+        info.ReverseScale.Should().BeTrue();  // minimize.
+        info.DimsObjectives.Should().HaveCount(1);
+        info.DimsObjectives[0].Label.Should().Be("Objective Value");
+        info.DimsParams.Select(d => d.Label).Should().Equal("a", "b");
+        info.DrawOrder.Should().Equal(Enumerable.Range(0, 10));  // trivial for single-objective.
+        info.Feasibility.Should().BeNull();  // no constraints.
+        info.ColorValues.Should().HaveCount(10);
+    }
+
+    [TestMethod]
+    public void ParallelCoordinate_Constraints_ProduceFeasibility()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize, sampler: new RandomSampler(0));
+        study.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            t.SetConstraint("c", a);  // feasible when a <= 0.
+            return a * a;
+        }, nTrials: 8);
+
+        var info = ParallelCoordinate.GetInfo(study);
+        info.Feasibility.Should().NotBeNull();
+        info.Feasibility!.Should().HaveCount(8);
+    }
+
+    [TestMethod]
+    public void ParallelCoordinate_MultiObjective_UsesParetoRankColor()
+    {
+        var study = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new RandomSampler(0));
+        study.Optimize((System.Func<Trial, System.Collections.Generic.IReadOnlyList<double>>)(t =>
+        {
+            double x = t.SuggestFloat("x", -3, 3);
+            double y = t.SuggestFloat("y", -3, 3);
+            return new[] { x * x + y * y, (x - 1) * (x - 1) + (y - 1) * (y - 1) };
+        }), nTrials: 20);
+
+        var info = ParallelCoordinate.GetInfo(study);
+
+        info.IsRankColor.Should().BeTrue();
+        info.ColorbarTitle.Should().Be("Pareto Rank");
+        info.ReverseScale.Should().BeTrue();
+        info.DimsObjectives.Select(d => d.Label).Should().Equal("Objective 0", "Objective 1");
+        // Pareto rank 0 exists (the front) and color_values are whole numbers.
+        info.ColorValues.Should().Contain(0.0);
+        info.ColorValues.Should().OnlyContain(v => v == Math.Floor(v));
+        // draw_order sorts ranks non-increasingly.
+        for (int i = 1; i < info.DrawOrder.Count; i++)
+            info.ColorValues[info.DrawOrder[i]].Should().BeLessThanOrEqualTo(info.ColorValues[info.DrawOrder[i - 1]]);
+    }
 }

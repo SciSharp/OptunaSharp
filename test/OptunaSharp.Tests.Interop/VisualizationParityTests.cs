@@ -561,6 +561,157 @@ public class VisualizationParityTests : OptunaInteropTestBase
         PyFloat($"{pyVar}.range[1]").Should().Be(cs.Range.Max, $"{pyVar} range[1]");
     }
 
+    // ------------------------------------------------------------------ parallel coordinate
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 30)]
+    [DataRow(7, 45)]
+    public void ParallelCoordinate_SingleObjective_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(ContourObjective, nTrials: nTrials);  // reuse: a/log-z... actually x/log-z/cat-c.
+        var csInfo = ParallelCoordinate.GetInfo(csStudy);
+
+        PyExec(
+            PyContourObjective +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_contour, n_trials={nTrials})\n" +
+            "from optuna.visualization._parallel_coordinate import _get_parallel_coordinate_info\n" +
+            "info = _get_parallel_coordinate_info(study, None, None, 'Objective Value')\n");
+
+        AssertParallelCoordinateInfo(csInfo, "info", compareDrawOrder: true);
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 40)]
+    [DataRow(11, 60)]
+    public void ParallelCoordinate_MissingValues_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            if (a > 0)
+            {
+                double d = t.SuggestFloat("d", 0, 10);  // conditional → 'd' is missing for a<=0.
+                return a + d;
+            }
+            return a;
+        }, nTrials: nTrials);
+        var csInfo = ParallelCoordinate.GetInfo(csStudy);
+
+        PyExec(
+            "def _oss_pc_cond(t):\n" +
+            "    a = t.suggest_float('a', -5, 5)\n" +
+            "    if a > 0:\n" +
+            "        d = t.suggest_float('d', 0, 10)\n" +
+            "        return a + d\n" +
+            "    return a\n" +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_pc_cond, n_trials={nTrials})\n" +
+            "from optuna.visualization._parallel_coordinate import _get_parallel_coordinate_info\n" +
+            "info = _get_parallel_coordinate_info(study, None, None, 'Objective Value')\n");
+
+        AssertParallelCoordinateInfo(csInfo, "info", compareDrawOrder: true);
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 40)]
+    [DataRow(7, 55)]
+    public void ParallelCoordinate_MultiObjective_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new RandomSampler(seed));
+        csStudy.Optimize(MoObjective, nTrials: nTrials);
+        var csInfo = ParallelCoordinate.GetInfo(csStudy);
+
+        PyExec(
+            PyMoObjective +
+            $"study = optuna.create_study(directions=['minimize','minimize'], sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_mo, n_trials={nTrials})\n" +
+            "from optuna.visualization._parallel_coordinate import _get_parallel_coordinate_info\n" +
+            "info = _get_parallel_coordinate_info(study, None, None, 'Objective Value')\n");
+
+        // Everything bit-exact except draw_order: it rides np.argsort over tied Pareto ranks (unstable),
+        // a documented divergence. Instead verify draw_order orders the ranks non-increasingly.
+        AssertParallelCoordinateInfo(csInfo, "info", compareDrawOrder: false);
+        for (int i = 1; i < csInfo.DrawOrder.Count; i++)
+            csInfo.ColorValues[csInfo.DrawOrder[i]].Should()
+                .BeLessThanOrEqualTo(csInfo.ColorValues[csInfo.DrawOrder[i - 1]]);
+    }
+
+    private void AssertParallelCoordinateInfo(ParallelCoordinateInfo cs, string pyVar, bool compareDrawOrder)
+    {
+        PyStr($"{pyVar}.colorbar_title").Should().Be(cs.ColorbarTitle);
+        PyBool($"{pyVar}.reverse_scale").Should().Be(cs.ReverseScale);
+        PyBool($"{pyVar}.is_rank_color").Should().Be(cs.IsRankColor);
+
+        int no = (int)PyLong($"len({pyVar}.dims_objectives)");
+        no.Should().Be(cs.DimsObjectives.Count);
+        for (int i = 0; i < no; i++)
+            AssertDimension(cs.DimsObjectives[i], $"{pyVar}.dims_objectives[{i}]");
+
+        int npd = (int)PyLong($"len({pyVar}.dims_params)");
+        npd.Should().Be(cs.DimsParams.Count);
+        for (int i = 0; i < npd; i++)
+            AssertDimension(cs.DimsParams[i], $"{pyVar}.dims_params[{i}]");
+
+        int nc = (int)PyLong($"len({pyVar}.color_values)");
+        nc.Should().Be(cs.ColorValues.Count);
+        for (int i = 0; i < nc; i++)
+            PyFloat($"float({pyVar}.color_values[{i}])").Should().Be(cs.ColorValues[i], $"color_values[{i}]");
+
+        PyBool($"{pyVar}.feasibility is None").Should().Be(cs.Feasibility is null);
+        if (cs.Feasibility is not null)
+        {
+            int nf = (int)PyLong($"len({pyVar}.feasibility)");
+            nf.Should().Be(cs.Feasibility.Count);
+            for (int i = 0; i < nf; i++)
+                PyBool($"{pyVar}.feasibility[{i}]").Should().Be(cs.Feasibility[i], $"feasibility[{i}]");
+        }
+
+        int nd = (int)PyLong($"len({pyVar}.draw_order)");
+        nd.Should().Be(cs.DrawOrder.Count);
+        if (compareDrawOrder)
+            for (int i = 0; i < nd; i++)
+                PyLong($"{pyVar}.draw_order[{i}]").Should().Be(cs.DrawOrder[i], $"draw_order[{i}]");
+    }
+
+    private void AssertDimension(DimensionInfo cs, string pyVar)
+    {
+        PyStr($"{pyVar}.label").Should().Be(cs.Label, $"{pyVar} label");
+        PyBool($"{pyVar}.is_log").Should().Be(cs.IsLog, $"{pyVar} is_log");
+        PyBool($"{pyVar}.is_cat").Should().Be(cs.IsCat, $"{pyVar} is_cat");
+        PyBool($"{pyVar}.has_missing").Should().Be(cs.HasMissing, $"{pyVar} has_missing");
+        PyFloat($"float({pyVar}.range[0])").Should().Be(cs.Range.Min, $"{pyVar} range[0]");
+        PyFloat($"float({pyVar}.range[1])").Should().Be(cs.Range.Max, $"{pyVar} range[1]");
+
+        int nv = (int)PyLong($"len({pyVar}.values)");
+        nv.Should().Be(cs.Values.Count, $"{pyVar} values count");
+        for (int i = 0; i < nv; i++)
+            PyFloat($"float({pyVar}.values[{i}])").Should().Be(cs.Values[i], $"{pyVar} values[{i}]");
+
+        int nt = (int)PyLong($"len({pyVar}.tickvals)");
+        nt.Should().Be(cs.Tickvals.Count, $"{pyVar} tickvals count");
+        for (int i = 0; i < nt; i++)
+            PyFloat($"float({pyVar}.tickvals[{i}])").Should().Be(cs.Tickvals[i], $"{pyVar} tickvals[{i}]");
+
+        int ntt = (int)PyLong($"len({pyVar}.ticktext)");
+        ntt.Should().Be(cs.Ticktext.Count, $"{pyVar} ticktext count");
+        for (int i = 0; i < ntt; i++)
+            PyStr($"{pyVar}.ticktext[{i}]").Should().Be(cs.Ticktext[i], $"{pyVar} ticktext[{i}]");
+    }
+
     // ------------------------------------------------------------------ shared assertions
 
     private const string PyContourObjective =
