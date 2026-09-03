@@ -30,18 +30,22 @@ with no external package on either side.
 
 ## 0. Progress ledger — where we are, where to continue
 
-> **Status as of 2026-09-02.** Legend: ✅ done & green · 🟩 partially landed (some sub-parts done as
+> **Status as of 2026-09-03.** Legend: ✅ done & green · 🟩 partially landed (some sub-parts done as
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 2.7** — Importance framework + PED-ANOVA
+### ▶ CONTINUE HERE: **Phase 2.8** — TPE stage 1 (the default sampler, univariate)
 
-Phases 0, 1 and 2.1–2.6 are complete, committed, and proven green (260 unit + 82 live-interop
-tests, both TFMs, none skipped). The next unstarted work item in plan order is **2.7**. Read
-`src/optuna/optuna/importance/__init__.py` + `_ped_anova/*`, run it, then port the importance
-framework and the **PED-ANOVA** evaluator (pure-numpy Parzen; NumSharp throughout); reuse the
-interop parity engine (below) to prove it bit-exact. Note: `study/_multi_objective.py` (2.10's first
-half) is already landed as `Internal/MultiObjective.cs`.
+Phases 0, 1 and 2.1–2.7 are complete, committed, and proven green (289 unit + 89 live-interop
+tests, both TFMs, none skipped). The next unstarted work item in plan order is **2.8**. Read
+`src/optuna/optuna/samplers/_tpe/*`, run it, then replace the `TPESampler` placeholder. A large slice
+of the supporting numeric kernel already landed as **2.7 byproducts** — `Internal/Erf.cs`,
+`Internal/TruncNorm.cs` (the `_log_gauss_mass` half of `_truncnorm.py`; still needs
+`ppf`/`rvs`/`_ndtri_exp`/`logpdf` + `_ndtri_exp`) and `Samplers/Tpe/ProbabilityDistributions.cs`
+(`_MixtureOfProductDistribution.LogPdf` + the categorical/discrete batched kinds; still needs
+`Sample`, the continuous/log-normal kinds, and `_unique_inverse_2d` is already ported). **Read the
+erf/ucrt divergence note below** — it bounds TPE's flagship bit-exact claim exactly the way it bounds
+PED-ANOVA's.
 
 ### Phase status
 
@@ -49,7 +53,7 @@ half) is already landed as `Internal/MultiObjective.cs`.
 |---|---|---|
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
-| 2 — Native features | 🟩 | **2.1–2.6 done**; 2.7 onward not started; 2.10 & prereqs partially landed (see below) |
+| 2 — Native features | 🟩 | **2.1–2.7 done**; 2.8 onward not started; 2.10 & prereqs partially landed (see below) |
 | 3 — Native heavy tail | ⬜ | not started |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
@@ -100,6 +104,38 @@ half) is already landed as `Internal/MultiObjective.cs`.
   `Evaluate` until the GP stack (**3.3**) — same pattern as the `TPESampler` placeholder. 19 unit
   tests (a port of Optuna's own `tests/terminator_tests/*`) + 6 live parity tests (decision sequence,
   scaled CV error bit-exact, median threshold) across both directions.
+- ✅ **2.7** — `feat(importance): Phase 2.7 — Importance framework + PED-ANOVA` (`3096aba`). New
+  `OptunaSharp.Importance` + `OptunaSharp.Importance.PedAnova` namespaces: `BaseImportanceEvaluator`
+  + `get_param_importances` (the `PedAnovaImportanceEvaluator` default; normalization; experimental
+  `normalize=false` warning), `PedAnovaImportanceEvaluator` (the full `evaluator.py` — `_QuantileFilter`,
+  `_get_top_quantile_trials`, Pearson-divergence, regime partitioning, conditional/dynamic-space
+  handling), and `ScottParzenEstimator` + grid-count/build helpers. Pulled forward as tested
+  byproducts for 2.8: `Internal/TruncNorm.cs` (`_log_gauss_mass` + `_log_ndtr`/`_ndtr`/`_log_diff`)
+  and `Samplers/Tpe/ProbabilityDistributions.cs` (`_MixtureOfProductDistribution.LogPdf`, the
+  categorical + discrete-truncnorm batched kinds, `_unique_inverse_2d`/`_log_gauss_mass_unique`).
+  `Internal/TpeTrialSplit.cs` hosts `_split_complete_trials_multi_objective` (the MO `target=None`
+  path); its HSSP tie-break throws pending **2.10** (`_hypervolume/*`) — the exact-rank-partition
+  case works, and MO-with-explicit-`target` uses the QuantileFilter path fully. **Numeric strategy
+  (all verified against live Optuna before porting):** NumPy `@`/`np.dot` reproduced as a *sequential*
+  dot (proven bit-identical end-to-end over 300 mixed studies — the BLAS order doesn't reach the
+  answer's bits), `.sum()` reductions via NumPy-pairwise (`MathUtil.PairwiseSum`), `np.cumsum`
+  sequential, scalar `x**2` via `Math.Pow` (Python's scalar `**` ≠ `x*x` in ~0.05% of cases; NumPy
+  array `**2` == `x*x`), and a new bit-exact `MathUtil.Log1p` (`log(u) - ((u-1)-x)/u`, matches NumPy
+  over 220k points — `.NET Math.Log`/`Math.Exp` already equal NumPy's `np.log`/`np.exp` bit-for-bit).
+  29 unit tests (a port of Optuna's own `pedanova_tests/*` — grid counts, Scott bandwidth, quantile
+  filter, PDFs — plus end-to-end importances built via the bit-exact `RandomSampler`) + 7 live parity
+  tests (SO mixed float/log-float/int/log-int/categorical across seeds, `params=` subset, MO with
+  explicit target).
+  - **[Misaligned] erf/erfc — the one divergence from Python (documented on `TruncNorm`).** The
+    numerical Parzen density routes through `_ndtr` → `erf`, and Optuna's `math.erf` is the platform
+    C library (**ucrt** on this Windows box), which matches neither FreeBSD `s_erf` (what
+    `Internal/Erf.cs` ports), CPython's own `m_erf`, nor scipy — they differ by ~1-3 ULP. So PED-ANOVA
+    importances (and anything on the truncnorm kernel, incl. **TPE in 2.8**) agree with Python only to
+    a few ULP, **not bit-for-bit** — the same system-libm class the plan already excuses for LAPACK.
+    Everything NOT through `erf` stays bit-exact: the categorical importance path, trial selection,
+    Scott bandwidth, grid counts, and the descending importance ordering all match Optuna exactly, and
+    Optuna's ≥2000-element vectorized-erf approximation IS reproduced bit-for-bit by `Erf.ComputeArray`.
+    Unit/interop tests assert a `1e-10`…`1e-13` tolerance on erf-dependent values, exact elsewhere.
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -107,6 +143,21 @@ half) is already landed as `Internal/MultiObjective.cs`.
 
 - **`Internal/Erf.cs`** — full FreeBSD `s_erf.c` `erf`/`erfc` + Optuna's vectorized `_tpe/_erf.py`
   variant + norm cdf/sf. Built for Wilcoxon; it is also the **2.8 TPE** `_erf` prerequisite — done.
+  Its ≥2000-element `ComputeArray` path reproduces Optuna's `_erf.py` approximation bit-for-bit; the
+  scalar/`<2000` path is FreeBSD `s_erf`, ~1-3 ULP from Python's `math.erf` (ucrt) — see the 2.7
+  erf/ucrt `[Misaligned]` note. (`Internal/MathUtil.cs` gained a bit-exact `Log1p` + shared
+  `PairwiseSum` in 2.7.)
+- **`Internal/TruncNorm.cs`** — the `_log_gauss_mass` half of `_tpe/_truncnorm.py`
+  (`_log_ndtr`/`_ndtr`/`_log_diff` + the case logic). Built for PED-ANOVA 2.7; **2.8** adds the
+  sampling half (`ppf`/`rvs`/`_ndtri_exp`/`logpdf`).
+- **`Samplers/Tpe/ProbabilityDistributions.cs`** — `_tpe/probability_distributions.py`:
+  `_MixtureOfProductDistribution.LogPdf` (categorical + non-log discrete-truncnorm branches),
+  `_BatchedCategoricalDistributions`/`_BatchedDiscreteTruncNormDistributions`,
+  `_unique_inverse_2d`/`_log_gauss_mass_unique`. Built for PED-ANOVA 2.7; **2.8** adds `Sample`, the
+  continuous/log-normal batched kinds, and the multivariate path.
+- **`Internal/TpeTrialSplit.cs`** — `_split_complete_trials_multi_objective` from `_tpe/sampler.py`
+  (used by PED-ANOVA's MO `target=None` path). HSSP tie-break throws pending **2.10**; **2.8**'s
+  `sampler.py` port reuses/extends this with the single-objective + pruned/infeasible splits.
 - **`Internal/SignedRankTest.cs`** — scipy-1.16-exact Wilcoxon signed-rank (exact/permutation/
   asymptotic branches). Done for 2.3.
 - **`Internal/MultiObjective.cs`** — `study/_multi_objective.py` port: non-dominated sort,
@@ -146,7 +197,8 @@ half) is already landed as `Internal/MultiObjective.cs`.
   suite covers the gap for now. Build it when the algorithm surface is large enough to snapshot
   (natural point: alongside/after TPE 2.8, the flagship bit-exact claim).
 - ⬜ **`MisalignedRegistry`** — not yet a formal ledger; documented divergences currently live as
-  in-source `[Misaligned]` comments (e.g. journal snapshot bytes are OptunaSharp JSON, not pickle).
+  in-source `[Misaligned]` comments (e.g. journal snapshot bytes are OptunaSharp JSON, not pickle;
+  the 2.7 **erf/ucrt** ~1-3 ULP tolerance on the truncnorm density, which also bounds 2.8 TPE).
 
 ### Build / test notes for the next agent
 
@@ -158,8 +210,8 @@ half) is already landed as `Internal/MultiObjective.cs`.
   fails *inside* `NumSharp.Core`, that's the sibling checkout, not OptunaSharp** — point
   `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
   fallback.
-- **Test:** `dotnet test test/OptunaSharp.Tests/...` (260 unit, both TFMs) and
-  `dotnet test test/OptunaSharp.Tests.Interop/...` (82 live-Optuna tests; self-skip Inconclusive
+- **Test:** `dotnet test test/OptunaSharp.Tests/...` (289 unit, both TFMs) and
+  `dotnet test test/OptunaSharp.Tests.Interop/...` (89 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
 - **Interop Python is pinned to the vendored reference.** The live-interop suite runs against the
   submodule's Optuna **5.0.0.dev** (`pip install -e src/optuna --no-deps`), not the stale PyPI build.
@@ -297,8 +349,8 @@ Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 led
 | 2.4 | ✅ | `PartialFixedSampler`, `GridSampler` | `samplers/_partial_fixed.py`, `_grid.py` | ~400 | 900 | 🟢 | 0.7 |
 | 2.5 | ✅ | `BruteForceSampler` | `samplers/_brute_force.py` | ~480 | 1,000 | 🟢+ | tree enumeration over dynamic spaces; the categorical-NaN quirk (`_is_nan`); bit-exact `rng.choice(p=)` via NumPy pairwise-sum + `searchsorted(side='right')`. `758189f` |
 | 2.6 | ✅ | Terminator framework + non-GP evaluators (`StaticError`, `BestValueStagnation`, `MedianError`, `CrossValidationError`) | `terminator/*` minus regret/EMMR | ~300 | 700 | 🟢 | `OptunaSharp.Terminator` namespace; regret/EMMR are GP placeholders (throw until 3.3); `np.var`/`sys.float_info` sentinels bit-exact. `cc7c6e2` |
-| 2.7 | ⬜ **NEXT** | Importance framework + **PED-ANOVA** | `importance/__init__.py`, `_ped_anova/*` | ~350 | 800 | 🟢+ | pure-numpy Parzen; NumSharp throughout |
-| 2.8 | ⬜ | **TPE stage 1 — the default sampler, univariate** | `_tpe/_erf.py`, `_truncnorm.py`, `parzen_estimator.py`, `probability_distributions.py`, `sampler.py` core | ~800 | 2,600 | 🟡 | 0.4; **`_erf` already ported** (`Internal/Erf.cs`); port `_truncnorm` exactly; replace the `TPESampler` placeholder; **bit-exact oracle vs Python TPE** is the flagship parity claim |
+| 2.7 | ✅ | Importance framework + **PED-ANOVA** | `importance/__init__.py`, `_ped_anova/*` | ~350 | 800 | 🟢+ | pure-numpy Parzen; NumSharp throughout. `_truncnorm._log_gauss_mass` + `probability_distributions.log_pdf` landed as byproducts. **erf/ucrt tolerance** (`[Misaligned]`, see §0) |
+| 2.8 | ⬜ **NEXT** | **TPE stage 1 — the default sampler, univariate** | `_tpe/_erf.py`, `_truncnorm.py`, `parzen_estimator.py`, `probability_distributions.py`, `sampler.py` core | ~800 | 2,600 | 🟡 | 0.4; **`_erf` + the `_log_gauss_mass` half of `_truncnorm` + `probability_distributions.log_pdf` already ported** (2.7 byproducts); finish `_truncnorm` (`ppf`/`rvs`/`_ndtri_exp`/`logpdf`) + `probability_distributions.sample`; replace the `TPESampler` placeholder; **bit-exact oracle vs Python TPE** is the flagship parity claim (bounded by the same erf/ucrt tolerance as 2.7) |
 | 2.9 | ⬜ | TPE stage 2 — `multivariate`, `group`, `constant_liar`, weights | `_tpe/sampler.py` rest | ~300 | 900 | 🟡 | 2.8 |
 | 2.10 | 🟩 | **MO machinery**: non-dominated sort, WFG hypervolume, HSSP, box decomposition, Pareto front | `study/_multi_objective.py`, `_hypervolume/*` | ~400 | 1,100 | 🟡 | **`study/_multi_objective.py` half done** (`Internal/MultiObjective.cs`, from 0.8); remaining = `_hypervolume/*` |
 | 2.11 | ⬜ | TPE stage 3 — MOTPE + constraints | `_tpe/sampler.py` MO split | ~150 | 450 | 🟡 | 2.9, 2.10 |
