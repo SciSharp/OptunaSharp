@@ -34,18 +34,25 @@ with no external package on either side.
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 2.8** — TPE stage 1 (the default sampler, univariate)
+### ▶ CONTINUE HERE: **Phase 2.9** — TPE stage 2 (`group`, MOTPE refinements)
 
-Phases 0, 1 and 2.1–2.7 are complete, committed, and proven green (289 unit + 89 live-interop
-tests, both TFMs, none skipped). The next unstarted work item in plan order is **2.8**. Read
-`src/optuna/optuna/samplers/_tpe/*`, run it, then replace the `TPESampler` placeholder. A large slice
-of the supporting numeric kernel already landed as **2.7 byproducts** — `Internal/Erf.cs`,
-`Internal/TruncNorm.cs` (the `_log_gauss_mass` half of `_truncnorm.py`; still needs
-`ppf`/`rvs`/`_ndtri_exp`/`logpdf` + `_ndtri_exp`) and `Samplers/Tpe/ProbabilityDistributions.cs`
-(`_MixtureOfProductDistribution.LogPdf` + the categorical/discrete batched kinds; still needs
-`Sample`, the continuous/log-normal kinds, and `_unique_inverse_2d` is already ported). **Read the
-erf/ucrt divergence note below** — it bounds TPE's flagship bit-exact claim exactly the way it bounds
-PED-ANOVA's.
+Phases 0, 1 and 2.1–2.8 are complete, committed, and proven green (303 unit + 97 live-interop
+tests, both TFMs, none skipped). **2.8 landed the whole TPE numeric kernel plus the univariate AND
+non-group multivariate sampler** — a default `TPESampler()` now optimizes single-objective studies
+end-to-end, matching Optuna within the erf tolerance (see the 2.8 entry below). The remaining TPE
+work is small:
+- **`group=true`** — the group-decomposed multivariate TPE. Constructor currently throws
+  `NotImplementedException`; `SearchSpace/GroupDecomposedSearchSpace.cs` is already ported, so this
+  is mostly wiring `infer_relative_search_space`/`sample_relative`'s group branches.
+- **MO/MOTPE** — MO studies already run through the independent path (`multivariate` defaults to
+  False for MO) and the `handle_below` uniform-weights path is ported; what remains rides on **2.10**
+  (`_hypervolume/*` — the `_split_complete_trials_multi_objective` HSSP tie-break throws until then)
+  and **2.11** (the MOTPE split).
+- Everything else in the sampler (`constant_liar` incl. the `tpe:relative_params` sharing, the
+  deprecated `weights`/`gamma`/`consider_*` args, `n_startup_trials`, `reseed_rng`) is done.
+
+**Read BOTH divergence notes below** (erf/ucrt AND the new argsort tie-break) — together they bound
+TPE's parity exactly.
 
 ### Phase status
 
@@ -53,7 +60,7 @@ PED-ANOVA's.
 |---|---|---|
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
-| 2 — Native features | 🟩 | **2.1–2.7 done**; 2.8 onward not started; 2.10 & prereqs partially landed (see below) |
+| 2 — Native features | 🟩 | **2.1–2.8 done**; 2.9 (`group`) not started; 2.10/2.11 partially landed (see below) |
 | 3 — Native heavy tail | ⬜ | not started |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
@@ -136,6 +143,42 @@ PED-ANOVA's.
     Scott bandwidth, grid counts, and the descending importance ordering all match Optuna exactly, and
     Optuna's ≥2000-element vectorized-erf approximation IS reproduced bit-for-bit by `Erf.ComputeArray`.
     Unit/interop tests assert a `1e-10`…`1e-13` tolerance on erf-dependent values, exact elsewhere.
+- ✅ **2.8** — `feat(samplers): Phase 2.8 — TPESampler (TPE, the default sampler)` (`c1f0b63`). Replaced the
+  placeholder with the full `TPESampler`: univariate (independent) AND non-group multivariate paths,
+  so a default `TPESampler()` optimizes single-objective studies end-to-end. Completed the numeric
+  kernel — `Internal/TruncNorm.cs` sampling half (`_ndtri_exp` Newton iter, `ppf`, vectorized
+  `_log_ndtr`, `_norm_logpdf`), new bit-exact `MathUtil.Expm1` (Kahan `(u-1)x/log(u)`) + `LogAddExp`
+  (`npy_logaddexp`), `Samplers/Tpe/ProbabilityDistributions.cs` (all four numerical batched kinds,
+  `_MixtureOfProductDistribution.sample` incl. the bit-exact `rng.choice(p=)`/`rand`/`uniform` draw
+  order, and the continuous branch of `log_pdf`), new `Samplers/Tpe/ParzenEstimator.cs`
+  (`_ParzenEstimator` + params, `compute_sigmas`, `_call_weights_func`, categorical/numerical
+  distributions), and `Internal/TpeTrialSplit.cs` gained `_split_trials`/complete/pruned/infeasible +
+  `default_gamma`/`default_gamma_multiobjective`/`default_weights` (bit-exact `np.linspace`). The
+  sampler ports `_sample`/`_compare` (`np.argmax` first-max), `_get_internal_repr`, `_get_params`,
+  `constant_liar` (the `tpe:relative_params` system-attr sharing, byte-compatible with Python
+  `json.dumps`), the deprecated-arg `FutureWarning`s, and `reseed_rng`. `group=true` throws pending
+  **2.9**; MO uses the independent path (the MO-split HSSP tie-break still throws pending **2.10**).
+  14 unit tests + 8 live trajectory-parity tests (multivariate continuous/log-float/categorical,
+  independent mode, sum-of-squares, bit-exact startup) across seeds.
+  - **Numeric strategy (all verified against live Optuna before porting):** `Expm1`/`LogAddExp` are
+    **bit-exact** vs NumPy (checked over the truncnorm input range); `_ndtri_exp` is bit-exact for its
+    own inputs but the sampling `ppf`/density ride the scalar `erf` → the same **erf/ucrt few-ULP
+    tolerance** as 2.7 (the flagship parity is tolerance-bounded, not bit-for-bit, exactly as the plan
+    anticipates). RNG draw **count and order** are identical regardless, so the study stays in
+    lock-step. Confirmed exact-to-tolerance over full trajectories: multivariate continuous +
+    categorical, log-float, and independent mode.
+  - **[Misaligned] argsort tie order (the second documented divergence, on `ParzenEstimator`).**
+    `compute_sigmas` calls `np.argsort(mus)`; NumPy 2.x sorts float64 with **x86-simd-sort**, whose
+    tie order is a SIMD-network permutation that is not portably reproducible (not stable, not classic
+    quicksort/heapsort — `kind=` is ignored for float64 — and ISA-dependent). OptunaSharp uses a
+    **stable** sort, which is exact whenever the observation values are **distinct** — so every
+    all-continuous-float study matches Optuna, as do categorical params and the independent path with
+    <25 "above" observations (uniform weights make the 1-D tie order cancel). The residual case —
+    **repeated discrete/int observations in a multivariate study** (there each dim's bandwidth pairs
+    with a joint kernel, so the tie order does not cancel) — matches Optuna's algorithm but can pick a
+    different sigma→kernel pairing and diverge; confirmed by forcing Python's argsort to `kind=stable`,
+    which makes an int-param study match bit-for-bit. Documented like the erf one; TPE parity tests
+    exclude that path on purpose.
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -147,26 +190,30 @@ PED-ANOVA's.
   scalar/`<2000` path is FreeBSD `s_erf`, ~1-3 ULP from Python's `math.erf` (ucrt) — see the 2.7
   erf/ucrt `[Misaligned]` note. (`Internal/MathUtil.cs` gained a bit-exact `Log1p` + shared
   `PairwiseSum` in 2.7.)
-- **`Internal/TruncNorm.cs`** — the `_log_gauss_mass` half of `_tpe/_truncnorm.py`
-  (`_log_ndtr`/`_ndtr`/`_log_diff` + the case logic). Built for PED-ANOVA 2.7; **2.8** adds the
-  sampling half (`ppf`/`rvs`/`_ndtri_exp`/`logpdf`).
-- **`Samplers/Tpe/ProbabilityDistributions.cs`** — `_tpe/probability_distributions.py`:
-  `_MixtureOfProductDistribution.LogPdf` (categorical + non-log discrete-truncnorm branches),
-  `_BatchedCategoricalDistributions`/`_BatchedDiscreteTruncNormDistributions`,
-  `_unique_inverse_2d`/`_log_gauss_mass_unique`. Built for PED-ANOVA 2.7; **2.8** adds `Sample`, the
-  continuous/log-normal batched kinds, and the multivariate path.
-- **`Internal/TpeTrialSplit.cs`** — `_split_complete_trials_multi_objective` from `_tpe/sampler.py`
-  (used by PED-ANOVA's MO `target=None` path). HSSP tie-break throws pending **2.10**; **2.8**'s
-  `sampler.py` port reuses/extends this with the single-objective + pruned/infeasible splits.
+- **`Internal/TruncNorm.cs`** — the full `_tpe/_truncnorm.py`: `_log_gauss_mass` (`_log_ndtr`/`_ndtr`/
+  `_log_diff` + case logic, from 2.7) plus the **2.8 sampling half** (`_ndtri_exp`, `ppf`, vectorized
+  `LogNdtr`, `NormLogPdf`). Complete.
+- **`Samplers/Tpe/ProbabilityDistributions.cs`** — the full `_tpe/probability_distributions.py`:
+  `_MixtureOfProductDistribution.LogPdf` (categorical, discrete, and — **2.8** — continuous branches),
+  all five batched kinds (categorical + the **2.8** continuous/discrete trunc-norm/log-norm), the
+  **2.8** `Sample` (bit-exact `rng.choice(p=)`/`rand`/`uniform` draw order), and
+  `_unique_inverse_2d`/`_log_gauss_mass_unique`. Complete.
+- **`Samplers/Tpe/ParzenEstimator.cs`** — **new in 2.8**. `_ParzenEstimator` + `_ParzenEstimatorParameters`,
+  `compute_sigmas` (stable argsort — see the 2.8 argsort `[Misaligned]`), categorical/numerical
+  distribution builders, `_call_weights_func`, transform/untransform, sample/log_pdf.
+- **`Internal/TpeTrialSplit.cs`** — the trial-splitting + defaults from `_tpe/sampler.py`:
+  `_split_complete_trials_multi_objective` (from 2.7; HSSP tie-break throws pending **2.10**) plus the
+  **2.8** `_split_trials`/`_split_complete_trials_single_objective`/`_split_pruned_trials`/
+  `_split_infeasible_trials` and `default_gamma`/`default_gamma_multiobjective`/`default_weights`
+  (bit-exact `np.linspace`).
 - **`Internal/SignedRankTest.cs`** — scipy-1.16-exact Wilcoxon signed-rank (exact/permutation/
   asymptotic branches). Done for 2.3.
 - **`Internal/MultiObjective.cs`** — `study/_multi_objective.py` port: non-dominated sort,
   `_dominates`, `_fast_non_domination_rank`, `_calculate_nondomination_rank`, 2-D/N-D Pareto front,
   `np.unique(axis=0)` semantics. Landed for Phase 0.8 `best_trials`. **This is the first half of
   2.10** — what remains for 2.10 is `_hypervolume/*` (WFG, HSSP, box decomposition).
-- **`Samplers/TPESampler.cs`** — placeholder: constructs fine (so default-sampler `load_study`/
-  `copy_study`/summaries work), but **throws `NotImplementedException` on sample**. Replace its body
-  when porting **2.8**; Optuna's default-sampler identity is intentionally preserved.
+- **`Samplers/TPESampler.cs`** — **the real sampler as of 2.8** (was a throwing placeholder).
+  Univariate + non-group multivariate; `group=true` throws pending **2.9**.
 - `trials_dataframe` ships as a dependency-free `TrialsTable` (Core stays pure); the
   `Microsoft.Data.Analysis` adapter remains Tier X (5.4).
 
@@ -197,8 +244,11 @@ PED-ANOVA's.
   suite covers the gap for now. Build it when the algorithm surface is large enough to snapshot
   (natural point: alongside/after TPE 2.8, the flagship bit-exact claim).
 - ⬜ **`MisalignedRegistry`** — not yet a formal ledger; documented divergences currently live as
-  in-source `[Misaligned]` comments (e.g. journal snapshot bytes are OptunaSharp JSON, not pickle;
-  the 2.7 **erf/ucrt** ~1-3 ULP tolerance on the truncnorm density, which also bounds 2.8 TPE).
+  in-source `[Misaligned]` comments: journal snapshot bytes are OptunaSharp JSON, not pickle; the
+  2.7 **erf/ucrt** ~1-3 ULP tolerance on the truncnorm density, which also bounds 2.8 TPE; and the
+  2.8 **argsort tie order** in `compute_sigmas` (stable vs NumPy's unreproducible x86-simd-sort —
+  diverges only on repeated numerical observations in a multivariate study; continuous/categorical
+  studies are exact). Both TPE divergences are on `Samplers/Tpe/ParzenEstimator.cs`/`TruncNorm.cs`.
 
 ### Build / test notes for the next agent
 
@@ -210,8 +260,8 @@ PED-ANOVA's.
   fails *inside* `NumSharp.Core`, that's the sibling checkout, not OptunaSharp** — point
   `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
   fallback.
-- **Test:** `dotnet test test/OptunaSharp.Tests/...` (289 unit, both TFMs) and
-  `dotnet test test/OptunaSharp.Tests.Interop/...` (89 live-Optuna tests; self-skip Inconclusive
+- **Test:** `dotnet test test/OptunaSharp.Tests/...` (303 unit, both TFMs) and
+  `dotnet test test/OptunaSharp.Tests.Interop/...` (97 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
 - **Interop Python is pinned to the vendored reference.** The live-interop suite runs against the
   submodule's Optuna **5.0.0.dev** (`pip install -e src/optuna --no-deps`), not the stale PyPI build.
@@ -337,7 +387,7 @@ Prerequisite to everything; order within the phase is the dependency order.
 **Phase 1 ≈ 1.65k py → ~3.55k C#. Estimate: 3–4 weeks.**
 Exit gate: journal-file Python↔C# live interop green — **cross-language persistence with zero external deps on either side**.
 
-## Phase 2 — Native features, easiest first — 🟩 IN PROGRESS (2.1–2.6 done; **next: 2.7**)
+## Phase 2 — Native features, easiest first — 🟩 IN PROGRESS (2.1–2.8 done; **next: 2.9**)
 
 Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 ledger).
 
@@ -350,8 +400,8 @@ Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 led
 | 2.5 | ✅ | `BruteForceSampler` | `samplers/_brute_force.py` | ~480 | 1,000 | 🟢+ | tree enumeration over dynamic spaces; the categorical-NaN quirk (`_is_nan`); bit-exact `rng.choice(p=)` via NumPy pairwise-sum + `searchsorted(side='right')`. `758189f` |
 | 2.6 | ✅ | Terminator framework + non-GP evaluators (`StaticError`, `BestValueStagnation`, `MedianError`, `CrossValidationError`) | `terminator/*` minus regret/EMMR | ~300 | 700 | 🟢 | `OptunaSharp.Terminator` namespace; regret/EMMR are GP placeholders (throw until 3.3); `np.var`/`sys.float_info` sentinels bit-exact. `cc7c6e2` |
 | 2.7 | ✅ | Importance framework + **PED-ANOVA** | `importance/__init__.py`, `_ped_anova/*` | ~350 | 800 | 🟢+ | pure-numpy Parzen; NumSharp throughout. `_truncnorm._log_gauss_mass` + `probability_distributions.log_pdf` landed as byproducts. **erf/ucrt tolerance** (`[Misaligned]`, see §0) |
-| 2.8 | ⬜ **NEXT** | **TPE stage 1 — the default sampler, univariate** | `_tpe/_erf.py`, `_truncnorm.py`, `parzen_estimator.py`, `probability_distributions.py`, `sampler.py` core | ~800 | 2,600 | 🟡 | 0.4; **`_erf` + the `_log_gauss_mass` half of `_truncnorm` + `probability_distributions.log_pdf` already ported** (2.7 byproducts); finish `_truncnorm` (`ppf`/`rvs`/`_ndtri_exp`/`logpdf`) + `probability_distributions.sample`; replace the `TPESampler` placeholder; **bit-exact oracle vs Python TPE** is the flagship parity claim (bounded by the same erf/ucrt tolerance as 2.7) |
-| 2.9 | ⬜ | TPE stage 2 — `multivariate`, `group`, `constant_liar`, weights | `_tpe/sampler.py` rest | ~300 | 900 | 🟡 | 2.8 |
+| 2.8 | ✅ | **TPE — the default sampler (univariate + non-group multivariate)** | `_tpe/_erf.py`, `_truncnorm.py`, `parzen_estimator.py`, `probability_distributions.py`, `sampler.py` core | ~800 | 2,600 | 🟡 | 0.4. Full numeric kernel + sampler; `Expm1`/`LogAddExp` bit-exact, `ppf`/density erf-tolerance-bounded. Trajectory parity vs live Optuna (continuous/log/categorical multivariate + independent). **Two `[Misaligned]`: erf/ucrt few-ULP, and stable-vs-x86-simd-sort argsort tie order on repeated numerical obs.** `constant_liar`+deprecated args done |
+| 2.9 | ⬜ **NEXT** | TPE stage 2 — `group` (group-decomposed multivariate) | `_tpe/sampler.py` group branches | ~150 | 450 | 🟡 | 2.8. `multivariate`/`constant_liar`/`weights` already landed in 2.8; `GroupDecomposedSearchSpace` already ported. `group=true` currently throws |
 | 2.10 | 🟩 | **MO machinery**: non-dominated sort, WFG hypervolume, HSSP, box decomposition, Pareto front | `study/_multi_objective.py`, `_hypervolume/*` | ~400 | 1,100 | 🟡 | **`study/_multi_objective.py` half done** (`Internal/MultiObjective.cs`, from 0.8); remaining = `_hypervolume/*` |
 | 2.11 | ⬜ | TPE stage 3 — MOTPE + constraints | `_tpe/sampler.py` MO split | ~150 | 450 | 🟡 | 2.9, 2.10 |
 | 2.12 | ⬜ | **QMC sampler** (Sobol + Halton, scrambling) | `samplers/_qmc.py` + scipy behavior | ~172 | 1,600 | 🟡 | Sobol direction numbers lifted from `rustuna_sampler/src/qmc/sobol/direction_numbers.rs`; scrambled sequences oracle-pinned vs scipy |
