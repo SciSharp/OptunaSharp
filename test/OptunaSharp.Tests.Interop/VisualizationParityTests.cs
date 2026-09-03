@@ -650,6 +650,60 @@ public class VisualizationParityTests : OptunaInteropTestBase
                 .BeLessThanOrEqualTo(csInfo.ColorValues[csInfo.DrawOrder[i - 1]]);
     }
 
+    // ------------------------------------------------------------------ timeline
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 20)]
+    [DataRow(7, 30)]
+    public void Timeline_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            long y = t.SuggestInt("y", 0, 10);
+            t.SetConstraint("c", x);
+            t.SetUserAttr("tag", "trial-info");
+            return x * x + y;
+        }, nTrials: nTrials);
+        var csInfo = Timeline.GetInfo(csStudy);
+
+        PyExec(
+            "def _oss_timeline(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_int('y', 0, 10)\n" +
+            "    t.set_constraint('c', x)\n" +
+            "    t.set_user_attr('tag', 'trial-info')\n" +
+            "    return x*x + y\n" +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_timeline, n_trials={nTrials})\n" +
+            "from optuna.visualization._timeline import _get_timeline_info\n" +
+            "info = _get_timeline_info(study)\n");
+
+        PyLong("len(info.bars)").Should().Be(csInfo.Bars.Count);
+        for (int k = 0; k < csInfo.Bars.Count; k++)
+        {
+            var bar = csInfo.Bars[k];
+            PyLong($"info.bars[{k}].number").Should().Be(bar.Number);
+            PyLong($"int(info.bars[{k}].state)").Should().Be((int)bar.State, $"bar {k} state");
+            PyBool($"info.bars[{k}].infeasible").Should().Be(bar.Infeasible, $"bar {k} infeasible");
+            // The hovertext is json.dumps({number, values, params, user_attrs}, indent=2) with <br> —
+            // bit-exact (no datetimes involved), so it must match live Optuna byte-for-byte.
+            PyStr($"info.bars[{k}].hovertext").Should().Be(bar.Hovertext, $"bar {k} hovertext");
+            bar.Complete.Should().BeOnOrAfter(bar.Start);
+        }
+
+        // n_recent_trials slicing.
+        var csRecent = Timeline.GetInfo(csStudy, nRecentTrials: 5);
+        PyExec("info5 = _get_timeline_info(study, n_recent_trials=5)\n");
+        PyLong("len(info5.bars)").Should().Be(csRecent.Bars.Count);
+        for (int k = 0; k < csRecent.Bars.Count; k++)
+            PyLong($"info5.bars[{k}].number").Should().Be(csRecent.Bars[k].Number);
+    }
+
     private void AssertParallelCoordinateInfo(ParallelCoordinateInfo cs, string pyVar, bool compareDrawOrder)
     {
         PyStr($"{pyVar}.colorbar_title").Should().Be(cs.ColorbarTitle);

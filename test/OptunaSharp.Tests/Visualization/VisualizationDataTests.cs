@@ -729,6 +729,108 @@ public class VisualizationDataTests
         info.Feasibility!.Should().HaveCount(8);
     }
 
+    // ------------------------------------------------------------------ timeline
+
+    private static FrozenTrial TimelineComplete(double value, DateTime start, DateTime complete,
+        OrderedDict<string, object?>? @params = null, OrderedDict<string, BaseDistribution>? dists = null,
+        OrderedDict<string, double>? constraints = null)
+    {
+        var t = FrozenTrial.CreateTrial(
+            state: TrialState.Complete, value: value,
+            @params: @params, distributions: dists, constraints: constraints);
+        t.SetDatetimeStart(start);
+        t.DatetimeComplete = complete;
+        return t;
+    }
+
+    [TestMethod]
+    public void Timeline_CompleteTrials_ProduceBars()
+    {
+        var s0 = new DateTime(2024, 1, 1, 0, 0, 0);
+        var c0 = new DateTime(2024, 1, 1, 0, 0, 1);
+        var s1 = new DateTime(2024, 1, 1, 0, 0, 2);
+        var c1 = new DateTime(2024, 1, 1, 0, 0, 5);
+
+        var study = Optuna.CreateStudy();
+        study.AddTrials(new[]
+        {
+            TimelineComplete(1.0, s0, c0),
+            TimelineComplete(2.0, s1, c1, constraints: new OrderedDict<string, double> { { "c", 1.0 } }),
+        });
+
+        var info = Timeline.GetInfo(study);
+
+        info.Bars.Should().HaveCount(2);
+        info.Bars[0].Number.Should().Be(0);
+        info.Bars[0].State.Should().Be(TrialState.Complete);
+        info.Bars[0].Start.Should().Be(s0);
+        info.Bars[0].Complete.Should().Be(c0);
+        info.Bars[0].Infeasible.Should().BeFalse();
+        info.Bars[1].Infeasible.Should().BeTrue();  // constraint 1.0 > 0.
+    }
+
+    [TestMethod]
+    public void Timeline_Hovertext_IsIndentedJsonWithBrNewlines()
+    {
+        var study = Optuna.CreateStudy();
+        study.AddTrials(new[]
+        {
+            TimelineComplete(1.5, new DateTime(2024, 1, 1), new DateTime(2024, 1, 1, 0, 0, 1),
+                @params: new OrderedDict<string, object?> { { "x", 0.5 } },
+                dists: new OrderedDict<string, BaseDistribution> { { "x", new FloatDistribution(0, 1) } }),
+        });
+
+        string hovertext = Timeline.GetInfo(study).Bars[0].Hovertext;
+
+        hovertext.Should().Be(
+            "{<br>  \"number\": 0,<br>  \"values\": [<br>    1.5<br>  ],<br>" +
+            "  \"params\": {<br>    \"x\": 0.5<br>  }<br>}");
+        hovertext.Should().NotContain("\n");
+    }
+
+    [TestMethod]
+    public void Timeline_NRecentTrials_SlicesToLast()
+    {
+        var study = Optuna.CreateStudy();
+        var baseTime = new DateTime(2024, 1, 1);
+        study.AddTrials(Enumerable.Range(0, 4)
+            .Select(i => TimelineComplete(i, baseTime.AddSeconds(i), baseTime.AddSeconds(i + 1)))
+            .ToList());
+
+        var info = Timeline.GetInfo(study, nRecentTrials: 2);
+        info.Bars.Select(b => b.Number).Should().Equal(2, 3);
+    }
+
+    [TestMethod]
+    public void Timeline_NRecentTrials_NonPositive_Throws()
+    {
+        var study = Optuna.CreateStudy();
+        study.AddTrials(new[] { TimelineComplete(1.0, new DateTime(2024, 1, 1), new DateTime(2024, 1, 1, 0, 0, 1)) });
+
+        ((Func<TimelineInfo>)(() => Timeline.GetInfo(study, nRecentTrials: 0)))
+            .Should().Throw<ValueError>().WithMessage("n_recent_trials must be a positive integer or None.");
+    }
+
+    [TestMethod]
+    public void Timeline_RunningTrial_CompleteAfterStart()
+    {
+        var study = Optuna.CreateStudy();
+        var running = FrozenTrial.CreateTrial(state: TrialState.Running);
+        running.SetDatetimeStart(new DateTime(2024, 1, 1));
+        study.AddTrials(new[] { running });
+
+        var bar = Timeline.GetInfo(study).Bars[0];
+        bar.State.Should().Be(TrialState.Running);
+        // A running trial's bar ends at max_datetime + 1s (max_datetime is "now" when a trial is running).
+        bar.Complete.Should().BeAfter(bar.Start);
+    }
+
+    [TestMethod]
+    public void Timeline_EmptyStudy_NoBars()
+    {
+        Timeline.GetInfo(Optuna.CreateStudy()).Bars.Should().BeEmpty();
+    }
+
     [TestMethod]
     public void ParallelCoordinate_MultiObjective_UsesParetoRankColor()
     {

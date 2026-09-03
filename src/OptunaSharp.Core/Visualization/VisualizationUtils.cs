@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NumSharp;
+using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
 using OptunaSharp.Logging;
@@ -114,4 +115,43 @@ internal static class VisualizationUtils
     /// <summary>Python <c>_is_reverse_scale</c>.</summary>
     internal static bool IsReverseScale(Study study, Func<FrozenTrial, double>? target)
         => target is not null || study.Direction == StudyDirection.Minimize;
+
+    /// <summary>
+    ///     Python <c>_make_json_compatible</c>: return the value unchanged if it is JSON-serializable,
+    ///     else its <c>str()</c>.
+    /// </summary>
+    internal static object? MakeJsonCompatible(object? value)
+    {
+        try
+        {
+            PyJson.Dumps(value);
+            return value;
+        }
+        catch (TypeError)
+        {
+            return PythonRepr.Str(value);
+        }
+    }
+
+    /// <summary>
+    ///     Python <c>_make_hovertext(trial)</c>: <c>json.dumps({number, values, params, [user_attrs]},
+    ///     indent=2)</c> with newlines turned into <c>&lt;br&gt;</c>.
+    /// </summary>
+    internal static string MakeHovertext(FrozenTrial trial)
+    {
+        var userAttrs = new OrderedDict<string, object?>();
+        foreach (var (key, value) in trial.UserAttrs)
+            userAttrs[key] = MakeJsonCompatible(value);
+
+        var dict = new OrderedDict<string, object?>
+        {
+            { "number", trial.Number },
+            { "values", trial.Values },
+            { "params", trial.ParamsDict },
+        };
+        if (userAttrs.Count > 0)
+            dict["user_attrs"] = userAttrs;
+
+        return PyJson.DumpsIndented(dict, 2).Replace("\n", "<br>");
+    }
 }

@@ -45,6 +45,82 @@ internal static class PyJson
         return sb.ToString();
     }
 
+    /// <summary>
+    ///     Python <c>json.dumps(value, indent=n)</c> — pretty-printed with an <paramref name="indent" />-space
+    ///     step, the separators <c>(",", ": ")</c>, and <c>{}</c>/<c>[]</c> for empty containers. Leaves
+    ///     reuse the same writers as <see cref="Dumps(object)" />, so floats/strings/NaN stay Python-identical.
+    /// </summary>
+    internal static string DumpsIndented(object? value, int indent)
+    {
+        var sb = new StringBuilder();
+        WriteValueIndented(sb, value, indent, 0);
+        return sb.ToString();
+    }
+
+    private static void WriteValueIndented(StringBuilder sb, object? value, int indent, int level)
+    {
+        switch (value)
+        {
+            case IDictionary dict:
+                WriteObjectIndented(sb, dict, indent, level);
+                break;
+            case string:
+                WriteValue(sb, value, compact: false);
+                break;
+            case IEnumerable seq:
+                WriteArrayIndented(sb, seq, indent, level);
+                break;
+            default:
+                WriteValue(sb, value, compact: false);  // leaf (null/bool/number/enum/CategoricalChoice).
+                break;
+        }
+    }
+
+    private static void WriteObjectIndented(StringBuilder sb, IDictionary dict, int indent, int level)
+    {
+        if (dict.Count == 0)
+        {
+            sb.Append("{}");
+            return;
+        }
+        sb.Append("{\n");
+        string childPad = new string(' ', indent * (level + 1));
+        bool first = true;
+        foreach (DictionaryEntry entry in dict)
+        {
+            if (!first)
+                sb.Append(",\n");
+            sb.Append(childPad);
+            WriteString(sb, KeyToString(entry.Key));
+            sb.Append(": ");
+            WriteValueIndented(sb, entry.Value, indent, level + 1);
+            first = false;
+        }
+        sb.Append('\n').Append(' ', indent * level).Append('}');
+    }
+
+    private static void WriteArrayIndented(StringBuilder sb, IEnumerable seq, int indent, int level)
+    {
+        var e = seq.GetEnumerator();
+        if (!e.MoveNext())
+        {
+            sb.Append("[]");
+            return;
+        }
+        sb.Append("[\n");
+        string childPad = new string(' ', indent * (level + 1));
+        bool first = true;
+        do
+        {
+            if (!first)
+                sb.Append(",\n");
+            sb.Append(childPad);
+            WriteValueIndented(sb, e.Current, indent, level + 1);
+            first = false;
+        } while (e.MoveNext());
+        sb.Append('\n').Append(' ', indent * level).Append(']');
+    }
+
     private static void WriteValue(StringBuilder sb, object? value, bool compact)
     {
         switch (value)

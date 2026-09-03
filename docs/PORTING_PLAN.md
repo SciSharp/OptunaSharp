@@ -45,27 +45,29 @@ OptunaSharp can share a live journal file with no external package on either sid
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 3.1 part 7** — viz data layer (timeline, the last builder → completes 3.1), then 3.2 GP
+### ▶ CONTINUE HERE: **Phase 3.2** — the GP stack (`GPSampler`) — §7 autodiff decision gate first
 
 Phases 0, 1 and **2.1–2.16 are complete** — **Phase 2 (all native features) is DONE** — and **Phase 3 is
 now in progress**. The whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP
 machinery, the non-scrambled QMC sampler, the full NSGA-II **and** NSGA-III genetic-algorithm samplers,
 the OpenBLAS-backed linalg primitives, and the complete `CmaEsSampler` over **all four** cmaes backends —
 full-covariance `cmaes.CMA`, separable `cmaes.SepCMA`, Warm-Starting via `get_warm_start_mgd`, and CMAwM
-(`with_margin`) — are committed and proven green. **3.1 parts 1–6 are done and bit-exact vs live Optuna**
-(**459 unit + 203 live-interop tests**, both TFMs, none skipped) — parts 1–5: `_utils` +
-optimization-history/EDF/intermediate-values + hypervolume-history + param-importances + slice + pareto-front
-+ contour + rank; part 6: **parallel_coordinate** (`ParallelCoordinate.GetInfo` — the per-axis
-`_DimensionInfo` with the log/categorical/numerical dim builders, missing-value synthetic ticks, the MO
-Pareto-rank coloring via `MultiObjective.FastNonDominationRank`, the `np.lexsort` numeric-categorical
-reorder, and the `.3g` tick text via a new `MathUtil.FormatG3` = .NET `"G3"` lowercased, byte-identical to
-CPython's `%g`). **SO parallel_coordinate is fully bit-exact**; the MO **`draw_order`** rides `np.argsort`
-over tied Pareto ranks (unstable) — a documented cosmetic divergence (verified instead that it orders the
-ranks non-increasingly). Rank's RGB `colors` remain the one deliberate Tier N boundary (pure `ColorIdxs` +
-`Infeasible` mask; RGB → Tier X **5.2**). **Next is 3.1 part 7** — the last builder, **timeline**, which
-completes 3.1 — then the GP stack (3.2); see the §7 autodiff decision gate and the Phase 3 table.
-(`_terminator_improvement` rides the GP improvement evaluators → deferred to **3.3**; the plotly rendering
-`plot_*`/`_get_*_plot` is Tier X **5.2**, not ported here.)
+(`with_margin`) — are committed and proven green. **Phase 3.1 (the visualization data layer) is now
+COMPLETE** — all 13 `_get_*_info` builders ported and **bit-exact vs live Optuna** (**465 unit + 205
+live-interop tests**, both TFMs, none skipped): `_utils` helpers + optimization-history/EDF/
+intermediate-values (part 1) + hypervolume-history + param-importances (part 2) + slice + pareto-front
+(part 3) + contour (part 4) + rank (part 5) + parallel_coordinate (part 6) + timeline (part 7). The new
+`OptunaSharp.Visualization` namespace exposes public info records the Tier X rendering package (**5.2**) will
+consume across the assembly boundary. Only three deliberate boundaries/divergences: rank's RGB `colors`
+(plotly's `sample_colorscale`; exposed as the pure `ColorIdxs` + `Infeasible` mask, RGB → 5.2); the MO
+parallel_coordinate `draw_order` (`np.argsort` over tied Pareto ranks — the unstable-quicksort `[Misaligned]`,
+same class as 2.8); and `_terminator_improvement`, which rides the GP improvement evaluators → deferred to
+**3.3**. New shared primitives: `MathUtil.Linspace`/`Mean`/`Std`/`FormatG3` (all byte-exact vs numpy/CPython)
+and `PyJson.DumpsIndented` (byte-exact `json.dumps(indent=2)`, used by the timeline hovertext). **Next is
+Phase 3.2 — the GP stack** (`GPSampler`): start with the §7 autodiff decision gate (hand-derived Matérn-5/2
+gradients + ported `batched_lbfgsb`, prototyped native), then port search_space → prior → kernel+MLL →
+L-BFGS-B → acqf → optim_mixed → sampler, using `LinAlg.Cholesky` (byte-exact) + `LinAlg.SolveTriangular`
+(the one still-managed primitive). The plotly rendering `plot_*`/`_get_*_plot` stays Tier X **5.2**.
 - ✅ **3.1 part 1 — viz data layer foundations (`OptunaSharp.Visualization`).** Ported the pure (non-plotly)
   half of `_utils.py` (`VisualizationUtils`: `CheckPlotArgs`/`IsLogScale`/`IsNumerical`/`FilterNonfinite`/
   `IsReverseScale`) plus the three simplest `_get_*_info` builders — `_optimization_history.py`
@@ -144,7 +146,7 @@ moment OptunaSharp.Core loads. Keep it.
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
 | 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp (3.2) + QMC scrambling deferred to their consumers |
-| 3 — Native heavy tail | 🟩 | **3.1 parts 1–6 done** (viz data layer: optimization-history/EDF/intermediate-values + `_utils` + hypervolume-history + param-importances + slice + pareto-front + contour + rank + parallel_coordinate `_get_*_info`, bit-exact/erf-tolerance vs live Optuna); **next** 3.1 part 7 (timeline → completes 3.1), then 3.2 GP (§7 gate); `_terminator_improvement`→3.3; plotly rendering→5.2 |
+| 3 — Native heavy tail | 🟩 | **3.1 COMPLETE** (all 13 viz data-layer `_get_*_info` builders, bit-exact/erf-tolerance vs live Optuna; rank RGB→5.2, MO PC draw_order `[Misaligned]`, `_terminator_improvement`→3.3); **next** 3.2 GP (§7 gate), then 3.3 GP terminators. Rendering `plot_*`→5.2 |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
 
@@ -589,6 +591,20 @@ moment OptunaSharp.Core loads. Keep it.
   constraints→feasibility, MO Pareto-rank) + 6 live parity (SO mixed float/log/categorical, SO with a
   conditional/missing param, MO Pareto rank — all bit-exact save the noted MO `draw_order`). Suite: **459 unit
   + 203 interop**, both TFMs, none skipped.
+- ✅ **3.1 part 7 — COMPLETES Phase 3.1** — `feat(viz): Phase 3.1 part 7 — timeline data layer`. `_timeline.py`
+  → `Timeline.GetInfo` (`_get_timeline_info` + `_get_max_datetime_complete` + `_is_running_trials_in_study`):
+  per-trial lifetime `TimelineBarInfo` (number, start, complete, state, hovertext, infeasible), the running-
+  trial `max_datetime + 1s` bar, the `n_recent_trials` tail slice (with the `plot_timeline` `> 0` `ValueError`
+  folded in), the reversed-time warning. The `_make_hovertext`/`_make_json_compatible` helpers land in
+  `VisualizationUtils`, backed by a new **`PyJson.DumpsIndented`** (additive) that reproduces
+  `json.dumps(indent=2)` byte-for-byte (2-space step, `(",", ": ")` separators, `{}`/`[]` empties; leaves
+  reuse the existing Python-float/string writers). **Hovertext is bit-exact vs live Optuna** — it is
+  `json.dumps({number, values, params, [user_attrs]}, indent=2)` with `<br>` newlines and touches no
+  datetimes, so it matches byte-for-byte across separately-run studies; the parity test compares
+  number/state/infeasible/hovertext exactly (datetimes are wall-clock, checked structurally start≤complete).
+  6 unit tests (fixed-datetime bars, exact indented-JSON+`<br>` hovertext, `n_recent_trials` slice,
+  non-positive `ValueError`, running-trial `complete>start`, empty study) + 2 live parity (hovertext + n_recent
+  slice). Suite: **465 unit + 205 interop**, both TFMs, none skipped. **Phase 3.1 done — 13/13 viz builders.**
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -894,7 +910,7 @@ Zero external deps.
 
 | # | Feature | Optuna source | py SLOC | est. C# | Difficulty | Notes |
 |---|---|---|--:|--:|---|---|
-| 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | 🟡 | pure numpy → NumSharp; rendering pkg is 5.2. **Parts 1–6 done** (`_utils` + optimization-history/EDF/intermediate-values + hypervolume-history + param-importances + slice + pareto-front + contour + rank + parallel_coordinate `_get_*_info`, bit-exact/erf-tolerance vs live Optuna; rank RGB→5.2; MO PC draw_order `[Misaligned]`); part 7 pending (timeline → completes 3.1); `_terminator_improvement`→3.3 |
+| 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | ✅ | **COMPLETE** — all 13 `_get_*_info` builders in `OptunaSharp.Visualization` (optimization-history/EDF/intermediate-values/hypervolume-history/param-importances/slice/pareto-front/contour/rank/parallel_coordinate/timeline + `_utils`), bit-exact/erf-tolerance vs live Optuna. rank RGB→5.2, MO PC draw_order `[Misaligned]`, `_terminator_improvement`→3.3. Rendering `plot_*`→5.2 |
 | 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, `batched_lbfgsb` (already pure numpy), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | 🔴 | **Decision gate first (§7), prototyped during Phase 2.** Uses 2.15 cholesky/solve_triangular. Port order: search_space → prior → kernel+MLL → L-BFGS-B → acqf → optim_mixed → sampler |
 | 3.3 | GP terminators: `RegretBoundEvaluator` (default), `EMMREvaluator` | `terminator/improvement/*` | ~230 | 700 | 🔴 | rides 3.2 |
 
