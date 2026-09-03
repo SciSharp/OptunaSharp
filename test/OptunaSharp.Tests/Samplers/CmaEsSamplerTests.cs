@@ -146,14 +146,6 @@ public class CmaEsSamplerTests
     // ---- experimental backends not yet ported (deferred; guard throws NotSupported) -----------
 
     [TestMethod]
-    public void UseSeparableCma_AtSamplingTime_ThrowsNotSupported()
-    {
-        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 0, useSeparableCma: true));
-        Action act = () => study.Optimize(t => Sphere(t), nTrials: 5);
-        act.Should().Throw<NotSupportedException>().WithMessage("*Separable CMA-ES*");
-    }
-
-    [TestMethod]
     public void WithMargin_AtSamplingTime_ThrowsNotSupported()
     {
         var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 0, withMargin: true));
@@ -251,5 +243,65 @@ public class CmaEsSamplerTests
         for (int i = 0; i < r1.Dim; i++)
             for (int j = 0; j < r1.Dim; j++)
                 r1.Cov[i, j].Should().Be(r2.Cov[i, j]);
+    }
+
+    // ---- Separable CMA-ES (use_separable_cma → cmaes.SepCMA) -----------------------------------
+
+    // SepCMA seed=42, dim3 sphere shift (0.4,-0.9,1.1), 10 trials, from live Optuna 5.0.0.dev.
+    private static readonly (string X0, string X1, string X2, string Value)[] SepSeed42 =
+    {
+        ("32b31134d612f4bf", "e8cbea8250071240", "4a02cc653c8f0240", "4d09455a48bb4040"),  // t0 (RandomSampler startup)
+        ("90ff5f606706d4bf", "6a50cb40e761f5bf", "b20274b5223203c0", "cdbd78f8d9e32940"),  // t1
+        ("00903529e5d2babf", "7caad78f542ff9bf", "82ad990038d001c0", "7202507b408d2740"),  // t2
+        ("fa634b79aef00040", "e0dd551cf269e13f", "a0fa51e97e94c6bf", "1c5a1c4db5a81a40"),  // t3
+        ("125e4522046913c0", "e0066fd8426fca3f", "c8dfac3285d1ecbf", "d77dc18073684040"),  // t4
+        ("c431eb19d27ff73f", "ccd16507a7f400c0", "f4c5d80ad0fe0140", "9e64512d619a0f40"),  // t5
+        ("24841974498bfd3f", "984ec14c285efbbf", "40e556416813d9bf", "c63d259f28e61340"),  // t6
+        ("38ac80e8d55ff73f", "8a9c2f19050800c0", "0c4cea6e49eff5bf", "095c79072fe62040"),  // t7
+        ("48a4317461ff1040", "90d1b00d4ad5d63f", "c86c0d275b9af6bf", "aaec771bfdb53640"),  // t8
+        ("b82753465c950140", "807b2751d32304c0", "0070dd10b3a2ef3f", "1acff3a0e9711740"),  // t9
+    };
+
+    private static double SepSphere(Trial t)
+    {
+        double[] sh = { 0.4, -0.9, 1.1 };
+        double v = 0;
+        for (int i = 0; i < 3; i++) v += Math.Pow(t.SuggestFloat($"x{i}", -5, 5) - sh[i], 2);
+        return v;
+    }
+
+    [TestMethod]
+    public void SeparableCma_Seed42_Trajectory_IsBitIdenticalToLiveOptuna()
+    {
+        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 42, useSeparableCma: true));
+        study.Optimize(SepSphere, nTrials: 10);
+
+        var trials = study.Trials.OrderBy(t => t.Number).ToList();
+        for (int i = 0; i < SepSeed42.Length; i++)
+        {
+            ((double)trials[i].Params["x0"]!).Should().Be(FromHex(SepSeed42[i].X0), $"x0 of trial {i}");
+            ((double)trials[i].Params["x1"]!).Should().Be(FromHex(SepSeed42[i].X1), $"x1 of trial {i}");
+            ((double)trials[i].Params["x2"]!).Should().Be(FromHex(SepSeed42[i].X2), $"x2 of trial {i}");
+            trials[i].Value!.Value.Should().Be(FromHex(SepSeed42[i].Value), $"value of trial {i}");
+        }
+    }
+
+    [TestMethod]
+    public void SeparableCma_SingleDimension_FallsBackWithUserWarning()
+    {
+        var messages = new List<(string, WarningCategory)>();
+        void Handler(string m, WarningCategory c) => messages.Add((m, c));
+        OptunaWarnings.WarningRaised += Handler;
+        try
+        {
+            // SepCMA requires dim > 1; on a 1-D relative space Optuna warns and falls back to CMA.
+            var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 0, useSeparableCma: true));
+            study.Optimize(t => Math.Pow(t.SuggestFloat("x", -5, 5) - 0.5, 2), nTrials: 12);
+            study.BestValue.Should().BeLessThan(1.0);
+        }
+        finally { OptunaWarnings.WarningRaised -= Handler; }
+
+        messages.Should().Contain(m =>
+            m.Item2 == WarningCategory.UserWarning && m.Item1.Contains("single-dimensional"));
     }
 }

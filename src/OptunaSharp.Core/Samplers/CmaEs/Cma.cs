@@ -21,7 +21,7 @@ namespace OptunaSharp.Samplers.CmaEs;
 ///     NumSharp's MT19937 <c>RandomState</c>. So a seeded ask/tell run reproduces the package's mean,
 ///     sigma and covariance byte-for-byte.</para>
 /// </summary>
-internal class Cma
+internal class Cma : ICmaOptimizer
 {
     private const double Eps = 1e-8;
     private const double MeanMax = 1e32;
@@ -190,9 +190,9 @@ internal class Cma
         _funhistValues = new double[_funhistTerm * 2];
     }
 
-    internal int Dim => _nDim;
-    internal int PopulationSize => _popsize;
-    internal int Generation => _g;
+    public int Dim => _nDim;
+    public int PopulationSize => _popsize;
+    public int Generation => _g;
     internal double[] Mean => _mean;
     internal double Sigma => _sigma;
     internal double[,] Cov => _c;
@@ -203,7 +203,7 @@ internal class Cma
     internal double C1 => _c1;
     internal double Cmu => _cmu;
 
-    internal void ReseedRng(int seed) => _rng.seed((uint)seed);
+    public void ReseedRng(int seed) => _rng.seed((uint)seed);
 
     // ---- state serialization ------------------------------------------------------------------
     // Optuna pickles the optimizer into system_attrs; we serialize our OWN JSON instead (pickle is
@@ -272,7 +272,7 @@ internal class Cma
     }
 
     /// <summary>Sample a parameter.</summary>
-    internal double[] Ask()
+    public double[] Ask()
     {
         for (int i = 0; i < _nMaxResampling; i++)
         {
@@ -347,7 +347,7 @@ internal class Cma
     }
 
     /// <summary>Tell evaluation values.</summary>
-    internal void Tell(List<(double[] X, double Value)> solutions)
+    public void Tell(List<(double[] X, double Value)> solutions)
     {
         if (solutions.Count != _popsize)
             throw new ArgumentException("Must tell popsize-length solutions.");

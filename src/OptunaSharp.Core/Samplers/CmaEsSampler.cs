@@ -214,7 +214,7 @@ public class CmaEsSampler : BaseSampler
             optimizer.Tell(solutions);
 
             // Store optimizer.
-            string optimizerStr = JsonSerializer.Serialize(optimizer.ToState());
+            string optimizerStr = SerializeOptimizer(optimizer);
             foreach (var (key, value) in SplitOptimizerStr(optimizerStr))
                 study.Storage.SetTrialSystemAttr(trial.TrialId, key, value);
         }
@@ -250,7 +250,34 @@ public class CmaEsSampler : BaseSampler
         return attrs;
     }
 
-    private Cma? RestoreOptimizer(List<FrozenTrial> completedTrials)
+    // Our optimizer-state JSON is self-describing (like Optuna's pickle): a `<tag>\n` prefix names
+    // the concrete optimizer so restore reconstructs the right type regardless of the sampler's
+    // current config — e.g. a single-dimensional `use_separable_cma=True` study stores a fallback
+    // `Cma` under the `sepcma:` prefix and must restore it as `Cma`, not `SepCma`. System.Text.Json
+    // emits no newlines, so the `\n` split is unambiguous.
+
+    /// <summary>Serialize the optimizer's evolving state to our own JSON (the pickle analogue).</summary>
+    private static string SerializeOptimizer(ICmaOptimizer optimizer) => optimizer switch
+    {
+        Cma c => "cma\n" + JsonSerializer.Serialize(c.ToState()),
+        SepCma s => "sepcma\n" + JsonSerializer.Serialize(s.ToState()),
+        _ => throw new NotSupportedException($"Cannot serialize optimizer of type {optimizer.GetType().Name}."),
+    };
+
+    private static ICmaOptimizer DeserializeOptimizer(string optimizerStr)
+    {
+        int nl = optimizerStr.IndexOf('\n');
+        string tag = optimizerStr[..nl];
+        string json = optimizerStr[(nl + 1)..];
+        return tag switch
+        {
+            "cma" => Cma.FromState(JsonSerializer.Deserialize<CmaState>(json)!),
+            "sepcma" => SepCma.FromState(JsonSerializer.Deserialize<SepCmaState>(json)!),
+            _ => throw new NotSupportedException($"Unknown optimizer state tag '{tag}'."),
+        };
+    }
+
+    private ICmaOptimizer? RestoreOptimizer(List<FrozenTrial> completedTrials)
     {
         // Restore a previous CMA object.
         for (int idx = completedTrials.Count - 1; idx >= 0; idx--)
@@ -263,13 +290,12 @@ public class CmaEsSampler : BaseSampler
                 continue;
 
             string optimizerStr = ConcatOptimizerAttrs(optimizerAttrs);
-            var state = JsonSerializer.Deserialize<CmaState>(optimizerStr)!;
-            return Cma.FromState(state);
+            return DeserializeOptimizer(optimizerStr);
         }
         return null;
     }
 
-    private Cma InitOptimizer(SearchSpaceTransform trans, StudyDirection direction)
+    private ICmaOptimizer InitOptimizer(SearchSpaceTransform trans, StudyDirection direction)
     {
         double[] boundsFlat = trans.Bounds.ToArray<double>();
         int nDim = boundsFlat.Length / 2;
@@ -327,9 +353,25 @@ public class CmaEsSampler : BaseSampler
         sigma0 = Math.Max(sigma0, Eps);
 
         if (_useSeparableCma)
-            throw new NotSupportedException(
-                "Separable CMA-ES (`use_separable_cma`) is not yet ported to OptunaSharp; " +
-                "it lands in a follow-up increment of Phase 2.16.");
+        {
+            if (boundsArr.GetLength(0) == 1)
+            {
+                OptunaWarnings.Warn(
+                    "Separable CMA-ES does not operate meaningfully on single-dimensional " +
+                    "search spaces. The setting `use_separable_cma=True` will be ignored.",
+                    WarningCategory.UserWarning);
+            }
+            else
+            {
+                return new SepCma(
+                    mean: mean,
+                    sigma: sigma0,
+                    bounds: boundsArr,
+                    nMaxResampling: 10 * nDim,
+                    seed: (int)_cmaRng.Rng.randint(1, 2147483646),
+                    populationSize: _popsize);
+            }
+        }
 
         if (_withMargin)
             throw new NotSupportedException(

@@ -102,6 +102,28 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [DataRow(2, 0)]
+    [DataRow(3, 7)]
+    [DataRow(5, 13)]
+    public void SeparableCma_FullState_IsBitIdentical(int dim, int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // Separable (diagonal-covariance) CMA-ES — no eigendecomposition; bit-exact end-to-end.
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "cma",
+            sampler: new CmaEsSampler(seed: seed, useSeparableCma: true));
+        csStudy.Optimize(SphereCs(dim), nTrials: 34);
+
+        AssertParityExceptOptimizerBlob(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            $"study = optuna.create_study(study_name='cma', sampler=optuna.samplers.CmaEsSampler(seed={seed}, use_separable_cma=True))\n" +
+            SpherePy(dim) +
+            "study.optimize(_obj, n_trials=34)\n");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
     public void MixedSpace_FullState_IsBitIdentical()
     {
         PythonSession.EnsureOrInconclusive();
