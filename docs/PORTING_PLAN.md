@@ -34,26 +34,28 @@ with no external package on either side.
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 2.13** — NSGA-II (crossovers, polynomial mutation, elite selection)
+### ▶ CONTINUE HERE: **Phase 2.14** — NSGA-III (reference points, niching)
 
-Phases 0, 1 and **2.1–2.12 are complete** (the whole TPE surface, pruners, PED-ANOVA, terminators, the
-MO hypervolume/HSSP machinery, and now the non-scrambled QMC sampler), committed and proven green
-(**346 unit + 120 live-interop tests**, both TFMs, none skipped). **2.12 landed `QMCSampler` (Sobol' +
-Halton, non-scrambled)** — bit-exact vs scipy (max abs diff 0.0), the first sampler validated against
-scipy rather than only NumPy/Optuna; the `qmc:<sha256>` sample-id key matches Python byte-for-byte too
-(see the 2.12 entry below). Next:
-- **2.13 — `NSGAIISampler`** (`samplers/nsgaii/*`, `_ga/_base.py`, ~1,000 py). The genetic-algorithm
-  MO sampler: parent selection by constrained non-domination rank + crowding distance, the 6 crossovers
-  (uniform, blx-alpha, sbx, vsbx, spx, undx), polynomial mutation, and elite selection. Depends on
-  **2.10** (done — non-dominated sort in `Internal/MultiObjective.cs`). Watch the RNG (every draw on
-  `LazyRandomState`/MT19937) and the float64 argsort tie-order note (crowding-distance sort). The one
-  `frompyfunc`/object-array site is the crossover — map it to `CategoricalChoice[]` (risk-register audit).
+Phases 0, 1 and **2.1–2.13 are complete** (the whole TPE surface, pruners, PED-ANOVA, terminators, the
+MO hypervolume/HSSP machinery, the non-scrambled QMC sampler, and now the full NSGA-II genetic-algorithm
+sampler), committed and proven green (**366 unit + 134 live-interop tests**, both TFMs, none skipped).
+**2.13 landed `NSGAIISampler`** — the default path (uniform crossover + no mutation) plus all 5
+arithmetic crossovers (blx-α/sbx/vsbx/spx), polynomial mutation, constraints (set_constraint +
+constraints_func), and the generation/parent-cache machinery are **bit-exact vs live Optuna** (full
+study state — every trial's params/values, per-trial generation, and the parent-cache trial-id lists;
+see the 2.13 entry below). Next:
+- **2.14 — `NSGAIIISampler`** (`samplers/_nsgaiii/*`, ~390 py). NSGA-III extends NSGA-II's elite
+  selection with Das-Dennis reference points + niching (its own `_elite_population_selection_strategy`);
+  the sampler reuses the whole 2.13 machinery (`BaseGASampler`, child generation, crossovers, mutations).
+  Depends on **2.13** (done). Watch the RNG lock-step and the reference-point/niche-count arithmetic
+  (Gaussian-elimination hyperplane fit — likely a small managed-linalg tolerance point, like UNDX below).
 - **2.10 remainder — `box_decomposition.py`** stays deferred with its GP consumer (**3.2**).
 - **2.12 remainder — QMC scrambling** stays deferred (needs scipy's compiled Cython scramble over PCG64).
-- After 2.13: **2.14 NSGA-III**, 2.15 managed eigh/cholesky, 2.16 CMA-ES.
+- After 2.14: 2.15 managed eigh/cholesky, 2.16 CMA-ES.
 
-**Read the divergence notes below** (erf/ucrt, argsort tie-break, HSSP ≥3-obj tie) — the argsort one
-will matter for NSGA's crowding-distance sort.
+**Read the divergence notes below** (erf/ucrt, argsort tie-break, HSSP ≥3-obj tie, and the new 2.13
+UNDX-QR sign note). The crowding-distance sort turned out to be a **stable Python `list.sort`** (not
+`np.argsort`), so it is bit-reproducible — the argsort concern flagged for 2.13 did not materialize.
 
 ### Phase status
 
@@ -61,7 +63,7 @@ will matter for NSGA's crowding-distance sort.
 |---|---|---|
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
-| 2 — Native features | 🟩 | **2.1–2.12 done** (full TPE; MO hypervolume/HSSP; QMC non-scrambled); box-decomp (3.2) + QMC scrambling deferred; **next: 2.13 NSGA-II** |
+| 2 — Native features | 🟩 | **2.1–2.13 done** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II); box-decomp (3.2) + QMC scrambling deferred; **next: 2.14 NSGA-III** |
 | 3 — Native heavy tail | ⬜ | not started |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
@@ -245,6 +247,44 @@ will matter for NSGA's crowding-distance sort.
   live-interop full-state-parity seeds. **Scrambling deferred** — scipy scrambles with its internal
   PCG64 inside compiled Cython; `scramble=true` throws (NumSharp has PCG64, but scipy's compiled
   scramble is not reproducible without its source).
+- ✅ **2.13** — `feat(samplers): Phase 2.13 — NSGAIISampler (NSGA-II)`. The full genetic-algorithm
+  MO sampler, ported structure-for-structure into `Samplers/Nsgaii/*` + `Samplers/BaseGASampler.cs`
+  + `Samplers/NSGAIISampler.cs`. `BaseGASampler` (generation attribution + parent-population cache in
+  study/trial system attrs — `NSGAIISampler:generation`, `NSGAIISampler:parent:<gen>`, byte-identical
+  to Python), `NSGAIIElitePopulationSelectionStrategy` (`_rank_population` over `MultiObjective.
+  FastNonDominationRank` + `_calc_crowding_distance`/`_crowding_distance_sort`), `NSGAIIChildGeneration
+  Strategy` (binary-tournament parent selection, crossover/no-crossover branch, per-param mutation
+  decision), `perform_crossover`/`perform_mutation`, all **6 crossovers** (`UniformCrossover`,
+  `BLXAlphaCrossover`, `SBXCrossover`, `VSBXCrossover`, `SPXCrossover`, `UNDXCrossover`) and both
+  mutations (`BaseMutation`, `PolynomialMutation`), the constrained-domination path
+  (`_constrained_dominates`/`_evaluate_penalty`/`_validate_constraints`), and the two strategy delegates
+  + `NSGAIIAfterTrialStrategy`. Two separate MT19937 streams from one seed (child generation on
+  `self._rng`; initial-population / mutated-away / non-intersection params on the independent
+  `RandomSampler`), replicated exactly. **Parity (verified vs live Optuna 5.0.0.dev + a 205-config
+  offline differential):** the default path AND every arithmetic crossover (blx/sbx/vsbx/spx) are
+  **bit-exact** — full study state (each trial's params-internal-repr at IEEE-bit level, values,
+  per-trial generation, and the parent-cache trial-id lists) matches byte-for-byte, SO and MO, with
+  `PolynomialMutation`, `set_constraint`, and the deprecated `constraints_func` (old-format list
+  constraint). RNG draw count/order verified across the categorical uniform crossover
+  (`rng.rand(n)` masks), numerical crossover (`rng.rand`/`np.power`/min-max/mean, all bit-exact via
+  `Math.Pow`), and the `rng.choice`→`randint(0,n)` tournament draws. 20 unit tests (hardcoded
+  seed=42 sequence from real Optuna, 6-crossover reproducibility, MO reproducibility, validation +
+  warnings) + 14 live full-state parity tests (SO/MO defaults, 5 bit-exact crossovers, poly mutation,
+  set_constraint, constraints_func). The crowding-distance sort is a **stable Python `list.sort`** (not
+  `np.argsort`), so it is bit-reproducible; the one `frompyfunc`/object-array site (categorical
+  crossover) maps to a plain `object?[]`.
+  - **[Misaligned] UNDX QR column signs (the fifth documented divergence, on `UNDXCrossover`).**
+    `UNDXCrossover` (n_parents=3) builds the orthonormal basis orthogonal to the primary search line
+    via `np.linalg.qr` (LAPACK `dgeqrf`/`dorgqr`). OptunaSharp uses a managed Householder QR that
+    reproduces numpy's basis vectors to ~1e-14 in **magnitude** but not their **per-column signs**
+    (LAPACK's column-sign bookkeeping is not portably reproducible — the same managed-vs-LAPACK class
+    §10 excuses). Because `etas ~ N(0, σ²)` is symmetric, a sign-flipped basis is still a *correct*
+    UNDX sampler, but with **≥2 numerical parameters** the child values differ from Optuna by O(1) and
+    that difference cascades through the crowding/non-domination selection, so a multi-parameter UNDX
+    study's trajectory diverges from Optuna's (it stays RNG-lock-step and reproducible within
+    OptunaSharp). **UNDX with a single numerical parameter is bit-exact** (the basis is unused). The
+    other 5 crossovers have no QR/linalg and are exact; UNDX ≥2-D is excluded from the bit-parity
+    tests (reproducibility only).
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -293,6 +333,13 @@ will matter for NSGA's crowding-distance sort.
   Halton (van der Corput) engines, bit-exact vs `scipy.stats.qmc`. Reuse for any future QMC work; note
   the scrambling gap (needs scipy's compiled Cython scramble over PCG64).
 - **`Samplers/QMCSampler.cs`** — **new in 2.12**. Non-scrambled QMC sampler; `scramble=true` throws.
+- **`Samplers/BaseGASampler.cs` + `Samplers/Nsgaii/*` + `Samplers/NSGAIISampler.cs`** — **new in 2.13**.
+  The GA framework (generation attribution + parent-population cache) and the whole NSGA-II strategy
+  stack: elite selection (rank + crowding distance), child generation, `perform_crossover`/
+  `perform_mutation`, the 6 crossovers, `BaseMutation`/`PolynomialMutation`, constrained domination.
+  **NSGA-III (2.14) reuses all of this** — it only swaps `_elite_population_selection_strategy` for a
+  reference-point/niching one. Carries the 2.13 UNDX-QR-sign `[Misaligned]`. `MultiObjective.
+  FastNonDominationRank` (0.8) is the ranking engine.
 - `trials_dataframe` ships as a dependency-free `TrialsTable` (Core stays pure); the
   `Microsoft.Data.Analysis` adapter remains Tier X (5.4).
 
@@ -330,8 +377,11 @@ will matter for NSGA's crowding-distance sort.
   studies are exact); and the 2.10 **HSSP ≥3-objective zero-contribution tie** on `Internal/Hypervolume.cs`
   (the sequential dot cancels a dominated point's marginal HV to exactly 0 where Optuna's BLAS `np.dot`
   leaves a sub-ULP residual, so `np.argmax` can pick a different but hypervolume-equivalent point — 2-obj
-  HSSP is dot-free and exact; does not surface in realistic MO TPE). The TPE divergences are on
-  `Samplers/Tpe/ParzenEstimator.cs`/`TruncNorm.cs`.
+  HSSP is dot-free and exact; does not surface in realistic MO TPE); and the 2.13 **UNDX QR column
+  signs** on `Samplers/Nsgaii/Crossovers/UNDXCrossover.cs` (managed Householder QR matches numpy's basis
+  magnitudes to ~1e-14 but not LAPACK's per-column signs → a ≥2-parameter UNDX study's values diverge
+  O(1) and cascade through selection; still a correct, reproducible UNDX; 1-parameter UNDX and the other
+  5 crossovers are bit-exact). The TPE divergences are on `Samplers/Tpe/ParzenEstimator.cs`/`TruncNorm.cs`.
 
 ### Build / test notes for the next agent
 
@@ -343,8 +393,8 @@ will matter for NSGA's crowding-distance sort.
   fails *inside* `NumSharp.Core`, that's the sibling checkout, not OptunaSharp** — point
   `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
   fallback.
-- **Test:** `dotnet test test/OptunaSharp.Tests/...` (346 unit, both TFMs) and
-  `dotnet test test/OptunaSharp.Tests.Interop/...` (120 live-Optuna tests; self-skip Inconclusive
+- **Test:** `dotnet test test/OptunaSharp.Tests/...` (366 unit, both TFMs) and
+  `dotnet test test/OptunaSharp.Tests.Interop/...` (134 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
 - **Interop Python is pinned to the vendored reference.** The live-interop suite runs against the
   submodule's Optuna **5.0.0.dev** (`pip install -e src/optuna --no-deps`), not the stale PyPI build.
@@ -470,7 +520,7 @@ Prerequisite to everything; order within the phase is the dependency order.
 **Phase 1 ≈ 1.65k py → ~3.55k C#. Estimate: 3–4 weeks.**
 Exit gate: journal-file Python↔C# live interop green — **cross-language persistence with zero external deps on either side**.
 
-## Phase 2 — Native features, easiest first — 🟩 IN PROGRESS (2.1–2.8 done; **next: 2.9**)
+## Phase 2 — Native features, easiest first — 🟩 IN PROGRESS (2.1–2.13 done; **next: 2.14**)
 
 Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 ledger).
 
@@ -488,8 +538,8 @@ Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 led
 | 2.10 | 🟩 | **MO machinery**: non-dominated sort, WFG hypervolume, HSSP, box decomposition, Pareto front | `study/_multi_objective.py`, `_hypervolume/*` | ~400 | 1,100 | 🟡 | **core done**: `MultiObjective.cs` (0.8) + `Hypervolume.cs` (`compute_hypervolume`+`_solve_hssp`, `c7bd648`) → MO TPE split unblocked. **box_decomposition deferred to 3.2** (GP-only consumer) |
 | 2.11 | ✅ | TPE stage 3 — MOTPE + constraints | `_tpe/sampler.py` MO split | ~150 | 0 | 🟡 | **no new code** — multivariate MO + constrained TPE already compose from 2.7–2.10 + the constraint infra. Verified vs live Optuna (mv MO 4.6e-14; constrained SO/MO 7.1e-14, infeasible split exercised). `9a6ffe1` |
 | 2.12 | 🟩 | **QMC sampler** (Sobol + Halton, scrambling) | `samplers/_qmc.py` + scipy behavior | ~172 | 1,600 | 🟡 | **non-scrambled done** — Sobol'+Halton bit-exact vs scipy, byte-exact sample-id key (`217af06`). Sobol numbers from `rustuna .../direction_numbers.rs`. **Scrambling deferred** (scipy's compiled Cython scramble over PCG64) |
-| 2.13 | ⬜ **NEXT** | **NSGA-II** (6 crossovers, polynomial mutation, elite selection, constraints) | `samplers/nsgaii/*`, `_ga/_base.py` | ~1,000 | 2,400 | 🟡 | 2.10 (done); crossover object-array site → `CategoricalChoice[]` |
-| 2.14 | ⬜ | NSGA-III (reference points, niching) | `samplers/_nsgaiii/*` | ~390 | 950 | 🟡+ | 2.13 |
+| 2.13 | ✅ | **NSGA-II** (6 crossovers, polynomial mutation, elite selection, constraints) | `samplers/nsgaii/*`, `_ga/_base.py` | ~1,000 | 2,400 | 🟡 | 2.10. Default + blx/sbx/vsbx/spx **bit-exact** vs live Optuna (full state); UNDX ≥2-D `[Misaligned]` (QR column signs). Crossover object-array → `object?[]`. `NSGAIISampler`+`BaseGASampler`+`Samplers/Nsgaii/*` |
+| 2.14 | ⬜ **NEXT** | NSGA-III (reference points, niching) | `samplers/_nsgaiii/*` | ~390 | 950 | 🟡+ | 2.13 (done); reuses `BaseGASampler` + crossovers/mutations |
 | 2.15 | ⬜ | Managed numeric primitives for 2.16/3.2: symmetric `eigh` (cyclic Jacobi), unblocked `cholesky`, `solve_triangular` | — (NumSharp.Core has no managed eigen/cholesky) | — | 500 | 🟡 | small dims (CMA-ES: search-space rank; GP: ≤ trial count) → O(n³) managed is fine. Tolerance oracle vs LAPACK; **byte-exact upgrade switch lives in Tier X (5.5)** |
 | 2.16 | ⬜ | **CMA-ES** — port the external `cmaes` package (CMA, sep-CMA, IPOP/BIPOP restarts, margin, lr-adapt) + `CmaEsSampler` | `samplers/_cmaes.py` + `CyberAgentAILab/cmaes` (~1.8k py) | ~2,300 | 4,500 | 🟠 | 2.15. Trajectory oracle is tolerance-based on the native `eigh` (byte-exact under 5.5). Optimizer state → own JSON (pickle non-goal, `[Misaligned]`) |
 
