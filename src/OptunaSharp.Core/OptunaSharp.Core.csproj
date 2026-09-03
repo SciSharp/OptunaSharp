@@ -52,4 +52,32 @@
     <PackageReference Include="NumSharp" Version="0.60.0" />
   </ItemGroup>
 
+  <!-- ================================================================================
+       NumSharp.Interop.OpenBLAS — the native LAPACK/CBLAS backend, referenced the same
+       "csproj now, nuget later" way as NumSharp.Core.
+
+       It ships the prebuilt scipy-openblas 0.3.31 binaries NumPy itself bundles, so once
+       referenced (the backend auto-registers via a [ModuleInitializer]) NumSharp's np.linalg
+       — cholesky / eigh / solve / matrix_rank / svd / qr — computes through LAPACK and is
+       BIT-IDENTICAL to NumPy (verified: cholesky/eigh values+vectors/solve match numpy 2.4.2
+       byte-for-byte). This is what makes the linalg-backed samplers (NSGA-III's hyperplane
+       solve, CMA-ES's eigendecomposition, the GP stack's Cholesky) byte-exact rather than
+       managed-tolerance. Per the maintainer's decision this is a first-class Core dependency
+       (a documented departure from the plan's original "Core = zero-native-deps" framing):
+       "use NumSharp + OpenBLAS any time Optuna uses NumPy."
+
+       NOTE: NumSharp.Interop.OpenBLAS is not yet published to nuget.org, so the PackageReference
+       fallback only restores once it is released; the in-repo sibling ProjectReference is the
+       working path today.
+       ================================================================================ -->
+  <PropertyGroup>
+    <NumSharpOpenBlasProject Condition="'$(NumSharpOpenBlasProject)' == ''">$(MSBuildThisFileDirectory)..\..\..\NumSharp\src\NumSharp.Interop.OpenBLAS\NumSharp.Interop.OpenBLAS.csproj</NumSharpOpenBlasProject>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(NumSharpOpenBlasProject)')">
+    <ProjectReference Include="$(NumSharpOpenBlasProject)" />
+  </ItemGroup>
+  <ItemGroup Condition="!Exists('$(NumSharpOpenBlasProject)')">
+    <PackageReference Include="NumSharp.Interop.OpenBLAS" Version="0.60.0" />
+  </ItemGroup>
+
 </Project>

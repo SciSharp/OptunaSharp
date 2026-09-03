@@ -19,18 +19,16 @@ namespace OptunaSharp.Samplers.Nsgaiii;
 ///     individual is associated with its closest reference point, and survivors are drawn to keep the
 ///     reference points as evenly populated (sparse) as possible.
 ///
-///     <para><b>[Misaligned] managed-linalg tolerance (the hyperplane fit).</b>
-///     <see cref="NsgaiiiLinAlg.Solve" /> is an unblocked reciprocal-multiplier LU (LAPACK
-///     <c>dgetf2</c> shape) that reproduces numpy's <c>np.linalg.solve</c> bit-for-bit on the vast
-///     majority of the small extreme-point systems that arise, but drifts by ~1 ULP on a few percent
-///     of them (the managed-vs-LAPACK class the plan excuses — §10). Everything else in the pipeline
-///     is bit-exact: <c>_filter_inf</c>, the ideal-point subtraction, the ASF <c>einsum</c>/argmin
-///     extreme-point pick, the reference-point association (numpy's 4-operand <c>einsum</c> is
-///     replicated term-by-term, verified bit-identical over 2000 cases), the degeneracy
-///     <see cref="NsgaiiiLinAlg.MatrixRank" /> branch, and the niching itself. A 1-ULP normalization
-///     difference only changes the outcome when it flips a niche-distance decision within ULPs of a
-///     tie — otherwise a study's full trajectory matches Optuna bit-for-bit. Every RNG draw
-///     (<c>rng.shuffle</c>) stays in lock-step regardless.</para>
+///     <para><b>Bit-exact.</b> The whole pipeline matches Optuna bit-for-bit: <c>_filter_inf</c>,
+///     the ideal-point subtraction, the ASF <c>einsum</c>/argmin extreme-point pick, the
+///     reference-point association (numpy's 4-operand <c>einsum</c> replicated term-by-term, verified
+///     bit-identical over 2000 cases), the niching, and — since 2.15 — the hyperplane fit itself: the
+///     degeneracy <see cref="LinAlg.MatrixRank" /> branch and the <see cref="LinAlg.Solve" /> route
+///     through NumSharp's <c>np.linalg.matrix_rank</c>/<c>solve</c> over the OpenBLAS LAPACK backend,
+///     which is byte-identical to NumPy (the earlier managed reciprocal-multiplier LU drifted ~1 ULP
+///     on a few percent of the extreme-point systems; the LAPACK route removes even that). Every RNG
+///     draw (<c>rng.shuffle</c>) stays in lock-step. Confirmed byte-for-byte over a 400-config
+///     differential (5 crossovers × {2,3,4} objectives × 25 seeds + 25 constrained).</para>
 /// </summary>
 public class NSGAIIIElitePopulationSelectionStrategy
 {
@@ -247,11 +245,11 @@ public class NSGAIIIElitePopulationSelectionStrategy
             for (int j = 0; j < m; j++)
                 if (!double.IsFinite(extremePoints[d, j])) { allFinite = false; break; }
 
-        if (allFinite && NsgaiiiLinAlg.MatrixRank(extremePoints) == m)
+        if (allFinite && LinAlg.MatrixRank(extremePoints) == m)
         {
             var ones = new double[m];
             for (int j = 0; j < m; j++) ones[j] = 1.0;
-            interceptsInv = NsgaiiiLinAlg.Solve(extremePoints, ones);
+            interceptsInv = LinAlg.Solve(extremePoints, ones);
         }
         else
         {

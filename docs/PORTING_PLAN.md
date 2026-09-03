@@ -21,10 +21,21 @@ tier must be fully functional without it (it appears only as an optional byte-ex
 
 **Tier N headline (the release claim this ordering buys):** `OptunaSharp` Core ships **Optuna's
 entire algorithm surface — every sampler incl. TPE/NSGA/CMA-ES/GP, every pruner, MO machinery,
-PED-ANOVA, terminators, in-memory + journal-file persistence — pure managed, zero dependencies
-beyond NumSharp**. Cross-language persistence is ALREADY in this tier: Optuna's journal-file format
-is JSON-lines over plain file IO, so Python Optuna and OptunaSharp can share a live journal file
-with no external package on either side.
+PED-ANOVA, terminators, in-memory + journal-file persistence**. Cross-language persistence is ALREADY
+in this tier: Optuna's journal-file format is JSON-lines over plain file IO, so Python Optuna and
+OptunaSharp can share a live journal file with no external package on either side.
+
+> **⚠️ Dependency-model update (2026-09-03, maintainer decision — supersedes the original "pure
+> managed, zero deps beyond NumSharp" framing).** Core now also references **`NumSharp.Interop.OpenBLAS`**
+> as a first-class dependency: *"use NumSharp + OpenBLAS any time Optuna uses NumPy."* That package
+> ships the same scipy-openblas 0.3.31 binaries NumPy 2.4.2 bundles, so NumSharp's `np.linalg`
+> (cholesky/eigh/solve/matrix_rank/svd/qr) runs through LAPACK and is **byte-identical to NumPy** —
+> the linalg-backed samplers (NSGA-III's hyperplane solve, CMA-ES's `eigh`, GP's Cholesky) are
+> byte-exact rather than managed-tolerance, and the plan's separate "5.5 OpenBLAS byte-exactness
+> upgrade switch" is effectively pulled forward into Core. Consequences: Core carries per-RID native
+> binaries (no longer zero-native-deps); `2.15` is now "wire OpenBLAS + thin `LinAlg` adapters," not
+> "hand-rolled managed eigh/cholesky." **Not yet on nuget.org** — the in-repo sibling ProjectReference
+> is the working path; the `PackageReference` fallback (and CI/pack) needs the package published.
 
 ---
 
@@ -34,31 +45,40 @@ with no external package on either side.
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 2.15** — managed numeric primitives (eigh/cholesky/solve_triangular) for 2.16 + 3.2
+### ▶ CONTINUE HERE: **Phase 2.16** — CMA-ES (port the `cmaes` package + `CmaEsSampler`)
 
-Phases 0, 1 and **2.1–2.14 are complete** (the whole TPE surface, pruners, PED-ANOVA, terminators, the
-MO hypervolume/HSSP machinery, the non-scrambled QMC sampler, and now the full NSGA-II **and** NSGA-III
-genetic-algorithm samplers), committed and proven green (**381 unit + 145 live-interop tests**, both
-TFMs, none skipped). **2.14 landed `NSGAIIISampler`** — the reference-point/niching elite selection
-(`_nsgaiii/*`) over the whole reused 2.13 machinery — and it is **bit-exact vs live Optuna** across a
-400-config offline differential (5 crossovers × {2,3,4} objectives × 25 seeds + 25 constrained, ~10k
-trials, zero divergence) plus 11 live full-state parity seeds (see the 2.14 entry below). The
-Gaussian-elimination hyperplane fit that the plan flagged as a *likely* managed-linalg tolerance point
-turned out **not to surface**: a reciprocal-multiplier LU (LAPACK `dgetf2` shape) plus term-by-term
-replication of numpy's association `einsum` keep the niching bit-exact in practice. Next:
-- **2.15 — managed `eigh` (cyclic Jacobi), unblocked `cholesky`, `solve_triangular`** for 2.16/3.2.
-  NumSharp.Core ships no managed eigensolver/cholesky without the OpenBLAS backend; these are the
-  small-dim primitives CMA-ES and GP need (tolerance oracle vs LAPACK; byte-exact upgrade switch lives
-  in Tier X 5.5). **`Samplers/Nsgaiii/NsgaiiiLinAlg.cs`** (2.14's `Solve`/`MatrixRank`) is the seed of
-  this — graduate/extend it rather than starting fresh.
+Phases 0, 1 and **2.1–2.15 are complete** (the whole TPE surface, pruners, PED-ANOVA, terminators, the
+MO hypervolume/HSSP machinery, the non-scrambled QMC sampler, the full NSGA-II **and** NSGA-III
+genetic-algorithm samplers, and now the OpenBLAS-backed linalg primitives), committed and proven green
+(**393 unit + 151 live-interop tests**, both TFMs, none skipped). **2.15 landed `Internal/LinAlg.cs`**
+— but the maintainer redirected it (see the ⚠️ dependency-model note above): instead of hand-rolled
+managed eigh/cholesky, Core now references **`NumSharp.Interop.OpenBLAS`** and `LinAlg` delegates to
+NumSharp's `np.linalg.cholesky`/`eigh`/`solve`/`matrix_rank`, which run through LAPACK and are
+**byte-identical to NumPy** (verified: cholesky, eigh values+vectors incl. signs, and solve match numpy
+2.4.2 bit-for-bit over a 90-case sweep). This retro-upgraded NSGA-III's hyperplane solve to byte-exact
+(the 2.14 ULP tolerance point is now gone; the 400-config differential still passes). Next:
+- **2.16 — CMA-ES.** Port the external `cmaes` package (`CyberAgentAILab/cmaes` v0.13.0, pip-installed
+  here — CMA, sep-CMA, IPOP/BIPOP restarts, margin, lr-adapt) + `samplers/_cmaes.py`'s `CmaEsSampler`.
+  The eigendecomposition (`D2, B = np.linalg.eigh(self._C)`) now goes through `LinAlg.Eigh` (byte-exact
+  incl. eigenvector signs), so — unlike the plan's original tolerance expectation — CMA-ES sampling
+  should be **byte-exact**, not tolerance-bounded. Optimizer state → own JSON (pickle non-goal,
+  `[Misaligned]`).
 - **2.10 remainder — `box_decomposition.py`** stays deferred with its GP consumer (**3.2**).
 - **2.12 remainder — QMC scrambling** stays deferred (needs scipy's compiled Cython scramble over PCG64).
-- After 2.15: 2.16 CMA-ES, then Phase 3 (viz data layer, GP).
+- After 2.16: Phase 3 (viz data layer, GP). GP's `torch.linalg.cholesky`/`solve_triangular` map to
+  `LinAlg.Cholesky` (byte-exact) + `LinAlg.SolveTriangular` (the one still-managed primitive — NumSharp
+  exposes no LAPACK `dtrtrs`; route it through NumSharp once it gains the binding).
 
-**Read the divergence notes below** (erf/ucrt, argsort tie-break, HSSP ≥3-obj tie, UNDX-QR sign, and the
-new 2.14 solve note — a theoretical managed-vs-LAPACK ULP drift that did **not** flip any selection over
-400 differential studies). The NSGA-III niching `rng.shuffle` reproduces numpy's Python-list Fisher-Yates
-via an index permutation (bit-exact), exactly like the GridSampler shuffle.
+**Read the divergence notes below** (erf/ucrt, argsort tie-break, HSSP ≥3-obj tie, UNDX-QR sign). The
+2.14 solve note is **resolved** by 2.15's OpenBLAS route. The NSGA-III niching `rng.shuffle` reproduces
+numpy's Python-list Fisher-Yates via an index permutation (bit-exact), exactly like the GridSampler shuffle.
+
+**Wiring gotcha for OpenBLAS (important for every future np.linalg user):** a bare package/project
+reference is **not** enough — the CLR runs the OpenBLAS backend's self-registering `[ModuleInitializer]`
+only when code first touches one of its types, so an unreferenced assembly stays unloaded and
+`np.linalg.cholesky`/`eigh` throw `OpenBlasMissingBackendException`. `Internal/OpenBlasActivation.cs` is
+Core's own `[ModuleInitializer]` that touches `OpenBlasEngine.LapackAvailable` to force the load the
+moment OptunaSharp.Core loads. Keep it.
 
 ### Phase status
 
@@ -66,7 +86,7 @@ via an index permutation (bit-exact), exactly like the GridSampler shuffle.
 |---|---|---|
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
-| 2 — Native features | 🟩 | **2.1–2.14 done** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III); box-decomp (3.2) + QMC scrambling deferred; **next: 2.15 managed eigh/cholesky** |
+| 2 — Native features | 🟩 | **2.1–2.15 done** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS-backed linalg primitives); box-decomp (3.2) + QMC scrambling deferred; **next: 2.16 CMA-ES** |
 | 3 — Native heavy tail | ⬜ | not started |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
@@ -323,7 +343,28 @@ via an index permutation (bit-exact), exactly like the GridSampler shuffle.
     within ULPs of a tie; across the 400-config differential (incl. 4×4 fits) it never did, so NSGA-III is
     effectively bit-exact. Documented like the HSSP ≥3-obj note. `matrix_rank` uses a `max|a|·n·eps`
     tolerance vs numpy's SVD `σmax·n·eps`; the two agree except at the degeneracy boundary (rare, and the
-    same tolerance class).
+    same tolerance class). **RESOLVED in 2.15:** the solve/matrix_rank now route through
+    `LinAlg`→`np.linalg` over OpenBLAS (byte-identical to numpy), so this note is history — the 400-config
+    differential still passes, now with a genuinely byte-exact hyperplane fit.
+- ✅ **2.15** — `feat(linalg): Phase 2.15 — OpenBLAS-backed linalg primitives (LinAlg) for CMA-ES/GP`.
+  **Redirected mid-flight by the maintainer** from hand-rolled managed primitives to
+  **`NumSharp.Interop.OpenBLAS`** (*"use NumSharp + OpenBLAS any time Optuna uses NumPy"*). Core's csproj
+  now references the OpenBLAS project the same conditional "csproj now / nuget later" way as NumSharp.Core;
+  `Internal/OpenBlasActivation.cs` is a `[ModuleInitializer]` that force-loads it (a bare reference is not
+  enough — the backend self-registers from its own module initializer, which the CLR runs only on first
+  type touch). `Internal/LinAlg.cs` is a thin `double[,]`/`double[]` adapter whose `Solve`/`MatrixRank`/
+  `Cholesky`/`Eigh` delegate to `np.linalg` — **byte-identical to NumPy** (the same scipy-openblas 0.3.31
+  binaries numpy 2.4.2 bundles): verified cholesky, eigh values **and eigenvectors incl. signs**, and solve
+  match numpy 2.4.2 bit-for-bit on a fixed 3×3 and over a 90-case random sweep (`Should().Be(0.0)`).
+  `SolveTriangular` stays managed (forward/back substitution — NumSharp exposes no LAPACK `dtrtrs`; the one
+  primitive not yet LAPACK-backed). Graduated NSGA-III's solve/matrix_rank onto `LinAlg` (deleting
+  `NsgaiiiLinAlg.cs`), retro-upgrading the 2.14 hyperplane fit to byte-exact — the 400-config differential
+  still passes 400/400. 12 unit tests (known cholesky/eigh/solve/triangular cases + a 2000-case
+  reconstruction/residual/orthonormality self-consistency sweep) + 6 live interop tests (byte-exact fixed
+  3×3, byte-exact cholesky/solve/eigenvalue sweeps, managed solve_triangular tolerance vs scipy). Suite:
+  **393 unit + 151 interop**, both TFMs, none skipped. **Caveat:** `NumSharp.Interop.OpenBLAS` is not on
+  nuget.org yet, so the CI/pack PackageReference fallback needs it published; the sibling ProjectReference
+  is the working path (pack already records the dependency cleanly for both TFMs).
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -383,11 +424,16 @@ via an index permutation (bit-exact), exactly like the GridSampler shuffle.
 - **`Samplers/NSGAIIISampler.cs` + `Samplers/Nsgaiii/*`** — **new in 2.14**. `NSGAIIISampler` (mirrors
   `NSGAIISampler` over the shared GA stack) + `NSGAIIIElitePopulationSelectionStrategy` (reference-point
   niching: default-reference-point generation, filter-inf, ideal-point/ASF normalization, association,
-  the `defaultdict` niche sweep) + `NsgaiiiLinAlg` (managed `Solve` = reciprocal-multiplier LU, and
-  `MatrixRank` — **the seed for the 2.15 managed-linalg primitives**, extend rather than re-port).
-  Carries the 2.14 hyperplane-solve `[Misaligned]` (non-surfacing). Bit-exact vs Optuna.
-- `trials_dataframe` ships as a dependency-free `TrialsTable` (Core stays pure); the
-  `Microsoft.Data.Analysis` adapter remains Tier X (5.4).
+  the `defaultdict` niche sweep). Its hyperplane fit calls `Internal/LinAlg` (2.15). Bit-exact vs Optuna.
+- **`Internal/LinAlg.cs` + `Internal/OpenBlasActivation.cs`** — **new in 2.15**. `LinAlg` is the
+  `double[,]`/`double[]` adapter over NumSharp's `np.linalg`: `Solve`/`MatrixRank`/`Cholesky`/`Eigh`
+  delegate to LAPACK via `NumSharp.Interop.OpenBLAS` → **byte-identical to NumPy** (used by NSGA-III now;
+  CMA-ES `Eigh` in 2.16; GP `Cholesky` in 3.2). `SolveTriangular` is the one still-managed primitive
+  (forward/back substitution — no NumSharp `dtrtrs`). `OpenBlasActivation` is a `[ModuleInitializer]` that
+  force-loads the OpenBLAS backend (a bare reference does not trigger its self-registration — keep it).
+  **Any future numpy-linalg site should use `LinAlg`/`np.linalg`, not a hand-rolled managed kernel.**
+- `trials_dataframe` ships as a dependency-free `TrialsTable`; the `Microsoft.Data.Analysis` adapter
+  remains Tier X (5.4).
 
 ### Validation infra — current state vs. §4 target
 
@@ -443,8 +489,8 @@ via an index permutation (bit-exact), exactly like the GridSampler shuffle.
   fails *inside* `NumSharp.Core`, that's the sibling checkout, not OptunaSharp** — point
   `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
   fallback.
-- **Test:** `dotnet test test/OptunaSharp.Tests/...` (381 unit, both TFMs) and
-  `dotnet test test/OptunaSharp.Tests.Interop/...` (145 live-Optuna tests; self-skip Inconclusive
+- **Test:** `dotnet test test/OptunaSharp.Tests/...` (393 unit, both TFMs) and
+  `dotnet test test/OptunaSharp.Tests.Interop/...` (151 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
 - **Interop Python is pinned to the vendored reference.** The live-interop suite runs against the
   submodule's Optuna **5.0.0.dev** (`pip install -e src/optuna --no-deps`), not the stale PyPI build.
@@ -506,7 +552,7 @@ via an index permutation (bit-exact), exactly like the GridSampler shuffle.
 
 | Tier | Package | Contents | Deps beyond BCL |
 |---|---|---|---|
-| N | `OptunaSharp` (Core) | distributions, trial, study, ALL samplers (Random/Grid/PartialFixed/BruteForce/TPE/QMC/NSGA-II/NSGA-III/CMA-ES/**GP**), all 9 pruners, transform, MO machinery, PED-ANOVA, terminators (incl. GP-based), InMemory + **journal-file** storage, filesystem artifacts, viz data layer, own managed `eigh`(Jacobi)/`cholesky`/L-BFGS-B | **NumSharp.Core only** |
+| N | `OptunaSharp` (Core) | distributions, trial, study, ALL samplers (Random/Grid/PartialFixed/BruteForce/TPE/QMC/NSGA-II/NSGA-III/CMA-ES/**GP**), all 9 pruners, transform, MO machinery, PED-ANOVA, terminators (incl. GP-based), InMemory + **journal-file** storage, filesystem artifacts, viz data layer, `eigh`/`cholesky`/`solve` via `np.linalg` (LAPACK), L-BFGS-B | **NumSharp.Core + NumSharp.Interop.OpenBLAS** (see the ⚠️ dependency-model note in §0) |
 | X | `OptunaSharp.Storage.Sqlite` | RDB storage, Optuna-compatible schema + alembic version pin | Microsoft.Data.Sqlite |
 | X | `OptunaSharp.Storage.EFCore` | same schema on PostgreSQL/MySQL | EF Core + providers |
 | X | `OptunaSharp.Storage.Redis` | journal Redis backend | StackExchange.Redis |
@@ -590,8 +636,8 @@ Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 led
 | 2.12 | 🟩 | **QMC sampler** (Sobol + Halton, scrambling) | `samplers/_qmc.py` + scipy behavior | ~172 | 1,600 | 🟡 | **non-scrambled done** — Sobol'+Halton bit-exact vs scipy, byte-exact sample-id key (`217af06`). Sobol numbers from `rustuna .../direction_numbers.rs`. **Scrambling deferred** (scipy's compiled Cython scramble over PCG64) |
 | 2.13 | ✅ | **NSGA-II** (6 crossovers, polynomial mutation, elite selection, constraints) | `samplers/nsgaii/*`, `_ga/_base.py` | ~1,000 | 2,400 | 🟡 | 2.10. Default + blx/sbx/vsbx/spx **bit-exact** vs live Optuna (full state); UNDX ≥2-D `[Misaligned]` (QR column signs). Crossover object-array → `object?[]`. `NSGAIISampler`+`BaseGASampler`+`Samplers/Nsgaii/*` |
 | 2.14 | ✅ | NSGA-III (reference points, niching) | `samplers/_nsgaiii/*` | ~390 | 950 | 🟡+ | 2.13. Reference-point niching over the reused `BaseGASampler`/crossovers/mutations. **Bit-exact** vs live Optuna — 400-config offline differential (0 divergence) + 11 live parity seeds. Reciprocal-multiplier LU `Solve`/`MatrixRank` (`NsgaiiiLinAlg`); numpy association `einsum` replicated term-by-term; `rng.shuffle` via index permutation. The flagged managed-linalg tolerance point did not surface |
-| 2.15 | ⬜ **NEXT** | Managed numeric primitives for 2.16/3.2: symmetric `eigh` (cyclic Jacobi), unblocked `cholesky`, `solve_triangular` | — (NumSharp.Core has no managed eigen/cholesky) | — | 500 | 🟡 | small dims (CMA-ES: search-space rank; GP: ≤ trial count) → O(n³) managed is fine. Tolerance oracle vs LAPACK; **byte-exact upgrade switch lives in Tier X (5.5)**. Seed from 2.14's `NsgaiiiLinAlg` (`Solve`/`MatrixRank`) |
-| 2.16 | ⬜ | **CMA-ES** — port the external `cmaes` package (CMA, sep-CMA, IPOP/BIPOP restarts, margin, lr-adapt) + `CmaEsSampler` | `samplers/_cmaes.py` + `CyberAgentAILab/cmaes` (~1.8k py) | ~2,300 | 4,500 | 🟠 | 2.15. Trajectory oracle is tolerance-based on the native `eigh` (byte-exact under 5.5). Optimizer state → own JSON (pickle non-goal, `[Misaligned]`) |
+| 2.15 | ✅ | Numeric primitives for 2.16/3.2: `eigh`, `cholesky`, `solve`, `matrix_rank`, `solve_triangular` | `Internal/LinAlg.cs` + `OpenBlasActivation.cs` | — | 250 | 🟡 | **Redirected to OpenBLAS** (maintainer decision): Core references `NumSharp.Interop.OpenBLAS`; `LinAlg` delegates cholesky/eigh/solve/matrix_rank to `np.linalg` → **byte-identical to NumPy** (verified 90-case sweep). `solve_triangular` stays managed (no NumSharp `dtrtrs`). NSGA-III solve retro-upgraded to byte-exact. `[ModuleInitializer]` force-load required |
+| 2.16 | ⬜ **NEXT** | **CMA-ES** — port the external `cmaes` package (CMA, sep-CMA, IPOP/BIPOP restarts, margin, lr-adapt) + `CmaEsSampler` | `samplers/_cmaes.py` + `CyberAgentAILab/cmaes` (~1.8k py, v0.13.0 pip-installed) | ~2,300 | 4,500 | 🟠 | 2.15. `D2, B = np.linalg.eigh(C)` → `LinAlg.Eigh` (byte-exact incl. eigenvector signs) → CMA-ES sampling should be **byte-exact**, not tolerance-bounded as originally planned. Optimizer state → own JSON (pickle non-goal, `[Misaligned]`) |
 
 **Phase 2 ≈ 7.7k py → ~20.1k C#. Estimate: 14–17 weeks.**
 Milestone after 2.11 — **✅ REACHED (M3): "Optuna default experience" complete** — TPE (univariate/
