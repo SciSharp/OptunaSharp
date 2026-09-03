@@ -34,25 +34,26 @@ with no external package on either side.
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 2.11** — MOTPE + constraints (multivariate MO TPE), then box decomposition
+### ▶ CONTINUE HERE: **Phase 2.12** — QMC sampler (Sobol + Halton, scrambling)
 
-Phases 0, 1 and 2.1–2.9 plus the **2.10 hypervolume + HSSP core** are complete, committed, and proven
-green (334 unit + 107 live-interop tests, both TFMs, none skipped). **2.10-core landed
-`compute_hypervolume` (WFG) + `_solve_hssp` and wired the HSSP tie-break into TPE's multi-objective
-split** — so multi-objective TPE and PED-ANOVA-with-`target=null` now run end-to-end, matching Optuna
-to the erf tolerance in full lock-step (see the 2.10 entry below). What remains for the flagship:
-- **2.11 — MOTPE + constraints**. MO studies already run today through the independent TPE path
-  (`multivariate` defaults to False for MO) — the `handle_below` uniform-weights `l(x)`, the
-  `_split_infeasible_trials` constraint split, and the MO below/above split all landed already. What
-  2.11 adds is the *multivariate* MO refinement (`multivariate=True` on a MO study) and full
-  constraints coverage. **First step: verify how much already works** — run a `multivariate=True` MO
-  study against live Optuna via the parity engine before writing new code.
-- **2.10 remainder — `box_decomposition.py` (`get_non_dominated_box_bounds`)** is deferred with its
-  only consumer, the GP acquisition function (**3.2**). Pull it forward when GP needs it; it is not on
-  the TPE/PED-ANOVA path.
+Phases 0, 1 and **2.1–2.11 are complete** (the whole TPE surface — univariate, multivariate, group,
+multi-objective MOTPE, and constrained — plus pruners, PED-ANOVA, terminators, and the MO
+hypervolume/HSSP machinery), committed and proven green (**336 unit + 114 live-interop tests**, both
+TFMs, none skipped). **2.11 needed no new code** — multivariate MO TPE and constrained TPE already
+compose from the pieces landed in 2.7–2.10; verified end-to-end vs live Optuna to the erf tolerance
+(see the 2.11 entry below). Next:
+- **2.12 — `QMCSampler`** (`samplers/_qmc.py`, ~172 py). Sobol + Halton low-discrepancy sequences with
+  scrambling. This is the first sampler that must match **scipy** (`scipy.stats.qmc`) rather than only
+  NumPy/Optuna: the Sobol direction numbers come from `rustuna_sampler/src/qmc/sobol/direction_numbers.rs`
+  and the scrambled sequences are oracle-pinned against scipy. Watch the RNG — it still routes through
+  `LazyRandomState`, but the scrambling draw order must match scipy's. Run scipy's `Sobol`/`Halton`
+  first, observe, then replicate.
+- **2.10 remainder — `box_decomposition.py` (`get_non_dominated_box_bounds`)** stays deferred with its
+  only consumer, the GP acquisition function (**3.2**).
+- After 2.12: **2.13 NSGA-II**, 2.14 NSGA-III, 2.15 managed eigh/cholesky, 2.16 CMA-ES.
 
 **Read the THREE TPE/MO divergence notes below** (erf/ucrt, argsort tie-break, HSSP ≥3-obj
-zero-contribution tie) — together they bound the multi-objective parity exactly.
+zero-contribution tie) — they continue to bound sampler parity, and QMC will likely add a scipy one.
 
 ### Phase status
 
@@ -60,7 +61,7 @@ zero-contribution tie) — together they bound the multi-objective parity exactl
 |---|---|---|
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
-| 2 — Native features | 🟩 | **2.1–2.9 done**; **2.10 core done** (hypervolume+HSSP; box-decomp deferred to 3.2); 2.11 not started |
+| 2 — Native features | 🟩 | **2.1–2.11 done** (full TPE incl. MOTPE+constraints; 2.10 box-decomp deferred to 3.2); **next: 2.12 QMC** |
 | 3 — Native heavy tail | ⬜ | not started |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
@@ -215,6 +216,19 @@ zero-contribution tie) — together they bound the multi-objective parity exactl
   values). 25 hypervolume unit tests (ports of `tests/hypervolume_tests/*`) + 4 MO TPE unit tests + 5
   MO TPE trajectory-parity seeds + 2 MO importance `target=null` seeds. **box_decomposition deferred to
   3.2** (its only consumer is `_gp/acqf.py`). See the 2.10 `[Misaligned]` HSSP note below.
+- ✅ **2.11** — `test(tpe): Phase 2.11 — verify MOTPE + constraints already work, lock with tests`
+  (`9a6ffe1`). **No new production code** — multivariate multi-objective TPE (MOTPE) and constrained
+  TPE already compose from earlier phases: the MO uniform-weight `l(x)` branch (2.7), the sampler +
+  `default_gamma_multiobjective` + `_split_infeasible_trials`/`_get_infeasible_trial_score` (2.8), the
+  group path (2.9), the non-domination/HSSP split (2.10), and the already-ported constraint infra
+  (`ConstrainedOptimization`, `_process_constraints_after_trial`, `trial.set_constraint`,
+  `FrozenTrial.Constraints`). Verified end-to-end vs live Optuna in full RNG lock-step to the erf
+  tolerance: multivariate=True MO TPE (max abs diff 4.6e-14), constrained SO/MO TPE via
+  `constraints_func` (7.1e-14, with genuine infeasible trials — 16/140 — exercising the infeasible
+  split and matching stored constraint values), and `trial.set_constraint` (7.1e-14). 2 unit tests
+  (multivariate MO reproducibility; constrained-TPE constraint storage + reproducibility) + 7 interop
+  seeds (3 multivariate MO + 4 constrained SO/MO). **TPE is now complete** — univariate, multivariate,
+  group, MOTPE, constrained.
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -253,11 +267,11 @@ zero-contribution tie) — together they bound the multi-objective parity exactl
   (2-D/3-D/N-D WFG) + `hssp.py: _solve_hssp` (2-D + n-D greedy). Consumed by the TPE MO split; the
   remaining `box_decomposition.py` (`get_non_dominated_box_bounds`) is deferred to **3.2** with its GP
   consumer. Carries the 2.10 `[Misaligned]` HSSP ≥3-obj zero-contribution tie note.
-- **`Samplers/TPESampler.cs`** — the real sampler: the numeric kernel + univariate + non-group
-  multivariate (2.8) and the group-decomposed multivariate `group=true` path (2.9). All of
-  single-objective TPE is complete; the MO split (`_split_complete_trials_multi_objective` HSSP
-  tie-break) is done as of **2.10 core** (`Internal/Hypervolume.cs`) — MO TPE runs end-to-end via the
-  independent path; the multivariate MOTPE refinement is **2.11**.
+- **`Samplers/TPESampler.cs`** — **the complete sampler**: numeric kernel + univariate + non-group
+  multivariate (2.8), the group-decomposed multivariate `group=true` path (2.9), the MO split via
+  `Internal/Hypervolume.cs` (2.10), and — verified in **2.11** — multivariate multi-objective (MOTPE)
+  and constrained TPE (`constraints_func`/`set_constraint`, the infeasible split). Nothing in TPE is
+  pending.
 - `trials_dataframe` ships as a dependency-free `TrialsTable` (Core stays pure); the
   `Microsoft.Data.Analysis` adapter remains Tier X (5.4).
 
@@ -308,8 +322,8 @@ zero-contribution tie) — together they bound the multi-objective parity exactl
   fails *inside* `NumSharp.Core`, that's the sibling checkout, not OptunaSharp** — point
   `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
   fallback.
-- **Test:** `dotnet test test/OptunaSharp.Tests/...` (334 unit, both TFMs) and
-  `dotnet test test/OptunaSharp.Tests.Interop/...` (107 live-Optuna tests; self-skip Inconclusive
+- **Test:** `dotnet test test/OptunaSharp.Tests/...` (336 unit, both TFMs) and
+  `dotnet test test/OptunaSharp.Tests.Interop/...` (114 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
 - **Interop Python is pinned to the vendored reference.** The live-interop suite runs against the
   submodule's Optuna **5.0.0.dev** (`pip install -e src/optuna --no-deps`), not the stale PyPI build.
@@ -451,16 +465,18 @@ Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 led
 | 2.8 | ✅ | **TPE — the default sampler (univariate + non-group multivariate)** | `_tpe/_erf.py`, `_truncnorm.py`, `parzen_estimator.py`, `probability_distributions.py`, `sampler.py` core | ~800 | 2,600 | 🟡 | 0.4. Full numeric kernel + sampler; `Expm1`/`LogAddExp` bit-exact, `ppf`/density erf-tolerance-bounded. Trajectory parity vs live Optuna (continuous/log/categorical multivariate + independent). **Two `[Misaligned]`: erf/ucrt few-ULP, and stable-vs-x86-simd-sort argsort tie order on repeated numerical obs.** `constant_liar`+deprecated args done |
 | 2.9 | ✅ | TPE stage 2 — `group` (group-decomposed multivariate) | `_tpe/sampler.py` group branches | ~150 | 300 | 🟡 | `infer_relative_search_space`/`sample_relative` group branches over the already-ported `GroupDecomposedSearchSpace`; experimental warning; MO-default override. Branching-space trajectory parity vs live Optuna (erf tolerance). `66064a4` |
 | 2.10 | 🟩 | **MO machinery**: non-dominated sort, WFG hypervolume, HSSP, box decomposition, Pareto front | `study/_multi_objective.py`, `_hypervolume/*` | ~400 | 1,100 | 🟡 | **core done**: `MultiObjective.cs` (0.8) + `Hypervolume.cs` (`compute_hypervolume`+`_solve_hssp`, `c7bd648`) → MO TPE split unblocked. **box_decomposition deferred to 3.2** (GP-only consumer) |
-| 2.11 | ⬜ **NEXT** | TPE stage 3 — MOTPE + constraints | `_tpe/sampler.py` MO split | ~150 | 450 | 🟡 | 2.9, 2.10 both done. MO already runs via the independent path; 2.11 = multivariate MO + constraints. Verify what already works first |
-| 2.12 | ⬜ | **QMC sampler** (Sobol + Halton, scrambling) | `samplers/_qmc.py` + scipy behavior | ~172 | 1,600 | 🟡 | Sobol direction numbers lifted from `rustuna_sampler/src/qmc/sobol/direction_numbers.rs`; scrambled sequences oracle-pinned vs scipy |
+| 2.11 | ✅ | TPE stage 3 — MOTPE + constraints | `_tpe/sampler.py` MO split | ~150 | 0 | 🟡 | **no new code** — multivariate MO + constrained TPE already compose from 2.7–2.10 + the constraint infra. Verified vs live Optuna (mv MO 4.6e-14; constrained SO/MO 7.1e-14, infeasible split exercised). `9a6ffe1` |
+| 2.12 | ⬜ **NEXT** | **QMC sampler** (Sobol + Halton, scrambling) | `samplers/_qmc.py` + scipy behavior | ~172 | 1,600 | 🟡 | Sobol direction numbers lifted from `rustuna_sampler/src/qmc/sobol/direction_numbers.rs`; scrambled sequences oracle-pinned vs scipy |
 | 2.13 | ⬜ | **NSGA-II** (6 crossovers, polynomial mutation, elite selection, constraints) | `samplers/nsgaii/*`, `_ga/_base.py` | ~1,000 | 2,400 | 🟡 | 2.10; crossover object-array site → `CategoricalChoice[]` |
 | 2.14 | ⬜ | NSGA-III (reference points, niching) | `samplers/_nsgaiii/*` | ~390 | 950 | 🟡+ | 2.13 |
 | 2.15 | ⬜ | Managed numeric primitives for 2.16/3.2: symmetric `eigh` (cyclic Jacobi), unblocked `cholesky`, `solve_triangular` | — (NumSharp.Core has no managed eigen/cholesky) | — | 500 | 🟡 | small dims (CMA-ES: search-space rank; GP: ≤ trial count) → O(n³) managed is fine. Tolerance oracle vs LAPACK; **byte-exact upgrade switch lives in Tier X (5.5)** |
 | 2.16 | ⬜ | **CMA-ES** — port the external `cmaes` package (CMA, sep-CMA, IPOP/BIPOP restarts, margin, lr-adapt) + `CmaEsSampler` | `samplers/_cmaes.py` + `CyberAgentAILab/cmaes` (~1.8k py) | ~2,300 | 4,500 | 🟠 | 2.15. Trajectory oracle is tolerance-based on the native `eigh` (byte-exact under 5.5). Optimizer state → own JSON (pickle non-goal, `[Misaligned]`) |
 
 **Phase 2 ≈ 7.7k py → ~20.1k C#. Estimate: 14–17 weeks.**
-Milestone after 2.11: **"Optuna default experience" complete** — TPE + MedianPruner bit-exact with
-Python, persisted to a journal file Python can open. Zero external deps.
+Milestone after 2.11 — **✅ REACHED (M3): "Optuna default experience" complete** — TPE (univariate/
+multivariate/group/MOTPE/constrained) + MedianPruner, parity-verified against Python (bit-exact off
+the erf path, erf-tolerance on the truncnorm density), persisted to a journal file Python can open.
+Zero external deps.
 
 ## Phase 3 — Native heavy tail — ⬜ NOT STARTED
 
