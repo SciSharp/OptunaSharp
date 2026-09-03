@@ -64,8 +64,13 @@ public class NSGAIIElitePopulationSelectionStrategy
         return elitePopulation;
     }
 
-    /// <summary>Python <c>_rank_population</c>.</summary>
-    private static List<List<FrozenTrial>> RankPopulation(
+    /// <summary>
+    ///     Python <c>_rank_population</c>. Module-level in Optuna's
+    ///     <c>nsgaii/_elite_population_selection_strategy.py</c> and imported by the NSGA-III strategy,
+    ///     so it is <c>internal static</c> here and shared with
+    ///     <see cref="OptunaSharp.Samplers.Nsgaiii.NSGAIIIElitePopulationSelectionStrategy" />.
+    /// </summary>
+    internal static List<List<FrozenTrial>> RankPopulation(
         IReadOnlyList<FrozenTrial> population, IReadOnlyList<StudyDirection> directions, bool isConstrained)
     {
         if (population.Count == 0)

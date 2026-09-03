@@ -34,28 +34,31 @@ with no external package on either side.
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 2.14** — NSGA-III (reference points, niching)
+### ▶ CONTINUE HERE: **Phase 2.15** — managed numeric primitives (eigh/cholesky/solve_triangular) for 2.16 + 3.2
 
-Phases 0, 1 and **2.1–2.13 are complete** (the whole TPE surface, pruners, PED-ANOVA, terminators, the
-MO hypervolume/HSSP machinery, the non-scrambled QMC sampler, and now the full NSGA-II genetic-algorithm
-sampler), committed and proven green (**366 unit + 134 live-interop tests**, both TFMs, none skipped).
-**2.13 landed `NSGAIISampler`** — the default path (uniform crossover + no mutation) plus all 5
-arithmetic crossovers (blx-α/sbx/vsbx/spx), polynomial mutation, constraints (set_constraint +
-constraints_func), and the generation/parent-cache machinery are **bit-exact vs live Optuna** (full
-study state — every trial's params/values, per-trial generation, and the parent-cache trial-id lists;
-see the 2.13 entry below). Next:
-- **2.14 — `NSGAIIISampler`** (`samplers/_nsgaiii/*`, ~390 py). NSGA-III extends NSGA-II's elite
-  selection with Das-Dennis reference points + niching (its own `_elite_population_selection_strategy`);
-  the sampler reuses the whole 2.13 machinery (`BaseGASampler`, child generation, crossovers, mutations).
-  Depends on **2.13** (done). Watch the RNG lock-step and the reference-point/niche-count arithmetic
-  (Gaussian-elimination hyperplane fit — likely a small managed-linalg tolerance point, like UNDX below).
+Phases 0, 1 and **2.1–2.14 are complete** (the whole TPE surface, pruners, PED-ANOVA, terminators, the
+MO hypervolume/HSSP machinery, the non-scrambled QMC sampler, and now the full NSGA-II **and** NSGA-III
+genetic-algorithm samplers), committed and proven green (**381 unit + 145 live-interop tests**, both
+TFMs, none skipped). **2.14 landed `NSGAIIISampler`** — the reference-point/niching elite selection
+(`_nsgaiii/*`) over the whole reused 2.13 machinery — and it is **bit-exact vs live Optuna** across a
+400-config offline differential (5 crossovers × {2,3,4} objectives × 25 seeds + 25 constrained, ~10k
+trials, zero divergence) plus 11 live full-state parity seeds (see the 2.14 entry below). The
+Gaussian-elimination hyperplane fit that the plan flagged as a *likely* managed-linalg tolerance point
+turned out **not to surface**: a reciprocal-multiplier LU (LAPACK `dgetf2` shape) plus term-by-term
+replication of numpy's association `einsum` keep the niching bit-exact in practice. Next:
+- **2.15 — managed `eigh` (cyclic Jacobi), unblocked `cholesky`, `solve_triangular`** for 2.16/3.2.
+  NumSharp.Core ships no managed eigensolver/cholesky without the OpenBLAS backend; these are the
+  small-dim primitives CMA-ES and GP need (tolerance oracle vs LAPACK; byte-exact upgrade switch lives
+  in Tier X 5.5). **`Samplers/Nsgaiii/NsgaiiiLinAlg.cs`** (2.14's `Solve`/`MatrixRank`) is the seed of
+  this — graduate/extend it rather than starting fresh.
 - **2.10 remainder — `box_decomposition.py`** stays deferred with its GP consumer (**3.2**).
 - **2.12 remainder — QMC scrambling** stays deferred (needs scipy's compiled Cython scramble over PCG64).
-- After 2.14: 2.15 managed eigh/cholesky, 2.16 CMA-ES.
+- After 2.15: 2.16 CMA-ES, then Phase 3 (viz data layer, GP).
 
-**Read the divergence notes below** (erf/ucrt, argsort tie-break, HSSP ≥3-obj tie, and the new 2.13
-UNDX-QR sign note). The crowding-distance sort turned out to be a **stable Python `list.sort`** (not
-`np.argsort`), so it is bit-reproducible — the argsort concern flagged for 2.13 did not materialize.
+**Read the divergence notes below** (erf/ucrt, argsort tie-break, HSSP ≥3-obj tie, UNDX-QR sign, and the
+new 2.14 solve note — a theoretical managed-vs-LAPACK ULP drift that did **not** flip any selection over
+400 differential studies). The NSGA-III niching `rng.shuffle` reproduces numpy's Python-list Fisher-Yates
+via an index permutation (bit-exact), exactly like the GridSampler shuffle.
 
 ### Phase status
 
@@ -63,7 +66,7 @@ UNDX-QR sign note). The crowding-distance sort turned out to be a **stable Pytho
 |---|---|---|
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
-| 2 — Native features | 🟩 | **2.1–2.13 done** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II); box-decomp (3.2) + QMC scrambling deferred; **next: 2.14 NSGA-III** |
+| 2 — Native features | 🟩 | **2.1–2.14 done** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III); box-decomp (3.2) + QMC scrambling deferred; **next: 2.15 managed eigh/cholesky** |
 | 3 — Native heavy tail | ⬜ | not started |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
@@ -285,6 +288,42 @@ UNDX-QR sign note). The crowding-distance sort turned out to be a **stable Pytho
     OptunaSharp). **UNDX with a single numerical parameter is bit-exact** (the basis is unused). The
     other 5 crossovers have no QR/linalg and are exact; UNDX ≥2-D is excluded from the bit-parity
     tests (reproducibility only).
+- ✅ **2.14** — `feat(samplers): Phase 2.14 — NSGAIIISampler (NSGA-III)`. The many-objective GA sampler,
+  ported structure-for-structure into `Samplers/Nsgaiii/*` + `Samplers/NSGAIIISampler.cs`. `NSGAIIISampler`
+  mirrors `NSGAIISampler` (same `BaseGASampler`, `NSGAIIChildGenerationStrategy`, crossovers, mutations,
+  `NSGAIIAfterTrialStrategy`, two-stream RNG) and only swaps the elite selection for
+  `NSGAIIIElitePopulationSelectionStrategy` — `@experimental_class("3.2.0")` ExperimentalWarning on
+  construction, `reference_points`/`dividing_parameter` args, no experimental-argument warnings (unlike
+  NSGA-II). The strategy is the full `_nsgaiii/_elite_population_selection_strategy.py`: rank by shared
+  `_rank_population` (now `internal static`), fill by rank, and truncate the borderline front by
+  **reference-point niching** — `_generate_default_reference_point` (`combinations_with_replacement` +
+  `np.add.at`), `_filter_inf` (nanmax/nanmin/clip), `_normalize_objective_values` (ideal-point subtract,
+  ASF `einsum`/argmin extreme points, hyperplane `solve`/`matrix_rank` branch), `_associate_individuals_
+  with_reference_points`, and `_preserve_niche_individuals` (the `defaultdict` niche sweep with
+  `rng.shuffle`/`sort(reverse=True)`/`pop()`). New `Samplers/Nsgaiii/NsgaiiiLinAlg.cs` supplies the small
+  managed `Solve` (reciprocal-multiplier LU, LAPACK `dgetf2` shape) + `MatrixRank` (GE pivot count).
+  **Parity (verified vs live Optuna 5.0.0.dev):** a **400-config offline differential** — 5 crossovers ×
+  {2,3,4} objectives × 25 seeds + 25 constrained (set_constraint), ~10k trials — matched **byte-for-byte
+  with zero divergence** (full study state: every trial's params/values, per-trial generation, parent-cache
+  trial-id lists). 15 unit tests (hardcoded seed=42 SO sequence, default reference points for M=2/3,
+  MO/crossover/custom-reference-point reproducibility, validation, experimental+deprecation warnings) + 11
+  live full-state parity tests (2-/3-objective defaults, 4 crossovers, custom reference points, poly
+  mutation, set_constraint). **Numeric due-diligence (all verified before porting):** `_filter_inf` and
+  the reference-point association are bit-exact (the 4-operand `einsum("ni,pi,p,pm->npm")` reproduced
+  term-by-term — 2000/2000, vs 46% for the naive factored form); the ASF argmin and `matrix_rank`
+  degeneracy branch are exact; the reciprocal-multiplier `Solve` matches numpy on ~96% of the real
+  extreme-point systems (vs ~87% for direct-division), the residual ~1 ULP being the only managed-vs-LAPACK
+  gap — and it flipped **no** niche selection across the 400 studies. `rng.shuffle` on the niche lists
+  reproduces numpy's Python-list Fisher-Yates via a bit-exact index permutation (the GridSampler pattern).
+  - **[Misaligned] hyperplane-fit solve (a theoretical managed-vs-LAPACK ULP point that did not surface).**
+    `_normalize_objective_values` fits the ASF-extreme-point hyperplane with `np.linalg.solve` (LAPACK
+    `dgesv`). `NsgaiiiLinAlg.Solve` is the closest managed match (unblocked reciprocal-multiplier LU) but
+    drifts ~1 ULP on a few percent of the small systems (numpy's LAPACK rides an arch-specific FMA `gemm`).
+    A 1-ULP normalization difference only changes the outcome when it flips a niche-distance decision
+    within ULPs of a tie; across the 400-config differential (incl. 4×4 fits) it never did, so NSGA-III is
+    effectively bit-exact. Documented like the HSSP ≥3-obj note. `matrix_rank` uses a `max|a|·n·eps`
+    tolerance vs numpy's SVD `σmax·n·eps`; the two agree except at the degeneracy boundary (rare, and the
+    same tolerance class).
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -339,7 +378,14 @@ UNDX-QR sign note). The crowding-distance sort turned out to be a **stable Pytho
   `perform_mutation`, the 6 crossovers, `BaseMutation`/`PolynomialMutation`, constrained domination.
   **NSGA-III (2.14) reuses all of this** — it only swaps `_elite_population_selection_strategy` for a
   reference-point/niching one. Carries the 2.13 UNDX-QR-sign `[Misaligned]`. `MultiObjective.
-  FastNonDominationRank` (0.8) is the ranking engine.
+  FastNonDominationRank` (0.8) is the ranking engine. `NSGAIIElitePopulationSelectionStrategy.
+  RankPopulation` is now `internal static` (Optuna's shared `_rank_population`), consumed by NSGA-III.
+- **`Samplers/NSGAIIISampler.cs` + `Samplers/Nsgaiii/*`** — **new in 2.14**. `NSGAIIISampler` (mirrors
+  `NSGAIISampler` over the shared GA stack) + `NSGAIIIElitePopulationSelectionStrategy` (reference-point
+  niching: default-reference-point generation, filter-inf, ideal-point/ASF normalization, association,
+  the `defaultdict` niche sweep) + `NsgaiiiLinAlg` (managed `Solve` = reciprocal-multiplier LU, and
+  `MatrixRank` — **the seed for the 2.15 managed-linalg primitives**, extend rather than re-port).
+  Carries the 2.14 hyperplane-solve `[Misaligned]` (non-surfacing). Bit-exact vs Optuna.
 - `trials_dataframe` ships as a dependency-free `TrialsTable` (Core stays pure); the
   `Microsoft.Data.Analysis` adapter remains Tier X (5.4).
 
@@ -381,7 +427,11 @@ UNDX-QR sign note). The crowding-distance sort turned out to be a **stable Pytho
   signs** on `Samplers/Nsgaii/Crossovers/UNDXCrossover.cs` (managed Householder QR matches numpy's basis
   magnitudes to ~1e-14 but not LAPACK's per-column signs → a ≥2-parameter UNDX study's values diverge
   O(1) and cascade through selection; still a correct, reproducible UNDX; 1-parameter UNDX and the other
-  5 crossovers are bit-exact). The TPE divergences are on `Samplers/Tpe/ParzenEstimator.cs`/`TruncNorm.cs`.
+  5 crossovers are bit-exact); and the 2.14 **NSGA-III hyperplane-fit solve** on
+  `Samplers/Nsgaii/../Nsgaiii/NsgaiiiLinAlg.cs` (a reciprocal-multiplier LU ~1 ULP from numpy's LAPACK
+  `dgesv` on a few percent of the small extreme-point systems — a theoretical niche-selection tie-break
+  risk that flipped nothing across the 400-config differential, incl. 4×4 fits; NSGA-III is effectively
+  bit-exact). The TPE divergences are on `Samplers/Tpe/ParzenEstimator.cs`/`TruncNorm.cs`.
 
 ### Build / test notes for the next agent
 
@@ -393,8 +443,8 @@ UNDX-QR sign note). The crowding-distance sort turned out to be a **stable Pytho
   fails *inside* `NumSharp.Core`, that's the sibling checkout, not OptunaSharp** — point
   `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
   fallback.
-- **Test:** `dotnet test test/OptunaSharp.Tests/...` (366 unit, both TFMs) and
-  `dotnet test test/OptunaSharp.Tests.Interop/...` (134 live-Optuna tests; self-skip Inconclusive
+- **Test:** `dotnet test test/OptunaSharp.Tests/...` (381 unit, both TFMs) and
+  `dotnet test test/OptunaSharp.Tests.Interop/...` (145 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
 - **Interop Python is pinned to the vendored reference.** The live-interop suite runs against the
   submodule's Optuna **5.0.0.dev** (`pip install -e src/optuna --no-deps`), not the stale PyPI build.
@@ -539,8 +589,8 @@ Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 led
 | 2.11 | ✅ | TPE stage 3 — MOTPE + constraints | `_tpe/sampler.py` MO split | ~150 | 0 | 🟡 | **no new code** — multivariate MO + constrained TPE already compose from 2.7–2.10 + the constraint infra. Verified vs live Optuna (mv MO 4.6e-14; constrained SO/MO 7.1e-14, infeasible split exercised). `9a6ffe1` |
 | 2.12 | 🟩 | **QMC sampler** (Sobol + Halton, scrambling) | `samplers/_qmc.py` + scipy behavior | ~172 | 1,600 | 🟡 | **non-scrambled done** — Sobol'+Halton bit-exact vs scipy, byte-exact sample-id key (`217af06`). Sobol numbers from `rustuna .../direction_numbers.rs`. **Scrambling deferred** (scipy's compiled Cython scramble over PCG64) |
 | 2.13 | ✅ | **NSGA-II** (6 crossovers, polynomial mutation, elite selection, constraints) | `samplers/nsgaii/*`, `_ga/_base.py` | ~1,000 | 2,400 | 🟡 | 2.10. Default + blx/sbx/vsbx/spx **bit-exact** vs live Optuna (full state); UNDX ≥2-D `[Misaligned]` (QR column signs). Crossover object-array → `object?[]`. `NSGAIISampler`+`BaseGASampler`+`Samplers/Nsgaii/*` |
-| 2.14 | ⬜ **NEXT** | NSGA-III (reference points, niching) | `samplers/_nsgaiii/*` | ~390 | 950 | 🟡+ | 2.13 (done); reuses `BaseGASampler` + crossovers/mutations |
-| 2.15 | ⬜ | Managed numeric primitives for 2.16/3.2: symmetric `eigh` (cyclic Jacobi), unblocked `cholesky`, `solve_triangular` | — (NumSharp.Core has no managed eigen/cholesky) | — | 500 | 🟡 | small dims (CMA-ES: search-space rank; GP: ≤ trial count) → O(n³) managed is fine. Tolerance oracle vs LAPACK; **byte-exact upgrade switch lives in Tier X (5.5)** |
+| 2.14 | ✅ | NSGA-III (reference points, niching) | `samplers/_nsgaiii/*` | ~390 | 950 | 🟡+ | 2.13. Reference-point niching over the reused `BaseGASampler`/crossovers/mutations. **Bit-exact** vs live Optuna — 400-config offline differential (0 divergence) + 11 live parity seeds. Reciprocal-multiplier LU `Solve`/`MatrixRank` (`NsgaiiiLinAlg`); numpy association `einsum` replicated term-by-term; `rng.shuffle` via index permutation. The flagged managed-linalg tolerance point did not surface |
+| 2.15 | ⬜ **NEXT** | Managed numeric primitives for 2.16/3.2: symmetric `eigh` (cyclic Jacobi), unblocked `cholesky`, `solve_triangular` | — (NumSharp.Core has no managed eigen/cholesky) | — | 500 | 🟡 | small dims (CMA-ES: search-space rank; GP: ≤ trial count) → O(n³) managed is fine. Tolerance oracle vs LAPACK; **byte-exact upgrade switch lives in Tier X (5.5)**. Seed from 2.14's `NsgaiiiLinAlg` (`Solve`/`MatrixRank`) |
 | 2.16 | ⬜ | **CMA-ES** — port the external `cmaes` package (CMA, sep-CMA, IPOP/BIPOP restarts, margin, lr-adapt) + `CmaEsSampler` | `samplers/_cmaes.py` + `CyberAgentAILab/cmaes` (~1.8k py) | ~2,300 | 4,500 | 🟠 | 2.15. Trajectory oracle is tolerance-based on the native `eigh` (byte-exact under 5.5). Optimizer state → own JSON (pickle non-goal, `[Misaligned]`) |
 
 **Phase 2 ≈ 7.7k py → ~20.1k C#. Estimate: 14–17 weeks.**
