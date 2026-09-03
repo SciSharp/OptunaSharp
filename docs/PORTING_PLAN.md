@@ -45,25 +45,27 @@ OptunaSharp can share a live journal file with no external package on either sid
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 3.1 part 4** — viz data layer (rank/contour → parallel_coordinate/timeline), then 3.2 GP
+### ▶ CONTINUE HERE: **Phase 3.1 part 5** — viz data layer (rank, then parallel_coordinate/timeline), then 3.2 GP
 
 Phases 0, 1 and **2.1–2.16 are complete** — **Phase 2 (all native features) is DONE** — and **Phase 3 is
 now in progress**. The whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP
 machinery, the non-scrambled QMC sampler, the full NSGA-II **and** NSGA-III genetic-algorithm samplers,
 the OpenBLAS-backed linalg primitives, and the complete `CmaEsSampler` over **all four** cmaes backends —
 full-covariance `cmaes.CMA`, separable `cmaes.SepCMA`, Warm-Starting via `get_warm_start_mgd`, and CMAwM
-(`with_margin`) — are committed and proven green. **3.1 parts 1–3 are done and bit-exact vs live Optuna**
-(**446 unit + 193 live-interop tests**, both TFMs, none skipped) — part 1 was the `_utils` helpers +
-optimization-history/EDF/intermediate-values builders; part 2 added hypervolume-history (byte-exact 2-obj,
-reusing `Internal/Hypervolume.cs`) + param-importances (riding the done `ImportanceFunctions`, erf-tolerance
-values, exact names/labels/order); part 3 added the **slice** builder (`SlicePlot.GetPlotInfo` — per-param
-x/y/feasibility, categorical `x_labels`, log/numerical flags; named `SlicePlot` to dodge the
-`NumSharp.Slice` collision) and the **pareto-front** builder (`ParetoFront.GetInfo` — best/non-best/
-infeasible partition over the done `MultiObjective.GetParetoFrontTrialsByTrials`, 2-/3-target, deprecated
-`constraints_func`). **Next is 3.1 part 4** — the remaining builders (rank/contour → parallel_coordinate/
-timeline), then the GP stack (3.2) — see the §7 autodiff decision gate and the Phase 3 table.
-(`_terminator_improvement` rides the GP improvement evaluators → deferred to **3.3**; the plotly rendering
-`plot_*`/`_get_*_plot` is Tier X **5.2**, not ported here.)
+(`with_margin`) — are committed and proven green. **3.1 parts 1–4 are done and bit-exact vs live Optuna**
+(**450 unit + 195 live-interop tests**, both TFMs, none skipped) — part 1: `_utils` helpers +
+optimization-history/EDF/intermediate-values; part 2: hypervolume-history (byte-exact 2-obj, reusing
+`Internal/Hypervolume.cs`) + param-importances (riding `ImportanceFunctions`, erf-tolerance values, exact
+names/labels/order); part 3: **slice** (`SlicePlot.GetPlotInfo`, named to dodge the `NumSharp.Slice`
+collision) + **pareto-front** (`ParetoFront.GetInfo`, over `MultiObjective.GetParetoFrontTrialsByTrials`);
+part 4: **contour** (`Contour.GetInfo`/`GetAxisInfo` — the padded per-axis `indices`/`values`, the sparse
+`(x_i,y_i)→z` grid with direction min/max dedup, the N×N param-pair matrix; **log-axis range bit-exact**,
+so `Math.Log10`/`Math.Pow` match Python here too). **Next is 3.1 part 5** — the **rank** builder (note:
+its RGB `colors` ride plotly's `sample_colorscale("RdYlBu_r")`, which Optuna's own TODO flags as a
+data-layer wart — port the pure ranks/`color_idxs` and leave the RGB to Tier X 5.2), then
+parallel_coordinate/timeline, then the GP stack (3.2) — see the §7 autodiff decision gate and the Phase 3
+table. (`_terminator_improvement` rides the GP improvement evaluators → deferred to **3.3**; the plotly
+rendering `plot_*`/`_get_*_plot` is Tier X **5.2**, not ported here.)
 - ✅ **3.1 part 1 — viz data layer foundations (`OptunaSharp.Visualization`).** Ported the pure (non-plotly)
   half of `_utils.py` (`VisualizationUtils`: `CheckPlotArgs`/`IsLogScale`/`IsNumerical`/`FilterNonfinite`/
   `IsReverseScale`) plus the three simplest `_get_*_info` builders — `_optimization_history.py`
@@ -142,7 +144,7 @@ moment OptunaSharp.Core loads. Keep it.
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
 | 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp (3.2) + QMC scrambling deferred to their consumers |
-| 3 — Native heavy tail | 🟩 | **3.1 parts 1–3 done** (viz data layer: optimization-history/EDF/intermediate-values + `_utils` + hypervolume-history + param-importances + slice + pareto-front `_get_*_info`, bit-exact/erf-tolerance vs live Optuna); **next** 3.1 part 4 (rank/contour → parallel_coordinate/timeline), then 3.2 GP (§7 gate); `_terminator_improvement`→3.3; plotly rendering→5.2 |
+| 3 — Native heavy tail | 🟩 | **3.1 parts 1–4 done** (viz data layer: optimization-history/EDF/intermediate-values + `_utils` + hypervolume-history + param-importances + slice + pareto-front + contour `_get_*_info`, bit-exact/erf-tolerance vs live Optuna); **next** 3.1 part 5 (rank, then parallel_coordinate/timeline), then 3.2 GP (§7 gate); `_terminator_improvement`→3.3; plotly rendering→5.2 |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
 
@@ -537,6 +539,20 @@ moment OptunaSharp.Core loads. Keep it.
   validate/empty, pareto best-non-best-infeasible partition, include-dominated-false, unsupported-objective-
   count `ValueError`) + 5 live parity (slice mixed float/log-float/int/categorical + subset, pareto 2-obj
   with constraints, pareto 3-obj mixed-direction). Suite: **446 unit + 193 interop**, both TFMs, none skipped.
+- ✅ **3.1 part 4** — `feat(viz): Phase 3.1 part 4 — contour data layer`. `_contour.py` → `Contour.GetInfo`/
+  `GetContourSubplotInfo`/`GetAxisInfo` (the full pure-numpy half — `_contour.py`'s data layer has no plotly
+  leak, unlike `_rank.py`). Per-axis `ContourAxisInfo` = name, padded `(min,max)` range, `is_log`/`is_cat`,
+  the sorted-unique `indices` (with the padded numeric endpoints prepended/appended for numerical axes) and
+  the per-trial `values` (numeric / `str()` / null); `SubContourInfo` = the sparse `(x_i, y_i) → z` grid
+  (keyed by the `indices` positions, deduped by study-direction min/max when `target` is null) plus per-trial
+  feasibility; `ContourInfo` = sorted params + the 2-param single cell or the N×N param-pair matrix +
+  `reverse_scale`. `PADDING_RATIO=0.05`; ordinal param sort; the `Parameter {name} does not exist`
+  `ValueError`; the <2-unique/same-param empty-grid warnings. **Bit-exact vs live Optuna** — including the
+  **log-axis range** (`Math.Log10`/`Math.Pow` match Python's `math.log10`/`math.pow` here) and the boxed
+  int/float/str index lookups. 4 unit tests (two-param padded grid + min/max z dedup, maximize→not-reversed,
+  unknown-param `ValueError`, 3×3 grid with empty diagonals) + 2 live parity (float/log-float/categorical,
+  9-cell grid, every axis range/indices/values + z-grid + constraints byte-identical). Suite: **450 unit +
+  195 interop**, both TFMs, none skipped.
 - ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
@@ -842,7 +858,7 @@ Zero external deps.
 
 | # | Feature | Optuna source | py SLOC | est. C# | Difficulty | Notes |
 |---|---|---|--:|--:|---|---|
-| 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | 🟡 | pure numpy → NumSharp; rendering pkg is 5.2. **Parts 1–3 done** (`_utils` + optimization-history/EDF/intermediate-values + hypervolume-history + param-importances + slice + pareto-front `_get_*_info`, bit-exact/erf-tolerance vs live Optuna); parts 4+ pending (rank/contour → parallel_coordinate/timeline); `_terminator_improvement`→3.3 |
+| 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | 🟡 | pure numpy → NumSharp; rendering pkg is 5.2. **Parts 1–4 done** (`_utils` + optimization-history/EDF/intermediate-values + hypervolume-history + param-importances + slice + pareto-front + contour `_get_*_info`, bit-exact/erf-tolerance vs live Optuna); parts 5+ pending (rank → parallel_coordinate/timeline); `_terminator_improvement`→3.3 |
 | 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, `batched_lbfgsb` (already pure numpy), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | 🔴 | **Decision gate first (§7), prototyped during Phase 2.** Uses 2.15 cholesky/solve_triangular. Port order: search_space → prior → kernel+MLL → L-BFGS-B → acqf → optim_mixed → sampler |
 | 3.3 | GP terminators: `RegretBoundEvaluator` (default), `EMMREvaluator` | `terminator/improvement/*` | ~230 | 700 | 🔴 | rides 3.2 |
 

@@ -445,7 +445,118 @@ public class VisualizationParityTests : OptunaInteropTestBase
         AssertParetoFrontInfo(csInfo, "info");
     }
 
+    // ------------------------------------------------------------------ contour
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 30)]
+    [DataRow(7, 45)]
+    public void Contour_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(ContourObjective, nTrials: nTrials);
+        var csInfo = Contour.GetInfo(csStudy);
+
+        PyExec(
+            PyContourObjective +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_contour, n_trials={nTrials})\n" +
+            "from optuna.visualization._contour import _get_contour_info\n" +
+            "info = _get_contour_info(study, None, None, 'Objective Value')\n");
+
+        AssertContourInfo(csInfo, "info");
+    }
+
     // ------------------------------------------------------------------ shared assertions
+
+    private const string PyContourObjective =
+        "def _oss_contour(t):\n" +
+        "    x = t.suggest_float('x', -5, 5)\n" +
+        "    z = t.suggest_float('z', 1e-3, 1e3, log=True)\n" +
+        "    c = t.suggest_categorical('c', ['p', 'q', 'r'])\n" +
+        "    t.set_constraint('con', x)\n" +
+        "    return x*x + z/1000.0 + (1.0 if c == 'p' else 0.0)\n";
+
+    private static double ContourObjective(Trial t)
+    {
+        double x = t.SuggestFloat("x", -5, 5);
+        double z = t.SuggestFloat("z", 1e-3, 1e3, log: true);
+        string? c = t.SuggestCategorical("c", new CategoricalChoice[] { "p", "q", "r" }).Value as string;
+        t.SetConstraint("con", x);
+        return x * x + z / 1000.0 + (c == "p" ? 1.0 : 0.0);
+    }
+
+    private void AssertContourInfo(ContourInfo cs, string pyVar)
+    {
+        PyStr($"{pyVar}.target_name").Should().Be(cs.TargetName);
+        PyBool($"{pyVar}.reverse_scale").Should().Be(cs.ReverseScale);
+
+        int np = (int)PyLong($"len({pyVar}.sorted_params)");
+        np.Should().Be(cs.SortedParams.Count);
+        for (int i = 0; i < np; i++)
+            PyStr($"{pyVar}.sorted_params[{i}]").Should().Be(cs.SortedParams[i]);
+
+        int rows = (int)PyLong($"len({pyVar}.sub_plot_infos)");
+        rows.Should().Be(cs.SubPlotInfos.Count);
+        for (int i = 0; i < rows; i++)
+        {
+            int cols = (int)PyLong($"len({pyVar}.sub_plot_infos[{i}])");
+            cols.Should().Be(cs.SubPlotInfos[i].Count);
+            for (int j = 0; j < cols; j++)
+            {
+                var sub = cs.SubPlotInfos[i][j];
+                string sp = $"{pyVar}.sub_plot_infos[{i}][{j}]";
+                AssertContourAxis(sub.XAxis, $"{sp}.xaxis");
+                AssertContourAxis(sub.YAxis, $"{sp}.yaxis");
+
+                PyLong($"len({sp}.z_values)").Should().Be(sub.ZValues.Count, $"{sp} z_values count");
+                foreach (var kv in sub.ZValues)
+                    PyFloat($"{sp}.z_values[({kv.Key.X}, {kv.Key.Y})]")
+                        .Should().Be(kv.Value, $"{sp} z_values[{kv.Key.X},{kv.Key.Y}]");
+
+                PyLong($"len({sp}.constraints)").Should().Be(sub.Constraints.Count);
+                for (int k = 0; k < sub.Constraints.Count; k++)
+                    PyBool($"{sp}.constraints[{k}]").Should().Be(sub.Constraints[k], $"{sp} constraints[{k}]");
+            }
+        }
+    }
+
+    private void AssertContourAxis(ContourAxisInfo cs, string pyVar)
+    {
+        PyStr($"{pyVar}.name").Should().Be(cs.Name);
+        PyBool($"{pyVar}.is_log").Should().Be(cs.IsLog, $"{pyVar} is_log");
+        PyBool($"{pyVar}.is_cat").Should().Be(cs.IsCat, $"{pyVar} is_cat");
+        PyFloat($"{pyVar}.range[0]").Should().Be(cs.Range.Min, $"{pyVar} range[0]");
+        PyFloat($"{pyVar}.range[1]").Should().Be(cs.Range.Max, $"{pyVar} range[1]");
+
+        int ni = (int)PyLong($"len({pyVar}.indices)");
+        ni.Should().Be(cs.Indices.Count, $"{pyVar} indices count");
+        for (int k = 0; k < ni; k++)
+        {
+            if (cs.IsCat)
+                PyStr($"{pyVar}.indices[{k}]").Should().Be((string)cs.Indices[k], $"{pyVar} indices[{k}]");
+            else
+                PyFloat($"float({pyVar}.indices[{k}])")
+                    .Should().Be(System.Convert.ToDouble(cs.Indices[k]), $"{pyVar} indices[{k}]");
+        }
+
+        int nv = (int)PyLong($"len({pyVar}.values)");
+        nv.Should().Be(cs.Values.Count, $"{pyVar} values count");
+        for (int k = 0; k < nv; k++)
+        {
+            bool isNone = PyBool($"{pyVar}.values[{k}] is None");
+            isNone.Should().Be(cs.Values[k] is null, $"{pyVar} values[{k}] null");
+            if (isNone)
+                continue;
+            if (cs.IsCat)
+                PyStr($"{pyVar}.values[{k}]").Should().Be((string)cs.Values[k]!, $"{pyVar} values[{k}]");
+            else
+                PyFloat($"float({pyVar}.values[{k}])")
+                    .Should().Be(System.Convert.ToDouble(cs.Values[k]), $"{pyVar} values[{k}]");
+        }
+    }
 
     private const string PySliceObjective =
         "def _oss_slice(t):\n" +

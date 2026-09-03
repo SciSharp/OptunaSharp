@@ -496,4 +496,93 @@ public class VisualizationDataTests
         var act = () => ParetoFront.GetInfo(study);  // targets=null, 4 objectives → ValueError.
         act.Should().Throw<ValueError>().WithMessage("*only supports 2 or 3 objective*");
     }
+
+    // ------------------------------------------------------------------ contour
+
+    private static FrozenTrial ContourTrial(double value, double x, double y)
+        => FrozenTrial.CreateTrial(
+            value: value,
+            @params: new OrderedDict<string, object?> { { "x", x }, { "y", y } },
+            distributions: new OrderedDict<string, BaseDistribution>
+            {
+                { "x", new FloatDistribution(-5, 5) },
+                { "y", new FloatDistribution(-5, 5) },
+            });
+
+    [TestMethod]
+    public void Contour_TwoNumericalParams_BuildsPaddedGrid()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
+        study.AddTrials(new[]
+        {
+            ContourTrial(10.0, 0.0, 0.0),
+            ContourTrial(20.0, 1.0, 1.0),
+            ContourTrial(5.0, 0.0, 1.0),
+            ContourTrial(8.0, 0.0, 0.0),  // duplicate (x=0,y=0) → minimize keeps min(10, 8) = 8.
+        });
+
+        var info = Contour.GetInfo(study);
+
+        info.SortedParams.Should().Equal("x", "y");
+        info.ReverseScale.Should().BeTrue();  // minimize → reversed scale.
+        info.TargetName.Should().Be("Objective Value");
+
+        var sub = info.SubPlotInfos[0][0];
+        sub.XAxis.IsCat.Should().BeFalse();
+        sub.XAxis.IsLog.Should().BeFalse();
+
+        // Indices = padded endpoints + the sorted unique values {0, 1}.
+        sub.XAxis.Indices.Should().HaveCount(4);
+        Convert.ToDouble(sub.XAxis.Indices[0]).Should().BeApproximately(-0.05, 1e-12);
+        Convert.ToDouble(sub.XAxis.Indices[1]).Should().Be(0.0);
+        Convert.ToDouble(sub.XAxis.Indices[2]).Should().Be(1.0);
+        Convert.ToDouble(sub.XAxis.Indices[3]).Should().BeApproximately(1.05, 1e-12);
+
+        // z grid keyed by (x_index, y_index) into the padded indices; dedup keeps the minimum.
+        sub.ZValues.Should().HaveCount(3);
+        sub.ZValues[(1, 1)].Should().Be(8.0);
+        sub.ZValues[(2, 2)].Should().Be(20.0);
+        sub.ZValues[(1, 2)].Should().Be(5.0);
+        sub.Constraints.Should().OnlyContain(c => c);
+    }
+
+    [TestMethod]
+    public void Contour_Maximize_NotReverseScale()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Maximize);
+        study.AddTrials(new[] { ContourTrial(1.0, 0.0, 0.0), ContourTrial(2.0, 1.0, 1.0) });
+        Contour.GetInfo(study).ReverseScale.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void Contour_UnknownParam_Throws()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
+        study.AddTrials(new[] { ContourTrial(1.0, 0.0, 0.0), ContourTrial(2.0, 1.0, 1.0) });
+
+        var act = () => Contour.GetInfo(study, @params: new[] { "x", "nope" });
+        act.Should().Throw<ValueError>().WithMessage("Parameter nope does not exist in your study.");
+    }
+
+    [TestMethod]
+    public void Contour_ThreeParams_BuildsNbyNGrid()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
+        // Three params via Optimize (deterministic); grid is 3×3 with same-param diagonals empty.
+        study.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            double b = t.SuggestFloat("b", -5, 5);
+            double c = t.SuggestFloat("c", -5, 5);
+            return a + b + c;
+        }, nTrials: 10);
+
+        var info = Contour.GetInfo(study);
+        info.SortedParams.Should().Equal("a", "b", "c");
+        info.SubPlotInfos.Should().HaveCount(3);
+        info.SubPlotInfos.Should().OnlyContain(row => row.Count == 3);
+        // Diagonal (same param) subplots carry no z grid.
+        info.SubPlotInfos[0][0].ZValues.Should().BeEmpty();
+        info.SubPlotInfos[1][0].ZValues.Should().NotBeEmpty();
+    }
 }
