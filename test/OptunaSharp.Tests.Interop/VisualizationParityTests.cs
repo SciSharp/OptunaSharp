@@ -469,6 +469,98 @@ public class VisualizationParityTests : OptunaInteropTestBase
         AssertContourInfo(csInfo, "info");
     }
 
+    // ------------------------------------------------------------------ rank
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 30)]
+    [DataRow(7, 45)]
+    public void Rank_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(ContourObjective, nTrials: nTrials);  // reuse: x/log-z/categorical-c + constraint.
+        var csInfo = Rank.GetInfo(csStudy);
+
+        PyExec(
+            PyContourObjective +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_contour, n_trials={nTrials})\n" +
+            "import numpy as np\n" +
+            "from optuna.visualization._rank import _get_rank_info, _get_order_with_same_order_averaging\n" +
+            "info = _get_rank_info(study, None, None, 'Objective Value')\n" +
+            "zs = np.array(info.zs, dtype=float)\n" +
+            "cidx = (_get_order_with_same_order_averaging(zs) / (len(zs) - 1)).tolist() if len(zs) >= 2 else [0.5]\n");
+
+        AssertRankInfo(csInfo, "info");
+    }
+
+    private void AssertRankInfo(RankPlotInfo cs, string pyVar)
+    {
+        PyStr($"{pyVar}.target_name").Should().Be(cs.TargetName);
+        PyBool($"{pyVar}.has_custom_target").Should().Be(cs.HasCustomTarget);
+
+        int np = (int)PyLong($"len({pyVar}.params)");
+        np.Should().Be(cs.Params.Count);
+        for (int i = 0; i < np; i++)
+            PyStr($"{pyVar}.params[{i}]").Should().Be(cs.Params[i]);
+
+        int nz = (int)PyLong($"len({pyVar}.zs)");
+        nz.Should().Be(cs.Zs.Length);
+        for (int i = 0; i < nz; i++)
+        {
+            PyFloat($"float({pyVar}.zs[{i}])").Should().Be(cs.Zs[i], $"zs[{i}]");
+            PyFloat($"cidx[{i}]").Should().Be(cs.ColorIdxs[i], $"color_idxs[{i}]");  // pure-numpy rank parity.
+        }
+
+        int rows = (int)PyLong($"len({pyVar}.sub_plot_infos)");
+        rows.Should().Be(cs.SubPlotInfos.Count);
+        for (int i = 0; i < rows; i++)
+        {
+            int cols = (int)PyLong($"len({pyVar}.sub_plot_infos[{i}])");
+            cols.Should().Be(cs.SubPlotInfos[i].Count);
+            for (int j = 0; j < cols; j++)
+            {
+                var sub = cs.SubPlotInfos[i][j];
+                string sp = $"{pyVar}.sub_plot_infos[{i}][{j}]";
+                AssertRankAxis(sub.XAxis, $"{sp}.xaxis");
+                AssertRankAxis(sub.YAxis, $"{sp}.yaxis");
+
+                int n = (int)PyLong($"len({sp}.xs)");
+                n.Should().Be(sub.Xs.Count);
+                for (int k = 0; k < n; k++)
+                {
+                    if (sub.XAxis.IsCat)
+                        PyStr($"{sp}.xs[{k}]").Should().Be((string)sub.Xs[k]!, $"{sp} xs[{k}]");
+                    else
+                        PyFloat($"float({sp}.xs[{k}])").Should().Be(System.Convert.ToDouble(sub.Xs[k]), $"{sp} xs[{k}]");
+                    if (sub.YAxis.IsCat)
+                        PyStr($"{sp}.ys[{k}]").Should().Be((string)sub.Ys[k]!, $"{sp} ys[{k}]");
+                    else
+                        PyFloat($"float({sp}.ys[{k}])").Should().Be(System.Convert.ToDouble(sub.Ys[k]), $"{sp} ys[{k}]");
+
+                    PyFloat($"float({sp}.zs[{k}])").Should().Be(sub.Zs[k], $"{sp} zs[{k}]");
+                    PyLong($"{sp}.trials[{k}].number").Should().Be(sub.Trials[k].Number, $"{sp} trials[{k}].number");
+                    PyBool($"any(v > 0.0 for v in {sp}.trials[{k}].constraints.values())")
+                        .Should().Be(sub.Infeasible[k], $"{sp} infeasible[{k}]");
+
+                    // Per-subplot color_idxs = the global color_idxs at this trial's index (self-consistent).
+                    sub.ColorIdxs[k].Should().Be(cs.ColorIdxs[sub.Trials[k].Number], $"{sp} color_idxs[{k}]");
+                }
+            }
+        }
+    }
+
+    private void AssertRankAxis(RankAxisInfo cs, string pyVar)
+    {
+        PyStr($"{pyVar}.name").Should().Be(cs.Name);
+        PyBool($"{pyVar}.is_log").Should().Be(cs.IsLog, $"{pyVar} is_log");
+        PyBool($"{pyVar}.is_cat").Should().Be(cs.IsCat, $"{pyVar} is_cat");
+        PyFloat($"{pyVar}.range[0]").Should().Be(cs.Range.Min, $"{pyVar} range[0]");
+        PyFloat($"{pyVar}.range[1]").Should().Be(cs.Range.Max, $"{pyVar} range[1]");
+    }
+
     // ------------------------------------------------------------------ shared assertions
 
     private const string PyContourObjective =

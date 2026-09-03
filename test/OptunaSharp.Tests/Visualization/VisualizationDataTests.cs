@@ -585,4 +585,88 @@ public class VisualizationDataTests
         info.SubPlotInfos[0][0].ZValues.Should().BeEmpty();
         info.SubPlotInfos[1][0].ZValues.Should().NotBeEmpty();
     }
+
+    // ------------------------------------------------------------------ rank
+
+    private static FrozenTrial RankTrial(double value, double x, double y,
+        OrderedDict<string, double>? constraints = null)
+        => FrozenTrial.CreateTrial(
+            value: value, constraints: constraints,
+            @params: new OrderedDict<string, object?> { { "x", x }, { "y", y } },
+            distributions: new OrderedDict<string, BaseDistribution>
+            {
+                { "x", new FloatDistribution(-5, 5) },
+                { "y", new FloatDistribution(-5, 5) },
+            });
+
+    [TestMethod]
+    public void Rank_ColorIdxs_AreScaledAverageRanks()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
+        study.AddTrials(new[] { RankTrial(3.0, 0, 0), RankTrial(1.0, 1, 1), RankTrial(2.0, 0, 1) });
+
+        var info = Rank.GetInfo(study);
+
+        info.Zs.Should().Equal(3.0, 1.0, 2.0);
+        // order([3,1,2]) = [2,0,1]; /(3-1) = [1.0, 0.0, 0.5].
+        info.ColorIdxs.Should().Equal(1.0, 0.0, 0.5);
+        info.HasCustomTarget.Should().BeFalse();
+        info.Params.Should().Equal("x", "y");
+
+        // Two params → a single off-diagonal subplot.
+        info.SubPlotInfos.Should().HaveCount(1);
+        info.SubPlotInfos[0].Should().HaveCount(1);
+        var sub = info.SubPlotInfos[0][0];
+        sub.XAxis.Name.Should().Be("x");
+        sub.YAxis.Name.Should().Be("y");
+        sub.Zs.Should().Equal(3.0, 1.0, 2.0);
+        sub.ColorIdxs.Should().Equal(1.0, 0.0, 0.5);
+        sub.Infeasible.Should().OnlyContain(f => !f);
+    }
+
+    [TestMethod]
+    public void Rank_TiedValues_ShareAveragedRank()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
+        study.AddTrials(new[] { RankTrial(1.0, 0, 0), RankTrial(1.0, 1, 1), RankTrial(2.0, 0, 1) });
+
+        // sorted [1,1,2]: the two 1's share positions {0,1} → 0.5; the 2 → 2. /(3-1) = [0.25,0.25,1.0].
+        Rank.GetInfo(study).ColorIdxs.Should().Equal(0.25, 0.25, 1.0);
+    }
+
+    [TestMethod]
+    public void Rank_PreservesGivenParamOrder()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
+        study.AddTrials(new[] { RankTrial(1.0, 0, 0), RankTrial(2.0, 1, 1) });
+
+        // Unlike slice/contour, rank keeps the caller's param order (no sort).
+        var info = Rank.GetInfo(study, @params: new[] { "y", "x" });
+        info.Params.Should().Equal("y", "x");
+        info.SubPlotInfos[0][0].XAxis.Name.Should().Be("y");
+        info.SubPlotInfos[0][0].YAxis.Name.Should().Be("x");
+    }
+
+    [TestMethod]
+    public void Rank_InfeasibleTrials_AreFlagged()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
+        study.AddTrials(new[]
+        {
+            RankTrial(1.0, 0, 0),
+            RankTrial(2.0, 1, 1, constraints: new OrderedDict<string, double> { { "c", 1.0 } }),
+        });
+
+        Rank.GetInfo(study).SubPlotInfos[0][0].Infeasible.Should().Equal(false, true);
+    }
+
+    [TestMethod]
+    public void Rank_UnknownParam_Throws()
+    {
+        var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
+        study.AddTrials(new[] { RankTrial(1.0, 0, 0), RankTrial(2.0, 1, 1) });
+
+        var act = () => Rank.GetInfo(study, @params: new[] { "nope", "x" });
+        act.Should().Throw<ValueError>().WithMessage("Parameter nope does not exist in your study.");
+    }
 }
