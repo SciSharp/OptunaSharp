@@ -304,4 +304,34 @@ public class CmaEsSamplerTests
         messages.Should().Contain(m =>
             m.Item2 == WarningCategory.UserWarning && m.Item1.Contains("single-dimensional"));
     }
+
+    // ---- Warm-Starting CMA-ES (source_trials → get_warm_start_mgd) -----------------------------
+
+    [TestMethod]
+    public void WarmStart_IsReproducible()
+    {
+        List<(object?, object?)> Run()
+        {
+            var src = Optuna.CreateStudy(sampler: new RandomSampler(1));
+            src.Optimize(Sphere, nTrials: 30);
+            var tgt = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 10, sourceTrials: src.Trials.ToList()));
+            tgt.Optimize(Sphere, nTrials: 20);
+            return tgt.Trials.OrderBy(t => t.Number).Select(t => (t.Params["x0"], t.Params["x1"])).ToList();
+        }
+
+        Run().Should().Equal(Run());
+    }
+
+    [TestMethod]
+    public void WarmStart_NoCompatibleSourceTrials_ThrowsValueError()
+    {
+        // The source study optimizes a differently-named parameter, so none of its trials are
+        // compatible with the target's relative search space → "No compatible source_trials".
+        var src = Optuna.CreateStudy(sampler: new RandomSampler(1));
+        src.Optimize(t => Math.Pow(t.SuggestFloat("z", -5, 5), 2), nTrials: 30);
+
+        var tgt = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 10, sourceTrials: src.Trials.ToList()));
+        Action act = () => tgt.Optimize(Sphere, nTrials: 10);
+        act.Should().Throw<NumSharp.ValueError>().WithMessage("*No compatible source_trials*");
+    }
 }

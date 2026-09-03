@@ -45,6 +45,10 @@ internal static class LinAlg
     internal static int MatrixRank(double[,] a)
         => (int)Convert.ToInt64(np.linalg.matrix_rank(np.array(a)).GetValue(0));
 
+    /// <summary>The determinant of <paramref name="a" /> — <c>np.linalg.det</c> (LAPACK LU).</summary>
+    internal static double Det(double[,] a)
+        => (double)np.linalg.det(np.array(a));
+
     /// <summary>
     ///     The lower-triangular Cholesky factor <c>L</c> of a symmetric positive-definite
     ///     <paramref name="a" /> (<c>a = L Lᵀ</c>) — <c>np.linalg.cholesky</c> (LAPACK <c>potrf</c>).

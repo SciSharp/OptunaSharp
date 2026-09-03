@@ -183,7 +183,7 @@ public class CmaEsSampler : BaseSampler
         // When `with_margin=true`, bounds in discrete dimensions are handled inside `CMAwM`.
         var trans = new SearchSpaceTransform(searchSpace, transformStep: !_withMargin, transform01: true);
 
-        var optimizer = RestoreOptimizer(completedTrials) ?? InitOptimizer(trans, study.Direction);
+        var optimizer = RestoreOptimizer(completedTrials) ?? InitOptimizer(trans, study.Direction, searchSpace);
 
         int nDim = (int)trans.Bounds.shape[0];
         if (optimizer.Dim != nDim)
@@ -295,7 +295,8 @@ public class CmaEsSampler : BaseSampler
         return null;
     }
 
-    private ICmaOptimizer InitOptimizer(SearchSpaceTransform trans, StudyDirection direction)
+    private ICmaOptimizer InitOptimizer(
+        SearchSpaceTransform trans, StudyDirection direction, OrderedDict<string, BaseDistribution> searchSpace)
     {
         double[] boundsFlat = trans.Bounds.ToArray<double>();
         int nDim = boundsFlat.Length / 2;
@@ -344,9 +345,23 @@ public class CmaEsSampler : BaseSampler
         }
         else
         {
-            throw new NotSupportedException(
-                "Warm Starting CMA-ES (`source_trials`) is not yet ported to OptunaSharp; " +
-                "it lands in a follow-up increment of Phase 2.16.");
+            // Warm Starting CMA-ES: estimate the prior distribution from the source task's trials.
+            var expectedStates = new List<TrialState> { TrialState.Complete };
+            if (_considerPrunedTrials) expectedStates.Add(TrialState.Pruned);
+            int sign = direction == StudyDirection.Minimize ? 1 : -1;
+
+            var sourceSolutions = new List<(double[] Params, double Value)>();
+            foreach (var t in _sourceTrials)
+            {
+                if (!expectedStates.Contains(t.State)) continue;
+                if (!IsCompatibleSearchSpace(searchSpace, t.Distributions)) continue;
+                double[] x = trans.Transform(t.ParamsDict).ToArray<double>();
+                sourceSolutions.Add((x, sign * t.Value!.Value));
+            }
+            if (sourceSolutions.Count == 0)
+                throw new ValueError("No compatible source_trials");
+
+            (mean, sigma0, cov) = WarmStart.GetWarmStartMgd(sourceSolutions);
         }
 
         // Avoid ZeroDivisionError in cmaes.
@@ -388,6 +403,18 @@ public class CmaEsSampler : BaseSampler
             populationSize: _popsize,
             cov: cov,
             lrAdapt: _lrAdapt);
+    }
+
+    /// <summary>
+    ///     Python <c>_is_compatible_search_space</c>: the relative space and the source trial's
+    ///     distributions must have identical key sets.
+    /// </summary>
+    private static bool IsCompatibleSearchSpace(
+        OrderedDict<string, BaseDistribution> relativeSpace,
+        IReadOnlyDictionary<string, BaseDistribution> distributions)
+    {
+        int intersection = relativeSpace.Keys.Count(distributions.ContainsKey);
+        return intersection == relativeSpace.Count && intersection == distributions.Count;
     }
 
     public override object? SampleIndependent(

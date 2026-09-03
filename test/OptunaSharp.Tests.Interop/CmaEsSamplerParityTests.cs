@@ -124,6 +124,33 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [DataRow(3, 1, 10)]
+    [DataRow(2, 7, 3)]
+    [DataRow(5, 2, 8)]
+    public void WarmStart_FullState_IsBitIdentical(int dim, int srcSeed, int tgtSeed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // Warm-Starting: a source study (independent RandomSampler → bit-exact) primes the target
+        // CMA-ES via get_warm_start_mgd. Both source and target trajectories are byte-identical.
+        var src = Optuna.CreateStudy(sampler: new RandomSampler(srcSeed));
+        src.Optimize(SphereCs(dim), nTrials: 30);
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "cma",
+            sampler: new CmaEsSampler(seed: tgtSeed, sourceTrials: src.Trials.ToList()));
+        csStudy.Optimize(SphereCs(dim), nTrials: 32);
+
+        AssertParityExceptOptimizerBlob(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            SpherePy(dim) +
+            $"_src = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={srcSeed}))\n" +
+            "_src.optimize(_obj, n_trials=30)\n" +
+            $"study = optuna.create_study(study_name='cma', sampler=optuna.samplers.CmaEsSampler(seed={tgtSeed}, source_trials=_src.trials))\n" +
+            "study.optimize(_obj, n_trials=32)\n");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
     public void MixedSpace_FullState_IsBitIdentical()
     {
         PythonSession.EnsureOrInconclusive();
