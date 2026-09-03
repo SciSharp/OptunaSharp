@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace OptunaSharp.Internal;
 
@@ -22,6 +23,12 @@ namespace OptunaSharp.Internal;
 internal static class TruncNorm
 {
     private static readonly double Sqrt2 = Math.Sqrt(2.0);
+
+    // Python: _norm_pdf_C = sqrt(2*pi); _norm_pdf_logC = log(_norm_pdf_C).
+    internal static readonly double NormPdfLogC = Math.Log(Math.Sqrt(2.0 * Math.PI));
+
+    // Python: _ndtri_exp_approx_C = sqrt(3) / pi.
+    private static readonly double NdtriExpApproxC = Math.Sqrt(3.0) / Math.PI;
 
     // sys.float_info.epsilon (machine epsilon for float64), NOT double.Epsilon (smallest subnormal).
     private const double MachineEpsilon = 2.220446049250313e-16;
@@ -128,6 +135,144 @@ internal static class TruncNorm
                 outArr[i] = LogDiff(LogNdtrSingle(b[i]), LogNdtrSingle(a[i]));
         }
 
+        return outArr;
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Sampling half of _truncnorm.py (arrives with TPE, PORTING_PLAN Phase 2.8).
+    // ------------------------------------------------------------------------------------------
+
+    /// <summary>Python <c>_log_ndtr(a)</c> — the vectorized <c>frompyfunc(_log_ndtr_single)</c>.</summary>
+    internal static double[] LogNdtr(double[] a)
+    {
+        var result = new double[a.Length];
+        for (int i = 0; i < a.Length; i++)
+            result[i] = LogNdtrSingle(a[i]);
+        return result;
+    }
+
+    /// <summary>Python <c>_norm_logpdf(x) = -(x**2) / 2 - _norm_pdf_logC</c> (scalar; array <c>**2</c> == <c>x*x</c>).</summary>
+    internal static double NormLogPdf(double x) => -(x * x) / 2.0 - NormPdfLogC;
+
+    /// <summary>
+    ///     Python <c>_ndtri_exp(y)</c> — the Newton iteration returning <c>x</c> with
+    ///     <c>y == log_ndtr(x)</c>. Operates element-wise but iterates globally (all elements step
+    ///     together, break when every element's update satisfies <c>|dx| &lt; 1e-8 |x|</c>), exactly
+    ///     as NumPy's whole-array loop does.
+    /// </summary>
+    internal static double[] NdtriExp(double[] y)
+    {
+        int n = y.Length;
+        var flipped = new bool[n];
+        var z = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            z[i] = y[i];
+            if (y[i] > -1e-2)
+            {
+                // Flip the sign near zero for stability: z = log(-expm1(y)).
+                flipped[i] = true;
+                z[i] = Math.Log(-MathUtil.Expm1(y[i]));
+            }
+        }
+
+        var x = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            if (z[i] < -5.0)
+                x[i] = -Math.Sqrt(-2.0 * (z[i] + NormPdfLogC));
+            else
+                x[i] = -NdtriExpApproxC * Math.Log(MathUtil.Expm1(-z[i]));
+        }
+
+        for (int iter = 0; iter < 100; iter++)
+        {
+            var logNdtrX = LogNdtr(x);
+            bool allConverged = true;
+            for (int i = 0; i < n; i++)
+            {
+                double x2 = x[i] * x[i];
+                double logNormPdfX = -0.5 * x2 - NormPdfLogC;
+                // exp(log_ndtr_x - log_norm_pdf_x) instead of ndtr/norm_pdf for numerical stability.
+                double dx = (logNdtrX[i] - z[i]) * Math.Exp(logNdtrX[i] - logNormPdfX);
+                x[i] -= dx;
+                if (!(Math.Abs(dx) < 1e-8 * Math.Abs(x[i])))
+                    allConverged = false;
+            }
+            if (allConverged)
+                break;
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            if (flipped[i])
+                x[i] = -x[i];
+        }
+        return x;
+    }
+
+    /// <summary>
+    ///     Python <c>_truncnorm.ppf(q, a, b)</c> — the percent-point function of the truncated
+    ///     standard normal on <c>[a, b]</c>. Inputs are same-length flattened arrays (the caller
+    ///     broadcasts). <c>case_left</c> (<c>a &lt; 0</c>) and <c>case_right</c> are computed on
+    ///     disjoint subsets for numerical stability, matching Optuna.
+    /// </summary>
+    internal static double[] Ppf(double[] q, double[] a, double[] b)
+    {
+        int n = q.Length;
+        var logMass = LogGaussMass(a, b);
+        var outArr = new double[n];
+
+        var leftIdx = new List<int>();
+        var rightIdx = new List<int>();
+        for (int i = 0; i < n; i++)
+        {
+            if (a[i] < 0.0)
+                leftIdx.Add(i);
+            else
+                rightIdx.Add(i);
+        }
+
+        if (leftIdx.Count > 0)
+        {
+            // ppf_left: _ndtri_exp(_log_sum(_log_ndtr(a), log(q) + log_mass)).
+            var aSub = new double[leftIdx.Count];
+            for (int k = 0; k < leftIdx.Count; k++)
+                aSub[k] = a[leftIdx[k]];
+            var logNdtrA = LogNdtr(aSub);
+            var arg = new double[leftIdx.Count];
+            for (int k = 0; k < leftIdx.Count; k++)
+                arg[k] = MathUtil.LogAddExp(logNdtrA[k], Math.Log(q[leftIdx[k]]) + logMass[leftIdx[k]]);
+            var res = NdtriExp(arg);
+            for (int k = 0; k < leftIdx.Count; k++)
+                outArr[leftIdx[k]] = res[k];
+        }
+
+        if (rightIdx.Count > 0)
+        {
+            // ppf_right: -_ndtri_exp(_log_sum(_log_ndtr(-b), log1p(-q) + log_mass)).
+            var negBSub = new double[rightIdx.Count];
+            for (int k = 0; k < rightIdx.Count; k++)
+                negBSub[k] = -b[rightIdx[k]];
+            var logNdtrNegB = LogNdtr(negBSub);
+            var arg = new double[rightIdx.Count];
+            for (int k = 0; k < rightIdx.Count; k++)
+                arg[k] = MathUtil.LogAddExp(logNdtrNegB[k], MathUtil.Log1p(-q[rightIdx[k]]) + logMass[rightIdx[k]]);
+            var res = NdtriExp(arg);
+            for (int k = 0; k < rightIdx.Count; k++)
+                outArr[rightIdx[k]] = -res[k];
+        }
+
+        // out[q == 0] = a; out[q == 1] = b; out[a == b] = nan (applied sequentially, in this order).
+        for (int i = 0; i < n; i++)
+        {
+            if (q[i] == 0.0)
+                outArr[i] = a[i];
+            if (q[i] == 1.0)
+                outArr[i] = b[i];
+            if (a[i] == b[i])
+                outArr[i] = double.NaN;
+        }
         return outArr;
     }
 }

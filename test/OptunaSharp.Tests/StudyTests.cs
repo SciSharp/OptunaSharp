@@ -473,14 +473,15 @@ public class StudyTests
     }
 
     [TestMethod]
-    public void Default_Sampler_Is_TPE_Which_Is_Not_Ported_Yet()
+    public void Default_Sampler_Is_TPE_And_Optimizes()
     {
-        // Optuna's default sampler identity is preserved: the study constructs fine (so
-        // load/copy workflows work), but actually sampling throws with guidance until
-        // PORTING_PLAN 2.8 lands.
-        var study = Optuna.CreateStudy();
+        // Optuna's default sampler is TPESampler (PORTING_PLAN 2.8): the study constructs fine and
+        // now actually optimizes past the startup phase without throwing.
+        var study = Optuna.CreateStudy(sampler: new TPESampler(seed: 0));
         study.Sampler.Should().BeOfType<TPESampler>();
-        var act = () => study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 1);
-        act.Should().Throw<NotImplementedException>().WithMessage("*TPESampler is not ported yet*");
+        study.Optimize(t => Math.Pow(t.SuggestFloat("x", -10, 10), 2.0), nTrials: 20);
+        study.Trials.Should().HaveCount(20);
+        study.BestValue.Should().BeLessThan(study.Trials[0].Value!.Value + 1e-9);
+        study.BestParams["x"].Should().BeOfType<double>();
     }
 }

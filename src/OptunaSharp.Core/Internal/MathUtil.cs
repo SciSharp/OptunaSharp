@@ -38,6 +38,48 @@ internal static class MathUtil
         return Math.Log(u) - ((u - 1.0) - x) / u;
     }
 
+    private static readonly double Loge2 = Math.Log(2.0);
+
+    /// <summary>
+    ///     C99 / NumPy <c>np.expm1(x)</c> — <c>exp(x) - 1</c> accurate for small <c>x</c>. .NET has
+    ///     no <c>Math.Expm1</c>; this Kahan form (<c>(u-1)*x/log(u)</c>, u = exp(x)) is bit-identical
+    ///     to NumPy's <c>expm1</c> because <see cref="Math.Exp(double)" />/<see cref="Math.Log(double)" />
+    ///     already match NumPy's <c>np.exp</c>/<c>np.log</c> bit-for-bit (verified against Python over
+    ///     the TPE truncnorm input range).
+    /// </summary>
+    internal static double Expm1(double x)
+    {
+        if (double.IsNaN(x))
+            return double.NaN;
+        double u = Math.Exp(x);
+        if (u == 1.0)
+            return x;  // |x| below the rounding of exp(x): expm1(x) == x.
+        double y = u - 1.0;
+        if (y == -1.0)
+            return -1.0;  // exp(x) underflowed to 0 (x very negative).
+        if (double.IsPositiveInfinity(u))
+            return u;  // overflow.
+        return y * x / Math.Log(u);
+    }
+
+    /// <summary>
+    ///     NumPy <c>np.logaddexp(a, b) = log(exp(a) + exp(b))</c>, computed stably. Reproduces
+    ///     NumPy's <c>npy_logaddexp</c> exactly (the <c>a == b</c> branch adds <c>log(2)</c> and
+    ///     handles the infinities); bit-identical to Python because it rides on the bit-exact
+    ///     <see cref="Log1p" /> and <see cref="Math.Exp(double)" />.
+    /// </summary>
+    internal static double LogAddExp(double a, double b)
+    {
+        if (a == b)
+            return a + Loge2;  // Also covers a == b == ±inf.
+        double tmp = a - b;
+        if (tmp > 0)
+            return a + Log1p(Math.Exp(-tmp));
+        if (tmp <= 0)
+            return b + Log1p(Math.Exp(tmp));
+        return tmp;  // NaN input.
+    }
+
     /// <summary>
     ///     NumPy's <c>np.add.reduce</c> pairwise summation for a contiguous float64 array — the
     ///     exact accumulation order of <c>ndarray.sum()</c>, so reductions stay bit-identical.

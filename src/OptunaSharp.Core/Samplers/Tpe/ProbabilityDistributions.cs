@@ -1,16 +1,22 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using NumSharp;
 using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.Tpe;
 
 /// <summary>
-///     Partial port of <c>optuna/samplers/_tpe/probability_distributions.py</c>. Only the batched
-///     distribution kinds and the <c>log_pdf</c> path that <c>PedAnovaImportanceEvaluator</c>
-///     depends on are ported here (categorical + discrete truncated-normal). The continuous
-///     truncated-normal / log-normal kinds, and <c>sample</c>, land with the TPE sampler in
-///     Phase 2.8.
+///     Port of <c>optuna/samplers/_tpe/probability_distributions.py</c>: the batched distribution
+///     kinds and the <c>_MixtureOfProductDistribution</c> that back both the TPE sampler (Phase 2.8)
+///     and <c>PedAnovaImportanceEvaluator</c> (Phase 2.7).
+///
+///     <para><b>[Misaligned] erf/ucrt tolerance.</b> The numerical kinds route their density through
+///     <see cref="TruncNorm" /> → <see cref="Erf" />, whose scalar path is FreeBSD <c>s_erf</c> — ~1-3
+///     ULP from Python's platform <c>math.erf</c> (ucrt on Windows). So sampled numerical values and
+///     their log-densities agree with Optuna to a few ULP, not bit-for-bit (the same class of
+///     divergence documented on <see cref="TruncNorm" />). RNG draw counts and order are identical, so
+///     the study trajectory stays in lock-step regardless.</para>
 /// </summary>
 internal abstract class BatchedDistributions
 {
@@ -25,27 +31,84 @@ internal sealed class BatchedCategoricalDistributions : BatchedDistributions
     internal BatchedCategoricalDistributions(double[,] weights) => Weights = weights;
 }
 
-/// <summary>Python <c>_BatchedDiscreteTruncNormDistributions</c>.</summary>
-internal sealed class BatchedDiscreteTruncNormDistributions : BatchedDistributions
+/// <summary>
+///     Common base of the four numerical batched kinds (truncated normal / log-normal, continuous /
+///     discrete). Mirrors the shared <c>mu</c>/<c>sigma</c>/<c>low</c>/<c>high</c> fields and the
+///     <c>adapted_low</c>/<c>adapted_high</c>/<c>is_log</c>/<c>step</c> properties in Optuna.
+/// </summary>
+internal abstract class BatchedNumericalDistributions : BatchedDistributions
 {
     internal double[] Mu { get; }
     internal double[] Sigma { get; }
     internal double Low { get; }
     internal double High { get; }
-    internal double Step { get; }
 
-    internal BatchedDiscreteTruncNormDistributions(double[] mu, double[] sigma, double low, double high, double step)
+    protected BatchedNumericalDistributions(double[] mu, double[] sigma, double low, double high)
     {
         Mu = mu;
         Sigma = sigma;
         Low = low;
         High = high;
-        Step = step;
     }
 
-    internal double AdaptedLow => Low - Step / 2.0;
-    internal double AdaptedHigh => High + Step / 2.0;
-    internal bool IsLog => false;
+    internal abstract double AdaptedLow { get; }
+    internal abstract double AdaptedHigh { get; }
+    internal abstract bool IsLog { get; }
+
+    /// <summary>Discretization step; <c>0.0</c> for the continuous kinds (Python's <c>step</c> property).</summary>
+    internal abstract double Step { get; }
+}
+
+/// <summary>Python <c>_BatchedTruncNormDistributions</c>.</summary>
+internal sealed class BatchedTruncNormDistributions : BatchedNumericalDistributions
+{
+    internal BatchedTruncNormDistributions(double[] mu, double[] sigma, double low, double high)
+        : base(mu, sigma, low, high) { }
+
+    internal override double AdaptedLow => Low;
+    internal override double AdaptedHigh => High;
+    internal override bool IsLog => false;
+    internal override double Step => 0.0;
+}
+
+/// <summary>Python <c>_BatchedTruncLogNormDistributions</c>.</summary>
+internal sealed class BatchedTruncLogNormDistributions : BatchedNumericalDistributions
+{
+    internal BatchedTruncLogNormDistributions(double[] mu, double[] sigma, double low, double high)
+        : base(mu, sigma, low, high) { }
+
+    internal override double AdaptedLow => Math.Log(Low);
+    internal override double AdaptedHigh => Math.Log(High);
+    internal override bool IsLog => true;
+    internal override double Step => 0.0;
+}
+
+/// <summary>Python <c>_BatchedDiscreteTruncNormDistributions</c>.</summary>
+internal sealed class BatchedDiscreteTruncNormDistributions : BatchedNumericalDistributions
+{
+    private readonly double _step;
+
+    internal BatchedDiscreteTruncNormDistributions(double[] mu, double[] sigma, double low, double high, double step)
+        : base(mu, sigma, low, high) => _step = step;
+
+    internal override double AdaptedLow => Low - _step / 2.0;
+    internal override double AdaptedHigh => High + _step / 2.0;
+    internal override bool IsLog => false;
+    internal override double Step => _step;
+}
+
+/// <summary>Python <c>_BatchedDiscreteTruncLogNormDistributions</c>.</summary>
+internal sealed class BatchedDiscreteTruncLogNormDistributions : BatchedNumericalDistributions
+{
+    private readonly double _step;
+
+    internal BatchedDiscreteTruncLogNormDistributions(double[] mu, double[] sigma, double low, double high, double step)
+        : base(mu, sigma, low, high) => _step = step;
+
+    internal override double AdaptedLow => Math.Log(Low - _step / 2.0);
+    internal override double AdaptedHigh => Math.Log(High + _step / 2.0);
+    internal override bool IsLog => true;
+    internal override double Step => _step;
 }
 
 /// <summary>Python <c>_MixtureOfProductDistribution</c>.</summary>
@@ -60,6 +123,150 @@ internal sealed class MixtureOfProductDistribution
         Distributions = distributions;
     }
 
+    /// <summary>
+    ///     Python <c>_MixtureOfProductDistribution.sample(rng, batch_size)</c> — returns a
+    ///     <c>(batch_size, n_dim)</c> array of samples in the original internal repr (log undone,
+    ///     discrete grids snapped). The RNG draws are, in order: one <c>choice</c> over the mixture
+    ///     weights (<c>batch_size</c> uniforms), one <c>rand(batch_size)</c> per categorical dim in
+    ///     dim order, then a single <c>uniform(0, 1, (n_numerical, batch_size))</c> for all numerical
+    ///     dims — matching Optuna byte-for-byte so the whole study stays RNG-aligned.
+    /// </summary>
+    internal double[,] Sample(LazyRandomState rng, int batchSize)
+    {
+        int nDim = Distributions.Count;
+        var activeIndices = Choice(rng, Weights, batchSize);
+        var ret = new double[batchSize, nDim];
+
+        var numericalDists = new List<BatchedNumericalDistributions>();
+        var numericalInds = new List<int>();
+        var discInds = new List<int>();
+        var logInds = new List<int>();
+
+        for (int i = 0; i < nDim; i++)
+        {
+            if (Distributions[i] is BatchedCategoricalDistributions cat)
+            {
+                // active_weights = weights[active_indices, :]; rnd_quantile = rng.rand(batch_size).
+                var rndQuantile = rng.Rng.rand((long)batchSize).ToArray<double>();
+                int nChoices = cat.Weights.GetLength(1);
+                for (int s = 0; s < batchSize; s++)
+                {
+                    int ai = activeIndices[s];
+                    // cum_probs = cumsum(active_weights, axis=-1); cum_probs[:, -1] = 1;
+                    // ret = sum(cum_probs < rnd_quantile[:, None], axis=-1).
+                    double acc = 0.0;
+                    int count = 0;
+                    for (int c = 0; c < nChoices; c++)
+                    {
+                        acc += cat.Weights[ai, c];
+                        double cp = c == nChoices - 1 ? 1.0 : acc;  // Avoid numerical errors.
+                        if (cp < rndQuantile[s])
+                            count++;
+                    }
+                    ret[s, i] = count;
+                }
+            }
+            else
+            {
+                var num = (BatchedNumericalDistributions)Distributions[i];
+                numericalDists.Add(num);
+                numericalInds.Add(i);
+                if (num.Step != 0.0)
+                    discInds.Add(i);
+                if (num.IsLog)
+                    logInds.Add(i);
+            }
+        }
+
+        if (numericalDists.Count > 0)
+        {
+            int nNum = numericalDists.Count;
+            int total = nNum * batchSize;
+            // _truncnorm.rvs draws random_state.uniform(0, 1, size=(n_num, batch)) in C order.
+            var quantiles = rng.Rng.random_sample((long)total).ToArray<double>();
+
+            var aFlat = new double[total];
+            var bFlat = new double[total];
+            var loc = new double[total];
+            var scale = new double[total];
+            for (int d = 0; d < nNum; d++)
+            {
+                var nd = numericalDists[d];
+                double adaptedLow = nd.AdaptedLow;
+                double adaptedHigh = nd.AdaptedHigh;
+                for (int s = 0; s < batchSize; s++)
+                {
+                    int idx = d * batchSize + s;
+                    double mu = nd.Mu[activeIndices[s]];
+                    double sigma = nd.Sigma[activeIndices[s]];
+                    aFlat[idx] = (adaptedLow - mu) / sigma;
+                    bFlat[idx] = (adaptedHigh - mu) / sigma;
+                    loc[idx] = mu;
+                    scale[idx] = sigma;
+                }
+            }
+
+            var ppf = TruncNorm.Ppf(quantiles, aFlat, bFlat);
+            for (int d = 0; d < nNum; d++)
+            {
+                int col = numericalInds[d];
+                for (int s = 0; s < batchSize; s++)
+                {
+                    int idx = d * batchSize + s;
+                    ret[s, col] = ppf[idx] * scale[idx] + loc[idx];
+                }
+            }
+
+            // ret[:, log_inds] = np.exp(ret[:, log_inds]) — undo the log transform.
+            foreach (int col in logInds)
+            {
+                for (int s = 0; s < batchSize; s++)
+                    ret[s, col] = Math.Exp(ret[s, col]);
+            }
+
+            // ret[:, disc_inds] = clip(low + round((v - low) / step) * step, low, high).
+            foreach (int col in discInds)
+            {
+                var nd = (BatchedNumericalDistributions)Distributions[col];
+                double low = nd.Low, high = nd.High, step = nd.Step;
+                for (int s = 0; s < batchSize; s++)
+                {
+                    double v = ret[s, col];
+                    double rounded = low + Math.Round((v - low) / step, MidpointRounding.ToEven) * step;
+                    ret[s, col] = MathUtil.Clip(rounded, low, high);
+                }
+            }
+        }
+
+        return ret;
+    }
+
+    /// <summary>
+    ///     NumPy <c>rng.choice(len(weights), p=weights, size=size)</c>: cdf = cumsum(weights) (sequential),
+    ///     cdf /= cdf[-1], then <c>cdf.searchsorted(random_sample(size), side='right')</c>. Replicated
+    ///     directly because NumSharp's <c>choice</c> uses <c>side='left'</c> (see the BruteForce ledger).
+    /// </summary>
+    private static int[] Choice(LazyRandomState rng, double[] weights, int size)
+    {
+        int n = weights.Length;
+        var cdf = new double[n];
+        double acc = 0.0;
+        for (int i = 0; i < n; i++)
+        {
+            acc += weights[i];  // np.cumsum: sequential prefix sum.
+            cdf[i] = acc;
+        }
+        double last = cdf[n - 1];
+        for (int i = 0; i < n; i++)
+            cdf[i] /= last;
+
+        var u = rng.Rng.random_sample((long)size).ToArray<double>();
+        var result = new int[size];
+        for (int j = 0; j < size; j++)
+            result[j] = BisectRight(cdf, u[j]);
+        return result;
+    }
+
     /// <summary>Python <c>_MixtureOfProductDistribution.log_pdf(x)</c>, with <c>x</c> shape <c>(n_samples, dim)</c>.</summary>
     internal double[] LogPdf(double[,] x)
     {
@@ -67,6 +274,9 @@ internal sealed class MixtureOfProductDistribution
         int dim = x.GetLength(1);
         int nKernels = Weights.Length;
         var weightedLogPdf = new double[nSamples, nKernels];
+
+        var contDists = new List<BatchedNumericalDistributions>();
+        var contCols = new List<int>();
 
         for (int i = 0; i < dim; i++)
         {
@@ -84,9 +294,16 @@ internal sealed class MixtureOfProductDistribution
                     break;
                 }
 
-                case BatchedDiscreteTruncNormDistributions dtn:
+                case BatchedNumericalDistributions num when num.Step == 0.0:
+                    // Continuous kind: collected and processed together after the loop.
+                    contDists.Add(num);
+                    contCols.Add(i);
+                    break;
+
+                case BatchedNumericalDistributions dtn:
                 {
-                    // NOTE: PED-ANOVA's Scott estimator only ever produces the non-log discrete kind.
+                    // Discrete kind (truncated normal or log-normal).
+                    bool isLog = dtn.IsLog;
                     double step = dtn.Step;
                     var xcol = new double[nSamples];
                     for (int s = 0; s < nSamples; s++)
@@ -97,17 +314,16 @@ internal sealed class MixtureOfProductDistribution
                     int nXi = xiUniq.Length;
                     int nMs = muUniq.Length;
 
-                    // left/right for the non-log discrete kind: xi_uniq ∓ step / 2.
                     var a = new double[nXi * nMs];
                     var b = new double[nXi * nMs];
                     for (int p = 0; p < nXi; p++)
                     {
-                        double left = xiUniq[p] - step / 2.0;
-                        double right = xiUniq[p] + step / 2.0;
-                        for (int q = 0; q < nMs; q++)
+                        double left = isLog ? Math.Log(xiUniq[p] - step / 2.0) : xiUniq[p] - step / 2.0;
+                        double right = isLog ? Math.Log(xiUniq[p] + step / 2.0) : xiUniq[p] + step / 2.0;
+                        for (int qi = 0; qi < nMs; qi++)
                         {
-                            a[p * nMs + q] = (left - muUniq[q]) / sigmaUniq[q];
-                            b[p * nMs + q] = (right - muUniq[q]) / sigmaUniq[q];
+                            a[p * nMs + qi] = (left - muUniq[qi]) / sigmaUniq[qi];
+                            b[p * nMs + qi] = (right - muUniq[qi]) / sigmaUniq[qi];
                         }
                     }
 
@@ -121,10 +337,10 @@ internal sealed class MixtureOfProductDistribution
 
                     var normLow = new double[nMs];
                     var normHigh = new double[nMs];
-                    for (int q = 0; q < nMs; q++)
+                    for (int qi = 0; qi < nMs; qi++)
                     {
-                        normLow[q] = (dtn.AdaptedLow - muUniq[q]) / sigmaUniq[q];
-                        normHigh[q] = (dtn.AdaptedHigh - muUniq[q]) / sigmaUniq[q];
+                        normLow[qi] = (dtn.AdaptedLow - muUniq[qi]) / sigmaUniq[qi];
+                        normHigh[qi] = (dtn.AdaptedHigh - muUniq[qi]) / sigmaUniq[qi];
                     }
                     var norm = TruncNorm.LogGaussMass(normLow, normHigh);
                     for (int s = 0; s < nSamples; s++)
@@ -136,12 +352,12 @@ internal sealed class MixtureOfProductDistribution
                 }
 
                 default:
-                    throw new NotImplementedException(
-                        "Continuous / log-scaled batched distributions are not ported yet " +
-                        "(PORTING_PLAN Phase 2.8). PED-ANOVA only exercises the categorical and " +
-                        "non-log discrete truncated-normal kinds.");
+                    throw new InvalidOperationException("Unknown batched distribution kind.");
             }
         }
+
+        if (contDists.Count > 0)
+            AddContinuousLogPdf(x, weightedLogPdf, contDists, contCols);
 
         // weighted_log_pdf += np.log(self.weights[np.newaxis]).
         for (int s = 0; s < nSamples; s++)
@@ -167,11 +383,86 @@ internal sealed class MixtureOfProductDistribution
         return result;
     }
 
-    /// <summary>Python <c>_MixtureOfProductDistribution.sample</c> — arrives with TPE (Phase 2.8).</summary>
-    internal double[,] Sample(LazyRandomState rng, int batchSize)
-        => throw new NotImplementedException(
-            "_MixtureOfProductDistribution.sample is not ported yet (PORTING_PLAN Phase 2.8, TPE " +
-            "sampler). PED-ANOVA only uses log_pdf.");
+    /// <summary>
+    ///     The continuous branch of <c>log_pdf</c>: <c>_truncnorm.logpdf</c> over all continuous dims,
+    ///     summed over dims and added to <paramref name="weightedLogPdf" />. The Gaussian-mass grid is
+    ///     computed once over the <c>(n_kernels, n_cont)</c> standardized bounds, exactly as NumPy does,
+    ///     so the <see cref="Erf" /> array-size threshold is exercised identically.
+    /// </summary>
+    private void AddContinuousLogPdf(
+        double[,] x, double[,] weightedLogPdf,
+        List<BatchedNumericalDistributions> contDists, List<int> contCols)
+    {
+        int nSamples = x.GetLength(0);
+        int nKernels = Weights.Length;
+        int nCont = contDists.Count;
+
+        // x_cont[c][s] = log(x[s, col]) if is_log else x[s, col].
+        var xCont = new double[nCont][];
+        for (int c = 0; c < nCont; c++)
+        {
+            bool isLog = contDists[c].IsLog;
+            int col = contCols[c];
+            var arr = new double[nSamples];
+            for (int s = 0; s < nSamples; s++)
+                arr[s] = isLog ? Math.Log(x[s, col]) : x[s, col];
+            xCont[c] = arr;
+        }
+
+        // Standardized bounds a, b over (n_kernels, n_cont), raveled row-major (k outer, c inner).
+        var aGrid = new double[nKernels * nCont];
+        var bGrid = new double[nKernels * nCont];
+        for (int k = 0; k < nKernels; k++)
+        {
+            for (int c = 0; c < nCont; c++)
+            {
+                var nd = contDists[c];
+                double sigma = nd.Sigma[k];
+                aGrid[k * nCont + c] = (nd.AdaptedLow - nd.Mu[k]) / sigma;
+                bGrid[k * nCont + c] = (nd.AdaptedHigh - nd.Mu[k]) / sigma;
+            }
+        }
+        var logGaussMass = TruncNorm.LogGaussMass(aGrid, bGrid);
+
+        for (int s = 0; s < nSamples; s++)
+        {
+            for (int k = 0; k < nKernels; k++)
+            {
+                double sum = 0.0;
+                for (int c = 0; c < nCont; c++)
+                {
+                    var nd = contDists[c];
+                    double mu = nd.Mu[k];
+                    double sigma = nd.Sigma[k];
+                    int gi = k * nCont + c;
+                    double xstd = (xCont[c][s] - mu) / sigma;
+                    double val = TruncNorm.NormLogPdf(xstd) - logGaussMass[gi] - Math.Log(sigma);
+                    // np.select([a == b, (x < a) | (x > b)], [nan, -inf], default=out).
+                    if (aGrid[gi] == bGrid[gi])
+                        val = double.NaN;
+                    else if (xstd < aGrid[gi] || xstd > bGrid[gi])
+                        val = double.NegativeInfinity;
+                    sum += val;
+                }
+                weightedLogPdf[s, k] += sum;
+            }
+        }
+    }
+
+    /// <summary>NumPy <c>searchsorted(cdf, v, side='right')</c> for an ascending array (bisect right).</summary>
+    private static int BisectRight(double[] a, double v)
+    {
+        int lo = 0, hi = a.Length;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (v < a[mid])
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+        return lo;
+    }
 
     /// <summary>
     ///     Python <c>_log_gauss_mass_unique(a, b)</c>: dedup the raveled (a, b) pairs, evaluate
