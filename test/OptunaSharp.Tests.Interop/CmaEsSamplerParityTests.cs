@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using AwesomeAssertions;
 using OptunaSharp.Distributions;
 using OptunaSharp.Samplers;
 using OptunaSharp.Storages;
@@ -178,6 +179,94 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
             "    t.suggest_categorical('dd', ['p', 'q', 'r'])\n" +
             "    return (a - 1.5) ** 2 + (b + 2) ** 2 + (np.log(c) - 1.0) ** 2\n" +
             "study.optimize(_obj, n_trials=24)\n");
+    }
+
+    // ---- CMA-ES with Margin (with_margin → cmaes.CMAwM) ---------------------------------------
+
+    private const double MarginTol = 1e-9;
+
+    /// <summary>
+    ///     Trajectory parity for <c>with_margin=True</c>. Unlike the bit-exact CMA/SepCMA/warm-start
+    ///     paths, CMAwM's margin correction rides SciPy's <c>norm.cdf</c>/<c>chi2.ppf</c> (reproduced
+    ///     managed via <c>Erf</c>/<c>TruncNorm</c> — the erf class), so parity is asserted to a small
+    ///     tolerance. The whole study still lines up trial-for-trial (number, state, param set, and the
+    ///     <c>cmawm:generation</c> attribution) because the raw draws come from the bit-exact CMA and
+    ///     the discrete dims snap to an exact grid; in practice the observable params/values agree
+    ///     bit-for-bit (the erf drift stays inside the internal mean/scaling), but the tolerance keeps
+    ///     the gate honest about the documented divergence and robust to an encoding-boundary tie.
+    /// </summary>
+    private void AssertMarginTrajectoryParity(Study csStudy, string pyCreateAndRun)
+    {
+        var csState = StudySnapshot.Capture(csStudy);
+        PyExec(pyCreateAndRun);
+        var pyState = PyStudyState("study");
+
+        csState.Trials.Count.Should().Be(pyState.Trials.Count, "trajectory length must match");
+        for (int i = 0; i < pyState.Trials.Count; i++)
+        {
+            var e = pyState.Trials[i];
+            var a = csState.Trials[i];
+            a.Number.Should().Be(e.Number);
+            a.State.Should().Be(e.State, $"trial {e.Number} state");
+            a.Params.Keys.Should().BeEquivalentTo(e.Params.Keys, $"trial {e.Number} param set");
+
+            foreach (var key in e.Params.Keys)
+            {
+                object? ev = e.Params[key];
+                object? av = a.Params[key];
+                if (ev is double ed && av is double ad)
+                    ad.Should().BeApproximately(ed, Math.Max(MarginTol, MarginTol * Math.Abs(ed)),
+                        $"trial {e.Number} param '{key}'");
+                else
+                    av.Should().Be(ev, $"trial {e.Number} param '{key}'");   // int y snaps to the exact grid
+            }
+
+            (a.Values is null).Should().Be(e.Values is null, $"trial {e.Number} values null-ness");
+            if (e.Values is not null)
+                for (int k = 0; k < e.Values.Count; k++)
+                    a.Values![k].Should().BeApproximately(e.Values[k],
+                        Math.Max(MarginTol, MarginTol * Math.Abs(e.Values[k])), $"trial {e.Number} values[{k}]");
+
+            // Generation attribution is exact (integer), under the `cmawm:` prefix.
+            e.SystemAttrs.TryGetValue("cmawm:generation", out var eg);
+            a.SystemAttrs.TryGetValue("cmawm:generation", out var ag);
+            (ag is null).Should().Be(eg is null, $"trial {e.Number} cmawm:generation presence");
+            if (eg is not null)
+                Convert.ToInt64(ag).Should().Be(Convert.ToInt64(eg), $"trial {e.Number} cmawm:generation");
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(42, 16)]
+    [DataRow(7, 20)]
+    [DataRow(0, 24)]
+    public void WithMargin_Trajectory_MatchesLiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // Mixed float (continuous CMA) + int (margin-corrected discrete) space — the setting
+        // with_margin exists for: it keeps the discrete `y` from collapsing to one point.
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "cmawm",
+            sampler: new CmaEsSampler(seed: seed, withMargin: true));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            long y = t.SuggestInt("y", -5, 5);
+            double z = t.SuggestFloat("z", -5, 5);
+            return Math.Pow(x - 0.7, 2) + Math.Pow(y + 2, 2) + Math.Pow(z - 1.3, 2);
+        }, nTrials: nTrials);
+
+        AssertMarginTrajectoryParity(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            $"study = optuna.create_study(study_name='cmawm', sampler=optuna.samplers.CmaEsSampler(seed={seed}, with_margin=True))\n" +
+            "def _obj(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_int('y', -5, 5)\n" +
+            "    z = t.suggest_float('z', -5, 5)\n" +
+            "    return (x - 0.7) ** 2 + (y + 2) ** 2 + (z - 1.3) ** 2\n" +
+            $"study.optimize(_obj, n_trials={nTrials})\n");
     }
 
     // Deterministic shifted sphere with an explicit left-to-right sum (NOT Python's builtin sum(),

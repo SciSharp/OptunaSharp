@@ -206,7 +206,12 @@ public class CmaEsSampler : BaseSampler
             var solutions = new List<(double[] X, double Value)>();
             foreach (var t in solutionTrials.Take(optimizer.PopulationSize))
             {
-                double[] x = trans.Transform(t.ParamsDict).ToArray<double>();
+                // CMAwM updates its distribution from the RAW x it stashed as `x_for_tell`, not from
+                // the trial's (encoded, grid-snapped) params. Every other backend re-transforms params.
+                double[] x = optimizer is CmaWm
+                    ? ((System.Collections.IEnumerable)t.SystemAttrs["x_for_tell"]!)
+                        .Cast<object?>().Select(v => Convert.ToDouble(v)).ToArray()
+                    : trans.Transform(t.ParamsDict).ToArray<double>();
                 double y = study.Direction == StudyDirection.Minimize ? t.Value!.Value : -t.Value!.Value;
                 solutions.Add((x, y));
             }
@@ -222,7 +227,20 @@ public class CmaEsSampler : BaseSampler
         // Caution: optimizer should update its seed value.
         int seed = (int)_cmaRng.Rng.randint(1, 65536) + trial.Number;
         optimizer.ReseedRng(seed);
-        double[] cmaParams = optimizer.Ask();
+        double[] cmaParams;
+        if (optimizer is CmaWm cmaWm)
+        {
+            // CMAwM's ask() yields (encoded, raw): evaluate/untransform the encoded x, but stash the
+            // raw x as `x_for_tell` so the next tell updates the distribution from it (see above).
+            var (encoded, xForTell) = cmaWm.AskEncoded();
+            study.Storage.SetTrialSystemAttr(
+                trial.TrialId, "x_for_tell", xForTell.Select(v => (object?)v).ToList());
+            cmaParams = encoded;
+        }
+        else
+        {
+            cmaParams = optimizer.Ask();
+        }
 
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyGeneration, optimizer.Generation);
 
@@ -261,6 +279,7 @@ public class CmaEsSampler : BaseSampler
     {
         Cma c => "cma\n" + JsonSerializer.Serialize(c.ToState()),
         SepCma s => "sepcma\n" + JsonSerializer.Serialize(s.ToState()),
+        CmaWm w => "cmawm\n" + JsonSerializer.Serialize(w.ToState()),
         _ => throw new NotSupportedException($"Cannot serialize optimizer of type {optimizer.GetType().Name}."),
     };
 
@@ -273,6 +292,7 @@ public class CmaEsSampler : BaseSampler
         {
             "cma" => Cma.FromState(JsonSerializer.Deserialize<CmaState>(json)!),
             "sepcma" => SepCma.FromState(JsonSerializer.Deserialize<SepCmaState>(json)!),
+            "cmawm" => CmaWm.FromState(JsonSerializer.Deserialize<CmaWmState>(json)!),
             _ => throw new NotSupportedException($"Unknown optimizer state tag '{tag}'."),
         };
     }
@@ -389,9 +409,37 @@ public class CmaEsSampler : BaseSampler
         }
 
         if (_withMargin)
-            throw new NotSupportedException(
-                "CMA-ES with margin (`with_margin`) is not yet ported to OptunaSharp; " +
-                "it lands in a follow-up increment of Phase 2.16.");
+        {
+            // Per-dimension discretization step (in the [0,1] transformed space). Continuous dims and
+            // log dims get 0.0; a discrete dim gets step/(high-low). `with_margin` handles the bounds
+            // of discrete dims inside CMAwM, so `trans` was built with transformStep=false.
+            var steps = new double[searchSpace.Count];
+            int si = 0;
+            foreach (var dist in searchSpace.Values)
+            {
+                steps[si++] = dist switch
+                {
+                    FloatDistribution fd => fd.Step is null || fd.Log ? 0.0
+                        : fd.Low == fd.High ? 1.0
+                        : fd.Step.Value / (fd.High - fd.Low),
+                    IntDistribution id => id.Log ? 0.0
+                        : id.Low == id.High ? 1.0
+                        : (double)id.Step / (id.High - id.Low),
+                    _ => throw new ArgumentException(
+                        "CmaEsSampler with_margin supports only Float/Int distributions."),
+                };
+            }
+
+            return new CmaWm(
+                mean: mean,
+                sigma: sigma0,
+                bounds: boundsArr,
+                steps: steps,
+                nMaxResampling: 10 * nDim,
+                seed: (int)_cmaRng.Rng.randint(1, 2147483646),
+                populationSize: _popsize,
+                cov: cov);
+        }
 
         int seed = (int)_cmaRng.Rng.randint(1, 2147483646);
         return new Cma(

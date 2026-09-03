@@ -196,6 +196,8 @@ internal class Cma : ICmaOptimizer
     internal double[] Mean => _mean;
     internal double Sigma => _sigma;
     internal double[,] Cov => _c;
+    internal double[,]? Bounds => _bounds;      // needed by CmaWm to rebuild its decomposition on restore
+    internal int NMaxResampling => _nMaxResampling;
     internal double[] PSigma => _pSigma;
     internal double[] Pc => _pc;
     internal double[] Weights => _weights;
@@ -312,7 +314,10 @@ internal class Cma : ICmaOptimizer
         return (b, d);
     }
 
-    private double[] SampleSolution()
+    /// <summary>Python <c>CMA._sample_solution()</c> — one raw draw <c>~ N(m, σ² C)</c> (no bounds
+    /// check/repair). <see cref="CmaWm" /> calls this directly, bypassing <see cref="Ask" />'s
+    /// feasibility loop, because it does its own continuous-only feasibility handling.</summary>
+    internal double[] SampleSolution()
     {
         var (b, d) = EigenDecomposition();
         double[] z = _rng.randn(_nDim).ToArray<double>();  // ~ N(0, I)

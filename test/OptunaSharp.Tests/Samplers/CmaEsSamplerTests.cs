@@ -143,15 +143,128 @@ public class CmaEsSamplerTests
             .WithMessage("*do not support `use_separable_cma=True` and `with_margin=True`*");
     }
 
-    // ---- experimental backends not yet ported (deferred; guard throws NotSupported) -----------
+    // ---- CMA-ES with Margin (with_margin → cmaes.CMAwM) ---------------------------------------
+
+    // with_margin=True, seed=42, mixed float(x)/int(y)/float(z) over [-5,5], from live Optuna
+    // 5.0.0.dev + cmaes 0.13.0. The continuous params (x, z) and the values are bit-exact — the
+    // margin correction leaves mean[continuous]/C/sigma untouched, so those dims never ride the
+    // erf/chi² path; the int param (y) is snapped to the exact grid. See CmaWm's [Misaligned] note.
+    private static readonly (string X, long Y, string Z, string Value)[] MarginSeed42 =
+    {
+        ("32b31134d612f4bf", 5, "4a02cc653c8f0240", "eed9257f2cee4a40"),  // t0 gen=None (RandomSampler startup)
+        ("90ff5f606706d4bf", -1, "b20274b5223203c0", "056004a6986c2f40"),  // t1 gen=0
+        ("00903529e5d2babf", -2, "82ad990038d001c0", "069c9f0c8e2b2a40"),  // t2 gen=0
+        ("fa634b79aef00040", 1, "a0fa51e97e94c6bf", "ec4ee608d7602a40"),  // t3 gen=0
+        ("125e4522046913c0", 0, "c8dfac3285d1ecbf", "413274ff31d64340"),  // t4 gen=0
+        ("c431eb19d27ff73f", -2, "f4c5d80ad0fe0140", "2742166d7ee0f73f"),  // t5 gen=0
+        ("24841974498bfd3f", -2, "40e556416813d9bf", "656da96aefb41040"),  // t6 gen=0
+        ("38ac80e8d55ff73f", -2, "0c4cea6e49eff5bf", "55dd5a16e2d91e40"),  // t7 gen=0
+        ("b4cbefdb34980f40", -3, "cc55008342641140", "70ac35930bd93440"),  // t8 gen=1
+        ("04729703dfae0240", -2, "40b6cd21e3cee23f", "aa0c5ce949740940"),  // t9 gen=1
+        ("88f52c176f42f83f", -2, "70619e40aab3e8bf", "967e504322d61340"),  // t10 gen=1
+        ("68682bf696c9eb3f", -3, "769a2cbb89490140", "8ef9783ae54ffc3f"),  // t11 gen=1
+        ("6093948536afe43f", -2, "c0bc48743ed0de3f", "e0efa6053f88e53f"),  // t12 gen=1
+        ("a4443c8dab4d0440", -5, "00552df13d56913f", "5d047e88680c2c40"),  // t13 gen=1
+        ("12ef7fb791e304c0", -1, "1c34262c48c0f43f", "b343d53751ed2740"),  // t14 gen=1
+        ("8061d189dcfcd5bf", 0, "f0f3090aad9ce83f", "751688ffbd7b1540"),  // t15 gen=2
+    };
+
+    private static double MarginObjective(Trial t)
+    {
+        double x = t.SuggestFloat("x", -5, 5);
+        long y = t.SuggestInt("y", -5, 5);
+        double z = t.SuggestFloat("z", -5, 5);
+        return Math.Pow(x - 0.7, 2) + Math.Pow(y + 2, 2) + Math.Pow(z - 1.3, 2);
+    }
 
     [TestMethod]
-    public void WithMargin_AtSamplingTime_ThrowsNotSupported()
+    public void WithMargin_Seed42_Trajectory_MatchesLiveOptuna()
     {
-        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 0, withMargin: true));
-        Action act = () => study.Optimize(
-            t => Math.Pow(t.SuggestFloat("x", -5, 5), 2) + t.SuggestInt("y", -5, 5), nTrials: 5);
-        act.Should().Throw<NotSupportedException>().WithMessage("*margin*");
+        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 42, withMargin: true));
+        study.Optimize(MarginObjective, nTrials: 16);
+
+        var trials = study.Trials.OrderBy(t => t.Number).ToList();
+        trials.Should().HaveCount(16);
+        for (int i = 0; i < MarginSeed42.Length; i++)
+        {
+            ((double)trials[i].Params["x"]!).Should().Be(FromHex(MarginSeed42[i].X), $"x of trial {i}");
+            Convert.ToInt64(trials[i].Params["y"]).Should().Be(MarginSeed42[i].Y, $"y of trial {i}");
+            ((double)trials[i].Params["z"]!).Should().Be(FromHex(MarginSeed42[i].Z), $"z of trial {i}");
+            trials[i].Value!.Value.Should().Be(FromHex(MarginSeed42[i].Value), $"value of trial {i}");
+        }
+    }
+
+    [TestMethod]
+    public void WithMargin_SameSeed_IsReproducible()
+    {
+        List<(object?, object?, object?)> Run()
+        {
+            var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 3, withMargin: true));
+            study.Optimize(MarginObjective, nTrials: 22);
+            return study.Trials.OrderBy(t => t.Number)
+                .Select(t => (t.Params["x"], t.Params["y"], t.Params["z"])).ToList();
+        }
+
+        Run().Should().Equal(Run());
+    }
+
+    [TestMethod]
+    public void WithMargin_Optimize_MinimizesTheMixedObjective()
+    {
+        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 1, withMargin: true));
+        study.Optimize(MarginObjective, nTrials: 60);
+        // The optimum is at x=0.7, y=-2, z=1.3 (value 0); margin CMA-ES drives it well down.
+        study.BestValue.Should().BeLessThan(0.5);
+    }
+
+    [TestMethod]
+    public void WithMargin_Attribution_UsesCmawmPrefixAndStoresXForTell()
+    {
+        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 42, withMargin: true));
+        study.Optimize(MarginObjective, nTrials: 16);
+        var trials = study.Trials.OrderBy(t => t.Number).ToList();
+
+        // The with_margin backend attributes generations under the `cmawm:` prefix (not `cma:`).
+        trials[0].SystemAttrs.ContainsKey("cmawm:generation").Should().BeFalse();  // RandomSampler startup
+        trials[0].SystemAttrs.ContainsKey("x_for_tell").Should().BeFalse();
+        Convert.ToInt64(trials[1].SystemAttrs["cmawm:generation"]).Should().Be(0);
+        Convert.ToInt64(trials[8].SystemAttrs["cmawm:generation"]).Should().Be(1);
+        // Every CMAwM-sampled trial stores the raw ask() vector for the next tell.
+        trials[1].SystemAttrs.ContainsKey("x_for_tell").Should().BeTrue();
+        trials[8].SystemAttrs.ContainsKey("x_for_tell").Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void CmaWmState_JsonRoundTrip_IsIdempotentAndDeterministic()
+    {
+        static double Obj(double[] x) { double s = 0; foreach (var xi in x) s += Math.Pow(xi - 0.3, 2); return s; }
+        static void Advance(CmaWm w, int seed)
+        {
+            w.ReseedRng(seed);
+            var sols = new List<(double[], double)>();
+            for (int k = 0; k < w.PopulationSize; k++) { var (enc, tell) = w.AskEncoded(); sols.Add((tell, Obj(enc))); }
+            w.Tell(sols);
+        }
+
+        var bounds = new double[3, 2];
+        for (int i = 0; i < 3; i++) { bounds[i, 0] = 0; bounds[i, 1] = 1; }
+        var mean = new[] { 0.5, 0.5, 0.5 };
+        var steps = new[] { 0.1, 0.0, 0.25 };  // discrete(11) / continuous / discrete(5)
+
+        var opt = new CmaWm(mean, 1.0 / 6, bounds, steps, nMaxResampling: 30, seed: 9, populationSize: null);
+        for (int g = 0; g < 3; g++) Advance(opt, 100 + g);
+        string json0 = JsonSerializer.Serialize(opt.ToState());
+
+        // Idempotent: restore → re-serialize (no evolution) reproduces the stored form.
+        string jsonIdem = JsonSerializer.Serialize(CmaWm.FromState(JsonSerializer.Deserialize<CmaWmState>(json0)!).ToState());
+        jsonIdem.Should().Be(json0);
+
+        // Deterministic: two optimizers restored from the same state evolve identically.
+        var r1 = CmaWm.FromState(JsonSerializer.Deserialize<CmaWmState>(json0)!);
+        var r2 = CmaWm.FromState(JsonSerializer.Deserialize<CmaWmState>(json0)!);
+        for (int g = 0; g < 5; g++) { Advance(r1, 500 + g); Advance(r2, 500 + g); }
+        r1.Inner.Mean.Should().Equal(r2.Inner.Mean);
+        r1.AffineScaling.Should().Equal(r2.AffineScaling);
     }
 
     // ---- warnings -----------------------------------------------------------------------------
