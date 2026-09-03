@@ -228,6 +228,83 @@ public class TpeSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [DataRow(0)]
+    [DataRow(7)]
+    [DataRow(42)]
+    public void MultivariateMultiObjective_TrajectoryMatches(int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // multivariate=True on a multi-objective study (MOTPE): the joint Parzen estimator over the
+        // below set (uniform l(x) weights) + the non-domination/HSSP split, all in RNG lock-step.
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(),
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new TPESampler(seed: seed, multivariate: true, nStartupTrials: 8), studyName: "tpe");
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return (System.Collections.Generic.IReadOnlyList<double>)new[] { x * x + y, (x - 2) * (x - 2) + y * y };
+        }, nTrials: 35);
+
+        AssertTrajectoryParity(csStudy,
+            "study = optuna.create_study(study_name='tpe', directions=['minimize', 'minimize'], " +
+            $"sampler=optuna.samplers.TPESampler(seed={seed}, multivariate=True, n_startup_trials=8))\n" +
+            "def _obj(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    return x * x + y, (x - 2) ** 2 + y * y\n" +
+            "study.optimize(_obj, n_trials=35)\n");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(1, 0)]
+    [DataRow(1, 42)]
+    [DataRow(2, 0)]
+    [DataRow(2, 42)]
+    public void Constrained_TrajectoryMatches(int nObjectives, int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // Constrained TPE (constraints_func): infeasible trials (x > 3) are split by
+        // _split_infeasible_trials before the complete/pruned split. The trajectory staying in
+        // lock-step proves the constraint-aware split matches Optuna. Feasible ~80% of the domain,
+        // so infeasible trials genuinely occur.
+        Func<FrozenTrial, System.Collections.Generic.IEnumerable<double>> cons =
+            t => new[] { (double)t.Params["x"] - 3.0 };
+        var directions = Enumerable.Repeat(StudyDirection.Minimize, nObjectives).ToArray();
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), directions: directions,
+            sampler: new TPESampler(seed: seed, nStartupTrials: 8, constraintsFunc: cons), studyName: "tpe");
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            var outs = new System.Collections.Generic.List<double> { x * x + y };
+            if (nObjectives == 2)
+                outs.Add((x - 2) * (x - 2) + y * y);
+            return outs;
+        }, nTrials: 35);
+
+        string pyDirs = "[" + string.Join(", ", Enumerable.Repeat("'minimize'", nObjectives)) + "]";
+        string pyReturn = nObjectives == 2
+            ? "    return x * x + y, (x - 2) ** 2 + y * y\n"
+            : "    return x * x + y\n";
+        AssertTrajectoryParity(csStudy,
+            $"study = optuna.create_study(study_name='tpe', directions={pyDirs}, " +
+            $"sampler=optuna.samplers.TPESampler(seed={seed}, n_startup_trials=8, " +
+            "constraints_func=lambda t: (t.params['x'] - 3.0,)))\n" +
+            "def _obj(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            pyReturn +
+            "study.optimize(_obj, n_trials=35)\n");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
     public void StartupPhase_UsesRandomSampling_BitExact()
     {
         PythonSession.EnsureOrInconclusive();

@@ -326,6 +326,58 @@ public class TpeSamplerTests
     }
 
     [TestMethod]
+    public void MultivariateMultiObjective_TpeSampler_Reproducible_SameSeed()
+    {
+        // multivariate=True MO TPE (MOTPE): the joint below-set estimator must be deterministic.
+        List<double[]> Run()
+        {
+            var study = Optuna.CreateStudy(
+                sampler: new TPESampler(seed: 6, multivariate: true, nStartupTrials: 8),
+                directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+            study.Optimize((Func<Trial, IReadOnlyList<double>>)(t =>
+            {
+                double x = t.SuggestFloat("x", -5, 5);
+                double y = t.SuggestFloat("y", -5, 5);
+                return new[] { x * x + y, (x - 2) * (x - 2) + y * y };
+            }), nTrials: 30);
+            return study.Trials.Select(t => t.Values!.ToArray()).ToList();
+        }
+
+        var a = Run();
+        var b = Run();
+        for (int i = 0; i < a.Count; i++)
+            a[i].Should().Equal(b[i]);
+    }
+
+    [TestMethod]
+    public void ConstrainedTpe_StoresConstraints_AndIsReproducible()
+    {
+        // constraints_func splits infeasible trials (x > 3) via _split_infeasible_trials. The
+        // constraints must be stored on every finished trial and the run must be deterministic.
+        List<double> Run()
+        {
+            var study = Optuna.CreateStudy(sampler: new TPESampler(
+                seed: 9, nStartupTrials: 8,
+                constraintsFunc: t => new[] { (double)t.Params["x"] - 3.0 }));
+            study.Optimize(t =>
+            {
+                double x = t.SuggestFloat("x", -5, 5);
+                return x * x;
+            }, nTrials: 25);
+
+            foreach (var t in study.Trials)
+            {
+                // Each finished trial carries a single constraint equal to x - 3.
+                t.Constraints.Should().HaveCount(1);
+                t.Constraints.Values.First().Should().BeApproximately((double)t.Params["x"] - 3.0, 1e-12);
+            }
+            return study.Trials.Select(t => (double)t.Params["x"]).ToList();
+        }
+
+        Run().Should().Equal(Run());
+    }
+
+    [TestMethod]
     public void MultiObjective3d_TpeSampler_CompletesThroughHsspTieBreak()
     {
         // Three objectives exercise the n-dimensional HSSP tie-break (was a NotImplementedException
