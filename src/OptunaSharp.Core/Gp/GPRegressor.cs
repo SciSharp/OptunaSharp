@@ -142,6 +142,75 @@ internal sealed class GPRegressor
     }
 
     /// <summary>
+    ///     The cross-kernel matrix <c>K[b,j] = kernel_scale · M(sqdist(x1_b, x2_j))</c> — the two-argument
+    ///     <c>GPRegressor.kernel(X1, X2)</c>, used by the posterior. <paramref name="x1" /> is
+    ///     <c>(B, dim)</c>, <paramref name="x2" /> is <c>(N, dim)</c>; the result is <c>(B, N)</c>.
+    /// </summary>
+    internal double[,] Kernel(double[,] x1, double[,] x2)
+    {
+        int b = x1.GetLength(0);
+        int nn = x2.GetLength(0);
+        double[] w = InverseSquaredLengthscales;
+        double scale = KernelScale;
+        var k = new double[b, nn];
+        for (int i = 0; i < b; i++)
+            for (int j = 0; j < nn; j++)
+            {
+                double acc = 0.0;
+                for (int d = 0; d < _nParams; d++)
+                {
+                    double diff = x1[i, d] - x2[j, d];
+                    double sq = diff * diff;
+                    if (_isCategorical[d])
+                        sq = sq > 0.0 ? 1.0 : 0.0;
+                    acc += sq * w[d];
+                }
+                k[i, j] = scale * Matern52(acc).Value;
+            }
+        return k;
+    }
+
+    /// <summary>
+    ///     The GP posterior mean and variance at the query points <paramref name="x" /> (<c>(B, dim)</c>)
+    ///     — <c>GPRegressor.posterior(x, joint=False)</c>. With <c>k = kernel(x, X)</c>,
+    ///     <c>mean = k · C⁻¹y</c> and <c>var = kernel_scale − k · (C⁻¹kᵀ)</c> (clamped at 0), reusing the
+    ///     cached Cholesky factor and <c>C⁻¹y</c> from <see cref="CacheMatrix" />. Consumed by the
+    ///     acquisition functions (Phase 3.2 part 3).
+    /// </summary>
+    internal (double[] Mean, double[] Var) Posterior(double[,] x)
+    {
+        if (_covYYChol is null)
+            throw new InvalidOperationException("Call CacheMatrix before Posterior.");
+
+        int b = x.GetLength(0);
+        double[,] covFxFX = Kernel(x, _xTrain);   // (B, N)
+
+        var mean = new double[b];
+        for (int i = 0; i < b; i++)
+        {
+            double s = 0.0;
+            for (int j = 0; j < _n; j++)
+                s += covFxFX[i, j] * _covYYInvY[j];
+            mean[i] = s;
+        }
+
+        // V = cov_fx_fX @ C⁻¹ = solve( X (L Lᵀ) = cov_fx_fX ) via two right-side triangular solves.
+        double[,] lt = Transpose(_covYYChol);
+        double[,] tmp = LinAlg.SolveTriangular(lt, covFxFX, upper: true, left: false);   // X Lᵀ = cov_fx_fX
+        double[,] v = LinAlg.SolveTriangular(_covYYChol, tmp, upper: false, left: false); // X L = tmp
+
+        var variance = new double[b];
+        for (int i = 0; i < b; i++)
+        {
+            double s = 0.0;
+            for (int j = 0; j < _n; j++)
+                s += covFxFX[i, j] * v[i, j];
+            variance[i] = Math.Max(0.0, KernelScale - s);
+        }
+        return (mean, variance);
+    }
+
+    /// <summary>
     ///     <c>marginal_log_likelihood()</c> (constant omitted): <c>-½·logdet(C) - ½·yᵀC⁻¹y</c> with
     ///     <c>C = K + noise_var·I</c>, exploiting the Cholesky factor <c>C = L·Lᵀ</c>:
     ///     <c>logdet_part = -Σ log(diag L)</c> and <c>quad_part = -½·‖L⁻¹y‖²</c>.

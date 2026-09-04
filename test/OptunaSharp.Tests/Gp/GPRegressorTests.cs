@@ -135,6 +135,31 @@ public class GPRegressorTests
     }
 
     [TestMethod]
+    public void Posterior_MatchesOptuna()
+    {
+        // Fit the 8-point 1-D scenario, then check the posterior mean/var at three query points
+        // against live Optuna's gpr.posterior. The fit matches Optuna to ~1e-14, so the posterior
+        // matches to a tolerance.
+        var x = new double[,] { { 0.1 }, { 0.35 }, { 0.5 }, { 0.72 }, { 0.9 }, { 0.25 }, { 0.6 }, { 0.8 } };
+        var y = new[]
+        {
+            0.7306317300743783, 1.268428212469242, 0.2936730029150271, -1.1446831397092652,
+            -0.849223481972128, 1.418560466127369, -0.5033619930308116, -1.2140247968738114
+        };
+        GPRegressor gpr = GPRegressor.FitKernelParams(x, y, new[] { false }, 1e-6, false, null, 1e-2);
+
+        (double[] mean, double[] var) = gpr.Posterior(new double[,] { { 0.15 }, { 0.55 }, { 0.95 } });
+        var expMean = new[] { 1.0276146154309682, -0.11449233506753842, -0.6020268275607927 };
+        var expVar = new[] { 0.002437885425645714, 0.0005376554800664568, 0.0069967899184824045 };
+        for (int i = 0; i < 3; i++)
+        {
+            mean[i].Should().BeApproximately(expMean[i], 1e-9);
+            var[i].Should().BeApproximately(expVar[i], 1e-9);
+            var[i].Should().BeGreaterThanOrEqualTo(0.0, "variance is clamped to be non-negative");
+        }
+    }
+
+    [TestMethod]
     public void LossAndGrad_IsReproducible()
     {
         var gpr = MakeCaseA();

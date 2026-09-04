@@ -93,6 +93,64 @@ public class GpFitParityTests : OptunaInteropTestBase
         "    return (gpr.inverse_squared_lengthscales.detach().numpy().tolist(),\n" +
         "            float(gpr.kernel_scale), float(gpr.noise_var), loss)\n";
 
+    private const string PosteriorHelper =
+        "import numpy as np, torch\n" +
+        "import optuna._gp.gp as _gp\n" +
+        "def _gp_posterior(X, Y, isc, isl, ks, nv, xq):\n" +
+        "    gpr = _gp.GPRegressor(is_categorical=torch.from_numpy(isc), X_train=torch.from_numpy(X),\n" +
+        "        y_train=torch.from_numpy(Y), inverse_squared_lengthscales=torch.from_numpy(isl),\n" +
+        "        kernel_scale=torch.tensor(ks, dtype=torch.float64), noise_var=torch.tensor(nv, dtype=torch.float64))\n" +
+        "    gpr._cache_matrix()\n" +
+        "    m, v = gpr.posterior(torch.from_numpy(xq))\n" +
+        "    return m.detach().numpy().tolist(), v.detach().numpy().tolist()\n";
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void Posterior_MatchesOptuna_Sweep()
+    {
+        PythonSession.EnsureOrInconclusive();
+        PyExec(PosteriorHelper);
+        var rng = new Random(555);
+        for (int trial = 0; trial < 20; trial++)
+        {
+            int nParams = 1 + rng.Next(3);
+            int nPoints = nParams + 4 + rng.Next(5);
+            int nQuery = 2 + rng.Next(4);
+            var isCat = new bool[nParams];
+            if (rng.NextDouble() < 0.4) isCat[rng.Next(nParams)] = true;
+
+            var x = new double[nPoints, nParams];
+            for (int i = 0; i < nPoints; i++)
+                for (int dd = 0; dd < nParams; dd++)
+                    x[i, dd] = isCat[dd] ? rng.Next(3) : rng.NextDouble();
+            var y = new double[nPoints];
+            for (int i = 0; i < nPoints; i++) y[i] = rng.NextDouble() * 2 - 1;
+            var isl = new double[nParams];
+            for (int dd = 0; dd < nParams; dd++) isl[dd] = 0.2 + rng.NextDouble() * 5;
+            double ks = 0.3 + rng.NextDouble() * 2;
+            double nv = 1e-4 + rng.NextDouble() * 0.3;
+            var xq = new double[nQuery, nParams];
+            for (int i = 0; i < nQuery; i++)
+                for (int dd = 0; dd < nParams; dd++)
+                    xq[i, dd] = isCat[dd] ? rng.Next(3) : rng.NextDouble();
+
+            var gpr = new GPRegressor(isCat, x, y, isl, ks, nv);
+            gpr.CacheMatrix();
+            (double[] mean, double[] var) = gpr.Posterior(xq);
+
+            PyExec(
+                $"X = np.array({Lit(x)}, dtype=float)\nY = np.array({Lit(y)}, dtype=float)\nisc = np.array({Lit(isCat)})\n" +
+                $"isl = np.array({Lit(isl)}, dtype=float)\nks = {ks.ToString("R", CultureInfo.InvariantCulture)}\n" +
+                $"nv = {nv.ToString("R", CultureInfo.InvariantCulture)}\nxq = np.array({Lit(xq)}, dtype=float)\n" +
+                $"mcs = np.array({Lit(mean)})\nvcs = np.array({Lit(var)})\n" +
+                "mpy, vpy = _gp_posterior(X, Y, isc, isl, ks, nv, xq)\n" +
+                "d_mean = float(np.max(np.abs(np.array(mpy) - mcs)))\n" +
+                "d_var = float(np.max(np.abs(np.array(vpy) - vcs)))\n");
+            PyFloat("d_mean").Should().BeLessThan(1e-9, $"posterior mean trial={trial}");
+            PyFloat("d_var").Should().BeLessThan(1e-9, $"posterior var trial={trial}");
+        }
+    }
+
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void FitKernelParams_MatchesOptuna_Sweep()
@@ -124,8 +182,8 @@ public class GpFitParityTests : OptunaInteropTestBase
             double lossCs = -gpr.MarginalLogLikelihood() - Prior.DefaultLogPrior(gpr);
 
             PyExec(
-                $"X = np.array({Lit(x)})\n" +
-                $"Y = np.array({Lit(y)})\n" +
+                $"X = np.array({Lit(x)}, dtype=float)\n" +
+                $"Y = np.array({Lit(y)}, dtype=float)\n" +
                 $"isc = np.array({Lit(isCat)})\n" +
                 $"fcs = np.array({Lit(fitted)})\n" +
                 $"loss_cs = {lossCs.ToString("R", CultureInfo.InvariantCulture)}\n" +
@@ -181,9 +239,9 @@ public class GpFitParityTests : OptunaInteropTestBase
         (double lossCs, double[] gradCs) = gpr.LossAndGrad(raw, MinNoise, deterministic);
 
         PyExec(
-            $"raw = np.array({Lit(raw)})\n" +
-            $"X = np.array({Lit(x)})\n" +
-            $"Y = np.array({Lit(y)})\n" +
+            $"raw = np.array({Lit(raw)}, dtype=float)\n" +
+            $"X = np.array({Lit(x)}, dtype=float)\n" +
+            $"Y = np.array({Lit(y)}, dtype=float)\n" +
             $"isc = np.array({Lit(isCat)})\n" +
             $"lcs = {lossCs.ToString("R", CultureInfo.InvariantCulture)}\n" +
             $"gcs = np.array({Lit(gradCs)})\n" +

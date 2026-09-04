@@ -45,7 +45,14 @@ OptunaSharp can share a live journal file with no external package on either sid
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 3.2 part 3** — GP acquisition functions + `optim_mixed` + `search_space` → `GPSampler` (fit ✅ done, gate closed)
+### ▶ CONTINUE HERE: **Phase 3.2 part 3b** — GP acquisition functions (`acqf.py`: LogEI + hand-derived acqf gradient) — 3a foundations (search_space + posterior) ✅ done
+
+> **⚠️ Blocker for the full `GPSampler` (not for acqf math):** `optim_mixed.optimize_acqf_mixed` draws its
+> 2048 preliminary points from **`GpSearchSpace.SampleNormalizedParams`**, which needs scipy's **scrambled**
+> Sobol' (`scipy.stats.qmc.Sobol(scramble=True)`) — the **Phase 2.12-deferred** scrambling (scipy's compiled
+> Cython scramble over PCG64). It is a `NotImplementedException` today. So the sampler-level parity is gated on
+> porting that scramble (its own sub-part, e.g. 3c). The acqf eval+gradient (3b) and `optim_mixed`'s local
+> search are validatable independently of it (at fixed candidate points).
 
 Phases 0, 1 and **2.1–2.16 are complete** — **Phase 2 (all native features) is DONE** — and **Phase 3 is
 now in progress**. The whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP
@@ -118,6 +125,22 @@ BLAS/LAPACK drift from scipy's by ULPs — the documented GP boundary). The plot
   "same optimum" metric). 4 unit (`LBfgsBTests`: quadratic/Rosenbrock/bounded convergence, determinism) +
   4 interop (`LBfgsBParityTests` quadratic/Rosenbrock/bounded vs scipy nit/nfev/x/f; `GpFitParityTests`
   fit-result sweep vs live Optuna). Suite: **476 unit + 212 interop**, both TFMs, none skipped.
+- ✅ **3.2 part 3a — GP search-space transforms + posterior (the acqf foundations).** Two pieces the
+  acquisition functions consume. `Gp/SearchSpace.cs` — `GpSearchSpace` (port of `_gp/search_space.py`'s
+  `SearchSpace`; **renamed to avoid the `OptunaSharp.SearchSpace` namespace collision**, the `SlicePlot`
+  precedent): scale-type/bounds/steps construction, `NormalizeOneParam`/`UnnormalizeOneParam`/
+  `RoundOneNormalizedParam` (affine + log/exp + floor-to-grid), `GetChoicesOfDiscreteParams`,
+  `GetNormalizedParams`, `GetUnnormalizedParam`. **Bit-exact vs Optuna** (pure numpy — no erf/LAPACK;
+  `log`/`exp`/`floor` match Python bit-for-bit): scale-types/steps/indices, all discrete choice grids,
+  and the one-param transforms over a 60-config sweep (`Should().Be(0.0)`), plus the boxed int/log-float/
+  categorical `get_unnormalized_param`. `SampleNormalizedParams` is a documented `NotImplementedException`
+  (needs the 2.12 scrambled Sobol'). `GPRegressor.Kernel(X1,X2)` + `Posterior(x)` — the two-argument cross
+  kernel and `posterior(x, joint=False)` (`mean = k·C⁻¹y`, `var = kernel_scale − k·(C⁻¹kᵀ)` clamped ≥ 0),
+  reusing `CacheMatrix`'s `L`/`C⁻¹y`. **Tolerance-exact vs Optuna** (~1e-14; managed `SolveTriangular` +
+  sequential dots vs torch): posterior mean/var over a 20-config fixed-hyperparameter sweep (isolating the
+  posterior math from fit drift). 8 unit (`SearchSpaceTests` ×6, `GPRegressorTests.Posterior`, +) + 2
+  interop (`GpSearchSpaceParityTests` one-param sweep; `GpFitParityTests.Posterior` sweep). Suite:
+  **483 unit + 214 interop**, both TFMs, none skipped.
 - ✅ **3.1 part 1 — viz data layer foundations (`OptunaSharp.Visualization`).** Ported the pure (non-plotly)
   half of `_utils.py` (`VisualizationUtils`: `CheckPlotArgs`/`IsLogScale`/`IsNumerical`/`FilterNonfinite`/
   `IsReverseScale`) plus the three simplest `_get_*_info` builders — `_optimization_history.py`
@@ -196,7 +219,7 @@ moment OptunaSharp.Core loads. Keep it.
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
 | 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp (3.2) + QMC scrambling deferred to their consumers |
-| 3 — Native heavy tail | 🟩 | **3.1 COMPLETE**; **3.2 in progress** — §7 autodiff gate **GREEN & CLOSED**: the GP fit is fully ported (part 1 hand-derived MLL gradient ~1e-13 vs autograd; part 2 managed L-BFGS-B port of scipy's `__lbfgsb.c` → `FitKernelParams` matches Optuna ~1e-14) so GP stays native, no TorchSharp; **next** 3.2 part 3 = acqf + optim_mixed + search_space + sampler, then 3.3 GP terminators. Rendering `plot_*`→5.2 |
+| 3 — Native heavy tail | 🟩 | **3.1 COMPLETE**; **3.2 in progress** — §7 autodiff gate **GREEN & CLOSED**: the GP fit is fully ported (part 1 hand-derived MLL gradient ~1e-13 vs autograd; part 2 managed L-BFGS-B port of scipy's `__lbfgsb.c` → `FitKernelParams` matches Optuna ~1e-14) so GP stays native, no TorchSharp; **3.2 part 3a done** (GpSearchSpace transforms bit-exact + GP posterior ~1e-14); **next** 3b acqf (LogEI+gradient), 3c scrambled Sobol' (2.12 gap, blocks sampler), then optim_mixed + GPSampler, then 3.3 GP terminators. Rendering `plot_*`→5.2 |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
 
@@ -961,7 +984,7 @@ Zero external deps.
 | # | Feature | Optuna source | py SLOC | est. C# | Difficulty | Notes |
 |---|---|---|--:|--:|---|---|
 | 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | ✅ | **COMPLETE** — all 13 `_get_*_info` builders in `OptunaSharp.Visualization` (optimization-history/EDF/intermediate-values/hypervolume-history/param-importances/slice/pareto-front/contour/rank/parallel_coordinate/timeline + `_utils`), bit-exact/erf-tolerance vs live Optuna. rank RGB→5.2, MO PC draw_order `[Misaligned]`, `_terminator_improvement`→3.3. Rendering `plot_*`→5.2 |
-| 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, L-BFGS-B (managed port of scipy's `__lbfgsb.c` — NOT "already numpy"; see §0), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | 🔴 | **🟩 gate GREEN & CLOSED (parts 1–2 done):** prior + kernel + MLL + **hand-derived gradient** (~1e-13 vs autograd) + **managed L-BFGS-B** (`Internal/LBfgsB.cs`, port of scipy `__lbfgsb.c`) + `FitKernelParams` (~1e-14 vs Optuna). Native confirmed; tolerance-exact via 2.15 cholesky/solve_triangular + hand-written BLAS. Remaining (part 3): acqf → optim_mixed → search_space → sampler |
+| 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, L-BFGS-B (managed port of scipy's `__lbfgsb.c` — NOT "already numpy"; see §0), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | 🔴 | **🟩 gate GREEN & CLOSED (parts 1–2 done):** prior + kernel + MLL + **hand-derived gradient** (~1e-13 vs autograd) + **managed L-BFGS-B** (`Internal/LBfgsB.cs`, port of scipy `__lbfgsb.c`) + `FitKernelParams` (~1e-14 vs Optuna). Native confirmed; tolerance-exact via 2.15 cholesky/solve_triangular + hand-written BLAS. **Part 3a done:** `GpSearchSpace` transforms (bit-exact) + `Posterior` (~1e-14). Remaining: acqf+gradient (3b) → scrambled Sobol' (3c, 2.12 gap) → optim_mixed → sampler |
 | 3.3 | GP terminators: `RegretBoundEvaluator` (default), `EMMREvaluator` | `terminator/improvement/*` | ~230 | 700 | 🔴 | rides 3.2 |
 
 **Phase 3 ≈ 3.5k py → ~11.7k C#. Estimate: 10–13 weeks (GP is 8–10).**
