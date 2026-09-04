@@ -15,9 +15,17 @@ namespace OptunaSharp.Internal;
 ///     <see cref="Eigh" /> (2.16), and the GP stack's <see cref="Cholesky" /> (3.2).
 ///
 ///     <para><see cref="SolveTriangular(double[,],double[],bool)" /> is the one primitive still
-///     computed in managed code: NumSharp exposes no LAPACK triangular solve (<c>dtrtrs</c>/
-///     <c>dtrsm</c>), so it is a plain forward/back substitution here — exact to a rounding, and to
-///     be routed through LAPACK once NumSharp gains the binding (with the GP consumer in 3.2).</para>
+///     computed in managed code — a plain forward/back substitution, exact to a rounding. NumSharp
+///     surfaces no <em>public</em> triangular solve to route it through (no <c>np.linalg</c> entry,
+///     no <c>IBlasBackend.TryTrsm</c>); its OpenBLAS interop does now bind <c>cblas_dtrsm</c> at the
+///     native layer (<c>OpenBlasNative.Dtrsm</c>), but that binding is <c>internal</c> and
+///     unreachable from OptunaSharp — so this awaits a public NumSharp triangular-solve op. It is one
+///     of the GP fit's documented tolerance sources (alongside the hand-derived MLL gradient and the
+///     managed L-BFGS-B, both a different float-op sequence than torch/scipy), which is why the GP
+///     oracle is tolerance-exact, not bit-exact — a boundary no linalg-backend switch can remove.
+///     By contrast CMA-ES's <see cref="Eigh" /> and the GP's <see cref="Cholesky" /> already route
+///     through OpenBLAS and are byte-identical to NumPy (the "5.5 byte-exactness switch," folded into
+///     Core when OpenBLAS became a Core dependency — verified bit-for-bit vs numpy 2.4.2).</para>
 /// </summary>
 internal static class LinAlg
 {
