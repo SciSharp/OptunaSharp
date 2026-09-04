@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp</RootNamespace>
+    <AssemblyName>OptunaSharp.Importance.Forests</AssemblyName>
+
+    <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/
+         license/version) is centralized in ../../Directory.Build.props. This is a Tier X satellite:
+         it pulls a foreign runtime (ML.NET's FastForest / native FastTree), so it ships separately
+         and Core stays pure managed — the NumSharp.Interop.OpenBLAS optional-package pattern. -->
+    <PackageId>OptunaSharp.Importance.Forests</PackageId>
+    <Description>Random-forest parameter-importance evaluators for OptunaSharp (a .NET port of Optuna): FanovaImportanceEvaluator (fANOVA — Hutter et al. 2014) and MeanDecreaseImpurityImportanceEvaluator (MDI). Ports of optuna.importance.FanovaImportanceEvaluator / MeanDecreaseImpurityImportanceEvaluator, with the underlying random forest fitted by ML.NET FastForest instead of scikit-learn. Because the forests are not tree-identical to scikit-learn's, importance values differ numerically from Python Optuna (documented divergence); the fANOVA marginal-variance algorithm and the MDI formula themselves are faithful ports. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;Importance;fANOVA;MDI;RandomForest;MLNET;FastForest;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
+
+    <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on missing/malformed
+         doc comments — the surface is ported to match Optuna, not curated per-member. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <!-- Emit the .pdb inside the .nupkg (the release pipeline pushes only *.nupkg). -->
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+
+    <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- Reuse the shared OptunaSharp package icon. -->
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ML.NET's FastForest is the random-forest backend (the analogue of Optuna's
+         sklearn.ensemble.RandomForestRegressor). Microsoft.ML.FastTree carries the FastForest
+         trainer + the RegressionTree structure the fANOVA tree-walk reads; Microsoft.ML carries
+         MLContext / IDataView / LoadFromEnumerable. Both MIT, native FastTree binaries per RID. -->
+    <PackageReference Include="Microsoft.ML" Version="4.0.3" />
+    <PackageReference Include="Microsoft.ML.FastTree" Version="4.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core is in-repo, so reference it by project. Packing records a clean "OptunaSharp" package
+         dependency. Core transitively provides NumSharp (ValueError) + the internal
+         SearchSpaceTransform / ImportanceBase helpers / intersection search space / OptunaWarnings
+         this package uses (granted via InternalsVisibleTo in Core's Assembly/Properties.cs). -->
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

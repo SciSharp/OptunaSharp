@@ -27,6 +27,12 @@ using System.Runtime.CompilerServices;
 // the experimental-class warning via OptunaWarnings/WarningCategory — both internal to Core.
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The forest-based importance evaluators (satellite package OptunaSharp.Importance.Forests — fANOVA
+// + Mean Decrease Impurity, Phase 5.1) reuse the internal SearchSpaceTransform, the shared
+// optuna/importance/_base.py helpers ported into ImportanceBase, the intersection search space, and
+// the ValueError/OptunaWarnings seam — all internal to Core.
+[assembly: InternalsVisibleTo("OptunaSharp.Importance.Forests, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 /// <summary>
 ///     The public half of the strong-name key OptunaSharp is signed with, as the hex literal
 ///     <see cref="InternalsVisibleToAttribute" /> expects.

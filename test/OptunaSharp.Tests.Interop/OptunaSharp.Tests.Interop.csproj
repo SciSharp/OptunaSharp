@@ -25,6 +25,10 @@
          can round-trip a study through Redis against live Python Optuna. Transitively brings
          StackExchange.Redis. Redis-dependent tests self-skip when no server is reachable. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Storage.Redis\OptunaSharp.Storage.Redis.csproj" />
+    <!-- The forest-based importance evaluators (fANOVA + MDI), so their live ranking-parity vs
+         Optuna's scikit-learn-backed evaluators can run in-process. Transitively brings ML.NET.
+         Those tests self-skip when scikit-learn is not importable in the Python env. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Importance.Forests\OptunaSharp.Importance.Forests.csproj" />
   </ItemGroup>
 
 </Project>
