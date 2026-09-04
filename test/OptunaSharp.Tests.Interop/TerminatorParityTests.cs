@@ -13,9 +13,9 @@ namespace OptunaSharp.Tests.Interop;
 ///     the full <c>should_terminate</c> decision sequence of a <see cref="Terminator" /> (with a
 ///     <see cref="BestValueStagnationEvaluator" /> improvement evaluator + its default
 ///     <c>StaticErrorEvaluator(0)</c>), the scaled cross-validation error, and the median-error
-///     threshold. The GP-based improvement evaluators (RegretBound/EMMR) ride Phase 3.3 and are
-///     not exercised here. Values are set through <c>tell</c>, so the result is RNG-free and the
-///     float comparisons are bit-exact.
+///     threshold. The GP-based improvement evaluators (RegretBound/EMMR) are covered separately in
+///     <see cref="GpTerminatorParityTests" /> (Phase 3.3, tolerance parity). Values here are set
+///     through <c>tell</c>, so the result is RNG-free and the float comparisons are bit-exact.
 /// </summary>
 [TestClass]
 public class TerminatorParityTests : OptunaInteropTestBase

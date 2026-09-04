@@ -15,9 +15,9 @@ namespace OptunaSharp.Tests.Terminator;
 ///     terminator framework and its non-GP evaluators (<see cref="StaticErrorEvaluator" />,
 ///     <see cref="BestValueStagnationEvaluator" />, <see cref="MedianErrorEvaluator" />,
 ///     <see cref="CrossValidationErrorEvaluator" />). The GP-based improvement evaluators
-///     (<see cref="RegretBoundEvaluator" />, <see cref="EMMREvaluator" />) are placeholders until
-///     PORTING_PLAN Phase 3.3, so their <c>Evaluate</c> paths are exercised only where Optuna's
-///     tests construct them without evaluating.
+///     (<see cref="RegretBoundEvaluator" />, <see cref="EMMREvaluator" />) are ported in
+///     PORTING_PLAN Phase 3.3 and covered by <see cref="GpTerminatorTests" /> (their construction is
+///     also exercised here where Optuna's own tests pair them into the non-GP evaluators).
 /// </summary>
 [TestClass]
 public class TerminatorTests
@@ -223,8 +223,8 @@ public class TerminatorTests
     [TestMethod]
     public void BestValueStagnation_EvaluateWithNoTrial()
     {
-        // Python parametrizes this over RegretBoundEvaluator too; that evaluator rides the GP
-        // stack (Phase 3.3), so only the native BestValueStagnationEvaluator is exercised here.
+        // Python parametrizes this over RegretBoundEvaluator too; that branch is covered in
+        // GpTerminatorTests.RegretBound_EvaluateWithNoTrial (it rides the GP stack, Phase 3.3).
         Action act = () => new BestValueStagnationEvaluator().Evaluate(new List<FrozenTrial>(), StudyDirection.Maximize);
         act.Should().Throw<ValueError>();
     }

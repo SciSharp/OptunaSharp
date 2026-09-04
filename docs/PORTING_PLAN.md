@@ -41,11 +41,22 @@ OptunaSharp can share a live journal file with no external package on either sid
 
 ## 0. Progress ledger — where we are, where to continue
 
-> **Status as of 2026-09-03.** Legend: ✅ done & green · 🟩 partially landed (some sub-parts done as
+> **Status as of 2026-09-04.** Legend: ✅ done & green · 🟩 partially landed (some sub-parts done as
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 3.3 — GP terminators** (`RegretBoundEvaluator` default + `EMMREvaluator`, `terminator/improvement/*`) → un-throw the 2.6 placeholder evaluators and wire `_terminator_improvement` (viz 3.1). **Phase 3.2 is COMPLETE — the ENTIRE `GPSampler` is ported: every sequential AND running-trial path, single- and multi-objective, unconstrained and constrained, runs end-to-end and per-suggestion-matches live Optuna.**
+### ▶ CONTINUE HERE: **Phase 4 — external storage (Tier X)** — this begins the Tier X external-dependency work (RDB/Redis/gRPC storage, etc.); the `ICachedStorageBackend` seam for 4.1 was declared back in 1.2. **TIER N IS COMPLETE — the entire native Optuna algorithm surface is ported (every sampler incl. TPE/NSGA/CMA-ES/GP, every pruner, MO machinery, PED-ANOVA, terminators incl. the GP evaluators, the visualization data layer, in-memory + journal-file persistence), pure managed on NumSharp(+OpenBLAS).** Also still open (small, independent): the 2.12 `QMCSampler` `scramble=true` wire-up (`Internal/ScrambledSobol` is ready; throws today).
+
+> **Phase 3.3 is COMPLETE (2026-09-04).** The two GP improvement evaluators are ported and un-throw:
+> `RegretBoundEvaluator` (the default, `terminator/improvement/evaluator.py` — `_get_beta`,
+> `_compute_standardized_regret_bound`, `_get_top_n`) and `EMMREvaluator` (`emmr.py` — the EMMR
+> Theorem-1/Eq-4 criterion). New `UCB`/`LCB` acqfs + `Gp/OptimSample.cs` (`optimize_acqf_sample`) are
+> the only new GP primitives they needed; everything else rides the Phase 3.2 GP stack (`FitKernelParams`,
+> `Posterior`/`PosteriorJoint`, `GpSearchSpace`). The deferred viz builder `_get_improvement_info` is
+> wired as `Visualization/TerminatorImprovement.cs` (the plotly `_get_improvement_plot` stays Tier X 5.2).
+> **Tolerance parity vs live Optuna** (the documented GP boundary — the fit's ~1e-3 hyperparameter drift
+> propagates through the posterior; RegretBound/EMMR criteria agree to a few 1e-3 relative, asserted at
+> 3e-2). Commit `df04479`. Suite: **544 unit + 259 interop**, both TFMs, none skipped.
 
 > **The whole `GPSampler` is ported and validated vs live Optuna/torch/scipy:** the fit (parts 1–2),
 > transforms + posterior (3a), LogEI (3b), scrambled Sobol' preliminary sampling (3c), the mixed acqf
@@ -73,11 +84,11 @@ OptunaSharp can share a live journal file with no external package on either sid
 > that leaves trials RUNNING before the trial under test, RNG in lock-step). Tolerance, not bit-exact —
 > the documented GP boundary. Suite after 3e-6: **533 unit + 252 interop**, both TFMs, none skipped.
 >
-> **Still open (small, independent of 3.3):** the 2.12 `QMCSampler` `scramble=true` follow-up (throws
-> today; `Internal/ScrambledSobol` is ready — a quick wire-up).
+> **Still open (small, independent — now the last native loose end):** the 2.12 `QMCSampler`
+> `scramble=true` follow-up (throws today; `Internal/ScrambledSobol` is ready — a quick wire-up).
 
-Phases 0, 1 and **2.1–2.16 are complete** — **Phase 2 (all native features) is DONE** — and **Phase 3 is
-now in progress**. The whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP
+Phases 0, 1, **2.1–2.16 and 3.1–3.3 are complete** — **Phase 2 (all native features) is DONE** and
+**Phase 3 (native heavy tail) is DONE, so TIER N is COMPLETE**. The whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP
 machinery, the non-scrambled QMC sampler, the full NSGA-II **and** NSGA-III genetic-algorithm samplers,
 the OpenBLAS-backed linalg primitives, and the complete `CmaEsSampler` over **all four** cmaes backends —
 full-covariance `cmaes.CMA`, separable `cmaes.SepCMA`, Warm-Starting via `get_warm_start_mgd`, and CMAwM
@@ -107,6 +118,32 @@ then 3.3 GP terminators). The GP
 forward/fit stays **tolerance-exact, not bit-for-bit** (managed `SolveTriangular` + hand-written L-BFGS-B
 BLAS/LAPACK drift from scipy's by ULPs — the documented GP boundary). The plotly rendering
 `plot_*`/`_get_*_plot` stays Tier X **5.2**.
+- ✅ **3.3 — GP terminators (`RegretBoundEvaluator` default + `EMMREvaluator`) → Tier N COMPLETE.**
+  Un-throws the two Phase 2.6 GP placeholders in `Terminator/ImprovementEvaluator.cs` +
+  `Terminator/EmmrEvaluator.cs`. **`RegretBoundEvaluator`** (`terminator/improvement/evaluator.py`):
+  `_get_top_n` (`np.clip(int(n·ratio), min_n, n)` + the `np.partition` order-statistic threshold + the
+  `values ≥ thr` mask), the standardize `(v−mean)/max(1e-10, std)`, `fit_kernel_params` on the top-n,
+  then `_compute_standardized_regret_bound` = `max(UCB) − max(LCB)` where max(UCB) also takes the
+  random-search `optimize_acqf_sample` sample, times the top-n std. **`EMMREvaluator`** (`emmr.py`): the
+  insufficient-trials / empty-space `float_info.max·0.1` sentinels, the 1-D `warn_and_convert_inf`, two
+  fits (t−1 with `gpr_cache=None`, t with `gpr_cache=gpr_t1`), the Theorem-1 Δμ*/v/g terms
+  (`norm.pdf`/`norm.cdf`), the Eq-4 KL terms (`λ = DEFAULT_MINIMUM_NOISE_VAR⁻¹`), and the
+  `min(float_info.max·0.5, Σ)` result. New GP primitives they needed: **`UCB`/`LCB`** acqfs (`Gp/Acqf.cs`,
+  `mean ± √(β·var)`) + **`Gp/OptimSample.cs`** (`optimize_acqf_sample` — scrambled-Sobol' sample →
+  `argmax`); everything else rides the 3.2 stack (`FitKernelParams`, `Posterior`/`PosteriorJoint`,
+  `GpSearchSpace`, `Prior.DefaultMinimumNoiseVar`). **Wired the deferred viz builder** as
+  `Visualization/TerminatorImprovement.cs` (`_get_improvement_info`: the MO guard, default
+  RegretBound/CrossValidation—or—StaticError(0)-for-BestValueStagnation evaluator selection, the
+  completed-prefix walk) — the plotly `_get_improvement_plot`/`_get_improvement_scatter` stay Tier X
+  **5.2**. RNG discipline: the evaluators' `LazyRandomState` seed draws the Sobol' seed identically to
+  Python, so the sampled-point sequence is in lock-step. **Tolerance parity vs live Optuna** (the
+  documented GP boundary: managed L-BFGS-B + triangular solve drift the fitted hyperparameters ~1e-3,
+  which propagate through the posterior; RegretBound/EMMR criteria agree to a few 1e-3 relative,
+  asserted at 3e-2 with ~13x headroom). 11 unit (`GpTerminatorTests` ×7 — a port of Optuna's own
+  `test_evaluator.py`/`test_emmr_evaluator.py` GP cases; `TerminatorImprovementTests` ×4 — the viz
+  builder control flow) + 7 interop (`GpTerminatorParityTests`: RegretBound ×3 + EMMR ×3 sweeps +
+  the full `_get_improvement_info` walk vs `optuna.visualization._terminator_improvement`). Suite:
+  **544 unit + 259 interop**, both TFMs, none skipped.
 - ✅ **3.2 part 1 — GP numeric core + the §7 autodiff decision gate (`OptunaSharp.Gp`).** New
   `src/OptunaSharp.Core/Gp/` namespace porting the forward + hand-derived backward of `optuna/_gp/gp.py`'s
   `GPRegressor`: `Prior.cs` (`default_log_prior` — the lengthscale hand-crafted term + `Gamma(2,1)` scale /
@@ -360,7 +397,7 @@ moment OptunaSharp.Core loads. Keep it.
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
 | 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp (3.2) + QMC scrambling deferred to their consumers |
-| 3 — Native heavy tail | 🟩 | **3.1 COMPLETE**; **3.2 COMPLETE** — §7 autodiff gate **GREEN & CLOSED**: the GP fit is fully ported (part 1 hand-derived MLL gradient ~1e-13 vs autograd; part 2 managed L-BFGS-B port of scipy's `__lbfgsb.c` → `FitKernelParams` matches Optuna ~1e-14) so GP stays native, no TorchSharp; **the ENTIRE `GPSampler` runs end-to-end** — every sequential path (3a–3d + 3e-1…3e-5: LogEI/LogCEI/LogEHVI/LogCEHVI) AND every running-trial q-batch path (3e-6: `ConditionalGPRegressor` + qLogEI/qLogPI/qLogCEI/qLogEHVI + KB `LogCEHVI`), all eval+gradient & per-suggestion-replay parity vs live Optuna. **Next** 3.3 GP terminators. Rendering `plot_*`→5.2 |
+| 3 — Native heavy tail | ✅ | **COMPLETE (3.1 + 3.2 + 3.3).** 3.1 viz data layer; 3.2 §7 autodiff gate **GREEN & CLOSED** — the GP fit fully ported (hand-derived MLL gradient ~1e-13 vs autograd; managed L-BFGS-B port of scipy's `__lbfgsb.c`) and **the ENTIRE `GPSampler`** (every sequential 3a–3e-5 + running-trial q-batch 3e-6 path), no TorchSharp; **3.3 GP terminators** — `RegretBoundEvaluator` (default) + `EMMREvaluator` un-thrown (`UCB`/`LCB` acqfs + `OptimSample` + the deferred `_get_improvement_info` viz builder), tolerance parity vs live Optuna. **Tier N is COMPLETE.** Rendering `plot_*`→5.2 |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
 
@@ -406,8 +443,9 @@ moment OptunaSharp.Core loads. Keep it.
   + `TerminatorFunctions.ReportCrossValidationScores`, `BaseImprovementEvaluator`/
   `BestValueStagnationEvaluator`, `MedianErrorEvaluator` (cached median×ratio; `-sys.float_info.min`/
   `sys.float_info.max` sentinels reproduced bit-exactly). `RegretBoundEvaluator` (the default
-  improvement evaluator) and `EMMREvaluator` are benign-construction placeholders that throw on
-  `Evaluate` until the GP stack (**3.3**) — same pattern as the `TPESampler` placeholder. 19 unit
+  improvement evaluator) and `EMMREvaluator` shipped here as benign-construction placeholders that
+  threw on `Evaluate` until the GP stack — **now ported and un-thrown in 3.3** (see the 3.3 done-item).
+  19 unit
   tests (a port of Optuna's own `tests/terminator_tests/*`) + 6 live parity tests (decision sequence,
   scaled CV error bit-exact, median threshold) across both directions.
 - ✅ **2.7** — `feat(importance): Phase 2.7 — Importance framework + PED-ANOVA` (`3096aba`). New
@@ -1099,7 +1137,7 @@ Status column: ✅ done · 🟩 partially landed · ⬜ not started (see §0 led
 | 2.3 | ✅ | `WilcoxonPruner` | `pruners/_wilcoxon.py` | ~100 | 300 | 🟢 | self-contained signed-rank test (`Internal/SignedRankTest.cs`, no scipy) |
 | 2.4 | ✅ | `PartialFixedSampler`, `GridSampler` | `samplers/_partial_fixed.py`, `_grid.py` | ~400 | 900 | 🟢 | 0.7 |
 | 2.5 | ✅ | `BruteForceSampler` | `samplers/_brute_force.py` | ~480 | 1,000 | 🟢+ | tree enumeration over dynamic spaces; the categorical-NaN quirk (`_is_nan`); bit-exact `rng.choice(p=)` via NumPy pairwise-sum + `searchsorted(side='right')`. `758189f` |
-| 2.6 | ✅ | Terminator framework + non-GP evaluators (`StaticError`, `BestValueStagnation`, `MedianError`, `CrossValidationError`) | `terminator/*` minus regret/EMMR | ~300 | 700 | 🟢 | `OptunaSharp.Terminator` namespace; regret/EMMR are GP placeholders (throw until 3.3); `np.var`/`sys.float_info` sentinels bit-exact. `cc7c6e2` |
+| 2.6 | ✅ | Terminator framework + non-GP evaluators (`StaticError`, `BestValueStagnation`, `MedianError`, `CrossValidationError`) | `terminator/*` minus regret/EMMR | ~300 | 700 | 🟢 | `OptunaSharp.Terminator` namespace; regret/EMMR shipped as GP placeholders here, **ported in 3.3**; `np.var`/`sys.float_info` sentinels bit-exact. `cc7c6e2` |
 | 2.7 | ✅ | Importance framework + **PED-ANOVA** | `importance/__init__.py`, `_ped_anova/*` | ~350 | 800 | 🟢+ | pure-numpy Parzen; NumSharp throughout. `_truncnorm._log_gauss_mass` + `probability_distributions.log_pdf` landed as byproducts. **erf/ucrt tolerance** (`[Misaligned]`, see §0) |
 | 2.8 | ✅ | **TPE — the default sampler (univariate + non-group multivariate)** | `_tpe/_erf.py`, `_truncnorm.py`, `parzen_estimator.py`, `probability_distributions.py`, `sampler.py` core | ~800 | 2,600 | 🟡 | 0.4. Full numeric kernel + sampler; `Expm1`/`LogAddExp` bit-exact, `ppf`/density erf-tolerance-bounded. Trajectory parity vs live Optuna (continuous/log/categorical multivariate + independent). **Two `[Misaligned]`: erf/ucrt few-ULP, and stable-vs-x86-simd-sort argsort tie order on repeated numerical obs.** `constant_liar`+deprecated args done |
 | 2.9 | ✅ | TPE stage 2 — `group` (group-decomposed multivariate) | `_tpe/sampler.py` group branches | ~150 | 300 | 🟡 | `infer_relative_search_space`/`sample_relative` group branches over the already-ported `GroupDecomposedSearchSpace`; experimental warning; MO-default override. Branching-space trajectory parity vs live Optuna (erf tolerance). `66064a4` |
@@ -1120,13 +1158,13 @@ multivariate/group/MOTPE/constrained) + MedianPruner, parity-verified against Py
 the erf path, erf-tolerance on the truncnorm density), persisted to a journal file Python can open.
 Zero external deps.
 
-## Phase 3 — Native heavy tail — 🟩 IN PROGRESS (3.1 done; 3.2 GPSampler COMPLETE; 3.3 GP terminators remain)
+## Phase 3 — Native heavy tail — ✅ COMPLETE (3.1 viz data layer; 3.2 GPSampler; 3.3 GP terminators)
 
 | # | Feature | Optuna source | py SLOC | est. C# | Difficulty | Notes |
 |---|---|---|--:|--:|---|---|
 | 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | ✅ | **COMPLETE** — all 13 `_get_*_info` builders in `OptunaSharp.Visualization` (optimization-history/EDF/intermediate-values/hypervolume-history/param-importances/slice/pareto-front/contour/rank/parallel_coordinate/timeline + `_utils`), bit-exact/erf-tolerance vs live Optuna. rank RGB→5.2, MO PC draw_order `[Misaligned]`, `_terminator_improvement`→3.3. Rendering `plot_*`→5.2 |
 | 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, L-BFGS-B (managed port of scipy's `__lbfgsb.c` — NOT "already numpy"; see §0), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | ✅ | **✅ COMPLETE — the entire `GPSampler` is ported. Gate GREEN & CLOSED (parts 1–2):** prior + kernel + MLL + **hand-derived gradient** (~1e-13 vs autograd) + **managed L-BFGS-B** (`Internal/LBfgsB.cs`, port of scipy `__lbfgsb.c`) + `FitKernelParams` (~1e-14 vs Optuna). Native confirmed; tolerance-exact via 2.15 cholesky/solve_triangular + hand-written BLAS. **Parts 3a–3d done — single-objective `GPSampler` runs end-to-end:** `GpSearchSpace` + `Posterior`; LogEI eval+gradient (`Gp/Acqf.cs`); scrambled Sobol' (`Internal/ScrambledSobol.cs`, bit-exact vs scipy — NumSharp PCG64 matches numpy); `Gp/OptimMixed.cs` (`optimize_acqf_mixed` + gradient ascent + exhaustive/Brent discrete search; numpy `choice(replace=False,p=)` reproduced) + `Internal/BrentMinimizer.cs` + `Samplers/GPSampler.cs`. Tolerance-parity vs live Optuna: `optimize_acqf_mixed` achieved-value <1e-6; per-suggestion GP replay <1e-2 normalized (discrete exact). **Parts 3e-1…3e-5 done — every sequential `GPSampler` path runs end-to-end:** box decomposition (`Internal/Hypervolume.cs`, bit-exact); `LogPI`+`LogCEI` (SO constrained); `qmc.sample_from_normal_sobol` (`Gp/Qmc.cs`+`Internal/TorchMt19937.cs`+cephes `TruncNorm.Ndtri` — torch's scrambled Sobol' reproduced to ~1e-15); `LogEHVI` (MO); `LogCEHVI` (MO constrained). Each: eval+hand-derived-gradient parity vs Optuna autograd + per-suggestion sampler replay. **Part 3e-6 done — every running-trial path runs end-to-end:** `ConditionalGPRegressor` (`Gp/ConditionalGPRegressor.cs`: `sample_joint_posterior`/`append_running_data`/`_extend_cholesky`, forward + query-sample gradient) + `qLogEI`/`qLogPI`/`qLogCEI`/`qLogEHVI` (`Gp/Acqf.cs`, the `amax`/`logsumexp` reduction gradients hand-derived) + the Kriging-Believer `LogCEHVI` for MO-constrained-with-running. Per-suggestion replay uses an ask/tell schedule that leaves trials RUNNING before the trial under test (RNG in lock-step). Suite: **533 unit + 252 interop**, both TFMs |
-| 3.3 | GP terminators: `RegretBoundEvaluator` (default), `EMMREvaluator` | `terminator/improvement/*` | ~230 | 700 | 🔴 | rides 3.2 (posterior/acqf now available) |
+| 3.3 | GP terminators: `RegretBoundEvaluator` (default), `EMMREvaluator` | `terminator/improvement/*` | ~230 | 700 | ✅ | **COMPLETE** — both evaluators un-thrown (`Terminator/{ImprovementEvaluator,EmmrEvaluator}.cs`); new `UCB`/`LCB` acqfs (`Gp/Acqf.cs`) + `Gp/OptimSample.cs` (`optimize_acqf_sample`); deferred `_get_improvement_info` viz wired (`Visualization/TerminatorImprovement.cs`). Rides the 3.2 GP stack → tolerance parity vs live Optuna (few-1e-3, asserted 3e-2 — the GP boundary). +11 unit +7 interop. Rendering `_get_improvement_plot`→5.2 |
 
 **Phase 3 ≈ 3.5k py → ~11.7k C#. Estimate: 10–13 weeks (GP is 8–10).**
 Exit gate = **Tier N complete**: the full Optuna algorithm surface, pure managed, NumSharp-only.

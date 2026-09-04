@@ -2,7 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NumSharp;
+using OptunaSharp.Collections;
+using OptunaSharp.Distributions;
+using OptunaSharp.Gp;
+using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
+using OptunaSharp.SearchSpace;
 
 namespace OptunaSharp.Terminator;
 
@@ -33,11 +38,17 @@ public abstract class BaseImprovementEvaluator
 ///     <c>optuna/terminator/improvement/evaluator.py: RegretBoundEvaluator</c>
 ///     (experimental since 3.2.0).
 ///
-///     NOT PORTED YET — this evaluator rides the native Gaussian-process stack, which arrives with
-///     PORTING_PLAN Phase 3.3. Mirroring Optuna, it is the default <c>improvement_evaluator</c> of
-///     <see cref="Terminator" />, so construction is benign (a study using an explicit non-GP
-///     evaluator such as <see cref="BestValueStagnationEvaluator" /> works), but
-///     <see cref="Evaluate" /> throws until the GP stack lands.
+///     This evaluator evaluates the regret of the current best solution, defined as the difference
+///     between the objective value of the best solution and of the global optimum. Specifically, it
+///     calculates the upper bound on the regret based on the fact that the empirical estimator of the
+///     objective function is bounded by lower and upper confidence bounds with high probability under
+///     the Gaussian-process model assumption. It is the default <c>improvement_evaluator</c> of
+///     <see cref="Terminator" />.
+///
+///     Rides the native GP stack (fit + posterior), so its output is tolerance-exact vs Optuna, not
+///     bit-for-bit — the documented GP boundary (the posterior goes through the managed triangular
+///     solve). The RNG draw for the search-space sampling matches Python's <c>LazyRandomState</c>
+///     bit-for-bit, so the sampled point sequence is identical.
 ///
 ///     For further information about this evaluator, please refer to the following paper:
 ///     - Automatic Termination for Hyperparameter Optimization
@@ -47,6 +58,7 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
 {
     private readonly double _topTrialsRatio;
     private readonly int _minNTrials;
+    private readonly double _minimumNoise;
     private readonly int _optimizeNSamples;
     private readonly LazyRandomState _rng;
 
@@ -60,15 +72,146 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
     {
         _topTrialsRatio = topTrialsRatio;
         _minNTrials = minNTrials;
+        _minimumNoise = Prior.DefaultMinimumNoiseVar;
         _optimizeNSamples = 2048;
         _rng = new LazyRandomState(seed);
     }
 
+    /// <summary>
+    ///     <c>_get_top_n</c> — select the top-<c>n</c> trials by value. <c>top_n =
+    ///     clip(int(n_trials·ratio), min_n_trials, n_trials)</c>; the threshold is the
+    ///     <c>(n_trials − top_n)</c>-th order statistic (<c>np.partition</c>), and the mask keeps every
+    ///     value at or above it.
+    /// </summary>
+    private (double[,] Params, double[] Values) GetTopN(double[,] normalizedParams, double[] values)
+    {
+        int nTrials = values.Length;
+        int topN = Math.Min(Math.Max((int)(nTrials * _topTrialsRatio), _minNTrials), nTrials);
+
+        // np.partition(values, kth)[kth] — the kth order statistic (0-indexed, ascending).
+        int kth = nTrials - topN;
+        var sorted = (double[])values.Clone();
+        Array.Sort(sorted);
+        double topNVal = sorted[kth];
+
+        int dim = normalizedParams.GetLength(1);
+        var idxs = new List<int>();
+        for (int i = 0; i < nTrials; i++)
+            if (values[i] >= topNVal)
+                idxs.Add(i);
+
+        var paramsOut = new double[idxs.Count, dim];
+        var valuesOut = new double[idxs.Count];
+        for (int r = 0; r < idxs.Count; r++)
+        {
+            valuesOut[r] = values[idxs[r]];
+            for (int d = 0; d < dim; d++)
+                paramsOut[r, d] = normalizedParams[idxs[r], d];
+        }
+        return (paramsOut, valuesOut);
+    }
+
     public override double Evaluate(IReadOnlyList<FrozenTrial> trials, StudyDirection studyDirection)
-        => throw new NotImplementedException(
-            "RegretBoundEvaluator is not ported yet (PORTING_PLAN Phase 3.3 — native GP stack). " +
-            "Use an explicit non-GP improvement evaluator (e.g. new BestValueStagnationEvaluator()) " +
-            "with Terminator in the meantime.");
+    {
+        var optunaSearchSpace = SearchSpaceFunctions.IntersectionSearchSpaceOf(trials);
+        ValidateInput(trials, optunaSearchSpace);
+
+        var completeTrials = trials.Where(t => t.State == TrialState.Complete).ToList();
+
+        // _gp module assumes that optimization direction is maximization.
+        double sign = studyDirection == StudyDirection.Minimize ? -1.0 : 1.0;
+        var values = new double[completeTrials.Count];
+        for (int i = 0; i < completeTrials.Count; i++)
+            values[i] = completeTrials[i].Value!.Value * sign;
+
+        var searchSpace = new GpSearchSpace(optunaSearchSpace);
+        double[,] normalizedParams = searchSpace.GetNormalizedParams(
+            completeTrials.Select(t => (IReadOnlyDictionary<string, object?>)t.ParamsDict).ToList());
+        (double[,] normalizedTopNParams, double[] topNValues) = GetTopN(normalizedParams, values);
+
+        double topNValuesMean = MathUtil.Mean(topNValues);
+        double topNValuesStd = Math.Max(1e-10, MathUtil.Std(topNValues));
+        var standardizedTopNValues = new double[topNValues.Length];
+        for (int i = 0; i < topNValues.Length; i++)
+            standardizedTopNValues[i] = (topNValues[i] - topNValuesMean) / topNValuesStd;
+
+        GPRegressor gpr = GPRegressor.FitKernelParams(
+            normalizedTopNParams, standardizedTopNValues, searchSpace.IsCategorical,
+            _minimumNoise, deterministicObjective: false, gprCache: null);
+
+        // Optuna's evaluate() leaves self._optimize_n_samples unused and relies on the default 2048;
+        // since it is hardcoded to 2048 in __init__ (no constructor parameter exposes it), threading
+        // the field through is behaviorally identical and keeps the field meaningful.
+        double standardizedRegretBound = ComputeStandardizedRegretBound(
+            gpr, searchSpace, normalizedTopNParams, standardizedTopNValues,
+            optimizeNSamples: _optimizeNSamples, rng: _rng.Rng);
+        return standardizedRegretBound * topNValuesStd;  // regret bound
+    }
+
+    private static void ValidateInput(
+        IReadOnlyList<FrozenTrial> trials, OrderedDict<string, BaseDistribution> searchSpace)
+    {
+        if (!trials.Any(t => t.State == TrialState.Complete))
+            throw new ValueError(
+                "Because no trial has been completed yet, the regret bound cannot be evaluated.");
+
+        if (searchSpace.Count == 0)
+            throw new ValueError(
+                "The intersection search space is empty. This condition is not supported by "
+                + $"{nameof(RegretBoundEvaluator)}.");
+    }
+
+    /// <summary>
+    ///     <c>_get_beta</c> — the confidence-width coefficient (Srinivas et al. 2010, scaled down by 5
+    ///     as in the paper's experiments).
+    /// </summary>
+    internal static double GetBeta(int nParams, int nTrials, double delta = 0.1)
+    {
+        // beta = 2 * log(n_params * n_trials**2 * pi**2 / 6 / delta), then /= 5.
+        double beta = 2.0 * Math.Log(
+            (double)((long)nParams * nTrials * nTrials) * Math.Pow(Math.PI, 2.0) / 6.0 / delta);
+        beta /= 5.0;
+        return beta;
+    }
+
+    /// <summary>
+    ///     <c>_compute_standardized_regret_bound</c> — <c>max(UCB) − max(LCB)</c> in standardized space.
+    ///     The <c>_gp</c> module maximizes, so (vs the paper): max(UCB) over the search space minus
+    ///     max(LCB) over the top trials. UCB over the search space is the larger of the UCB at the top
+    ///     trials and the UCB found by random search sampling (<see cref="OptimSample" />).
+    /// </summary>
+    internal static double ComputeStandardizedRegretBound(
+        GPRegressor gpr, GpSearchSpace searchSpace, double[,] normalizedTopNParams,
+        double[] standardizedTopNValues, double delta = 0.1, int optimizeNSamples = 2048,
+        NumPyRandom? rng = null)
+    {
+        int nTrials = normalizedTopNParams.GetLength(0);
+        int nParams = normalizedTopNParams.GetLength(1);
+
+        double beta = GetBeta(nParams, nTrials, delta);
+
+        var ucbAcqf = new UCB(gpr, searchSpace, beta);
+        // UCB over the search space. (Original: LCB over the search space.)
+        double ucbOverTopN = Max(ucbAcqf.EvalAcqfNoGrad(normalizedTopNParams));
+        double sampledUcb = OptimSample.OptimizeAcqfSample(ucbAcqf, optimizeNSamples, rng!).Value;
+        double standardizedUcbValue = Math.Max(ucbOverTopN, sampledUcb);
+
+        var lcbAcqf = new LCB(gpr, searchSpace, beta);
+        // LCB over the top trials. (Original: UCB over the top trials.)
+        double standardizedLcbValue = Max(lcbAcqf.EvalAcqfNoGrad(normalizedTopNParams));
+
+        // max(UCB) - max(LCB). (Original: min(UCB) - min(LCB).)
+        return standardizedUcbValue - standardizedLcbValue;  // standardized regret bound
+    }
+
+    private static double Max(double[] a)
+    {
+        double m = a[0];
+        for (int i = 1; i < a.Length; i++)
+            if (a[i] > m)
+                m = a[i];
+        return m;
+    }
 }
 
 /// <summary>

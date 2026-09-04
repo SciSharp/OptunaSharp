@@ -1285,3 +1285,116 @@ internal sealed class LogCEHVI : IAcquisitionFunc
         return (value, grad);
     }
 }
+
+/// <summary>
+///     The upper confidence bound acquisition function — port of <c>acqf.UCB</c>. <c>mean + √(β·var)</c>
+///     over the GP posterior. Consumed by <see cref="OptunaSharp.Terminator.RegretBoundEvaluator" />
+///     (PORTING_PLAN Phase 3.3): the standardized regret bound is <c>max(UCB) − max(LCB)</c>. Rides the
+///     managed posterior (triangular solve) → the documented GP tolerance boundary, not bit-exact.
+/// </summary>
+internal sealed class UCB : IAcquisitionFunc
+{
+    private readonly GPRegressor _gpr;
+    private readonly double _beta;
+
+    internal UCB(GPRegressor gpr, GpSearchSpace searchSpace, double beta)
+    {
+        _gpr = gpr;
+        _beta = beta;
+        SearchSpace = searchSpace;
+        LengthScales = gpr.LengthScales;
+    }
+
+    public GpSearchSpace SearchSpace { get; }
+    public double[] LengthScales { get; }
+
+    /// <summary><c>eval_acqf_no_grad</c> — <c>mean + √(β·var)</c> at each row of <paramref name="x" /> (<c>(B, dim)</c>).</summary>
+    public double[] EvalAcqfNoGrad(double[,] x)
+    {
+        int b = x.GetLength(0);
+        (double[] mean, double[] var) = _gpr.Posterior(x);
+        var result = new double[b];
+        for (int i = 0; i < b; i++)
+            result[i] = mean[i] + Math.Sqrt(_beta * var[i]);
+        return result;
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    public double EvalAcqfNoGrad(double[] x)
+    {
+        int dim = x.Length;
+        var row = new double[1, dim];
+        for (int d = 0; d < dim; d++)
+            row[0, d] = x[d];
+        (double[] mean, double[] var) = _gpr.Posterior(row);
+        return mean[0] + Math.Sqrt(_beta * var[0]);
+    }
+
+    /// <summary><c>eval_acqf_with_grad</c> — value and ∂UCB/∂x (autograd's inherited path; unused by the terminator).</summary>
+    public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
+    {
+        (double mean, double var, double[] dMean, double[] dVar, bool _) = _gpr.PosteriorWithGrad(x);
+        double sq = Math.Sqrt(_beta * var);
+        double factor = _beta / (2.0 * sq);
+        var grad = new double[x.Length];
+        for (int d = 0; d < x.Length; d++)
+            grad[d] = dMean[d] + factor * dVar[d];
+        return (mean + sq, grad);
+    }
+}
+
+/// <summary>
+///     The lower confidence bound acquisition function — port of <c>acqf.LCB</c>. <c>mean − √(β·var)</c>
+///     over the GP posterior. Consumed by <see cref="OptunaSharp.Terminator.RegretBoundEvaluator" />
+///     (PORTING_PLAN Phase 3.3). Rides the managed posterior → the documented GP tolerance boundary.
+/// </summary>
+internal sealed class LCB : IAcquisitionFunc
+{
+    private readonly GPRegressor _gpr;
+    private readonly double _beta;
+
+    internal LCB(GPRegressor gpr, GpSearchSpace searchSpace, double beta)
+    {
+        _gpr = gpr;
+        _beta = beta;
+        SearchSpace = searchSpace;
+        LengthScales = gpr.LengthScales;
+    }
+
+    public GpSearchSpace SearchSpace { get; }
+    public double[] LengthScales { get; }
+
+    /// <summary><c>eval_acqf_no_grad</c> — <c>mean − √(β·var)</c> at each row of <paramref name="x" /> (<c>(B, dim)</c>).</summary>
+    public double[] EvalAcqfNoGrad(double[,] x)
+    {
+        int b = x.GetLength(0);
+        (double[] mean, double[] var) = _gpr.Posterior(x);
+        var result = new double[b];
+        for (int i = 0; i < b; i++)
+            result[i] = mean[i] - Math.Sqrt(_beta * var[i]);
+        return result;
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    public double EvalAcqfNoGrad(double[] x)
+    {
+        int dim = x.Length;
+        var row = new double[1, dim];
+        for (int d = 0; d < dim; d++)
+            row[0, d] = x[d];
+        (double[] mean, double[] var) = _gpr.Posterior(row);
+        return mean[0] - Math.Sqrt(_beta * var[0]);
+    }
+
+    /// <summary><c>eval_acqf_with_grad</c> — value and ∂LCB/∂x (autograd's inherited path; unused by the terminator).</summary>
+    public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
+    {
+        (double mean, double var, double[] dMean, double[] dVar, bool _) = _gpr.PosteriorWithGrad(x);
+        double sq = Math.Sqrt(_beta * var);
+        double factor = _beta / (2.0 * sq);
+        var grad = new double[x.Length];
+        for (int d = 0; d < x.Length; d++)
+            grad[d] = dMean[d] - factor * dVar[d];
+        return (mean - sq, grad);
+    }
+}
