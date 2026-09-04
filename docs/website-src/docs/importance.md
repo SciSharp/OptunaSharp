@@ -53,8 +53,7 @@ promising region rather than the whole space.
 
 > **Roadmap.** Optuna's forest-based evaluators (`FanovaImportanceEvaluator`,
 > `MeanDecreaseImpurityImportanceEvaluator`) depend on a random-forest backend and are planned for a
-> later phase (they will ship in a satellite package so Core stays lightweight). PED-ANOVA is the
-> evaluator available today.
+> later phase. PED-ANOVA is the evaluator available today.
 
 ## Writing a custom evaluator
 
