@@ -59,6 +59,18 @@ internal sealed class GPRegressor
 
     internal int Dim => _nParams;
 
+    /// <summary><c>length_scales = 1 / √(inverse_squared_lengthscales)</c> — the per-parameter length scales the acqf optimizer preconditions with.</summary>
+    internal double[] LengthScales
+    {
+        get
+        {
+            var ls = new double[_nParams];
+            for (int d = 0; d < _nParams; d++)
+                ls[d] = 1.0 / Math.Sqrt(InverseSquaredLengthscales[d]);
+            return ls;
+        }
+    }
+
     internal GPRegressor(
         bool[] isCategorical,
         double[,] xTrain,
@@ -208,6 +220,78 @@ internal sealed class GPRegressor
             variance[i] = Math.Max(0.0, KernelScale - s);
         }
         return (mean, variance);
+    }
+
+    /// <summary>
+    ///     The posterior mean and variance at a single query point <paramref name="x" /> together with
+    ///     their gradients w.r.t. <paramref name="x" /> — the analytic replacement for autograd through
+    ///     <c>posterior</c>, used by the acquisition-function gradient (Phase 3.2 part 3b). With
+    ///     <c>k_j = kernel_scale·M(S_j)</c>, <c>V = C⁻¹kᵀ</c>: <c>mean = k·C⁻¹y</c>,
+    ///     <c>var = kernel_scale − k·V</c> (clamped at 0), and for a continuous dimension <c>d</c>
+    ///     (<c>∂k_j/∂x_d = kernel_scale·M'(S_j)·w_d·2(x_d − X_{j,d})</c>):
+    ///     <c>∂mean/∂x_d = Σ_j ∂k_j/∂x_d·C⁻¹y_j</c> and <c>∂var/∂x_d = −2·Σ_j ∂k_j/∂x_d·V_j</c>. The
+    ///     categorical (Hamming) dimensions have zero derivative, and where the variance is clamped the
+    ///     variance gradient is 0 (torch's <c>clamp_min_</c> backward) — matching autograd, including the
+    ///     NaNs Optuna itself produces where the posterior collapses.
+    /// </summary>
+    internal (double Mean, double Var, double[] DMean, double[] DVar, bool VarClamped) PosteriorWithGrad(double[] x)
+    {
+        if (_covYYChol is null)
+            throw new InvalidOperationException("Call CacheMatrix before PosteriorWithGrad.");
+
+        double[] w = InverseSquaredLengthscales;
+        double scale = KernelScale;
+        var k = new double[_n];
+        var mp = new double[_n];
+        for (int j = 0; j < _n; j++)
+        {
+            double s = 0.0;
+            for (int d = 0; d < _nParams; d++)
+            {
+                double diff = x[d] - _xTrain[j, d];
+                double sq = diff * diff;
+                if (_isCategorical[d])
+                    sq = sq > 0.0 ? 1.0 : 0.0;
+                s += sq * w[d];
+            }
+            (double value, double deriv) = Matern52(s);
+            k[j] = scale * value;
+            mp[j] = deriv;
+        }
+
+        double mean = 0.0;
+        for (int j = 0; j < _n; j++)
+            mean += k[j] * _covYYInvY[j];
+
+        // V = C⁻¹ kᵀ via inv(Lᵀ)·inv(L)·k.
+        double[] invLk = LinAlg.SolveTriangular(_covYYChol, k, upper: false);
+        double[,] lt = Transpose(_covYYChol);
+        double[] v = LinAlg.SolveTriangular(lt, invLk, upper: true);
+
+        double rawVar = scale;
+        for (int j = 0; j < _n; j++)
+            rawVar -= k[j] * v[j];
+        bool clamped = rawVar < 0.0;
+        double variance = clamped ? 0.0 : rawVar;
+
+        var dMean = new double[_nParams];
+        var dVar = new double[_nParams];
+        for (int d = 0; d < _nParams; d++)
+        {
+            if (_isCategorical[d])
+                continue;  // Hamming distance is piecewise constant → zero derivative.
+            double dm = 0.0;
+            double dv = 0.0;
+            for (int j = 0; j < _n; j++)
+            {
+                double dkj = scale * mp[j] * w[d] * 2.0 * (x[d] - _xTrain[j, d]);
+                dm += dkj * _covYYInvY[j];
+                dv += dkj * v[j];
+            }
+            dMean[d] = dm;
+            dVar[d] = clamped ? 0.0 : -2.0 * dv;
+        }
+        return (mean, variance, dMean, dVar, clamped);
     }
 
     /// <summary>

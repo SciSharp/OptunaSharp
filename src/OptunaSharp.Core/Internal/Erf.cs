@@ -305,6 +305,31 @@ internal static class Erf
         return result;
     }
 
+    /// <summary>
+    ///     Scaled complementary error function <c>erfcx(x) = exp(x²)·erfc(x)</c> — the numerically
+    ///     stable form used by the GP LogEI acquisition function for large arguments (where a naive
+    ///     <c>exp(x²)·erfc(x)</c> would overflow × underflow). For <c>|x| ≤ 25</c> the direct product
+    ///     is safe (no overflow, no underflow); beyond that the asymptotic series
+    ///     <c>1/(x√π)·Σ(-1)ᵏ(2k-1)!!/(2x²)ᵏ</c> is used. Rides the erf/ucrt tolerance class.
+    /// </summary>
+    internal static double Erfcx(double x)
+    {
+        if (x < 0.0)
+            return 2.0 * Math.Exp(x * x) - Erfcx(-x);  // erfcx(-x) = 2·exp(x²) − erfcx(x)
+        if (x <= 25.0)
+            return Math.Exp(x * x) * Erfc(x);
+        // Asymptotic expansion for large x (convergent-enough here: successive terms shrink fast).
+        double inv2x2 = 1.0 / (2.0 * x * x);
+        double term = 1.0;
+        double sum = 1.0;
+        for (int k = 1; k <= 12; k++)
+        {
+            term *= -(2 * k - 1) * inv2x2;
+            sum += term;
+        }
+        return sum / (x * Math.Sqrt(Math.PI));
+    }
+
     /// <summary>Standard normal CDF: <c>0.5 * erfc(-z / sqrt(2))</c>.</summary>
     internal static double NormCdf(double z) => 0.5 * Erfc(-z / Math.Sqrt(2.0));
 
