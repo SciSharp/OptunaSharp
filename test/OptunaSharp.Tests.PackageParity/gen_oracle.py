@@ -78,13 +78,19 @@ import xgboost as xgb
 dtrain = xgb.DMatrix(X_tr, label=y_tr)
 dtest = xgb.DMatrix(X_te, label=y_te)
 
+# The EXACT 8-parameter grid of bexgboost/823df08d2e3760538e9b931d38439a68 (16 stars) — the same
+# search space examples/XGBoostHpo.cs mirrors. Param names match XGBoost's own, so they spread
+# straight into the training params dict (as the gist does). The gist's XGBoostPruningCallback is
+# omitted: RandomSampler suggestions are value-independent, so pruning wouldn't change this parity.
 XGB_SPACE = [
     {"kind": "float", "name": "eta", "low": 0.01, "high": 0.3, "log": False},
     {"kind": "int", "name": "max_depth", "low": 3, "high": 10},
     {"kind": "float", "name": "subsample", "low": 0.5, "high": 1.0, "log": False},
     {"kind": "float", "name": "colsample_bytree", "low": 0.5, "high": 1.0, "log": False},
-    {"kind": "float", "name": "reg_lambda", "low": 0.1, "high": 10.0, "log": True},
-    {"kind": "float", "name": "reg_alpha", "low": 0.001, "high": 10.0, "log": True},
+    {"kind": "float", "name": "gamma", "low": 0.0, "high": 10.0, "log": False},
+    {"kind": "float", "name": "min_child_weight", "low": 0.1, "high": 10.0, "log": False},
+    {"kind": "float", "name": "lambda", "low": 0.1, "high": 10.0, "log": False},
+    {"kind": "float", "name": "alpha", "low": 0.0, "high": 10.0, "log": False},
 ]
 
 
@@ -92,11 +98,9 @@ def xgb_objective(trial):
     v = suggest_all(trial, XGB_SPACE)
     params = {
         "objective": "reg:squarederror", "eval_metric": "rmse", "tree_method": "hist",
-        "nthread": 1, "seed": 0,
-        "eta": v["eta"], "max_depth": v["max_depth"], "subsample": v["subsample"],
-        "colsample_bytree": v["colsample_bytree"], "lambda": v["reg_lambda"], "alpha": v["reg_alpha"],
+        "nthread": 1, "seed": 0, **v,
     }
-    model = xgb.train(params, dtrain, num_boost_round=40)
+    model = xgb.train(params, dtrain, num_boost_round=50)
     return rmse(y_te, model.predict(dtest))
 
 
