@@ -117,16 +117,24 @@ by path (see below) but is **not** a solution member.
 
 ## The NumSharp reference — "csproj for now, nuget in future"
 
-`OptunaSharp.Core` depends on NumSharp, resolved **conditionally on `Exists(...)`** in the csproj:
+`OptunaSharp.Core` depends on NumSharp, resolved **conditionally on `Exists(...)`** in the csproj, in
+priority order:
 
-- **Local dev** — when a sibling `NumSharp` checkout exists at `../../../NumSharp/src/NumSharp.Core/`
-  (i.e. `K:/source/NumSharp` beside `K:/source/OptunaSharp`), it is referenced by **ProjectReference**
-  so changes flow live.
-- **Standalone / CI** — otherwise it falls back to a **PackageReference** on `NumSharp 0.60.0`.
+- **Submodule (canonical)** — the pinned **`src/NumSharp` git submodule** (`SciSharp/NumSharp` @
+  `journey3`, mirroring `src/optuna`), referenced by **ProjectReference** at
+  `src/NumSharp/src/{NumSharp.Core,NumSharp.Interop.OpenBLAS}`. Restore it with
+  `git submodule update --init src/NumSharp` (it does NOT need NumSharp's own nested submodules).
+- **Sibling (fallback)** — if the submodule isn't initialised but a sibling `NumSharp` checkout exists at
+  `../../../NumSharp` (i.e. `K:/source/NumSharp`), that is used instead, so a local sibling still works.
+- **NuGet (last resort)** — otherwise a `PackageReference` on `NumSharp` / `NumSharp.Interop.OpenBLAS`
+  `0.60.0`. This currently CANNOT restore or compile: Core targets a NumSharp ahead of published 0.60.0
+  (`np.linalg`, `RuntimeError`, `KeyError`) and OpenBLAS isn't published at all — it becomes viable at
+  NumSharp `0.70.0`.
 
-The two are mutually exclusive, so exactly one applies. Packing always records a clean `NumSharp`
-package dependency either way (verified). **CI uses the NuGet fallback** — CI runners have no sibling
-NumSharp checkout, which also sidesteps the cross-repo build friction below.
+Exactly one applies (submodule wins where present). **CI initialises the submodule** — every
+Core-building job runs `git submodule update --init src/NumSharp` and builds via the P2P (so it now
+does hit the cross-repo build friction below). Override the path with
+`-p:NumSharpCoreProject=<path>` / `-p:NumSharpOpenBlasProject=<path>` if needed.
 
 ---
 

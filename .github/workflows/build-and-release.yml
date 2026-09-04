@@ -31,6 +31,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Init NumSharp submodule (src/NumSharp @ journey3)
+      run: git submodule update --init src/NumSharp
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
@@ -90,6 +93,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Init NumSharp submodule (src/NumSharp @ journey3)
+      run: git submodule update --init src/NumSharp
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
@@ -139,6 +145,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Init NumSharp submodule (src/NumSharp @ journey3)
+      run: git submodule update --init src/NumSharp
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -239,6 +248,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Init NumSharp submodule (src/NumSharp @ journey3)
+      run: git submodule update --init src/NumSharp
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4

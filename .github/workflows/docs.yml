@@ -37,6 +37,9 @@ jobs:
         with:
           fetch-depth: 0   # full history so DocFX git-contribute links resolve
 
+      - name: Init NumSharp submodule (src/NumSharp @ journey3)
+        run: git submodule update --init src/NumSharp
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:

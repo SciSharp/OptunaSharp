@@ -43,6 +43,10 @@
   <!-- The sibling path can be overridden (e.g. -p:NumSharpCoreProject=<path> or an env var) to
        point at a pinned checkout/worktree — useful when the sibling working tree is mid-edit. -->
   <PropertyGroup>
+    <!-- Prefer the in-repo NumSharp submodule (src/NumSharp, pinned to journey3 — the canonical
+         reference now); fall back to a sibling checkout (K:\source\NumSharp) if the submodule
+         isn't initialised. -->
+    <NumSharpCoreProject Condition="'$(NumSharpCoreProject)' == '' And Exists('$(MSBuildThisFileDirectory)..\NumSharp\src\NumSharp.Core\NumSharp.Core.csproj')">$(MSBuildThisFileDirectory)..\NumSharp\src\NumSharp.Core\NumSharp.Core.csproj</NumSharpCoreProject>
     <NumSharpCoreProject Condition="'$(NumSharpCoreProject)' == ''">$(MSBuildThisFileDirectory)..\..\..\NumSharp\src\NumSharp.Core\NumSharp.Core.csproj</NumSharpCoreProject>
   </PropertyGroup>
   <ItemGroup Condition="Exists('$(NumSharpCoreProject)')">
@@ -71,6 +75,8 @@
        working path today.
        ================================================================================ -->
   <PropertyGroup>
+    <!-- Same submodule-first, sibling-fallback resolution as NumSharp.Core above. -->
+    <NumSharpOpenBlasProject Condition="'$(NumSharpOpenBlasProject)' == '' And Exists('$(MSBuildThisFileDirectory)..\NumSharp\src\NumSharp.Interop.OpenBLAS\NumSharp.Interop.OpenBLAS.csproj')">$(MSBuildThisFileDirectory)..\NumSharp\src\NumSharp.Interop.OpenBLAS\NumSharp.Interop.OpenBLAS.csproj</NumSharpOpenBlasProject>
     <NumSharpOpenBlasProject Condition="'$(NumSharpOpenBlasProject)' == ''">$(MSBuildThisFileDirectory)..\..\..\NumSharp\src\NumSharp.Interop.OpenBLAS\NumSharp.Interop.OpenBLAS.csproj</NumSharpOpenBlasProject>
   </PropertyGroup>
   <ItemGroup Condition="Exists('$(NumSharpOpenBlasProject)')">
