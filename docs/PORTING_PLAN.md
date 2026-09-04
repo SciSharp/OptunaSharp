@@ -45,7 +45,7 @@ OptunaSharp can share a live journal file with no external package on either sid
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 3.2** — the GP stack (`GPSampler`) — §7 autodiff decision gate first
+### ▶ CONTINUE HERE: **Phase 3.2 part 2** — the GP fit optimizer: port L-BFGS-B + `fit_kernel_params` (gate core ✅ GREEN)
 
 Phases 0, 1 and **2.1–2.16 are complete** — **Phase 2 (all native features) is DONE** — and **Phase 3 is
 now in progress**. The whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP
@@ -63,11 +63,37 @@ consume across the assembly boundary. Only three deliberate boundaries/divergenc
 parallel_coordinate `draw_order` (`np.argsort` over tied Pareto ranks — the unstable-quicksort `[Misaligned]`,
 same class as 2.8); and `_terminator_improvement`, which rides the GP improvement evaluators → deferred to
 **3.3**. New shared primitives: `MathUtil.Linspace`/`Mean`/`Std`/`FormatG3` (all byte-exact vs numpy/CPython)
-and `PyJson.DumpsIndented` (byte-exact `json.dumps(indent=2)`, used by the timeline hovertext). **Next is
-Phase 3.2 — the GP stack** (`GPSampler`): start with the §7 autodiff decision gate (hand-derived Matérn-5/2
-gradients + ported `batched_lbfgsb`, prototyped native), then port search_space → prior → kernel+MLL →
-L-BFGS-B → acqf → optim_mixed → sampler, using `LinAlg.Cholesky` (byte-exact) + `LinAlg.SolveTriangular`
-(the one still-managed primitive). The plotly rendering `plot_*`/`_get_*_plot` stays Tier X **5.2**.
+and `PyJson.DumpsIndented` (byte-exact `json.dumps(indent=2)`, used by the timeline hovertext). **Phase 3.2
+is now in progress — the §7 autodiff decision gate is GREEN.** Its hard half — the hand-derived Matérn-5/2
+marginal-likelihood gradient that replaces PyTorch autograd — is **ported, tested, and proven to match live
+autograd to ~1e-13** (part 1 below), so **GP stays native (Tier N); TorchSharp 5.6 is NOT needed.** **Next
+is Phase 3.2 part 2 — the fit optimizer.** ⚠️ **Plan correction:** `batched_lbfgsb.py` is NOT "already
+numpy" as §7's parenthetical assumed — it is a greenlet *wrapper* around `scipy.optimize.fmin_l_bfgs_b`, and
+`_fit_kernel_params` itself calls `scipy.optimize.minimize(method="l-bfgs-b")`. So keeping GP native requires
+a **managed L-BFGS-B port**. The reference is scipy 1.16.3's `scipy/optimize/__lbfgsb.c` (L-BFGS-B v3.0, the
+Nocedal/Byrd/Zhu/Morales code translated to C, ~3.8k lines; deterministic, no autodiff — mechanical to port).
+Then continue: search_space → acqf → optim_mixed → sampler, using `LinAlg.Cholesky` (byte-exact) +
+`LinAlg.SolveTriangular` (managed — the loss/gradient are therefore **tolerance-exact, not bit-for-bit**; in
+`deterministic_objective` mode the 1e-6 noise floor makes the covariance ill-conditioned so the loss drifts
+~1e-8, small relative to its magnitude). The plotly rendering `plot_*`/`_get_*_plot` stays Tier X **5.2**.
+- ✅ **3.2 part 1 — GP numeric core + the §7 autodiff decision gate (`OptunaSharp.Gp`).** New
+  `src/OptunaSharp.Core/Gp/` namespace porting the forward + hand-derived backward of `optuna/_gp/gp.py`'s
+  `GPRegressor`: `Prior.cs` (`default_log_prior` — the lengthscale hand-crafted term + `Gamma(2,1)` scale /
+  `Gamma(1.1,30)` noise priors, constants omitted; `DEFAULT_MINIMUM_NOISE_VAR`) and `GPRegressor.cs`
+  (`Kernel` — Matérn-5/2 ARD with categorical Hamming distance; `MarginalLogLikelihood` —
+  `-½logdet(C) - ½yᵀC⁻¹y` via `LinAlg.Cholesky` + `LinAlg.SolveTriangular`; and **`LossAndGrad`** — the
+  analytic gradient of `-MLL - log_prior` w.r.t. the raw log-params that replaces PyTorch autograd). **This
+  resolves the plan's single genuinely-hard porting problem: the closed-form Matérn-5/2 gradient (∂MLL/∂w =
+  s·Σ(G⊙M')⊙D, ∂MLL/∂s = ΣG⊙M(S), ∂MLL/∂ν = ½(α·α − tr C⁻¹), G = ½(ααᵀ − C⁻¹)), computed in pure managed
+  code with `LinAlg.Dot`/`SolveTriangular` + `MathUtil.PairwiseSum`, matches live PyTorch autograd's loss AND
+  full gradient to ~1e-13** — far tighter than needed; a finite-difference self-check confirms correctness
+  independently. Tolerance (not bit-exact) by design: the analytic backward is a different float-op sequence
+  than autograd's reverse pass and the forward rides the managed triangular solve — the documented GP
+  boundary. 7 unit tests (kernel numerical + categorical-Hamming vs Optuna, MLL forward on 3 fixed cases,
+  prior value, finite-difference gradient check, deterministic noise-grad = 0, reproducibility) + 3 live
+  parity sweeps (`GpFitParityTests`: numerical / categorical / deterministic — 60 random (X,Y,raw) configs,
+  loss+gradient vs Optuna's own `_fit_kernel_params.loss_func`, magnitude-relative tol 1e-9). Suite:
+  **472 unit + 208 interop**, both TFMs, none skipped.
 - ✅ **3.1 part 1 — viz data layer foundations (`OptunaSharp.Visualization`).** Ported the pure (non-plotly)
   half of `_utils.py` (`VisualizationUtils`: `CheckPlotArgs`/`IsLogScale`/`IsNumerical`/`FilterNonfinite`/
   `IsReverseScale`) plus the three simplest `_get_*_info` builders — `_optimization_history.py`
@@ -146,7 +172,7 @@ moment OptunaSharp.Core loads. Keep it.
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
 | 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp (3.2) + QMC scrambling deferred to their consumers |
-| 3 — Native heavy tail | 🟩 | **3.1 COMPLETE** (all 13 viz data-layer `_get_*_info` builders, bit-exact/erf-tolerance vs live Optuna; rank RGB→5.2, MO PC draw_order `[Misaligned]`, `_terminator_improvement`→3.3); **next** 3.2 GP (§7 gate), then 3.3 GP terminators. Rendering `plot_*`→5.2 |
+| 3 — Native heavy tail | 🟩 | **3.1 COMPLETE**; **3.2 in progress** — the §7 autodiff gate is **GREEN** (part 1: hand-derived Matérn-5/2 MLL gradient matches live autograd ~1e-13 → GP stays native, no TorchSharp); **next** 3.2 part 2 = managed L-BFGS-B + fit, then acqf/optim_mixed/sampler, then 3.3 GP terminators. Rendering `plot_*`→5.2 |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
 
@@ -906,12 +932,12 @@ multivariate/group/MOTPE/constrained) + MedianPruner, parity-verified against Py
 the erf path, erf-tolerance on the truncnorm density), persisted to a journal file Python can open.
 Zero external deps.
 
-## Phase 3 — Native heavy tail — ⬜ NOT STARTED
+## Phase 3 — Native heavy tail — 🟩 IN PROGRESS (3.1 done; 3.2 gate green, part 1 landed)
 
 | # | Feature | Optuna source | py SLOC | est. C# | Difficulty | Notes |
 |---|---|---|--:|--:|---|---|
 | 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | ✅ | **COMPLETE** — all 13 `_get_*_info` builders in `OptunaSharp.Visualization` (optimization-history/EDF/intermediate-values/hypervolume-history/param-importances/slice/pareto-front/contour/rank/parallel_coordinate/timeline + `_utils`), bit-exact/erf-tolerance vs live Optuna. rank RGB→5.2, MO PC draw_order `[Misaligned]`, `_terminator_improvement`→3.3. Rendering `plot_*`→5.2 |
-| 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, `batched_lbfgsb` (already pure numpy), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | 🔴 | **Decision gate first (§7), prototyped during Phase 2.** Uses 2.15 cholesky/solve_triangular. Port order: search_space → prior → kernel+MLL → L-BFGS-B → acqf → optim_mixed → sampler |
+| 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, L-BFGS-B (managed port of scipy's `__lbfgsb.c` — NOT "already numpy"; see §0), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | 🔴 | **🟩 gate GREEN (part 1 done):** prior + kernel + MLL + **hand-derived gradient** (`OptunaSharp.Gp`) match live autograd ~1e-13 → native confirmed. Uses 2.15 cholesky/solve_triangular (tolerance-exact). Remaining: L-BFGS-B + fit (part 2) → acqf → optim_mixed → search_space → sampler |
 | 3.3 | GP terminators: `RegretBoundEvaluator` (default), `EMMREvaluator` | `terminator/improvement/*` | ~230 | 700 | 🔴 | rides 3.2 |
 
 **Phase 3 ≈ 3.5k py → ~11.7k C#. Estimate: 10–13 weeks (GP is 8–10).**
