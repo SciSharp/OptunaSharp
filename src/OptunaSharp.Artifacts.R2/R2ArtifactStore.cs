@@ -55,17 +55,21 @@ public class R2ArtifactStore : IArtifactStore
     }
 
     private static AmazonS3Client CreateClient(string accountId, string accessKeyId, string secretAccessKey)
+        => new(accessKeyId, secretAccessKey, BuildR2Config(accountId));
+
+    /// <summary>
+    ///     The <see cref="AmazonS3Config" /> for a Cloudflare R2 account: the account endpoint,
+    ///     path-style addressing, and the SigV4 <c>"auto"</c> region R2 expects. Exposed to the test
+    ///     suite so the endpoint format is pinned.
+    /// </summary>
+    internal static AmazonS3Config BuildR2Config(string accountId) => new()
     {
-        var config = new AmazonS3Config
-        {
-            ServiceURL = $"https://{accountId}.r2.cloudflarestorage.com",
-            // R2 addresses buckets path-style off the account endpoint.
-            ForcePathStyle = true,
-            // R2 ignores the region, but the SigV4 signer needs one; Cloudflare's docs use "auto".
-            AuthenticationRegion = "auto",
-        };
-        return new AmazonS3Client(accessKeyId, secretAccessKey, config);
-    }
+        ServiceURL = $"https://{accountId}.r2.cloudflarestorage.com",
+        // R2 addresses buckets path-style off the account endpoint.
+        ForcePathStyle = true,
+        // R2 ignores the region, but the SigV4 signer needs one; Cloudflare's docs use "auto".
+        AuthenticationRegion = "auto",
+    };
 
     public Stream OpenReader(string artifactId) => _inner.OpenReader(artifactId);
 

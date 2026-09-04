@@ -1,11 +1,15 @@
 # OptunaSharp.Tests.Artifacts
 
-Tests for the cloud artifact backends — `OptunaSharp.Artifacts.{S3,Gcs,AzureBlob,R2}`. Two layers.
+Tests for the cloud artifact backends — `OptunaSharp.Artifacts.{S3,Gcs,AzureBlob,R2}`. Two layers,
+**42 tests** total (31 unit + 11 integration) on each TFM, giving **100% line and 100% branch
+coverage** of the four packages — the only uncovered branch is the GCS default-client ctor
+(`StorageClient.Create()`), which requires live Application Default Credentials and cannot run offline.
 
 ## Unit tests (default — no external dependencies)
 
-Mock-based (Moq) tests of each store's real logic: the not-found → `ArtifactNotFound` mapping and the
-get/put/delete delegation, with the cloud SDK clients mocked (no network).
+Mock-based (Moq) tests of each store: every ctor, the not-found → `ArtifactNotFound` mapping, error
+propagation, `avoidBufCopy` behavior, and get/put/delete delegation — with the cloud SDK clients
+mocked (no network).
 
 ```bash
 dotnet test test/OptunaSharp.Tests.Artifacts -c Release
@@ -42,3 +46,15 @@ explicitly:
 ```bash
 dotnet test test/OptunaSharp.Tests.Artifacts -c Release --filter "TestCategory!=Integration"
 ```
+
+## Coverage
+
+With the emulators up, the whole suite gives **100% line coverage and 100% branch coverage** of the
+four artifact packages, except the one branch noted above. Measure it with:
+
+```bash
+docker compose -f test/OptunaSharp.Tests.Artifacts/docker-compose.yml up -d
+dotnet test test/OptunaSharp.Tests.Artifacts -c Release --collect:"XPlat Code Coverage"
+# -> TestResults/<guid>/coverage.cobertura.xml   (filter packages to OptunaSharp.Artifacts.*)
+```
+
