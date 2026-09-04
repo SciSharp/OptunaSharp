@@ -1,0 +1,28 @@
+# Redis server for the OptunaSharp.Storage.Redis integration tests.
+#
+#   Bring up:   docker compose -f test/OptunaSharp.Tests.Storage.Redis/docker-compose.yml up -d
+#   Run tests:  dotnet test test/OptunaSharp.Tests.Storage.Redis -c Release --filter TestCategory=Integration
+#   Tear down:  docker compose -f test/OptunaSharp.Tests.Storage.Redis/docker-compose.yml down -v
+#
+# JournalRedisBackend is exercised against a real, credential-free Redis — the same server Python
+# Optuna's JournalRedisBackend uses, so the on-wire encoding is asserted interchangeable across the
+# language boundary (see also OptunaSharp.Tests.Interop/JournalRedisInteropTests, which round-trips a
+# study Python<->C# over this very server).
+#
+# The integration tests self-skip (Assert.Inconclusive) when Redis is not reachable, so a plain
+# `dotnet test` without Docker is safe. Set OPTUNASHARP_REDIS_REQUIRED=1 to make an absent server a
+# hard failure instead (for CI once wired). Override the endpoint with OPTUNASHARP_REDIS_URL
+# (default redis://localhost:6379).
+services:
+  redis:
+    image: redis:7-alpine
+    # Ephemeral: no RDB snapshots, no AOF — the tests only need a live keyspace, and each uses a
+    # unique key prefix so runs never collide.
+    command: redis-server --save "" --appendonly no
+    ports:
+      - "6379:6379"   # Redis protocol endpoint
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

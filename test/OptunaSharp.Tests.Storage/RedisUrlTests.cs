@@ -5,7 +5,7 @@ using NumSharp;                          // ValueError
 using OptunaSharp.Storages.Journal;      // RedisUrl (internal — reachable via the friend grant)
 using StackExchange.Redis;
 
-namespace OptunaSharp.Tests.Storage.Redis;
+namespace OptunaSharp.Tests.Storage;
 
 /// <summary>
 ///     Unit tests for the <c>redis://</c> → <see cref="ConfigurationOptions" /> adapter — the one
@@ -104,5 +104,35 @@ public class RedisUrlTests
     {
         var act = () => RedisUrl.BuildConfiguration("not-a-url");
         act.Should().Throw<ValueError>().WithMessage("*Invalid Redis URL*");
+    }
+
+    [TestMethod]
+    public void QueryUsernameAndPassword_Override()
+    {
+        var o = RedisUrl.BuildConfiguration("redis://host:6379?username=alice&password=secret");
+        o.User.Should().Be("alice");
+        o.Password.Should().Be("secret");
+    }
+
+    [TestMethod]
+    public void UserOnly_NoPassword()
+    {
+        var o = RedisUrl.BuildConfiguration("redis://alice@host:6379");
+        o.User.Should().Be("alice");
+        o.Password.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void NonNumericDbPath_IsIgnored()
+    {
+        RedisUrl.BuildConfiguration("redis://host:6379/not-a-db").DefaultDatabase.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void ValuelessQueryFlag_IsIgnored()
+    {
+        // A bare query flag (no '=') must parse without throwing; other params still apply.
+        var o = RedisUrl.BuildConfiguration("redis://host:6379?verbose&db=2");
+        o.DefaultDatabase.Should().Be(2);
     }
 }

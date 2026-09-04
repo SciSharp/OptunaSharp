@@ -1,0 +1,141 @@
+name: Package Parity (isolated)
+
+# Build -> Package -> Deploy -> Test, each an ISOLATED job. The test job never sees src/: it
+# sparse-checks-out only the package-parity project and runs it in a Docker container whose build
+# context is that project alone. The container binds to the PACKAGED OptunaSharp (from a local feed)
+# and replays real Optuna + real xgboost/lightgbm/sklearn oracles against it. See
+# test/OptunaSharp.Tests.PackageParity/README.md.
+#
+# NOTE: until NumSharp.Interop.OpenBLAS is published to nuget.org (or made optional), the build/package
+# stages fail restore with NU1101 — a real finding this pipeline surfaces, not a harness bug.
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    paths:
+      - "src/**"
+      - "test/OptunaSharp.Tests.PackageParity/**"
+      - ".github/workflows/package-parity.yml"
+  pull_request:
+    branches: [ "master", "main" ]
+    paths:
+      - "src/**"
+      - "test/OptunaSharp.Tests.PackageParity/**"
+      - ".github/workflows/package-parity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOWARN: CS1591%3BCS1573%3BCS1572%3BCS1570%3BCS1574%3BCS1587%3BCS1711%3BCS1734
+
+jobs:
+  # 1) BUILD — compile the shipping project (isolated: proves it builds).
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
+        shell: bash
+        run: |
+          git submodule update --init src/NumSharp
+          python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
+            || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+          dotnet-quality: 'preview'
+      - name: Build Core
+        run: dotnet build src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
+
+  # 2) PACKAGE — pack the .nupkg, run the strong-name gate, and upload it as the ONLY thing that
+  #    flows to the test stage.
+  package:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
+        shell: bash
+        run: |
+          git submodule update --init src/NumSharp
+          python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
+            || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+          dotnet-quality: 'preview'
+      - name: Pack
+        id: pack
+        run: |
+          mkdir -p feed
+          dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release \
+            --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
+          VER=$(ls feed/OptunaSharp.*.nupkg | sed -E 's#.*/OptunaSharp\.(.+)\.nupkg#\1#')
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "packed OptunaSharp $VER"
+      - name: Strong-name gate on the packed assembly
+        run: dotnet run .github/scripts/verify_strong_name.cs -- feed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: optunasharp-feed
+          path: feed/*.nupkg
+          retention-days: 5
+
+  # 3) DEPLOY — stage the packed artifact into an isolated feed the test stage consumes. This is the
+  #    "deploy" boundary: only the .nupkg crosses it (swap for GitHub Packages for a hosted feed).
+  deploy:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: optunasharp-feed
+          path: feed
+      - run: |
+          echo "Deploying feed:"; ls -la feed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployed-feed
+          path: feed
+          retention-days: 5
+
+  # 4) TEST — ISOLATED, via docker compose (matching the source suites' service pattern). Sparse-
+  #    checkout ONLY the package-parity project + the reused Redis compose file (src/ is never
+  #    fetched), drop the deployed feed in, then `docker compose up` the test container alongside the
+  #    real Redis service. The test container's build context is just this project, so src/ never
+  #    enters the image; it reaches services by compose name (redis:6379). Real ML packages are
+  #    pip-installed in the container; the packaged OptunaSharp is replayed against their oracles.
+  test:
+    needs: [ package, deploy ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the isolated test project + reused service compose (no src/)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            test/OptunaSharp.Tests.PackageParity
+            test/OptunaSharp.Tests.Storage/docker-compose.yml
+          sparse-checkout-cone-mode: false
+      - name: Pull the deployed feed into the project
+        uses: actions/download-artifact@v4
+        with:
+          name: deployed-feed
+          path: test/OptunaSharp.Tests.PackageParity/feed
+      - name: Package-parity via docker compose (test container + real Redis service)
+        env:
+          OPTUNASHARP_VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          docker compose -f test/OptunaSharp.Tests.PackageParity/docker-compose.yml \
+            up --build --abort-on-container-exit --exit-code-from package-parity
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f test/OptunaSharp.Tests.PackageParity/docker-compose.yml down -v

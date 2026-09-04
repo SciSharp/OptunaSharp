@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>OptunaSharp.Tests.PackageParity</RootNamespace>
+
+    <!-- The version to pull from the local feed. CI overrides it with the version it just packed;
+         the default matches Directory.Build.props VersionPrefix for local runs. -->
+    <OptunaSharpPackageVersion Condition="'$(OptunaSharpPackageVersion)' == ''">0.1.0</OptunaSharpPackageVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MSTest" Version="3.8.3" />
+    <PackageReference Include="AwesomeAssertions" Version="9.3.0" />
+
+    <!-- THE ISOLATION BOUNDARY: OptunaSharp arrives as a PACKAGE from the local feed, not a
+         ProjectReference. The tests bind to the shipped assembly and its declared dependency graph
+         (NumSharp + NumSharp.Interop.OpenBLAS), exactly as a downstream consumer would. There is no
+         path from here to src/. -->
+    <PackageReference Include="OptunaSharp" Version="$(OptunaSharpPackageVersion)" />
+  </ItemGroup>
+
+</Project>

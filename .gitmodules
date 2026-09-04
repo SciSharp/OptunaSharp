@@ -1,3 +1,7 @@
 [submodule "src/optuna"]
 	path = src/optuna
 	url = https://github.com/optuna/optuna.git
+[submodule "src/NumSharp"]
+	path = src/NumSharp
+	url = https://github.com/SciSharp/NumSharp.git
+	branch = journey3

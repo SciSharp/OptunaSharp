@@ -1,0 +1,7 @@
+# Keep the build context tiny and reproducible. bin/obj are host build output; oracle/ is regenerated
+# inside the container; feed/ IS included (it carries the packed .nupkg the tests restore).
+bin/
+obj/
+oracle/
+Dockerfile
+.dockerignore

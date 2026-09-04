@@ -33,6 +33,7 @@ public class JournalRedisInteropTests
     [TestMethod]
     [TestCategory("RequiresPython")]
     [TestCategory("RequiresRedis")]
+    [TestCategory("Integration")]
     public void Python_Writes_CSharp_Continues_Python_ReadsBack()
     {
         PythonSession.EnsureOrInconclusive();

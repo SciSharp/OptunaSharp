@@ -39,6 +39,9 @@ using System.Runtime.CompilerServices;
 // the native CART port) directly — the port of Optuna's test_tree.py asserts against the tree
 // algorithm with no forest involved, and the native-forest tests reach CartRandomForest.
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Forests, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// Its test project asserts that experimental warning fired via the internal OptunaWarnings.WarningRaised
+// event (same reason the interop suite is a friend).
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
 /// <summary>
 ///     The public half of the strong-name key OptunaSharp is signed with, as the hex literal

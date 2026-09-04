@@ -1,0 +1,17 @@
+<Project>
+
+  <!--
+    SELF-CONTAINED ON PURPOSE. This file is the NEAREST Directory.Build.props to the project, so
+    MSBuild stops its upward search here and the repo-root Directory.Build.props (strong-naming, the
+    conditional sibling-NumSharp/Core references, shared metadata) is NEVER applied. That is the
+    point of this project: it must bind to the PACKAGED OptunaSharp and its declared dependencies
+    (NumSharp, NumSharp.Interop.OpenBLAS) — never to the source tree. Nothing here references src/.
+  -->
+  <PropertyGroup>
+    <SignAssembly>false</SignAssembly>            <!-- a non-shipping test; identity is irrelevant -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+</Project>

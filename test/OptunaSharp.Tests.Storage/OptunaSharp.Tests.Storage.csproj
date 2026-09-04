@@ -6,16 +6,18 @@
     <IsPackable>false</IsPackable>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
-    <RootNamespace>OptunaSharp.Tests.Storage.Redis</RootNamespace>
+    <PackageId>OptunaSharp.Tests.Storage</PackageId>
     <!-- AssemblyName matches the friend granted in OptunaSharp.Storage.Redis's Assembly/Properties.cs,
          so these tests can reach the internal RedisUrl adapter + the IConnectionMultiplexer ctor.
          Strong-naming is set repo-wide in ../../Directory.Build.props. -->
-    <AssemblyName>OptunaSharp.Tests.Storage.Redis</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="MSTest" Version="3.8.3" />
     <PackageReference Include="AwesomeAssertions" Version="9.3.0" />
+    <!-- Code-coverage collector: the "XPlat Code Coverage" data collector emits cobertura so the
+         full-API-coverage of OptunaSharp.Storage.Redis (JournalRedisBackend + RedisUrl) is measurable. -->
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
   </ItemGroup>
 
   <ItemGroup>

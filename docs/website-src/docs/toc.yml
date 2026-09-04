@@ -6,3 +6,29 @@
   href: getting-started.md
 - name: Porting Roadmap
   href: roadmap.md
+- name: Guides
+  items:
+    - name: Study and Trials
+      href: study-and-trials.md
+    - name: Distributions
+      href: distributions.md
+    - name: Search Spaces
+      href: search-spaces.md
+    - name: Samplers
+      href: samplers.md
+    - name: Pruners
+      href: pruners.md
+    - name: Multi-objective Optimization
+      href: multi-objective.md
+    - name: Storage
+      href: storage.md
+    - name: Artifacts
+      href: artifacts.md
+    - name: Terminators
+      href: terminators.md
+    - name: Parameter Importance
+      href: importance.md
+    - name: Visualization
+      href: visualization.md
+    - name: Logging
+      href: logging.md
