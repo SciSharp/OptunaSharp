@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using NumSharp;
 using OptunaSharp.Distributions;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Gp;
 
@@ -13,11 +15,9 @@ namespace OptunaSharp.Gp;
 ///     is pure numpy in Optuna and reproduced bit-for-bit here (no <c>erf</c>, no LAPACK — <c>log</c>/
 ///     <c>exp</c>/<c>floor</c> match Python bit-for-bit).
 ///
-///     <para><b>Not ported yet:</b> <see cref="SampleNormalizedParams" /> — Optuna draws the
-///     preliminary points from <b>scrambled</b> Sobol' (<c>scipy.stats.qmc.Sobol(scramble=True)</c>),
-///     which is the same reproducibility gap deferred in Phase 2.12 (scipy's compiled Cython scramble
-///     over PCG64). It stays a <see cref="NotImplementedException" /> until that lands; the acqf
-///     optimizer (Phase 3.2 part 3) depends on it.</para>
+///     <para><see cref="SampleNormalizedParams" /> draws the preliminary points from <b>scrambled</b>
+///     Sobol' (<see cref="ScrambledSobol" />, a bit-exact port of <c>scipy.stats.qmc.Sobol(scramble=True)</c>)
+///     — the acqf optimizer (Phase 3.2 part 3) depends on it.</para>
 /// </summary>
 internal sealed class GpSearchSpace
 {
@@ -155,11 +155,32 @@ internal sealed class GpSearchSpace
         return result;
     }
 
-    /// <summary>Preliminary QMC sampling — deferred: needs scipy's scrambled Sobol' (Phase 2.12 gap).</summary>
-    internal double[,] SampleNormalizedParams(int n)
-        => throw new NotImplementedException(
-            "SearchSpace.SampleNormalizedParams requires scrambled Sobol' sampling " +
-            "(scipy.stats.qmc.Sobol(scramble=True)), deferred with the Phase 2.12 QMC scrambling gap.");
+    /// <summary>
+    ///     <c>_sample_normalized_params</c> — <paramref name="n" /> preliminary points for the acqf
+    ///     optimizer. A Sobol' seed is drawn from <paramref name="rng" /> (the sampler's MT19937), the
+    ///     scrambled Sobol' box-fill runs through <see cref="ScrambledSobol" />, then each categorical
+    ///     dimension floors to a code and each discrete dimension rounds to its grid.
+    /// </summary>
+    internal double[,] SampleNormalizedParams(int n, NumPyRandom rng)
+    {
+        int seed = (int)rng.randint(0, 2147483647);  // rng.randint(np.iinfo(np.int32).max)
+        double[,] values = ScrambledSobol.Random(Dim, n, seed);
+        for (int i = 0; i < Dim; i++)
+        {
+            if (IsCategorical[i])
+            {
+                for (int t = 0; t < n; t++)
+                    values[t, i] = Math.Floor(values[t, i] * _bounds[i, 1]);
+            }
+            else if (_steps[i] != 0.0)
+            {
+                var scaleType = (ScaleType)_scaleTypes[i];
+                for (int t = 0; t < n; t++)
+                    values[t, i] = RoundOneNormalizedParam(values[t, i], scaleType, (_bounds[i, 0], _bounds[i, 1]), _steps[i]);
+            }
+        }
+        return values;
+    }
 
     // ---- one-parameter transforms (pure numpy, bit-exact) -------------------------------------
 

@@ -22,6 +22,25 @@ internal static class QuasiMonteCarlo
     private const int Bits = 30;
     private const ulong Capacity = 1UL << Bits;
 
+    /// <summary>The Sobol' fixed-point bit count (<c>scipy.stats.qmc.Sobol</c>'s default <c>bits=30</c>).</summary>
+    internal const int SobolBits = Bits;
+
+    /// <summary>
+    ///     A fresh copy of the first <paramref name="dim" /> rows of the (unscrambled) Sobol' direction
+    ///     numbers — scipy's <c>_sv</c> after <c>_initialize_v</c>. Returned as a copy so the scrambled
+    ///     engine (<see cref="ScrambledSobol" />) can apply the LMS in place without touching the cache.
+    /// </summary>
+    internal static uint[][] SobolSv(int dim)
+    {
+        if (dim < 1 || dim > SobolDirectionNumbers.MaxDim)
+            throw new ValueError($"Sobol' dimension must be in 1..={SobolDirectionNumbers.MaxDim}, got {dim}.");
+        uint[][] sv = DirectionNumbers();
+        var copy = new uint[dim][];
+        for (int d = 0; d < dim; d++)
+            copy[d] = (uint[])sv[d].Clone();
+        return copy;
+    }
+
     private static uint[][]? _sv;      // Sobol' direction numbers [MaxDim][Bits], left-aligned.
     private static int[]? _primes;     // The first MaxDim primes (Halton bases).
 

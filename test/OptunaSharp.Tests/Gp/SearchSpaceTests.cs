@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using AwesomeAssertions;
 using OptunaSharp.Distributions;
 using OptunaSharp.Gp;
+using OptunaSharp.Samplers;
 
 namespace OptunaSharp.Tests.Gp;
 
@@ -76,6 +77,33 @@ public class SearchSpaceTests
         un["i"].Should().Be(5L);          // int, rounded
         ((double)un["df"]!).Should().BeApproximately(0.25, 1e-15);
         un["c"].Should().Be("b");         // categorical external value
+    }
+
+    [TestMethod]
+    public void SampleNormalizedParams_MatchesOptuna()
+    {
+        // Mixed space (float / int / discretized-float / categorical); seed the sampler MT19937
+        // exactly like Optuna and check the scrambled-Sobol' preliminary points bit-for-bit.
+        var space = new Dictionary<string, BaseDistribution>
+        {
+            ["f"] = new FloatDistribution(-3.0, 5.0),
+            ["i"] = new IntDistribution(0, 9),
+            ["df"] = new FloatDistribution(0.0, 1.0, step: 0.25),
+            ["c"] = new CategoricalDistribution((CategoricalChoice)"a", (CategoricalChoice)"b", (CategoricalChoice)"c"),
+        };
+        double[,] v = new GpSearchSpace(space).SampleNormalizedParams(6, new LazyRandomState(123).Rng);
+        var expected = new[,]
+        {
+            { 0.57687549572438, 0.45, 0.5, 1.0 },
+            { 0.01982827764004469, 0.55, 0.5, 2.0 },
+            { 0.49105638545006514, 0.05, 0.7, 0.0 },
+            { 0.9181015817448497, 0.95, 0.1, 1.0 },
+            { 0.8377409363165498, 0.25, 0.3, 2.0 },
+            { 0.25310296658426523, 0.85, 0.7, 0.0 },
+        };
+        for (int t = 0; t < 6; t++)
+            for (int j = 0; j < 4; j++)
+                v[t, j].Should().Be(expected[t, j], $"sample_normalized_params[{t},{j}] is byte-identical to Optuna");
     }
 
     [TestMethod]
