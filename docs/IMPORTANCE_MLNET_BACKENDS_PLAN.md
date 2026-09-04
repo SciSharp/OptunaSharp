@@ -7,6 +7,33 @@
 
 ---
 
+## ✅ STATUS — COMPLETE (all work items landed on `master`)
+
+Done directly on `master` (not the worktree named at the top — the Phase 5.1 forest work had already
+merged), each work item green (build ×2 TFMs + tests + strong-named pack) before the next:
+
+- **WI-0** — prerequisite satisfied (NumSharp submodule + OpenBLAS natives staged; built by csproj path
+  with `-p:SkipNDScopeWeave=true -p:GeneratePackageOnBuild=false`).
+- **WI-1** — `refactor(importance)` **`0403972`**: FastForest package rename was already committed
+  (`647e2ec`); its evaluators moved to ns `OptunaSharp.Importance.Forests`; call sites + Core
+  doc-comments + FastForest README updated.
+- **WI-2** — same commit **`0403972`**: `MlNetTreeEnsembleAdapter` extracted to the shared linked source
+  `src/_shared/MlNetTreeEnsembleAdapter.cs` (ns `OptunaSharp.Importance.MLNet`); `FastForestBackend.Fit`
+  now `ensemble.Trees.Select(MlNetTreeEnsembleAdapter.ToSklearnLikeTree)`.
+- **WI-3** — `feat(importance)` **`599bf3f`**: new package `OptunaSharp.Importance.Booster.ML.NET`
+  (FastTree + FastTreeTweedie, ns `OptunaSharp.Importance.Booster`), experimental/off-label; unit suite
+  `OptunaSharp.Tests.Importance.Booster` (10 ×2 TFMs) + interop ranking parity (8 vs live Optuna).
+- **WI-4** — `feat(integration)` **`c7d9af9`**: new package `OptunaSharp.Integration.LightGbm` (LightGBM
+  importance now, tuner scoped for Phase 5.7), experimental/off-label; unit suite
+  `OptunaSharp.Tests.Integration.LightGbm` (10 ×2 TFMs) + interop ranking parity (4 vs live Optuna).
+
+All three satellite packages pack strong-named (`verify_strong_name.cs` OK, token `cc7b13ffcd2ddd51`);
+Core `InternalsVisibleTo` grants added for both new backend assemblies + their test projects; all six
+new/renamed projects are in the `.sln`. Live interop ran green against Optuna 5.0.0.dev + scikit-learn
+1.8.0. Remaining follow-up: the LightGBM **tuner** (Phase 5.7) and CI wiring (deferred, as with 4.3/4.5).
+
+---
+
 ## 0. TL;DR of the decision
 
 Optuna's importance module (`optuna.importance`) uses **only `sklearn.ensemble.RandomForestRegressor`**
