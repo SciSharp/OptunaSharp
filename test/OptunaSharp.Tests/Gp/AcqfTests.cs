@@ -166,4 +166,58 @@ public class AcqfTests
             System.Array.Empty<GPRegressor>(), System.Array.Empty<double>());
         act.Should().Throw<System.ArgumentException>();
     }
+
+    // ---- LogEHVI (Phase 3.2 part 3e-4 — multi-objective) ---------------------------------------
+
+    private static (LogEHVI Acqf, GpSearchSpace Space) FitEhviScenario()
+    {
+        var x = new double[,] { { 0.1 }, { 0.35 }, { 0.5 }, { 0.72 }, { 0.9 }, { 0.25 }, { 0.6 }, { 0.8 } };
+        var y0 = new[] { 0.73, 1.26, 0.29, -1.14, -0.84, 1.41, -0.50, -1.21 };
+        var y1 = new[] { -0.90, 0.40, 1.10, 0.20, -1.30, -0.10, 1.35, 0.55 };
+        var gpr0 = GPRegressor.FitKernelParams(x, y0, new[] { false }, 1e-6, false, null, 1e-2);
+        var gpr1 = GPRegressor.FitKernelParams(x, y1, new[] { false }, 1e-6, false, null, 1e-2);
+        var space = new GpSearchSpace(new System.Collections.Generic.Dictionary<string, BaseDistribution>
+            { ["x"] = new FloatDistribution(0.0, 1.0) });
+        var yTrain = new double[8, 2];
+        for (int i = 0; i < 8; i++) { yTrain[i, 0] = y0[i]; yTrain[i, 1] = y1[i]; }
+        return (new LogEHVI(new[] { gpr0, gpr1 }, space, yTrain, nQmcSamples: 128, qmcSeed: 42), space);
+    }
+
+    [TestMethod]
+    public void LogEHVI_BatchMatchesSinglePoint()
+    {
+        (LogEHVI acqf, _) = FitEhviScenario();
+        double[] batch = acqf.EvalAcqfNoGrad(new double[,] { { 0.15 }, { 0.45 }, { 0.7 } });
+        batch[0].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.15 }));
+        batch[1].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.45 }));
+        batch[2].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.7 }));
+    }
+
+    [TestMethod]
+    public void LogEHVI_Gradient_MatchesFiniteDifference()
+    {
+        (LogEHVI acqf, _) = FitEhviScenario();
+        const double eps = 1e-7;
+        foreach (double xv in new[] { 0.15, 0.3, 0.45, 0.7, 0.85 })
+        {
+            (double _, double[] grad) = acqf.EvalAcqfWithGrad(new[] { xv });
+            double fPlus = acqf.EvalAcqfNoGrad(new double[,] { { xv + eps } })[0];
+            double fMinus = acqf.EvalAcqfNoGrad(new double[,] { { xv - eps } })[0];
+            double fd = (fPlus - fMinus) / (2 * eps);
+            grad[0].Should().BeApproximately(fd, 1e-4 * (1 + Math.Abs(fd)),
+                $"analytic ∂LogEHVI/∂x at {xv} must match the central difference");
+        }
+    }
+
+    [TestMethod]
+    public void LogEHVI_ValueAndGrad_ForwardsAgree()
+    {
+        // The value returned by EvalAcqfWithGrad must equal EvalAcqfNoGrad at the same point.
+        (LogEHVI acqf, _) = FitEhviScenario();
+        foreach (double xv in new[] { 0.2, 0.55, 0.9 })
+        {
+            (double val, _) = acqf.EvalAcqfWithGrad(new[] { xv });
+            val.Should().BeApproximately(acqf.EvalAcqfNoGrad(new[] { xv }), 1e-12);
+        }
+    }
 }

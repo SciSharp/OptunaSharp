@@ -313,3 +313,294 @@ internal sealed class LogCEI : IAcquisitionFunc
         return (value, grad);
     }
 }
+
+/// <summary>
+///     The log expected-hypervolume-improvement acquisition function — port of <c>acqf.LogEHVI</c>, the
+///     acqf <see cref="GPSampler" /> maximizes for <b>multi-objective</b> optimization (PORTING_PLAN
+///     Phase 3.2 part 3e-4). It is a Sobol'-QMC Monte-Carlo estimate (Eq. (1) of arxiv 2006.05078) of
+///     the expected improvement in dominated hypervolume: the non-dominated region below the current
+///     Pareto front (and dominated by a reference point) is decomposed into boxes
+///     (<see cref="Hypervolume.GetNonDominatedBoxBounds" />), and for a fixed set of standard-normal
+///     samples (<see cref="Qmc.SampleFromNormalSobol" />) the log expected HVI is a log-sum-exp over
+///     boxes and samples.
+///
+///     <para><b>Deterministic and differentiable:</b> the QMC samples are fixed at construction, so the
+///     acqf is a smooth function of <c>x</c> optimizable by the gradient ascent. The hand-derived
+///     gradient (the autograd replacement) chains the box-clamped <c>log</c>/<c>logsumexp</c> softmax
+///     weights through each objective's posterior mean/variance gradient. Tolerance-exact vs Optuna (the
+///     posterior rides the managed triangular solve; the QMC samples match torch to ~1e-15) — the
+///     documented GP boundary, not bit-for-bit.</para>
+///
+///     <para><b>Scope:</b> the no-running-trials path (the running-trial <c>qLogEHVI</c> is deferred to
+///     the q-batch part).</para>
+/// </summary>
+internal sealed class LogEHVI : IAcquisitionFunc
+{
+    private const double Eps = 1e-12;
+
+    private readonly GPRegressor[] _gprList;
+    private readonly double _stabilizingNoise;
+    private readonly double[,] _fixedSamples;   // (n_qmc, n_obj) standard-normal QMC base samples
+    private readonly double[,] _lowerBounds;    // (n_boxes, n_obj) box lower bounds (maximization space)
+    private readonly double[,] _intervals;      // (n_boxes, n_obj) box widths, clamped ≥ EPS
+    private readonly int _nObjectives;
+    private readonly int _nQmc;
+    private readonly int _nBoxes;
+
+    internal LogEHVI(
+        GPRegressor[] gprList, GpSearchSpace searchSpace, double[,] yTrain,
+        int nQmcSamples, int qmcSeed, double stabilizingNoise = 1e-12)
+    {
+        _gprList = gprList;
+        _stabilizingNoise = stabilizingNoise;
+        _nObjectives = yTrain.GetLength(1);
+
+        _fixedSamples = Qmc.SampleFromNormalSobol(_nObjectives, nQmcSamples, qmcSeed);
+        _nQmc = _fixedSamples.GetLength(0);
+
+        double[] refPoint = GetReferencePoint(yTrain);
+        (double[,] lower, double[,] upper) = GetNonDominatedBoxBoundsMax(yTrain, refPoint);
+        _lowerBounds = lower;
+        _nBoxes = lower.GetLength(0);
+        _intervals = new double[_nBoxes, _nObjectives];
+        for (int b = 0; b < _nBoxes; b++)
+            for (int i = 0; i < _nObjectives; i++)
+                _intervals[b, i] = Math.Max(Eps, upper[b, i] - lower[b, i]);
+
+        // length_scales = mean over objectives of each GP's per-parameter length scales (preconditioning).
+        int dim = searchSpace.Dim;
+        var ls = new double[dim];
+        for (int d = 0; d < dim; d++)
+        {
+            double s = 0.0;
+            foreach (GPRegressor gpr in _gprList)
+                s += gpr.LengthScales[d];
+            ls[d] = s / _gprList.Length;
+        }
+        SearchSpace = searchSpace;
+        LengthScales = ls;
+    }
+
+    public GpSearchSpace SearchSpace { get; }
+    public double[] LengthScales { get; }
+
+    /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    public double[] EvalAcqfNoGrad(double[,] x)
+    {
+        int b = x.GetLength(0);
+        int dim = x.GetLength(1);
+        var result = new double[b];
+        var row = new double[dim];
+        for (int r = 0; r < b; r++)
+        {
+            for (int d = 0; d < dim; d++)
+                row[d] = x[r, d];
+            result[r] = EvalAcqfNoGrad(row);
+        }
+        return result;
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    public double EvalAcqfNoGrad(double[] x)
+    {
+        // Y_post[s, i] = mean_i + stdev_i * fixed_samples[s, i].
+        var yPost = new double[_nQmc, _nObjectives];
+        for (int i = 0; i < _nObjectives; i++)
+        {
+            (double mean, double var) = PosteriorAt(_gprList[i], x);
+            double stdev = Math.Sqrt(var + _stabilizingNoise);
+            for (int s = 0; s < _nQmc; s++)
+                yPost[s, i] = mean + stdev * _fixedSamples[s, i];
+        }
+        return LogEhviFromYPost(yPost);
+    }
+
+    /// <summary>
+    ///     <c>eval_acqf_with_grad</c> — value and the hand-derived gradient. For each sample <c>s</c> and
+    ///     box <c>b</c>, <c>L[s,b] = Σ_i log(clamp(Y_post[s,i] − lower[b,i], EPS, interval[b,i]))</c>;
+    ///     the value is <c>logsumexp_{s,b} L − log(n_qmc)</c>, and the gradient weights each term by the
+    ///     softmax <c>exp(L[s,b] − value − log n_qmc)</c>... (see body) chained through
+    ///     <c>∂Y_post/∂x = ∂mean/∂x + fixed·∂stdev/∂x</c>, with the clamp zeroing the out-of-range terms.
+    /// </summary>
+    public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
+    {
+        int dim = x.Length;
+
+        // Per-objective posterior mean/var and their gradients.
+        var mean = new double[_nObjectives];
+        var stdev = new double[_nObjectives];
+        var dMean = new double[_nObjectives][];
+        var dStdev = new double[_nObjectives][];
+        for (int i = 0; i < _nObjectives; i++)
+        {
+            (double m, double v, double[] dm, double[] dv, bool _) = _gprList[i].PosteriorWithGrad(x);
+            double sd = Math.Sqrt(v + _stabilizingNoise);
+            mean[i] = m;
+            stdev[i] = sd;
+            dMean[i] = dm;
+            var ds = new double[dim];
+            for (int d = 0; d < dim; d++)
+                ds[d] = dv[d] / (2.0 * sd);   // ∂stdev/∂x = ∂var/∂x / (2·stdev)
+            dStdev[i] = ds;
+        }
+
+        // Forward: L[s,b] and the logsumexp.
+        var yPost = new double[_nQmc, _nObjectives];
+        for (int i = 0; i < _nObjectives; i++)
+            for (int s = 0; s < _nQmc; s++)
+                yPost[s, i] = mean[i] + stdev[i] * _fixedSamples[s, i];
+        double logNQmc = Math.Log(_nQmc);
+        var l = new double[_nQmc * _nBoxes];
+        var clampMask = new bool[_nQmc, _nBoxes, _nObjectives];
+        var invDiff = new double[_nQmc, _nBoxes, _nObjectives];
+        int flat = 0;
+        double maxL = double.NegativeInfinity;
+        for (int s = 0; s < _nQmc; s++)
+            for (int b = 0; b < _nBoxes; b++)
+            {
+                double sum = 0.0;
+                for (int i = 0; i < _nObjectives; i++)
+                {
+                    double raw = yPost[s, i] - _lowerBounds[b, i];
+                    double interval = _intervals[b, i];
+                    double diff = raw < Eps ? Eps : (raw > interval ? interval : raw);
+                    bool inRange = raw > Eps && raw < interval;   // clamp_ zeroes the gradient at both bounds
+                    clampMask[s, b, i] = inRange;
+                    invDiff[s, b, i] = 1.0 / diff;
+                    sum += Math.Log(diff);
+                }
+                l[flat++] = sum;
+                if (sum > maxL) maxL = sum;
+            }
+
+        double expSum = 0.0;
+        for (int k = 0; k < l.Length; k++)
+            expSum += Math.Exp(l[k] - maxL);
+        double value = maxL + Math.Log(expSum) - logNQmc;
+
+        // Backward: grad[d] = Σ_{s,b} softmax(L)[s,b] · Σ_i mask · invDiff · (dMean_i[d] + fixed[s,i]·dStdev_i[d]).
+        var grad = new double[dim];
+        flat = 0;
+        for (int s = 0; s < _nQmc; s++)
+            for (int b = 0; b < _nBoxes; b++)
+            {
+                double w = Math.Exp(l[flat++] - maxL) / expSum;   // softmax over (s,b)
+                if (w == 0.0)
+                    continue;
+                for (int i = 0; i < _nObjectives; i++)
+                {
+                    if (!clampMask[s, b, i])
+                        continue;
+                    double factor = w * invDiff[s, b, i];
+                    double fixedSi = _fixedSamples[s, i];
+                    double[] dm = dMean[i];
+                    double[] ds = dStdev[i];
+                    for (int d = 0; d < dim; d++)
+                        grad[d] += factor * (dm[d] + fixedSi * ds[d]);
+                }
+            }
+        return (value, grad);
+    }
+
+    /// <summary><c>logehvi</c> — the log-sum-exp over boxes/samples of the box-clamped log volumes, given <c>Y_post</c> (n_qmc, n_obj).</summary>
+    private double LogEhviFromYPost(double[,] yPost)
+    {
+        double logNQmc = Math.Log(_nQmc);
+        var l = new double[_nQmc * _nBoxes];
+        int flat = 0;
+        double maxL = double.NegativeInfinity;
+        for (int s = 0; s < _nQmc; s++)
+            for (int b = 0; b < _nBoxes; b++)
+            {
+                double sum = 0.0;
+                for (int i = 0; i < _nObjectives; i++)
+                {
+                    double raw = yPost[s, i] - _lowerBounds[b, i];
+                    double interval = _intervals[b, i];
+                    double diff = raw < Eps ? Eps : (raw > interval ? interval : raw);
+                    sum += Math.Log(diff);
+                }
+                l[flat++] = sum;
+                if (sum > maxL) maxL = sum;
+            }
+        double expSum = 0.0;
+        for (int k = 0; k < l.Length; k++)
+            expSum += Math.Exp(l[k] - maxL);
+        return maxL + Math.Log(expSum) - logNQmc;
+    }
+
+    private static (double Mean, double Var) PosteriorAt(GPRegressor gpr, double[] x)
+    {
+        int dim = x.Length;
+        var row = new double[1, dim];
+        for (int d = 0; d < dim; d++)
+            row[0, d] = x[d];
+        (double[] mean, double[] var) = gpr.Posterior(row);
+        return (mean[0], var[0]);
+    }
+
+    /// <summary>
+    ///     <c>acqf._get_reference_point(Y)</c> — <c>Y</c> is to be maximized, so <c>loss = −Y</c> is
+    ///     minimized: <c>ref = nextafter(max(1.1·m, 0.9·m), +∞)</c> with <c>m = max_row(−Y)</c>.
+    /// </summary>
+    private static double[] GetReferencePoint(double[,] yTrain)
+    {
+        int n = yTrain.GetLength(0);
+        int m = yTrain.GetLength(1);
+        var refPoint = new double[m];
+        for (int j = 0; j < m; j++)
+        {
+            double mx = double.NegativeInfinity;
+            for (int r = 0; r < n; r++)
+            {
+                double loss = -yTrain[r, j];
+                if (loss > mx) mx = loss;
+            }
+            refPoint[j] = Internal.MathUtil.NextAfter(Math.Max(1.1 * mx, 0.9 * mx), double.PositiveInfinity);
+        }
+        return refPoint;
+    }
+
+    /// <summary>
+    ///     <c>acqf._get_non_dominated_box_bounds(Y, ref_point)</c> — in maximization space: filter the
+    ///     losses that dominate the reference point, take their Pareto front, decompose, and flip the
+    ///     signs back (<c>lower = −ubs</c>, <c>upper = −lbs</c>).
+    /// </summary>
+    private static (double[,] Lower, double[,] Upper) GetNonDominatedBoxBoundsMax(double[,] yTrain, double[] refPoint)
+    {
+        int n = yTrain.GetLength(0);
+        int m = yTrain.GetLength(1);
+        // loss_vals = -Y; keep rows with all(loss < ref_point).
+        var kept = new System.Collections.Generic.List<double[]>();
+        for (int r = 0; r < n; r++)
+        {
+            var loss = new double[m];
+            bool all = true;
+            for (int j = 0; j < m; j++)
+            {
+                loss[j] = -yTrain[r, j];
+                if (!(loss[j] < refPoint[j])) all = false;
+            }
+            if (all) kept.Add(loss);
+        }
+        double[][] lossVals = kept.ToArray();
+        bool[] onFront = Internal.MultiObjective.IsParetoFront(lossVals, assumeUniqueLexsorted: false);
+        var paretoSols = new System.Collections.Generic.List<double[]>();
+        for (int r = 0; r < lossVals.Length; r++)
+            if (onFront[r]) paretoSols.Add(lossVals[r]);
+
+        (double[][] lbs, double[][] ubs) =
+            Internal.Hypervolume.GetNonDominatedBoxBounds(paretoSols.ToArray(), refPoint);
+
+        int nBoxes = lbs.Length;
+        var lower = new double[nBoxes, m];
+        var upper = new double[nBoxes, m];
+        for (int b = 0; b < nBoxes; b++)
+            for (int j = 0; j < m; j++)
+            {
+                lower[b, j] = -ubs[b][j];   // flip back to maximization
+                upper[b, j] = -lbs[b][j];
+            }
+        return (lower, upper);
+    }
+}

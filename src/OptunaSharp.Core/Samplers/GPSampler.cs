@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Gp;
@@ -24,12 +25,12 @@ namespace OptunaSharp.Samplers;
 ///     (ULP drift from scipy's OpenBLAS BLAS + the erf/ucrt class in LogEI), the documented GP boundary
 ///     — <b>not</b> bit-for-bit like the MT19937 samplers.</para>
 ///
-///     <para><b>Scope (PORTING_PLAN Phase 3.2 part 3e, in progress):</b> the single-objective
-///     sequential paths are ported — unconstrained (acquisition = <see cref="LogEI" />, part 3d) and
-///     constrained (<see cref="LogCEI" /> = LogEI + Σ <see cref="LogPI" />, part 3e-2). Multi-objective
-///     (<c>LogEHVI</c>/<c>LogCEHVI</c>, which ride the box decomposition + the QMC normal Sobol'
-///     sampler) and running-trial q-batch (<c>qLogEI</c>/<c>qLogEHVI</c>/<c>qLogCEI</c>) acquisition
-///     functions are deferred to later parts and raise <see cref="NotImplementedException" /> for now.</para>
+///     <para><b>Scope (PORTING_PLAN Phase 3.2 part 3e, in progress):</b> the sequential (no-running)
+///     paths are ported — single-objective unconstrained (<see cref="LogEI" />, part 3d), single-
+///     objective constrained (<see cref="LogCEI" /> = LogEI + Σ <see cref="LogPI" />, part 3e-2), and
+///     multi-objective unconstrained (<see cref="LogEHVI" />, part 3e-4). Multi-objective constrained
+///     (<c>LogCEHVI</c>) and the running-trial q-batch acqfs (<c>qLogEI</c>/<c>qLogEHVI</c>/<c>qLogCEI</c>)
+///     are deferred to later parts and raise <see cref="NotImplementedException" /> for now.</para>
 /// </summary>
 /// <example>
 ///     <code>
@@ -68,6 +69,7 @@ public class GPSampler : BaseSampler
     private readonly int _nPreliminarySamples = 2048;
     private readonly int _nLocalSearch = 10;
     private readonly double _tol = 1e-4;
+    private readonly int _nQmcSamplesEhvi = 128;  // BoTorch default for the EHVI QMC estimate
 
     /// <param name="seed">Random seed to initialize the internal RNG. Defaults to <c>null</c> (picked randomly).</param>
     /// <param name="independentSampler">
@@ -225,9 +227,12 @@ public class GPSampler : BaseSampler
             }
             else
             {
-                throw hasRunning
-                    ? NotYetPorted("qLogEHVI (multi-objective with running trials)", "3e q-batch")
-                    : NotYetPorted("LogEHVI (multi-objective)", "3e MO");
+                if (hasRunning)
+                    throw NotYetPorted("qLogEHVI (multi-objective with running trials)", "3e q-batch");
+                int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
+                acqf = new LogEHVI(
+                    gprsList.ToArray(), internalSearchSpace, standardizedScoreVals, _nQmcSamplesEhvi, qmcSeed);
+                bestParams = GetBestParamsForMultiObjective(normalizedParams, standardizedScoreVals);
             }
         }
         else
@@ -376,6 +381,48 @@ public class GPSampler : BaseSampler
         for (int d = 0; d < dim; d++)
             row[0, d] = normalizedParams[idx, d];
         return row;
+    }
+
+    /// <summary>
+    ///     <c>_get_best_params_for_multi_objective</c> — the Pareto-front warmstart points for the MO
+    ///     acqf optimizer: pick up to <c>n_local_search // 2</c> of the current Pareto-optimal normalized
+    ///     params uniformly at random (<c>rng.choice(n_pareto, size, replace=False)</c> ==
+    ///     <c>permutation(n_pareto)[:size]</c>, bit-exact via the verified index shuffle).
+    /// </summary>
+    private double[,] GetBestParamsForMultiObjective(double[,] normalizedParams, double[,] standardizedScoreVals)
+    {
+        int n = standardizedScoreVals.GetLength(0);
+        int m = standardizedScoreVals.GetLength(1);
+        var negStd = new double[n][];
+        for (int r = 0; r < n; r++)
+        {
+            negStd[r] = new double[m];
+            for (int j = 0; j < m; j++)
+                negStd[r][j] = -standardizedScoreVals[r, j];
+        }
+        bool[] onFront = MultiObjective.IsParetoFront(negStd, assumeUniqueLexsorted: false);
+        var paretoIdx = new List<int>();
+        for (int r = 0; r < n; r++)
+            if (onFront[r]) paretoIdx.Add(r);
+        int nPareto = paretoIdx.Count;
+        int size = Math.Min(_nLocalSearch / 2, nPareto);
+
+        // rng.choice(n_pareto, size, replace=False) = permutation(n_pareto)[:size]. NumPy's
+        // permutation is arange + Fisher-Yates shuffle (bit-exact via _rng.Rng.shuffle — the GridSampler
+        // pattern), so the RNG advances by the full permutation regardless of size.
+        NDArray permArr = np.arange(nPareto);
+        _rng.Rng.shuffle(permArr);
+        long[] perm = permArr.ToArray<long>();
+
+        int dim = normalizedParams.GetLength(1);
+        var best = new double[size, dim];
+        for (int r = 0; r < size; r++)
+        {
+            int idx = paretoIdx[(int)perm[r]];
+            for (int d = 0; d < dim; d++)
+                best[r, d] = normalizedParams[idx, d];
+        }
+        return best;
     }
 
     private static NotImplementedException NotYetPorted(string what, string part)

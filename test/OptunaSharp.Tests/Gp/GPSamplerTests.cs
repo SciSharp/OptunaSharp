@@ -58,9 +58,45 @@ public class GPSamplerTests
             .Should().Equal(Params(RunConstrainedSphere(seed: 7, nTrials: 18)));
     }
 
-    [TestMethod]
-    public void MultiObjective_Throws_NotImplemented()
+    // A 2-objective problem (minimize both) over a 2-D box; the GP LogEHVI acqf drives the Pareto front.
+    private static Study RunMultiObjective(int seed, int nTrials)
     {
+        var study = Optuna.CreateStudy(
+            sampler: new GPSampler(seed: seed),
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+        study.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            double b = t.SuggestFloat("b", -5, 5);
+            return (IReadOnlyList<double>)new[] { a * a + b * b, (a - 2) * (a - 2) + b * b };
+        }, nTrials: nTrials);
+        return study;
+    }
+
+    [TestMethod]
+    public void MultiObjective_RunsEndToEnd_AndBuildsAParetoFront()
+    {
+        Study study = RunMultiObjective(seed: 0, nTrials: 24);
+        study.Trials.Count.Should().Be(24);
+        // The GP LogEHVI path (post-startup) must produce a non-trivial Pareto front.
+        study.BestTrials.Count.Should().BeGreaterThan(1,
+            "LogEHVI multi-objective optimization should discover several Pareto-optimal trials");
+    }
+
+    [TestMethod]
+    public void MultiObjective_SameSeed_Reproducible()
+    {
+        List<(double, double)> Params(Study s) => s.Trials
+            .Select(t => ((double)t.Params["a"]!, (double)t.Params["b"]!)).ToList();
+
+        Params(RunMultiObjective(seed: 5, nTrials: 16))
+            .Should().Equal(Params(RunMultiObjective(seed: 5, nTrials: 16)));
+    }
+
+    [TestMethod]
+    public void MultiObjectiveConstrained_Throws_NotImplemented()
+    {
+        // MO + constraints (LogCEHVI) is still deferred — lock the placeholder.
         var study = Optuna.CreateStudy(
             sampler: new GPSampler(seed: 0),
             directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
@@ -68,8 +104,9 @@ public class GPSamplerTests
         {
             double a = t.SuggestFloat("a", -5, 5);
             double b = t.SuggestFloat("b", -5, 5);
+            t.SetConstraint("0", a - 1.0);
             return (IReadOnlyList<double>)new[] { a * a + b * b, (a - 1) * (a - 1) + b * b };
         }, nTrials: 12);
-        act.Should().Throw<NotImplementedException>().WithMessage("*LogEHVI*");
+        act.Should().Throw<NotImplementedException>().WithMessage("*LogCEHVI*");
     }
 }
