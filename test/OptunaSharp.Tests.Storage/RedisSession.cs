@@ -2,7 +2,7 @@ using System;
 using OptunaSharp.Storages.Journal;    // RedisUrl (friend access), JournalRedisBackend
 using StackExchange.Redis;
 
-namespace OptunaSharp.Tests.Storage.Redis;
+namespace OptunaSharp.Tests.Storage;
 
 /// <summary>
 ///     Reachability gating + connection factories for the Redis server defined in
@@ -33,7 +33,7 @@ internal static class RedisSession
 
         string reason =
             $"Redis not reachable at {Url}. Start it with: " +
-            "docker compose -f test/OptunaSharp.Tests.Storage.Redis/docker-compose.yml up -d";
+            "docker compose -f test/OptunaSharp.Tests.Storage/docker-compose.yml up -d";
         if (Required())
             Assert.Fail(reason + " (OPTUNASHARP_REDIS_REQUIRED is set, so this is a hard failure).");
         Assert.Inconclusive(reason);

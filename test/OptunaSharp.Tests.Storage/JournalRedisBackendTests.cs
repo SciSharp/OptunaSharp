@@ -12,7 +12,7 @@ using OptunaSharp.Samplers;
 using OptunaSharp.Storages.Journal;
 using StackExchange.Redis;
 
-namespace OptunaSharp.Tests.Storage.Redis;
+namespace OptunaSharp.Tests.Storage;
 
 /// <summary>
 ///     Full integration coverage for <see cref="JournalRedisBackend" /> against a real Redis (the

@@ -5,7 +5,7 @@ using NumSharp;                          // ValueError
 using OptunaSharp.Storages.Journal;      // RedisUrl (internal — reachable via the friend grant)
 using StackExchange.Redis;
 
-namespace OptunaSharp.Tests.Storage.Redis;
+namespace OptunaSharp.Tests.Storage;
 
 /// <summary>
 ///     Unit tests for the <c>redis://</c> → <see cref="ConfigurationOptions" /> adapter — the one

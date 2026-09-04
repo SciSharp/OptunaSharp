@@ -83,3 +83,4 @@ docs/website/
 docs/website-src/api/*.yml
 docs/website-src/api/.manifest
 docs/website-src/llms.txt
+docs/papers/
