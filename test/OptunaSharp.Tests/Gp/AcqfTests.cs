@@ -263,4 +263,75 @@ public class AcqfTests
         foreach (double xv in new[] { 0.3, 0.7 })
             cehvi.EvalAcqfNoGrad(new[] { xv }).Should().Be(pi.EvalAcqfNoGrad(new[] { xv }));
     }
+
+    // ---- qLogEI + ConditionalGPRegressor (Phase 3.2 part 3e-6 — running trials) ----------------
+
+    private static (QLogEI Acqf, GpSearchSpace Space) FitQLogEiScenario(double threshold = 0.5)
+    {
+        var x = new double[,] { { 0.1 }, { 0.35 }, { 0.5 }, { 0.72 }, { 0.9 }, { 0.25 }, { 0.6 }, { 0.8 } };
+        var y = new[] { 0.73, 1.26, 0.29, -1.14, -0.84, 1.41, -0.50, -1.21 };
+        var gpr = GPRegressor.FitKernelParams(x, y, new[] { false }, 1e-6, false, null, 1e-2);
+        var space = new GpSearchSpace(new System.Collections.Generic.Dictionary<string, BaseDistribution>
+            { ["x"] = new FloatDistribution(0.0, 1.0) });
+        var xRunning = new double[,] { { 0.42 }, { 0.66 } };
+        return (new QLogEI(gpr, space, threshold, nQmcSamples: 64, qmcSeed: 7, xRunning), space);
+    }
+
+    [TestMethod]
+    public void QLogEI_BatchMatchesSinglePoint()
+    {
+        (QLogEI acqf, _) = FitQLogEiScenario();
+        double[] batch = acqf.EvalAcqfNoGrad(new double[,] { { 0.15 }, { 0.45 }, { 0.7 } });
+        batch[0].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.15 }));
+        batch[1].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.45 }));
+        batch[2].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.7 }));
+    }
+
+    [TestMethod]
+    public void QLogEI_ValueAndGrad_ForwardsAgree()
+    {
+        (QLogEI acqf, _) = FitQLogEiScenario();
+        foreach (double xv in new[] { 0.2, 0.55, 0.9 })
+        {
+            (double val, _) = acqf.EvalAcqfWithGrad(new[] { xv });
+            val.Should().BeApproximately(acqf.EvalAcqfNoGrad(new[] { xv }), 1e-12);
+        }
+    }
+
+    [TestMethod]
+    public void QLogEI_Gradient_MatchesFiniteDifference()
+    {
+        // Low threshold ⇒ the query column frequently wins the per-sample max ⇒ non-trivial gradient.
+        (QLogEI acqf, _) = FitQLogEiScenario(threshold: -1.5);
+        const double eps = 1e-7;
+        foreach (double xv in new[] { 0.15, 0.3, 0.45, 0.7, 0.85 })
+        {
+            (double _, double[] grad) = acqf.EvalAcqfWithGrad(new[] { xv });
+            double fPlus = acqf.EvalAcqfNoGrad(new[] { xv + eps });
+            double fMinus = acqf.EvalAcqfNoGrad(new[] { xv - eps });
+            double fd = (fPlus - fMinus) / (2 * eps);
+            grad[0].Should().BeApproximately(fd, 1e-4 * (1 + Math.Abs(fd)),
+                $"analytic ∂qLogEI/∂x at {xv} must match the central difference");
+        }
+    }
+
+    [TestMethod]
+    public void QLogEI_NegInfThreshold_IsZero()
+    {
+        // No feasible trial ⇒ threshold −∞ ⇒ qLogEI is identically 0 (matching Optuna's all-zeros utility).
+        (QLogEI acqf, _) = FitQLogEiScenario(threshold: double.NegativeInfinity);
+        acqf.EvalAcqfNoGrad(new[] { 0.4 }).Should().Be(0.0);
+        (double val, double[] grad) = acqf.EvalAcqfWithGrad(new[] { 0.4 });
+        val.Should().Be(0.0);
+        grad[0].Should().Be(0.0);
+    }
+
+    [TestMethod]
+    public void QLogEI_IsDeterministic()
+    {
+        // Fixed QMC seed ⇒ the acqf is a deterministic function (re-constructing gives identical values).
+        (QLogEI a1, _) = FitQLogEiScenario();
+        (QLogEI a2, _) = FitQLogEiScenario();
+        a1.EvalAcqfNoGrad(new[] { 0.33 }).Should().Be(a2.EvalAcqfNoGrad(new[] { 0.33 }));
+    }
 }

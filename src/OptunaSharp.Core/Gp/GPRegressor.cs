@@ -544,6 +544,41 @@ internal sealed class GPRegressor
     internal double[,] KernelToTrain(double[,] x1) => Kernel(x1, _xTrain);
 
     /// <summary>
+    ///     The kernel row <c>k[j] = kernel(x, others[j])</c> at a single query point <paramref name="x" />
+    ///     together with its gradient <c>dk[j,d] = ∂k[j]/∂x_d</c> — the cross-kernel building block the
+    ///     <see cref="ConditionalGPRegressor" /> gradient chains through (<c>∂k/∂x_d =
+    ///     kernel_scale·M'(S)·w_d·2(x_d − others[j,d])</c>; categorical/Hamming dims have zero derivative).
+    /// </summary>
+    internal (double[] K, double[,] Dk) KernelRowWithGrad(double[] x, double[,] others)
+    {
+        int m = others.GetLength(0);
+        double[] w = InverseSquaredLengthscales;
+        double scale = KernelScale;
+        var k = new double[m];
+        var dk = new double[m, _nParams];
+        for (int j = 0; j < m; j++)
+        {
+            double s = 0.0;
+            for (int d = 0; d < _nParams; d++)
+            {
+                double diff = x[d] - others[j, d];
+                double sq = diff * diff;
+                if (_isCategorical[d])
+                    sq = sq > 0.0 ? 1.0 : 0.0;
+                s += sq * w[d];
+            }
+            (double value, double deriv) = Matern52(s);
+            k[j] = scale * value;
+            for (int d = 0; d < _nParams; d++)
+                dk[j, d] = _isCategorical[d] ? 0.0 : scale * deriv * w[d] * 2.0 * (x[d] - others[j, d]);
+        }
+        return (k, dk);
+    }
+
+    /// <summary><c>kernel(x, X_train)</c> row and its x-gradient — <see cref="KernelRowWithGrad" /> against the completed-trial inputs.</summary>
+    internal (double[] K, double[,] Dk) KernelRowToTrainWithGrad(double[] x) => KernelRowWithGrad(x, _xTrain);
+
+    /// <summary>
     ///     <c>_solve_cholesky(L, B, left)</c> — solve <c>(L Lᵀ) X = B</c> (<paramref name="left" />
     ///     <c>true</c>) or <c>X (L Lᵀ) = B</c> (<c>false</c>) via two triangular solves, where
     ///     <c>C = L Lᵀ</c>.

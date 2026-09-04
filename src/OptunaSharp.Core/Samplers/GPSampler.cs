@@ -70,6 +70,7 @@ public class GPSampler : BaseSampler
     private readonly int _nPreliminarySamples = 2048;
     private readonly int _nLocalSearch = 10;
     private readonly double _tol = 1e-4;
+    private readonly int _nQmcSamplesQei = 128;   // QMC samples for the q-batch expected-improvement estimate
     private readonly int _nQmcSamplesEhvi = 128;  // BoTorch default for the EHVI QMC estimate
 
     /// <param name="seed">Random seed to initialize the internal RNG. Defaults to <c>null</c> (picked randomly).</param>
@@ -224,9 +225,16 @@ public class GPSampler : BaseSampler
         {
             if (nObjectives == 1)
             {
+                double threshold = ColumnMax(standardizedScoreVals, 0);
                 if (hasRunning)
-                    throw NotYetPorted("qLogEI (single-objective with running trials)", "3e q-batch");
-                acqf = new LogEI(gprsList[0], internalSearchSpace, ColumnMax(standardizedScoreVals, 0));
+                {
+                    int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
+                    acqf = new QLogEI(
+                        gprsList[0], internalSearchSpace, threshold, _nQmcSamplesQei, qmcSeed,
+                        normalizedParamsOfRunningTrials!);
+                }
+                else
+                    acqf = new LogEI(gprsList[0], internalSearchSpace, threshold);
                 bestParams = BestParamsRow(normalizedParams, ArgMaxColumn(standardizedScoreVals, 0));
             }
             else

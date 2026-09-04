@@ -65,6 +65,32 @@ internal static class Acqf
         double sigma = Math.Sqrt(var);
         return StandardLogEi((mean - f0) / sigma) + Math.Log(sigma);
     }
+
+    /// <summary>
+    ///     <c>_compute_mean_max_utility(log_util_vals)</c> — the q-batch reduction: the max over the
+    ///     q-batch axis (<c>amax</c>, dim=-1) then the log-mean-exp over the fixed-sample axis
+    ///     (<c>logsumexp − log(n_qmc)</c>). <paramref name="logUtil" /> is <c>(n_qmc, q_batch)</c>; the
+    ///     result is scalar.
+    /// </summary>
+    internal static double MeanMaxUtility(double[,] logUtil)
+    {
+        int nQmc = logUtil.GetLength(0);
+        int q = logUtil.GetLength(1);
+        var maxVal = new double[nQmc];
+        double lseMax = double.NegativeInfinity;
+        for (int s = 0; s < nQmc; s++)
+        {
+            double m = double.NegativeInfinity;
+            for (int j = 0; j < q; j++)
+                if (logUtil[s, j] > m) m = logUtil[s, j];
+            maxVal[s] = m;
+            if (m > lseMax) lseMax = m;
+        }
+        double sum = 0.0;
+        for (int s = 0; s < nQmc; s++)
+            sum += Math.Exp(maxVal[s] - lseMax);
+        return lseMax + Math.Log(sum) - Math.Log(nQmc);
+    }
 }
 
 /// <summary>
@@ -160,6 +186,166 @@ internal sealed class LogEI : IAcquisitionFunc
             double dSigma = dVar[d] / (2.0 * sigma);
             double dz = dMean[d] / sigma - z * dSigma / sigma;
             grad[d] = dlogeiDz * dz + dSigma / sigma;
+        }
+        return (value, grad);
+    }
+}
+
+/// <summary>
+///     The q-batch log-expected-improvement acquisition function — port of <c>acqf.qLogEI</c>, the acqf
+///     <see cref="GPSampler" /> maximizes for single-objective optimization <b>with running trials</b>
+///     (PORTING_PLAN Phase 3.2 part 3e-6). It conditions on the running fantasies via a
+///     <see cref="ConditionalGPRegressor" /> and, per QMC draw, forms the joint-posterior sample vector
+///     over the running trials plus the query point, takes the improvement <c>log(y − threshold)</c>,
+///     and reduces with <see cref="Acqf.MeanMaxUtility" /> (max over the q-batch, log-mean over the
+///     samples). See Eq. (10) of arxiv 2310.20708.
+///
+///     <para><b>Gradient:</b> the fantasy columns are constant, so only the query column carries an
+///     x-gradient (via <see cref="ConditionalGPRegressor.SampleJointPosteriorWithGrad" />); it flows
+///     through the <c>amax</c> selection (the per-sample argmax) and the <c>logsumexp</c> softmax — the
+///     hand-derived replacement for autograd. When <c>threshold</c> is <c>−∞</c> the acqf is identically
+///     0 (matching Optuna's all-zeros utility).</para>
+/// </summary>
+internal sealed class QLogEI : IAcquisitionFunc
+{
+    private const double Eps = 1e-12;
+
+    private readonly ConditionalGPRegressor _condGpr;
+    private readonly double _threshold;
+
+    internal QLogEI(
+        GPRegressor gpr, GpSearchSpace searchSpace, double threshold,
+        int nQmcSamples, int qmcSeed, double[,] normalizedParamsOfRunningTrials,
+        double stabilizingNoise = 1e-12)
+    {
+        _threshold = threshold;
+        _condGpr = new ConditionalGPRegressor(
+            gpr, normalizedParamsOfRunningTrials, nQmcSamples, qmcSeed, stabilizingNoise);
+        SearchSpace = searchSpace;
+        LengthScales = gpr.LengthScales;
+    }
+
+    public GpSearchSpace SearchSpace { get; }
+    public double[] LengthScales { get; }
+
+    /// <summary><c>compute_per_sample_log_utility</c> — <c>log(clamp_min(y_post − threshold, EPS))</c>, shape <c>(n_qmc, r+1)</c>.</summary>
+    internal double[,] PerSampleLogUtility(double[,] yPost)
+    {
+        int nQmc = yPost.GetLength(0), q = yPost.GetLength(1);
+        var lu = new double[nQmc, q];
+        for (int s = 0; s < nQmc; s++)
+            for (int j = 0; j < q; j++)
+            {
+                double v = yPost[s, j] - _threshold;
+                lu[s, j] = Math.Log(v < Eps ? Eps : v);
+            }
+        return lu;
+    }
+
+    /// <summary>The per-sample log utility at a single query point (used by <see cref="QLogCEI" /> to compose feasible improvement).</summary>
+    internal double[,] ComputePerSampleLogUtility(double[] x)
+    {
+        if (double.IsNegativeInfinity(_threshold))
+            return new double[_condGpr.NQmc, _condGpr.NRunning + 1];   // all zeros
+        return PerSampleLogUtility(_condGpr.SampleJointPosterior(x));
+    }
+
+    /// <summary>The per-sample log utility and its x-gradient (the gradient flows through the query column only).</summary>
+    internal (double[,] LogUtil, double[,] DQuery) ComputePerSampleLogUtilityWithGrad(double[] x)
+    {
+        if (double.IsNegativeInfinity(_threshold))
+            return (new double[_condGpr.NQmc, _condGpr.NRunning + 1], new double[_condGpr.NQmc, x.Length]);
+        (double[,] yPost, double[,] dSamples) = _condGpr.SampleJointPosteriorWithGrad(x);
+        return (PerSampleLogUtility(yPost), QueryLogUtilGrad(yPost, dSamples));
+    }
+
+    /// <summary>
+    ///     <c>∂ log_util[s, query]/∂x_d = mask[s]·(1/(y_post[s,query] − threshold))·∂samples[s]/∂x_d</c>
+    ///     (the <c>clamp_min</c> mask zeroes it where the improvement ≤ EPS); the fantasy columns are 0.
+    /// </summary>
+    private double[,] QueryLogUtilGrad(double[,] yPost, double[,] dSamples)
+    {
+        int nQmc = yPost.GetLength(0);
+        int queryCol = yPost.GetLength(1) - 1;
+        int dim = dSamples.GetLength(1);
+        var dq = new double[nQmc, dim];
+        for (int s = 0; s < nQmc; s++)
+        {
+            double v = yPost[s, queryCol] - _threshold;
+            if (!(v > Eps))
+                continue;   // clamp_min → zero gradient
+            double inv = 1.0 / v;
+            for (int d = 0; d < dim; d++)
+                dq[s, d] = inv * dSamples[s, d];
+        }
+        return dq;
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    public double[] EvalAcqfNoGrad(double[,] x)
+    {
+        int b = x.GetLength(0), dim = x.GetLength(1);
+        var result = new double[b];
+        var row = new double[dim];
+        for (int r = 0; r < b; r++)
+        {
+            for (int d = 0; d < dim; d++) row[d] = x[r, d];
+            result[r] = EvalAcqfNoGrad(row);
+        }
+        return result;
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    public double EvalAcqfNoGrad(double[] x)
+    {
+        if (double.IsNegativeInfinity(_threshold))
+            return 0.0;
+        return Acqf.MeanMaxUtility(PerSampleLogUtility(_condGpr.SampleJointPosterior(x)));
+    }
+
+    /// <summary><c>eval_acqf_with_grad</c> — value and the hand-derived gradient through amax/logsumexp.</summary>
+    public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
+    {
+        int dim = x.Length;
+        if (double.IsNegativeInfinity(_threshold))
+            return (0.0, new double[dim]);
+
+        (double[,] yPost, double[,] dSamples) = _condGpr.SampleJointPosteriorWithGrad(x);
+        int nQmc = yPost.GetLength(0);
+        int q = yPost.GetLength(1);
+        int queryCol = q - 1;
+        double[,] lu = PerSampleLogUtility(yPost);
+
+        // amax over the q-batch (track the argmax) then logsumexp over the samples.
+        var maxVal = new double[nQmc];
+        var argmax = new int[nQmc];
+        double lseMax = double.NegativeInfinity;
+        for (int s = 0; s < nQmc; s++)
+        {
+            double m = double.NegativeInfinity;
+            int am = 0;
+            for (int j = 0; j < q; j++)
+                if (lu[s, j] > m) { m = lu[s, j]; am = j; }
+            maxVal[s] = m; argmax[s] = am;
+            if (m > lseMax) lseMax = m;
+        }
+        double expSum = 0.0;
+        for (int s = 0; s < nQmc; s++)
+            expSum += Math.Exp(maxVal[s] - lseMax);
+        double value = lseMax + Math.Log(expSum) - Math.Log(nQmc);
+
+        // grad only flows where the per-sample max is the query column and the clamp mask is active.
+        var grad = new double[dim];
+        for (int s = 0; s < nQmc; s++)
+        {
+            if (argmax[s] != queryCol)
+                continue;
+            double v = yPost[s, queryCol] - _threshold;
+            if (!(v > Eps))
+                continue;
+            double factor = Math.Exp(maxVal[s] - lseMax) / expSum / v;
+            for (int d = 0; d < dim; d++)
+                grad[d] += factor * dSamples[s, d];
         }
         return (value, grad);
     }
