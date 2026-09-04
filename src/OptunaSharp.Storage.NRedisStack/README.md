@@ -27,6 +27,29 @@ var backend = new NRedisStackJournalRedisBackend("redis://localhost:6379");
 var study = Optuna.CreateStudy(storage: new JournalStorage(backend));
 ```
 
+## Native configuration
+
+The URL constructor mirrors Python Optuna, but you are not limited to it. Four constructors, all
+taking the same `useCluster` / `prefix`:
+
+```csharp
+// 1. redis-py-style URL (Optuna-identical)
+new NRedisStackJournalRedisBackend("redis://localhost:6379");
+
+// 2. keep the URL, tweak the derived ConfigurationOptions
+new NRedisStackJournalRedisBackend("redis://localhost:6379", o => { o.ConnectTimeout = 5000; o.ClientName = "my-app"; });
+
+// 3. a ConfigurationOptions you built yourself
+new NRedisStackJournalRedisBackend(new ConfigurationOptions { EndPoints = { "localhost:6379" }, Ssl = true });
+
+// 4. an IConnectionMultiplexer you already own — e.g. the same connection you use for NRedisStack's
+//    module APIs (JSON/Search/…) elsewhere in your app; you keep its lifetime
+new NRedisStackJournalRedisBackend(existingMultiplexer);
+```
+
+The on-wire journal format is fixed regardless of how you connect, so the study stays byte-compatible
+with Python Optuna and the sibling backends whichever constructor you use.
+
 ## License
 
 MIT © SciSharp STACK Team. (NRedisStack is MIT.)

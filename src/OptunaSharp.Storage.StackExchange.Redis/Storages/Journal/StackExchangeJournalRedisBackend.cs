@@ -19,6 +19,13 @@ namespace OptunaSharp.Storages.Journal;
 ///     the shared <see cref="RedisJournalProtocol" /> key layout + Core's <c>PyJson</c>, so a study is
 ///     byte-identical across them and byte-compatible with Python Optuna over the same Redis — only the
 ///     client calls (here, StackExchange.Redis' <see cref="IDatabase" />) differ.
+///
+///     <para>Beyond Optuna's URL-only constructor, this backend lets you drive StackExchange.Redis
+///     on its own terms — pass a fully-built <see cref="ConfigurationOptions" />, hand in an existing
+///     <see cref="IConnectionMultiplexer" /> (a connection you pool / share / manage through DI), or
+///     keep the URL and mutate the derived options through a callback. Every StackExchange.Redis knob
+///     is reachable; the on-wire journal format is fixed by <see cref="RedisJournalProtocol" />
+///     regardless of how you connect, so byte-compatibility holds however you configure the client.</para>
 /// </summary>
 public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot
 {
@@ -27,18 +34,73 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     private readonly string _prefix;
     private readonly IConnectionMultiplexer _connection;
 
+    // ---------------------------------------------------------------- construction
+    //
+    // Four ways in, from "just give it a URL" (Optuna-identical) to "here is the client I already
+    // built". The three richer overloads let you use StackExchange.Redis exactly as you would on its
+    // own — every ConfigurationOptions knob (timeouts, ConnectRetry, ReconnectRetryPolicy, ClientName,
+    // ChannelPrefix, SSL protocols/certificates, CommandMap, …) is yours.
+
+    /// <summary>Connects from a <c>redis-py</c>-style URL — the Optuna-identical entry point.</summary>
     /// <param name="url">URL of the redis storage (ie: <c>redis://localhost:6379</c>); <c>redis://</c>,
-    ///   <c>rediss://</c> (TLS), <c>unix://</c> accepted, password/db optional.</param>
+    ///   <c>rediss://</c> (TLS), <c>unix://</c> accepted, password/db optional. Only the components
+    ///   <c>redis-py</c> puts on the URL are read; for StackExchange.Redis-specific options use one of
+    ///   the other constructors.</param>
     /// <param name="useCluster">If <c>false</c> (default), a standalone server + one atomic Lua
     ///   <c>EVAL</c>; if <c>true</c>, a cluster + non-atomic <c>INCR</c>+<c>SET</c>.</param>
     /// <param name="prefix">Prefix of the preserved keys — useful when many users share one server.</param>
     public StackExchangeJournalRedisBackend(string url, bool useCluster = false, string prefix = "")
-        : this(url, ConnectionMultiplexer.Connect(ToConfiguration(RedisUrl.Parse(url))), useCluster, prefix)
+        : this(ConnectionMultiplexer.Connect(ToConfiguration(RedisUrl.Parse(url))), url, useCluster, prefix)
     {
     }
 
-    /// <summary>Advanced/testing constructor binding to an already-built multiplexer.</summary>
-    internal StackExchangeJournalRedisBackend(string url, IConnectionMultiplexer connection, bool useCluster, string prefix)
+    /// <summary>
+    ///     Connects from a <c>redis-py</c>-style URL, then hands you the derived
+    ///     <see cref="ConfigurationOptions" /> to adjust before the connection opens — the easy way to
+    ///     keep the familiar URL yet set knobs it cannot express (<c>ConnectTimeout</c>,
+    ///     <c>SyncTimeout</c>, <c>ConnectRetry</c>, <c>ClientName</c>, TLS certificates, …).
+    /// </summary>
+    /// <param name="url">The <c>redis-py</c>-style base URL (see the URL-only constructor).</param>
+    /// <param name="configure">Invoked on the <see cref="ConfigurationOptions" /> parsed from
+    ///   <paramref name="url" /> immediately before connecting; mutate it in place.</param>
+    /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
+    /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    public StackExchangeJournalRedisBackend(string url, Action<ConfigurationOptions> configure,
+        bool useCluster = false, string prefix = "")
+        : this(ConnectionMultiplexer.Connect(Configure(RedisUrl.Parse(url), configure)), url, useCluster, prefix)
+    {
+    }
+
+    /// <summary>
+    ///     Connects from a fully-specified StackExchange.Redis <see cref="ConfigurationOptions" /> — build
+    ///     the connection entirely in StackExchange.Redis' own terms (multiple endpoints, a
+    ///     <c>CommandMap</c>, TLS settings, and so on) instead of through a URL.
+    /// </summary>
+    /// <param name="options">The connection options; passed straight to <see cref="ConnectionMultiplexer" />.</param>
+    /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
+    /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    public StackExchangeJournalRedisBackend(ConfigurationOptions options, bool useCluster = false, string prefix = "")
+        : this(ConnectionMultiplexer.Connect(options ?? throw new ArgumentNullException(nameof(options))),
+               "", useCluster, prefix)
+    {
+    }
+
+    /// <summary>
+    ///     Binds to a StackExchange.Redis client you already built and connected — the full escape hatch.
+    ///     Everything about the connection is yours (pooling, a multiplexer shared across your app,
+    ///     DI-managed lifetime); the backend only issues journal commands on it. <b>You own the
+    ///     multiplexer's lifetime</b> — the backend never disposes a connection it did not create.
+    /// </summary>
+    /// <param name="connection">A connected <see cref="IConnectionMultiplexer" />.</param>
+    /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
+    /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    public StackExchangeJournalRedisBackend(IConnectionMultiplexer connection, bool useCluster = false, string prefix = "")
+        : this(connection ?? throw new ArgumentNullException(nameof(connection)), "", useCluster, prefix)
+    {
+    }
+
+    /// <summary>Shared core: every public constructor funnels here (so all raise the experimental warning).</summary>
+    private StackExchangeJournalRedisBackend(IConnectionMultiplexer connection, string url, bool useCluster, string prefix)
     {
         OptunaWarnings.Warn(
             RedisJournalProtocol.ExperimentalWarning(nameof(StackExchangeJournalRedisBackend)),
@@ -123,7 +185,10 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <summary>Maps the neutral <see cref="RedisEndpoint" /> onto StackExchange.Redis' options.</summary>
     internal static ConfigurationOptions ToConfiguration(RedisEndpoint ep)
     {
-        var o = new ConfigurationOptions { AbortOnConnectFail = false };  // redis-py connects lazily
+        // StackExchange.Redis defaults AbortOnConnectFail to true (Connect throws if no server is up);
+        // we set false so construction succeeds without a live server, matching redis-py's lazy connect
+        // (Optuna's `redis.Redis.from_url(url)` does not dial until the first command).
+        var o = new ConfigurationOptions { AbortOnConnectFail = false };
         if (ep.UnixSocketPath is not null)
         {
             o.EndPoints.Add(new UnixDomainSocketEndPoint(ep.UnixSocketPath));
@@ -141,6 +206,16 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
             o.Password = ep.Password;
         if (ep.Db is not null)
             o.DefaultDatabase = ep.Db;
+        return o;
+    }
+
+    /// <summary>Builds the URL's options, then applies the caller's native <paramref name="configure" /> tweak.</summary>
+    internal static ConfigurationOptions Configure(RedisEndpoint ep, Action<ConfigurationOptions> configure)
+    {
+        if (configure is null)
+            throw new ArgumentNullException(nameof(configure));
+        ConfigurationOptions o = ToConfiguration(ep);
+        configure(o);
         return o;
     }
 }

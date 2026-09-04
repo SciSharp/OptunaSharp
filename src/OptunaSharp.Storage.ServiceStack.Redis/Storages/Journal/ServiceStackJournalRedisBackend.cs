@@ -18,6 +18,23 @@ namespace OptunaSharp.Storages.Journal;
 ///     client is ServiceStack.Redis' <see cref="IRedisClient" /> (pooled via an
 ///     <see cref="IRedisClientsManager" />; raw string/EVAL/byte commands, no typed serialization).
 ///
+///     <para>Beyond Optuna's URL-only constructor, this backend lets you drive ServiceStack.Redis on
+///     its own terms — hand in an <see cref="IRedisClientsManager" /> you already built (any manager
+///     type, pool config and lifetime — shared across your app or DI-managed; the full-control path),
+///     pass a ServiceStack.Redis <see cref="SsRedisEndpoint" />, or keep the URL and mutate the derived
+///     endpoint through a callback. The on-wire journal format is fixed by
+///     <see cref="RedisJournalProtocol" /> regardless of how you connect, so byte-compatibility holds
+///     however you configure the client.</para>
+///
+///     <para>ServiceStack specifics for the endpoint/callback paths (they build a
+///     <see cref="RedisManagerPool" /> from the endpoint's connection string): that string reliably
+///     carries routing and auth (host, port, <c>Ssl</c>, <c>Db</c>, <c>Password</c>, <c>Username</c>),
+///     but ServiceStack's pooled managers configure timeouts/retry through the process-wide
+///     <c>RedisConfig</c> defaults rather than a per-endpoint <c>ConnectTimeout</c>, and the endpoint's
+///     <c>NamespacePrefix</c> must be left unset (use this backend's <c>prefix</c> parameter — a
+///     namespace prefix would diverge from the shared key layout). For anything more, inject a
+///     fully-built <see cref="IRedisClientsManager" />.</para>
+///
 ///     <para><b>License:</b> ServiceStack.Redis is commercially licensed (its free tier is
 ///     request-quota-limited). Prefer the MIT <c>StackExchange</c>/<c>NRedisStack</c> backends unless
 ///     your app already standardizes on ServiceStack.</para>
@@ -29,18 +46,79 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     private readonly string _prefix;
     private readonly IRedisClientsManager _manager;
 
+    // ---------------------------------------------------------------- construction
+    //
+    // Four ways in, from "just give it a URL" (Optuna-identical) to "here is the client manager I
+    // already built". The IRedisClientsManager overload is the full-control path — your choice of manager
+    // (RedisManagerPool / PooledRedisClientManager / BasicRedisClientManager) with any pool config, and
+    // any timeouts/retry via RedisConfig. The endpoint/callback overloads are a convenience over
+    // RedisManagerPool: they carry the endpoint's routing/auth (host/port/Ssl/Db/Password/Username), but
+    // ServiceStack's pooled managers take timeouts from RedisConfig, not the per-endpoint value (see the
+    // type-level remarks).
+
+    /// <summary>Connects from a <c>redis-py</c>-style URL — the Optuna-identical entry point.</summary>
     /// <param name="url">URL of the redis storage (ie: <c>redis://localhost:6379</c>); <c>redis://</c>
-    ///   and <c>rediss://</c> (TLS) are accepted (ServiceStack.Redis does not support unix sockets).</param>
+    ///   and <c>rediss://</c> (TLS) are accepted (ServiceStack.Redis does not support unix sockets). Only
+    ///   the components <c>redis-py</c> puts on the URL are read; for ServiceStack.Redis-specific options
+    ///   use one of the other constructors.</param>
     /// <param name="useCluster">If <c>false</c> (default), standalone + atomic Lua <c>EVAL</c>; if
     ///   <c>true</c>, cluster + non-atomic <c>INCR</c>+<c>SET</c>.</param>
     /// <param name="prefix">Prefix of the preserved keys.</param>
     public ServiceStackJournalRedisBackend(string url, bool useCluster = false, string prefix = "")
-        : this(url, CreateManager(RedisUrl.Parse(url)), useCluster, prefix)
+        : this(CreateManager(RedisUrl.Parse(url)), url, useCluster, prefix)
     {
     }
 
-    /// <summary>Advanced/testing constructor binding to an already-built client manager.</summary>
-    internal ServiceStackJournalRedisBackend(string url, IRedisClientsManager manager, bool useCluster, string prefix)
+    /// <summary>
+    ///     Connects from a <c>redis-py</c>-style URL, then hands you the derived ServiceStack.Redis
+    ///     <see cref="SsRedisEndpoint" /> to adjust before the client manager is built — the easy way to
+    ///     keep the familiar URL yet set endpoint settings it cannot express (<c>Ssl</c>, <c>Db</c>,
+    ///     <c>Client</c>, …). See the type-level remarks for what the pooled manager applies (routing/auth)
+    ///     versus what comes from <c>RedisConfig</c> (timeouts), and why <c>NamespacePrefix</c> must be
+    ///     left unset.
+    /// </summary>
+    /// <param name="url">The <c>redis-py</c>-style base URL (see the URL-only constructor).</param>
+    /// <param name="configure">Invoked on the <see cref="SsRedisEndpoint" /> parsed from
+    ///   <paramref name="url" /> immediately before the client manager is built; mutate it in place.</param>
+    /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
+    /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    public ServiceStackJournalRedisBackend(string url, Action<SsRedisEndpoint> configure,
+        bool useCluster = false, string prefix = "")
+        : this(CreateManager(RedisUrl.Parse(url), configure), url, useCluster, prefix)
+    {
+    }
+
+    /// <summary>
+    ///     Builds a pooled client from a ServiceStack.Redis <see cref="SsRedisEndpoint" /> you specify in
+    ///     full — every endpoint knob is yours. (Uses a <see cref="RedisManagerPool" />; for a different
+    ///     manager type or pool config, use the <see cref="IRedisClientsManager" /> constructor.)
+    /// </summary>
+    /// <param name="endpoint">A ServiceStack.Redis endpoint.</param>
+    /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
+    /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    public ServiceStackJournalRedisBackend(SsRedisEndpoint endpoint, bool useCluster = false, string prefix = "")
+        : this(PoolFor(endpoint ?? throw new ArgumentNullException(nameof(endpoint))), "", useCluster, prefix)
+    {
+    }
+
+    /// <summary>
+    ///     Binds to a ServiceStack.Redis <see cref="IRedisClientsManager" /> you already built — the full
+    ///     escape hatch. Manager type, pool size, redis config and lifetime are all yours (a pool shared
+    ///     across your app, DI-managed, …); the backend only borrows clients from it to issue journal
+    ///     commands. <b>You own the manager's lifetime</b> — the backend never disposes a manager it did
+    ///     not create.
+    /// </summary>
+    /// <param name="manager">A ServiceStack.Redis client manager (e.g. <see cref="RedisManagerPool" />,
+    ///   <c>PooledRedisClientManager</c>, <c>BasicRedisClientManager</c>).</param>
+    /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
+    /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    public ServiceStackJournalRedisBackend(IRedisClientsManager manager, bool useCluster = false, string prefix = "")
+        : this(manager ?? throw new ArgumentNullException(nameof(manager)), "", useCluster, prefix)
+    {
+    }
+
+    /// <summary>Shared core: every public constructor funnels here (so all raise the experimental warning).</summary>
+    private ServiceStackJournalRedisBackend(IRedisClientsManager manager, string url, bool useCluster, string prefix)
     {
         OptunaWarnings.Warn(
             RedisJournalProtocol.ExperimentalWarning(nameof(ServiceStackJournalRedisBackend)),
@@ -136,17 +214,44 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
 
     /// <summary>Builds a pooled ServiceStack client manager from the neutral <see cref="RedisEndpoint" />.</summary>
     internal static IRedisClientsManager CreateManager(RedisEndpoint ep)
+        => PoolFor(ToServiceStackEndpoint(ep));
+
+    /// <summary>
+    ///     Maps the neutral endpoint onto ServiceStack.Redis' own, applies the caller's native
+    ///     <paramref name="configure" /> tweak, then builds the pool.
+    /// </summary>
+    internal static IRedisClientsManager CreateManager(RedisEndpoint ep, Action<SsRedisEndpoint> configure)
+    {
+        if (configure is null)
+            throw new ArgumentNullException(nameof(configure));
+        SsRedisEndpoint sep = ToServiceStackEndpoint(ep);
+        configure(sep);
+        return PoolFor(sep);
+    }
+
+    /// <summary>Maps the neutral <see cref="RedisEndpoint" /> onto ServiceStack.Redis' own endpoint type.</summary>
+    private static SsRedisEndpoint ToServiceStackEndpoint(RedisEndpoint ep)
     {
         if (ep.UnixSocketPath is not null)
             throw new ValueError("ServiceStack.Redis does not support unix domain sockets; use redis:// or rediss://.");
 
-        var sep = new SsRedisEndpoint(ep.Host, ep.Port <= 0 ? 6379 : ep.Port)
+        return new SsRedisEndpoint(ep.Host, ep.Port <= 0 ? 6379 : ep.Port)
         {
             Ssl = ep.Ssl,
             Db = ep.Db ?? 0,
             Password = ep.Password,
             Username = ep.User,
         };
-        return new RedisManagerPool(sep.ToString());
     }
+
+    /// <summary>
+    ///     Builds the pooled client manager for a ServiceStack.Redis endpoint. <see cref="RedisManagerPool" />
+    ///     takes host <em>strings</em> (there is no <see cref="SsRedisEndpoint" />-object constructor), so
+    ///     the endpoint round-trips through its own connection-string form (<c>ToString()</c>). That string
+    ///     carries the endpoint's routing/auth (host, port, <c>Ssl</c>, <c>Db</c>, <c>Password</c>,
+    ///     <c>Username</c>); timeouts/retry are taken from the process-wide <c>RedisConfig</c> defaults, not
+    ///     the per-endpoint value (a ServiceStack pooled-manager behavior). See the type-level remarks.
+    /// </summary>
+    private static IRedisClientsManager PoolFor(SsRedisEndpoint sep)
+        => new RedisManagerPool(sep.ToString());
 }

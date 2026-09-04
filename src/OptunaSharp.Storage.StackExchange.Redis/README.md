@@ -21,8 +21,35 @@ study.Optimize(t => { var x = t.SuggestFloat("x", -10, 10); return (x - 2) * (x 
 ```
 
 `redis://`, `rediss://` (TLS) and `unix://` URLs are accepted (optional `[user]:[pass]@`, `/db`,
-`?db=`). For a cluster, pass `useCluster: true`. An internal constructor accepts an existing
-`IConnectionMultiplexer` to reuse a shared connection.
+`?db=`). For a cluster, pass `useCluster: true`.
+
+## Native StackExchange.Redis configuration
+
+The URL constructor mirrors Python Optuna, but you are not limited to it — drive StackExchange.Redis
+on its own terms. Four constructors, all taking the same `useCluster` / `prefix`:
+
+```csharp
+// 1. redis-py-style URL (Optuna-identical)
+new StackExchangeJournalRedisBackend("redis://localhost:6379");
+
+// 2. keep the URL, tweak the derived ConfigurationOptions
+new StackExchangeJournalRedisBackend("redis://localhost:6379", o =>
+{
+    o.ConnectTimeout = 5000;
+    o.ClientName     = "my-app";
+    o.ConnectRetry   = 3;
+});
+
+// 3. a ConfigurationOptions you built yourself (timeouts, retry policy, TLS certs, CommandMap, …)
+var options = new ConfigurationOptions { EndPoints = { "localhost:6379" }, Ssl = true, ClientName = "my-app" };
+new StackExchangeJournalRedisBackend(options);
+
+// 4. an IConnectionMultiplexer you already own (pooled / shared / DI-managed — you keep its lifetime)
+new StackExchangeJournalRedisBackend(existingMultiplexer);
+```
+
+The on-wire journal format is fixed regardless of how you connect, so the study stays byte-compatible
+with Python Optuna and the sibling backends whichever constructor you use.
 
 ## License
 

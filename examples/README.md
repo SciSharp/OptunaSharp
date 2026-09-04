@@ -24,6 +24,32 @@ Each exercises a whole Optuna capability, with a deterministic surrogate objecti
 | [`HyperparameterImportance.cs`](HyperparameterImportance.cs) | `ImportanceFunctions.GetParamImportances` — fANOVA vs PedAnova on an objective rigged so `a ≫ b ≫ c` |
 | [`AutomaticTermination.cs`](AutomaticTermination.cs) | the `Terminator` / `TerminatorCallback` — stop automatically when the search stops paying off |
 
+## Redis storage
+
+Persist a study's journal to a **Redis** server — so it survives restarts and can be shared by
+distributed workers — the .NET port of Optuna's
+[`JournalRedisBackend`](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.storages.journal.JournalRedisBackend.html).
+Unlike the showcases above, these need a **reachable Redis**; each probes first and prints friendly
+guidance (then exits cleanly) if none is found, so they never crash. See the
+[Redis docs](../docs/website-src/redis/index.md).
+
+| Example | First shows |
+|---|---|
+| [`RedisJournalStorage.cs`](RedisJournalStorage.cs) | `StackExchangeJournalRedisBackend` + `JournalStorage` with `loadIfExists` — a **resumable, shared** study (run it twice and the trial count grows) |
+| [`RedisNativeClientConfig.cs`](RedisNativeClientConfig.cs) | the backends' **native client configuration** (URL / URL-plus-tweak / full `ConfigurationOptions` / bring-your-own `IConnectionMultiplexer`) and **interchangeable clients** — write with StackExchange.Redis, read the byte-identical journal back with NRedisStack |
+
+```bash
+docker run --rm -p 6379:6379 redis:7-alpine          # start a Redis (or use docker-compose, below)
+dotnet run examples/RedisJournalStorage.cs           # run again to resume — the count grows
+dotnet run examples/RedisNativeClientConfig.cs
+# endpoint override: OPTUNASHARP_REDIS_URL=redis://host:6379
+```
+
+The repo's `test/OptunaSharp.Tests.Storage/docker-compose.yml` also starts one
+(`docker compose -f test/OptunaSharp.Tests.Storage/docker-compose.yml up -d`). A third backend on the
+**commercial** ServiceStack.Redis exists with the same surface but is not shown here (it isn't
+referenced by the examples).
+
 ## Run them
 
 ```bash
@@ -42,8 +68,9 @@ clip, so it always runs a real encode.
 
 ## Real vs. surrogate objectives
 
-`FFmpegX264Tuning` (an actual encode) and `ParamRepeatPruner` (a real repeat check) run their **real**
-objectives. The rest use a **deterministic surrogate** for the objective body — OptunaSharp can't run
+`FFmpegX264Tuning` (an actual encode), `ParamRepeatPruner` (a real repeat check), and the two Redis
+examples (real self-contained paraboloids — the point there is the storage, not the objective) run their
+**real** objectives. The rest use a **deterministic surrogate** for the objective body — OptunaSharp can't run
 XGBoost/train a net in-process, and a sampler's trajectory is fixed by `(seed, search space, value
 sequence)` alone, so the surrogate keeps the example self-contained while exercising the real feature.
 The **real ML** runs (XGBoost, LightGBM, sklearn) happen in `OptunaSharp.Tests.PackageParity`, where
@@ -57,3 +84,9 @@ XGBoost) and [`ParamRepeatPrunerParityTests`](../test/OptunaSharp.Tests.Interop/
 The features the showcases exercise have their own parity coverage in the interop suite (pruner
 decisions, NSGA-II, importance, terminator). Parity is asserted on the RNG-exact `RandomSampler` path;
 TPE over integer spaces isn't byte-comparable (NumPy simd-sort tie order — see the `testing` skill).
+
+The Redis examples don't add their own parity test: the journal's **byte-compatibility** with Python
+Optuna (and across the three client backends) is already proven by
+[`JournalRedisInteropTests`](../test/OptunaSharp.Tests.Interop/JournalRedisInteropTests.cs) (Python ↔
+Redis ↔ C#) and the `OptunaSharp.Tests.Storage` contract + cross-library suites, and the sampler
+trajectory they persist is the same RNG-exact `RandomSampler` path asserted elsewhere.

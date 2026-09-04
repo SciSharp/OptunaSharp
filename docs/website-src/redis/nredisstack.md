@@ -26,8 +26,29 @@ study.Optimize(trial =>
 }, nTrials: 20);
 ```
 
-The constructor is `NRedisStackJournalRedisBackend(url, useCluster = false, prefix = "")`. See the
+The URL constructor is `NRedisStackJournalRedisBackend(url, useCluster = false, prefix = "")`. See the
 [Redis overview](index.md) for the URL format, cluster mode, and key prefixes.
+
+## Native configuration
+
+Because NRedisStack builds on StackExchange.Redis, its connection is configured through the same
+`ConfigurationOptions` / `IConnectionMultiplexer` types. Three more constructors (all also taking
+`useCluster` and `prefix`) let you use the client directly:
+
+```csharp
+// keep the URL, tweak the derived ConfigurationOptions
+new NRedisStackJournalRedisBackend("redis://localhost:6379", o => { o.ConnectTimeout = 5000; o.ClientName = "my-app"; });
+
+// a ConfigurationOptions you built yourself
+new NRedisStackJournalRedisBackend(new ConfigurationOptions { EndPoints = { "localhost:6379" }, Ssl = true });
+
+// reuse a multiplexer you already own — for example the very connection on which you use NRedisStack's
+// module APIs (JSON / Search / TimeSeries / Bloom) elsewhere. You keep its lifetime.
+new NRedisStackJournalRedisBackend(myConnectionMultiplexer);
+```
+
+The journal still stores plain strings (see the note below); reusing your NRedisStack connection only
+shares the transport, not the module data model, so byte-compatibility is unaffected.
 
 ## About NRedisStack
 

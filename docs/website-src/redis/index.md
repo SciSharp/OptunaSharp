@@ -67,6 +67,37 @@ unix:///var/run/redis/redis.sock                  # StackExchange / NRedisStack 
 An optional `[username]:[password]@`, a `/db` index, and `?db=` / `?username=` / `?password=` query
 parameters are supported (query parameters take precedence over the URL components).
 
+## Native client configuration
+
+The URL constructor matches Python Optuna exactly and only reads what a `redis-py` URL carries — but a
+URL cannot express most of a .NET client's settings (connect/sync timeouts, retry policy, client name,
+TLS certificates, connection pooling, and so on). So each backend adds **three more constructors** that
+let you use its client on its own terms, without leaving OptunaSharp. Every backend offers, alongside
+the URL constructor:
+
+1. **URL + a native tweak** — keep the familiar URL, then adjust the client's own options object through
+   a callback just before it connects.
+2. **A native configuration object** — build the connection entirely in the client's terms.
+3. **An already-built client** — hand in a connection/manager you own (pooled, shared across your app,
+   DI-managed); the backend never disposes a client it did not create.
+
+```csharp
+// StackExchange.Redis / NRedisStack (both use StackExchange.Redis' ConfigurationOptions):
+new StackExchangeJournalRedisBackend("redis://localhost:6379", o => { o.ConnectTimeout = 5000; o.ClientName = "my-app"; });
+new StackExchangeJournalRedisBackend(new ConfigurationOptions { EndPoints = { "localhost:6379" }, Ssl = true });
+new StackExchangeJournalRedisBackend(myConnectionMultiplexer);      // IConnectionMultiplexer you own
+
+// ServiceStack.Redis (its RedisEndpoint / IRedisClientsManager):
+new ServiceStackJournalRedisBackend("redis://localhost:6379", ep => { ep.Ssl = true; ep.Db = 1; });
+new ServiceStackJournalRedisBackend(new RedisEndpoint("localhost", 6379) { Db = 1 });
+new ServiceStackJournalRedisBackend(new RedisManagerPool("localhost:6379"));   // full control: any manager you own
+```
+
+Every constructor also takes the same `useCluster` and `prefix`. The **on-wire journal format is fixed**
+whichever one you use, so byte-compatibility with Python Optuna and the sibling backends always holds —
+you are only changing how the client connects, never what it writes. See each client's page for the
+full constructor set.
+
 ## Standalone vs cluster
 
 By default a standalone server is assumed and each log append is a **single atomic Lua `EVAL`**
