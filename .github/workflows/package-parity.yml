@@ -36,8 +36,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Init NumSharp submodule (src/NumSharp @ journey3)
-        run: git submodule update --init src/NumSharp
+      - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
+        shell: bash
+        run: |
+          git submodule update --init src/NumSharp
+          python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
+            || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
@@ -56,8 +60,12 @@ jobs:
       version: ${{ steps.pack.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Init NumSharp submodule (src/NumSharp @ journey3)
-        run: git submodule update --init src/NumSharp
+      - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
+        shell: bash
+        run: |
+          git submodule update --init src/NumSharp
+          python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
+            || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |

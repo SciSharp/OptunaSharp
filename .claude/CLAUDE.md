@@ -123,7 +123,12 @@ priority order:
 - **Submodule (canonical)** — the pinned **`src/NumSharp` git submodule** (`SciSharp/NumSharp` @
   `journey3`, mirroring `src/optuna`), referenced by **ProjectReference** at
   `src/NumSharp/src/{NumSharp.Core,NumSharp.Interop.OpenBLAS}`. Restore it with
-  `git submodule update --init src/NumSharp` (it does NOT need NumSharp's own nested submodules).
+  `git submodule update --init src/NumSharp`, then **stage the OpenBLAS natives once** with
+  `python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py` — they're pulled from
+  PyPI (scipy-openblas), NOT committed, and without them the managed build still compiles but
+  `np.linalg` throws `OpenBlasMissingBackendException` at runtime (so linalg-backed samplers/tests
+  fail). CI runs both steps in every Core-building job. It does NOT need NumSharp's own nested
+  submodules (numpy/pocketfft/OpenBLAS-source).
 - **Sibling (fallback)** — if the submodule isn't initialised but a sibling `NumSharp` checkout exists at
   `../../../NumSharp` (i.e. `K:/source/NumSharp`), that is used instead, so a local sibling still works.
 - **NuGet (last resort)** — otherwise a `PackageReference` on `NumSharp` / `NumSharp.Interop.OpenBLAS`
