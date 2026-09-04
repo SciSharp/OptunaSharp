@@ -19,8 +19,8 @@ namespace OptunaSharp.Importance;
 ///     RandomForestRegressor</b>, and MDI reads each tree's stored per-node impurity and weighted
 ///     counts, so with a fixed seed the importances match Python Optuna to ~1 ULP. (An ML.NET
 ///     FastForest backend is also available as
-///     <c>OptunaSharp.Importance.FastForestMeanDecreaseImpurityImportanceEvaluator</c> in the
-///     <c>OptunaSharp.Importance.Forests</c> package.)</para>
+///     <c>OptunaSharp.Importance.Forests.FastForestMeanDecreaseImpurityImportanceEvaluator</c> in the
+///     <c>OptunaSharp.Importance.Forests.ML.NET</c> package.)</para>
 /// </summary>
 public sealed class MeanDecreaseImpurityImportanceEvaluator : BaseImportanceEvaluator
 {

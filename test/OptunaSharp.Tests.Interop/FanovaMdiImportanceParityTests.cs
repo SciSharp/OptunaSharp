@@ -2,6 +2,7 @@ using System.Linq;
 using AwesomeAssertions;
 using OptunaSharp.Distributions;
 using OptunaSharp.Importance;
+using OptunaSharp.Importance.Forests;
 using OptunaSharp.Samplers;
 using Python.Runtime;
 

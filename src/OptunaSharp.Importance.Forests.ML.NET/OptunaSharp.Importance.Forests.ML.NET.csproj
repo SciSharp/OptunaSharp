@@ -9,9 +9,11 @@
          license/version) is centralized in ../../Directory.Build.props. This is a Tier X satellite:
          it pulls a foreign runtime (ML.NET's FastForest / native FastTree), so it ships separately
          and Core stays pure managed — the NumSharp.Interop.OpenBLAS optional-package pattern. The
-         canonical fANOVA/MDI evaluators are pure-managed in Core (OptunaSharp); this package is an
-         optional ML.NET FastForest *backend*, hence the .ML.NET suffix (Core owns the
-         OptunaSharp.Importance.Forests namespace). -->
+         canonical fANOVA/MDI evaluators are pure-managed in Core (OptunaSharp, namespace
+         OptunaSharp.Importance); this package's public evaluators live in their own child namespace
+         OptunaSharp.Importance.Forests (every alternative backend gets one, so the "which is the real
+         one" question is answered by the name), and the .ML.NET assembly suffix marks it as the
+         ML.NET FastForest backend, distinct from Core's pure-managed OptunaSharp. -->
     <PackageId>OptunaSharp.Importance.Forests.ML.NET</PackageId>
     <Description>An ML.NET FastForest backend for OptunaSharp's forest-based parameter-importance evaluators (a .NET port of Optuna): FastForestFanovaImportanceEvaluator (fANOVA — Hutter et al. 2014) and FastForestMeanDecreaseImpurityImportanceEvaluator (MDI). The canonical FanovaImportanceEvaluator / MeanDecreaseImpurityImportanceEvaluator ship in Core as a pure-managed, bit-exact port of scikit-learn's RandomForestRegressor (value-parity with Python Optuna); this package fits the random forest with ML.NET FastForest instead, which is not tree-identical to scikit-learn, so its importance values differ numerically from Optuna (documented divergence; the fANOVA/MDI algorithm is shared with Core). Part of the SciSharp STACK.</Description>
     <PackageTags>Optuna;OptunaSharp;Importance;fANOVA;MDI;RandomForest;MLNET;FastForest;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
@@ -51,6 +53,15 @@
          SearchSpaceTransform / ImportanceBase helpers / intersection search space / OptunaWarnings
          this package uses (granted via InternalsVisibleTo in Core's Assembly/Properties.cs). -->
     <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The ML.NET tree-ensemble -> SklearnLikeTree adapter is shared by every ML.NET importance
+         backend (FastForest here, FastTree/FastTreeTweedie, LightGBM). It is a linked source file
+         rather than a runtime package, so no backend depends on another and Core stays pure managed;
+         each host assembly is a Core friend, which is what grants the adapter access to the internal
+         SklearnLikeTree. -->
+    <Compile Include="..\_shared\MlNetTreeEnsembleAdapter.cs" Link="Internal\MlNetTreeEnsembleAdapter.cs" />
   </ItemGroup>
 
 </Project>

@@ -4,7 +4,7 @@ using OptunaSharp.Collections;
 using OptunaSharp.Importance.Forests.Internal;
 using OptunaSharp.Importance.Forests.MLNet;
 
-namespace OptunaSharp.Importance;
+namespace OptunaSharp.Importance.Forests;
 
 /// <summary>
 ///     fANOVA importance evaluator backed by <b>ML.NET's FastForest</b> — the alternative forest

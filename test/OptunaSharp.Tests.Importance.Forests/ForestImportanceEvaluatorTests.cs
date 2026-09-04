@@ -4,6 +4,7 @@ using System.Linq;
 using AwesomeAssertions;
 using NumSharp;
 using OptunaSharp.Importance;
+using OptunaSharp.Importance.Forests;
 using OptunaSharp.Samplers;
 
 namespace OptunaSharp.Tests.Importance.Forests;
