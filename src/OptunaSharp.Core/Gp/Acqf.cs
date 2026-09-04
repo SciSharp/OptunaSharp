@@ -170,11 +170,14 @@ internal sealed class LogEI : IAcquisitionFunc
 ///     a point by <c>log Φ((mean − threshold)/σ)</c> (the log of the feasible probability of the GP
 ///     posterior over <c>threshold</c>). <see cref="GPSampler" /> uses it, summed over the constraint
 ///     GPs, as the feasibility term of <see cref="LogCEI" /> (single-objective constrained
-///     optimization). It rides <c>log_ndtr</c> → the erf/ucrt tolerance class.
+///     optimization) and of <see cref="LogCEHVI" /> (multi-objective constrained). It rides
+///     <c>log_ndtr</c> → the erf/ucrt tolerance class.
 ///
-///     <para><b>Scope:</b> the no-running-trials path (the Kriging-Believer <c>append_running_data</c>
-///     branch of Optuna's <c>LogPI</c>, used by the q-batch/MO-constrained acqfs, is deferred to a
-///     later part).</para>
+///     <para><b>Running trials (Kriging-Believer):</b> when
+///     <c>normalizedParamsOfRunningTrials</c> is given, the running points are appended to the GP with
+///     their posterior mean as the fantasy objective value (<see cref="GPRegressor.AppendRunningData" />),
+///     so the feasible-probability accounts for the trials already in flight (Optuna's
+///     <c>append_running_data</c> path; PORTING_PLAN Phase 3.2 part 3e-6).</para>
 /// </summary>
 internal sealed class LogPI : IAcquisitionFunc
 {
@@ -182,11 +185,20 @@ internal sealed class LogPI : IAcquisitionFunc
     private readonly double _threshold;
     private readonly double _stabilizingNoise;
 
-    internal LogPI(GPRegressor gpr, GpSearchSpace searchSpace, double threshold, double stabilizingNoise = 1e-12)
+    internal LogPI(
+        GPRegressor gpr, GpSearchSpace searchSpace, double threshold,
+        double[,]? normalizedParamsOfRunningTrials = null, double stabilizingNoise = 1e-12)
     {
         _gpr = gpr;
         _threshold = threshold;
         _stabilizingNoise = stabilizingNoise;
+
+        if (normalizedParamsOfRunningTrials != null)
+            // Kriging Believer: append the running points with their posterior mean as the fantasy
+            // objective, mutating the constraint GP in place (matching Optuna's LogPI).
+            _gpr.AppendRunningData(
+                normalizedParamsOfRunningTrials, _gpr.Posterior(normalizedParamsOfRunningTrials).Mean);
+
         SearchSpace = searchSpace;
         LengthScales = gpr.LengthScales;
     }
@@ -268,7 +280,8 @@ internal sealed class LogCEI : IAcquisitionFunc
         _acqf = new LogEI(gpr, searchSpace, threshold, stabilizingNoise);
         _constraintsAcqfList = new LogPI[constraintsGprList.Count];
         for (int i = 0; i < constraintsGprList.Count; i++)
-            _constraintsAcqfList[i] = new LogPI(constraintsGprList[i], searchSpace, constraintsThresholdList[i], stabilizingNoise);
+            _constraintsAcqfList[i] = new LogPI(
+                constraintsGprList[i], searchSpace, constraintsThresholdList[i], null, stabilizingNoise);
 
         SearchSpace = searchSpace;
         LengthScales = gpr.LengthScales;
@@ -331,8 +344,13 @@ internal sealed class LogCEI : IAcquisitionFunc
 ///     posterior rides the managed triangular solve; the QMC samples match torch to ~1e-15) — the
 ///     documented GP boundary, not bit-for-bit.</para>
 ///
-///     <para><b>Scope:</b> the no-running-trials path (the running-trial <c>qLogEHVI</c> is deferred to
-///     the q-batch part).</para>
+///     <para><b>Running trials (Kriging-Believer):</b> when
+///     <c>normalizedParamsOfRunningTrials</c> is given, each objective GP is extended with the running
+///     points (their posterior mean as the fantasy value) via
+///     <see cref="GPRegressor.AppendRunningData" />, so the posterior accounts for the trials already in
+///     flight (Optuna's <c>append_running_data</c> path; used by the MO-constrained
+///     <see cref="LogCEHVI" /> with running trials, PORTING_PLAN Phase 3.2 part 3e-6). The box
+///     decomposition still uses the completed-trial <c>Y_train</c>.</para>
 /// </summary>
 internal sealed class LogEHVI : IAcquisitionFunc
 {
@@ -349,11 +367,19 @@ internal sealed class LogEHVI : IAcquisitionFunc
 
     internal LogEHVI(
         GPRegressor[] gprList, GpSearchSpace searchSpace, double[,] yTrain,
-        int nQmcSamples, int qmcSeed, double stabilizingNoise = 1e-12)
+        int nQmcSamples, int qmcSeed, double[,]? normalizedParamsOfRunningTrials = null,
+        double stabilizingNoise = 1e-12)
     {
         _gprList = gprList;
         _stabilizingNoise = stabilizingNoise;
         _nObjectives = yTrain.GetLength(1);
+
+        if (normalizedParamsOfRunningTrials != null)
+            // Kriging Believer: append the running points with each objective's posterior mean as the
+            // fantasy value, mutating the objective GPs in place (matching Optuna's LogEHVI).
+            foreach (GPRegressor gpr in gprList)
+                gpr.AppendRunningData(
+                    normalizedParamsOfRunningTrials, gpr.Posterior(normalizedParamsOfRunningTrials).Mean);
 
         _fixedSamples = Qmc.SampleFromNormalSobol(_nObjectives, nQmcSamples, qmcSeed);
         _nQmc = _fixedSamples.GetLength(0);
@@ -620,8 +646,11 @@ internal sealed class LogEHVI : IAcquisitionFunc
 ///     <see cref="LogEHVI" /> term is dropped and only the constraint terms remain (the optimizer then
 ///     drives toward feasibility).
 ///
-///     <para><b>Scope:</b> the no-running-trials path (the running-trial Kriging-Believer variant is
-///     deferred to the q-batch part).</para>
+///     <para><b>Running trials (Kriging-Believer):</b> when <c>normalizedParamsOfRunningTrials</c> is
+///     given it is forwarded to both the feasible <see cref="LogEHVI" /> and each constraint
+///     <see cref="LogPI" />, which append the running points as fantasies. Unlike the single-objective
+///     path this is <b>not</b> a q-batch (Monte-Carlo) acqf — the MO-constrained running path stays the
+///     Kriging-Believer <see cref="LogCEHVI" /> (PORTING_PLAN Phase 3.2 part 3e-6).</para>
 /// </summary>
 internal sealed class LogCEHVI : IAcquisitionFunc
 {
@@ -632,17 +661,20 @@ internal sealed class LogCEHVI : IAcquisitionFunc
         GPRegressor[] gprList, GpSearchSpace searchSpace, double[,]? yFeasible,
         int nQmcSamples, int qmcSeed,
         IReadOnlyList<GPRegressor> constraintsGprList, IReadOnlyList<double> constraintsThresholdList,
-        double stabilizingNoise = 1e-12)
+        double[,]? normalizedParamsOfRunningTrials = null, double stabilizingNoise = 1e-12)
     {
         if (constraintsGprList.Count != constraintsThresholdList.Count || constraintsGprList.Count == 0)
             throw new ArgumentException("constraints_gpr_list and constraints_threshold_list must be non-empty and equal-length.");
 
         _acqf = yFeasible != null
-            ? new LogEHVI(gprList, searchSpace, yFeasible, nQmcSamples, qmcSeed, stabilizingNoise)
+            ? new LogEHVI(gprList, searchSpace, yFeasible, nQmcSamples, qmcSeed,
+                normalizedParamsOfRunningTrials, stabilizingNoise)
             : null;
         _constraintsAcqfList = new LogPI[constraintsGprList.Count];
         for (int i = 0; i < constraintsGprList.Count; i++)
-            _constraintsAcqfList[i] = new LogPI(constraintsGprList[i], searchSpace, constraintsThresholdList[i], stabilizingNoise);
+            _constraintsAcqfList[i] = new LogPI(
+                constraintsGprList[i], searchSpace, constraintsThresholdList[i],
+                normalizedParamsOfRunningTrials, stabilizingNoise);
 
         SearchSpace = searchSpace;
         LengthScales = LogEHVI.MeanLengthScales(gprList, searchSpace.Dim);

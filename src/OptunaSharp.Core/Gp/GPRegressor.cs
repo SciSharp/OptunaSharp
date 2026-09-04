@@ -45,11 +45,18 @@ internal sealed class GPRegressor
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna._gp.gp");
 
     private readonly bool[] _isCategorical;
-    private readonly double[,] _xTrain;   // (N, n_params)
+    private readonly double[,] _xTrain;   // (N, n_params) — completed trials only (kernel()/MLL/fit)
     private readonly double[] _yTrain;     // (N,)
     private readonly double[,,] _squaredXDiff;  // (N, N, n_params)
-    private readonly int _n;               // number of training points
+    private readonly int _n;               // number of training (completed) points
     private readonly int _nParams;
+
+    // The "all" set — completed trials plus any running trials appended by the Kriging-Believer path
+    // (append_running_data). Equal to the train set until AppendRunningData is called. The posterior
+    // (mean/variance and their gradients) reads these, matching Optuna's posterior() over _X_all.
+    private double[,] _xAll;   // (N_all, n_params)
+    private double[] _yAll;    // (N_all,)
+    private int _nAll;         // number of "all" points
 
     /// <summary><c>inverse_squared_lengthscales</c> (one per parameter). Mutated by the fit loop.</summary>
     internal double[] InverseSquaredLengthscales { get; set; }
@@ -94,6 +101,9 @@ internal sealed class GPRegressor
         _isCategorical = isCategorical;
         _xTrain = xTrain;
         _yTrain = yTrain;
+        _xAll = xTrain;   // == train set until AppendRunningData appends the running (fantasy) data.
+        _yAll = yTrain;
+        _nAll = _n;
         InverseSquaredLengthscales = inverseSquaredLengthscales;
         KernelScale = kernelScale;
         NoiseVar = noiseVar;
@@ -198,13 +208,13 @@ internal sealed class GPRegressor
             throw new InvalidOperationException("Call CacheMatrix before Posterior.");
 
         int b = x.GetLength(0);
-        double[,] covFxFX = Kernel(x, _xTrain);   // (B, N)
+        double[,] covFxFX = Kernel(x, _xAll);   // (B, N_all)
 
         var mean = new double[b];
         for (int i = 0; i < b; i++)
         {
             double s = 0.0;
-            for (int j = 0; j < _n; j++)
+            for (int j = 0; j < _nAll; j++)
                 s += covFxFX[i, j] * _covYYInvY[j];
             mean[i] = s;
         }
@@ -218,11 +228,51 @@ internal sealed class GPRegressor
         for (int i = 0; i < b; i++)
         {
             double s = 0.0;
-            for (int j = 0; j < _n; j++)
+            for (int j = 0; j < _nAll; j++)
                 s += covFxFX[i, j] * v[i, j];
             variance[i] = Math.Max(0.0, KernelScale - s);
         }
         return (mean, variance);
+    }
+
+    /// <summary>
+    ///     The <b>joint</b> GP posterior mean and full covariance at the query points <paramref name="x" />
+    ///     (<c>(B, dim)</c>) — <c>GPRegressor.posterior(x, joint=True)</c>. With <c>k = kernel(x, X_all)</c>,
+    ///     <c>mean = k · C⁻¹y</c>, and the covariance <c>cov = kernel(x, x) − k·C⁻¹·kᵀ</c> whose diagonal is
+    ///     clamped ≥ 0 (the off-diagonal covariances stay signed). Used by <see cref="ConditionalGPRegressor" />
+    ///     to condition on the running fantasies (Phase 3.2 part 3e-6).
+    /// </summary>
+    internal (double[] Mean, double[,] Cov) PosteriorJoint(double[,] x)
+    {
+        if (_covYYChol is null)
+            throw new InvalidOperationException("Call CacheMatrix before PosteriorJoint.");
+
+        int b = x.GetLength(0);
+        double[,] covFxFX = Kernel(x, _xAll);       // (B, N_all)
+        double[,] covFxFx = Kernel(x, x);           // (B, B) joint prior covariance
+
+        var mean = new double[b];
+        for (int i = 0; i < b; i++)
+        {
+            double s = 0.0;
+            for (int j = 0; j < _nAll; j++)
+                s += covFxFX[i, j] * _covYYInvY[j];
+            mean[i] = s;
+        }
+
+        // V = cov_fx_fX @ C⁻¹  (X (L Lᵀ) = cov_fx_fX).
+        double[,] v = SolveCholesky(_covYYChol, covFxFX, left: false);   // (B, N_all)
+        var cov = new double[b, b];
+        for (int a = 0; a < b; a++)
+            for (int c = 0; c < b; c++)
+            {
+                double s = 0.0;
+                for (int j = 0; j < _nAll; j++)
+                    s += v[a, j] * covFxFX[c, j];   // (V @ cov_fx_fX.T)[a,c]
+                double val = covFxFx[a, c] - s;
+                cov[a, c] = a == c ? Math.Max(0.0, val) : val;   // clamp only the diagonal
+            }
+        return (mean, cov);
     }
 
     /// <summary>
@@ -244,14 +294,14 @@ internal sealed class GPRegressor
 
         double[] w = InverseSquaredLengthscales;
         double scale = KernelScale;
-        var k = new double[_n];
-        var mp = new double[_n];
-        for (int j = 0; j < _n; j++)
+        var k = new double[_nAll];
+        var mp = new double[_nAll];
+        for (int j = 0; j < _nAll; j++)
         {
             double s = 0.0;
             for (int d = 0; d < _nParams; d++)
             {
-                double diff = x[d] - _xTrain[j, d];
+                double diff = x[d] - _xAll[j, d];
                 double sq = diff * diff;
                 if (_isCategorical[d])
                     sq = sq > 0.0 ? 1.0 : 0.0;
@@ -263,7 +313,7 @@ internal sealed class GPRegressor
         }
 
         double mean = 0.0;
-        for (int j = 0; j < _n; j++)
+        for (int j = 0; j < _nAll; j++)
             mean += k[j] * _covYYInvY[j];
 
         // V = C⁻¹ kᵀ via inv(Lᵀ)·inv(L)·k.
@@ -272,7 +322,7 @@ internal sealed class GPRegressor
         double[] v = LinAlg.SolveTriangular(lt, invLk, upper: true);
 
         double rawVar = scale;
-        for (int j = 0; j < _n; j++)
+        for (int j = 0; j < _nAll; j++)
             rawVar -= k[j] * v[j];
         bool clamped = rawVar < 0.0;
         double variance = clamped ? 0.0 : rawVar;
@@ -285,9 +335,9 @@ internal sealed class GPRegressor
                 continue;  // Hamming distance is piecewise constant → zero derivative.
             double dm = 0.0;
             double dv = 0.0;
-            for (int j = 0; j < _n; j++)
+            for (int j = 0; j < _nAll; j++)
             {
-                double dkj = scale * mp[j] * w[d] * 2.0 * (x[d] - _xTrain[j, d]);
+                double dkj = scale * mp[j] * w[d] * 2.0 * (x[d] - _xAll[j, d]);
                 dm += dkj * _covYYInvY[j];
                 dv += dkj * v[j];
             }
@@ -447,6 +497,105 @@ internal sealed class GPRegressor
         double[] invLy = LinAlg.SolveTriangular(_covYYChol, _yTrain, upper: false);
         double[,] lt = Transpose(_covYYChol);
         _covYYInvY = LinAlg.SolveTriangular(lt, invLy, upper: true);
+    }
+
+    /// <summary>
+    ///     <c>append_running_data(X_running, y_running)</c> — the Kriging-Believer step. Extend the cached
+    ///     covariance factorization with the running trials' points (using the posterior mean as their
+    ///     fantasy objective values), so subsequent <see cref="Posterior" /> / <see cref="PosteriorWithGrad" />
+    ///     calls condition on the running trials. The completed-only <c>kernel()</c>/fit state is left
+    ///     untouched (only the "all" set and the covariance grow); <b>must be called once</b>, after
+    ///     <see cref="CacheMatrix" />. Mirrors Optuna's <c>GPRegressor.append_running_data</c>.
+    /// </summary>
+    internal void AppendRunningData(double[,] xRunning, double[] yRunning)
+    {
+        if (_covYYChol is null)
+            throw new InvalidOperationException("Call CacheMatrix before AppendRunningData.");
+
+        int r = xRunning.GetLength(0);
+        double[,] kernelRunningTrain = Kernel(xRunning, _xTrain);        // (r, N)
+        double[,] kernelRunningRunning = Kernel(xRunning, xRunning);     // (r, r)
+        for (int i = 0; i < r; i++)
+            kernelRunningRunning[i, i] += NoiseVar;
+
+        // _X_all = cat(X_train, X_running); _y_all = cat(y_train, y_running).
+        var xAll = new double[_n + r, _nParams];
+        for (int i = 0; i < _n; i++)
+            for (int d = 0; d < _nParams; d++)
+                xAll[i, d] = _xTrain[i, d];
+        for (int i = 0; i < r; i++)
+            for (int d = 0; d < _nParams; d++)
+                xAll[_n + i, d] = xRunning[i, d];
+        var yAll = new double[_n + r];
+        Array.Copy(_yTrain, yAll, _n);
+        Array.Copy(yRunning, 0, yAll, _n, r);
+
+        _covYYChol = ExtendCholesky(_covYYChol, kernelRunningTrain, kernelRunningRunning);
+        _covYYInvY = SolveCholesky(_covYYChol, yAll);
+        _xAll = xAll;
+        _yAll = yAll;
+        _nAll = _n + r;
+    }
+
+    /// <summary>The cached lower Cholesky factor <c>L</c> of <c>C = K + noise_var·I</c> (<see cref="ConditionalGPRegressor" /> conditions on it).</summary>
+    internal double[,] CovYYChol => _covYYChol ?? throw new InvalidOperationException("Call CacheMatrix first.");
+
+    /// <summary><c>kernel(X1)</c> — the cross kernel <c>kernel(X1, X_train)</c> against the completed-trial inputs.</summary>
+    internal double[,] KernelToTrain(double[,] x1) => Kernel(x1, _xTrain);
+
+    /// <summary>
+    ///     <c>_solve_cholesky(L, B, left)</c> — solve <c>(L Lᵀ) X = B</c> (<paramref name="left" />
+    ///     <c>true</c>) or <c>X (L Lᵀ) = B</c> (<c>false</c>) via two triangular solves, where
+    ///     <c>C = L Lᵀ</c>.
+    /// </summary>
+    internal static double[,] SolveCholesky(double[,] l, double[,] b, bool left = true)
+    {
+        if (left)
+        {
+            double[,] tmp = LinAlg.SolveTriangular(l, b, upper: false, left: true);           // L (Lᵀ X) = B
+            return LinAlg.SolveTriangular(Transpose(l), tmp, upper: true, left: true);         // Lᵀ X = tmp
+        }
+        double[,] rt = LinAlg.SolveTriangular(Transpose(l), b, upper: true, left: false);       // (X L) Lᵀ = B
+        return LinAlg.SolveTriangular(l, rt, upper: false, left: false);                        // X L = rt
+    }
+
+    /// <summary><c>_solve_cholesky(L, b)</c> for a vector right-hand side (<c>left=True</c>): <c>C⁻¹b = L⁻ᵀ(L⁻¹b)</c>.</summary>
+    internal static double[] SolveCholesky(double[,] l, double[] b)
+    {
+        double[] invLb = LinAlg.SolveTriangular(l, b, upper: false);
+        return LinAlg.SolveTriangular(Transpose(l), invLb, upper: true);
+    }
+
+    /// <summary>
+    ///     <c>_extend_cholesky(L11, K21, K22)</c> — the Cholesky factor of the bordered matrix
+    ///     <c>[[K11, K21ᵀ], [K21, K22]]</c> given <c>K11 = L11·L11ᵀ</c>:
+    ///     <c>L = [[L11, 0], [L21, chol(K22 − L21·L21ᵀ)]]</c> with <c>L21ᵀ = L11⁻¹·K21ᵀ</c>.
+    /// </summary>
+    internal static double[,] ExtendCholesky(double[,] l11, double[,] k21, double[,] k22)
+    {
+        int n1 = l11.GetLength(0);
+        int n2 = k22.GetLength(0);
+        double[,] l21T = LinAlg.SolveTriangular(l11, Transpose(k21), upper: false, left: true);  // L11 L21ᵀ = K21ᵀ  → (n1, n2)
+        double[,] l21 = Transpose(l21T);                                                          // (n2, n1)
+        double[,] l21l21T = LinAlg.Dot(l21, l21T);                                                // (n2, n2)
+        var schur = new double[n2, n2];
+        for (int i = 0; i < n2; i++)
+            for (int j = 0; j < n2; j++)
+                schur[i, j] = k22[i, j] - l21l21T[i, j];
+        double[,] l22 = LinAlg.Cholesky(schur);
+
+        var l = new double[n1 + n2, n1 + n2];
+        for (int i = 0; i < n1; i++)
+            for (int j = 0; j < n1; j++)
+                l[i, j] = l11[i, j];
+        for (int i = 0; i < n2; i++)
+        {
+            for (int j = 0; j < n1; j++)
+                l[n1 + i, j] = l21[i, j];
+            for (int j = 0; j < n2; j++)
+                l[n1 + i, n1 + j] = l22[i, j];
+        }
+        return l;
     }
 
     /// <summary>

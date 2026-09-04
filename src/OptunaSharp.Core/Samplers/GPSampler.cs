@@ -179,9 +179,12 @@ public class GPSampler : BaseSampler
             .ToList();
         double[,] normalizedParams = internalSearchSpace.GetNormalizedParams(completedParams);
 
-        // Running-trial q-batch acquisition (qLogEI/qLogEHVI/qLogCEI) is deferred to a later part;
-        // each branch below throws when running trials are present.
+        // The running trials' normalized params (via the shared gp:relative_params attrs) — the
+        // q-batch / Kriging-Believer acquisition functions condition on the trials already in flight.
         bool hasRunning = runningTrials.Count > 0;
+        double[,]? normalizedParamsOfRunningTrials = hasRunning
+            ? internalSearchSpace.GetNormalizedParams(runningTrials.Select(GetParams).ToList())
+            : null;
 
         var directions = study.Directions;
         int nObjectives = directions.Count;
@@ -266,14 +269,13 @@ public class GPSampler : BaseSampler
                 (List<GPRegressor> constrGprList, double[] constrThresholdList) =
                     GetConstraintsAcqfArgs(constraintVals, internalSearchSpace, normalizedParams);
                 bool isAllInfeasible = !isFeasible.Any(f => f);
-                if (hasRunning)
-                    throw NotYetPorted(
-                        "multi-objective constrained with running trials (LogCEHVI q-batch)", "3e q-batch");
+                // The MO-constrained running path stays the Kriging-Believer LogCEHVI (not a q-acqf):
+                // running params are forwarded and appended as fantasies inside LogEHVI/LogPI.
                 int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
                 double[,]? yFeasible = isAllInfeasible ? null : FilterRows(standardizedScoreVals, isFeasible);
                 acqf = new LogCEHVI(
                     gprsList.ToArray(), internalSearchSpace, yFeasible, _nQmcSamplesEhvi, qmcSeed,
-                    constrGprList, constrThresholdList);
+                    constrGprList, constrThresholdList, normalizedParamsOfRunningTrials);
                 bestParams = isAllInfeasible
                     ? null
                     : GetBestParamsForMultiObjective(
