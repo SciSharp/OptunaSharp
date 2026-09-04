@@ -4,6 +4,7 @@ using OptunaSharp.Distributions;
 using OptunaSharp.Importance;
 using OptunaSharp.Importance.Booster;
 using OptunaSharp.Importance.Forests;
+using OptunaSharp.Integration.LightGbm;
 using OptunaSharp.Samplers;
 using Python.Runtime;
 
@@ -24,10 +25,11 @@ namespace OptunaSharp.Tests.Interop;
 ///       <item>The <b>FastForest</b> backend (ML.NET, satellite) is not tree-identical to
 ///         scikit-learn, so only the <b>ranking</b> is asserted: the dominant parameter matches
 ///         Optuna's on a well-separated problem.</item>
-///       <item>The <b>experimental boosters</b> (FastTree / FastTreeTweedie, the
-///         <c>OptunaSharp.Importance.Booster.ML.NET</c> satellite) are off-label for fANOVA/MDI (their
-///         trees fit residuals, not the objective), so — like FastForest — only the <b>ranking</b> is
-///         asserted, never values.</item>
+///       <item>The <b>experimental gradient boosters</b> (FastTree / FastTreeTweedie in the
+///         <c>OptunaSharp.Importance.Booster.ML.NET</c> satellite, and LightGBM in
+///         <c>OptunaSharp.Integration.LightGbm</c>) are off-label for fANOVA/MDI (their trees fit
+///         residuals, not the objective), so — like FastForest — only the <b>ranking</b> is asserted,
+///         never values.</item>
 ///     </list>
 ///
 ///     <para>Optuna's forest evaluators require scikit-learn; the tests self-skip (Inconclusive) when
@@ -170,7 +172,21 @@ public class FanovaMdiImportanceParityTests : OptunaInteropTestBase
     public void FastTreeTweedieMdi_RankingAgreesWithLiveOptuna(int seed, int nTrials)
         => RunRankingParity(seed, nTrials, new FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator(seed: 0), fanova: false, "FastTreeTweedie (MDI)");
 
-    // RANKING-only parity for an alternative backend (FastForest or the experimental boosters) vs
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 80)]
+    [DataRow(7, 100)]
+    public void LightGbmFanova_RankingAgreesWithLiveOptuna(int seed, int nTrials)
+        => RunRankingParity(seed, nTrials, new LightGbmFanovaImportanceEvaluator(seed: 0), fanova: true, "LightGBM (fANOVA)");
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 80)]
+    [DataRow(7, 100)]
+    public void LightGbmMdi_RankingAgreesWithLiveOptuna(int seed, int nTrials)
+        => RunRankingParity(seed, nTrials, new LightGbmMeanDecreaseImpurityImportanceEvaluator(seed: 0), fanova: false, "LightGBM (MDI)");
+
+    // RANKING-only parity for an alternative backend (FastForest or the experimental boosters / LightGBM) vs
     // Optuna's canonical scikit-learn evaluator: on this well-separated problem the dominant parameter
     // (x1, via x1*x1) must be ranked first on both sides. Booster *values* diverge by design (they fit
     // residuals, not the objective) and are never asserted — only the top-ranked parameter.

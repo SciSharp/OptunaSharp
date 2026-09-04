@@ -51,6 +51,15 @@ using System.Runtime.CompilerServices;
 // Its test project mirrors the forests test project (backend-parameterised invariants).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Booster, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The LightGBM integration (satellite package OptunaSharp.Integration.LightGbm) hosts an EXPERIMENTAL /
+// off-label LightGBM booster-importance backend (Phase 5.1) — and, later, the LightGBM tuner (Phase
+// 5.7). Its importance backend reuses the same Core-internal forest machinery as the other ML.NET
+// backends: SklearnLikeTree / ForestImportance + the linked MlNetTreeEnsembleAdapter, over the
+// SearchSpaceTransform / ImportanceBase / ValueError seam.
+[assembly: InternalsVisibleTo("OptunaSharp.Integration.LightGbm, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// Its test project mirrors the forests test project (backend-parameterised invariants).
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Integration.LightGbm, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 // The Redis backends' shared test project asserts that experimental warning fired via the internal
 // OptunaWarnings.WarningRaised event (same reason the interop suite is a friend).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpFriendKey.PublicKey)]

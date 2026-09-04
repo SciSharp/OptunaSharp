@@ -35,6 +35,9 @@
          RANKING-only parity vs Optuna's canonical evaluators (boosters are off-label — never
          value-parity). Same ML.NET native dependency as the FastForest backend. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Importance.Booster.ML.NET\OptunaSharp.Importance.Booster.ML.NET.csproj" />
+    <!-- The experimental LightGBM importance backend, also RANKING-only vs live Optuna. Brings the
+         native LightGBM binary (Microsoft.ML.LightGbm) transitively. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Integration.LightGbm\OptunaSharp.Integration.LightGbm.csproj" />
   </ItemGroup>
 
 </Project>

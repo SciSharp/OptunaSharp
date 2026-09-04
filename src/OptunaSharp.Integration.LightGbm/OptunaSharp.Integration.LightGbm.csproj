@@ -1,0 +1,71 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp</RootNamespace>
+    <AssemblyName>OptunaSharp.Integration.LightGbm</AssemblyName>
+
+    <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/
+         license/version) is centralized in ../../Directory.Build.props. This is a Tier X satellite
+         and the ONLY package in the importance plan with a heavy new native dependency
+         (Microsoft.ML.LightGbm ships the native LightGBM binaries per-RID), so it ships separately and
+         Core stays pure managed — the NumSharp.Interop.OpenBLAS optional-package pattern.
+
+         LightGBM's real Optuna identity is a TUNER (optuna.integration.lightgbm — LightGBMTuner /
+         LightGBMTunerCV, our Phase 5.7), not importance. This package is scoped to host BOTH: today the
+         (EXPERIMENTAL / off-label) LightGBM booster-importance backend, and later the tuner (the
+         Optuna-justified half). One package per heavy native dep. Naming follows OptunaSharp.Integration
+         .* (Optuna's optuna.integration.*); the importance evaluators are the histogram-GBM analog of
+         the FastTree boosters — boosting is not part of Optuna's importance, so no value-parity. -->
+    <PackageId>OptunaSharp.Integration.LightGbm</PackageId>
+    <Description>OptunaSharp's LightGBM integration (a .NET port of Optuna's optuna.integration.lightgbm), backed by ML.NET's native LightGBM. TODAY: EXPERIMENTAL / off-label gradient-boosted-tree importance backends — LightGbmFanovaImportanceEvaluator and LightGbmMeanDecreaseImpurityImportanceEvaluator. Optuna's importance uses only scikit-learn's RandomForestRegressor (bagging); LightGBM is a histogram gradient booster whose trees fit the ensemble residual, so running fANOVA/MDI over them is a different, non-standard quantity with NO value-parity to Optuna (weak ranking agreement at best) — prefer the canonical FanovaImportanceEvaluator / MeanDecreaseImpurityImportanceEvaluator in Core. PLANNED (Phase 5.7): the LightGBMTuner / LightGBMTunerCV analog, which is LightGBM's actual Optuna role. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;LightGbm;LightGBM;Integration;Importance;fANOVA;MDI;GradientBoosting;Boosting;MLNET;Experimental;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
+
+    <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on missing/malformed
+         doc comments — the surface is ported to match Optuna, not curated per-member. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <!-- Emit the .pdb inside the .nupkg (the release pipeline pushes only *.nupkg). -->
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+
+    <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- Reuse the shared OptunaSharp package icon. -->
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ML.NET's LightGBM trainer is the histogram gradient booster. Microsoft.ML.LightGbm carries the
+         trainer + the native LightGBM binaries (per RID) and re-exposes trees as the same
+         RegressionTree structure the fANOVA tree-walk and MDI read; Microsoft.ML carries MLContext /
+         IDataView / LoadFromEnumerable. Both MIT. This is the heavy native dependency of the importance
+         plan. -->
+    <PackageReference Include="Microsoft.ML" Version="4.0.3" />
+    <PackageReference Include="Microsoft.ML.LightGbm" Version="4.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core is in-repo, so reference it by project. Packing records a clean "OptunaSharp" package
+         dependency. Core transitively provides NumSharp (ValueError) + the internal
+         SearchSpaceTransform / ImportanceBase helpers / SklearnLikeTree / ForestImportance the
+         evaluators reach (granted via InternalsVisibleTo in Core's Assembly/Properties.cs). -->
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The ML.NET tree-ensemble -> SklearnLikeTree adapter is shared by every ML.NET importance
+         backend (LightGBM here, FastForest, FastTree/FastTreeTweedie). It is a linked source file
+         rather than a runtime package, so no backend depends on another and Core stays pure managed;
+         this assembly is a Core friend, which is what grants the adapter access to the internal
+         SklearnLikeTree. -->
+    <Compile Include="..\_shared\MlNetTreeEnsembleAdapter.cs" Link="Internal\MlNetTreeEnsembleAdapter.cs" />
+  </ItemGroup>
+
+</Project>
