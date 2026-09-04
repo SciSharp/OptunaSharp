@@ -21,6 +21,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+    <!-- The Redis journal backend, so the cross-language persistence gate (JournalRedisInteropTests)
+         can round-trip a study through Redis against live Python Optuna. Transitively brings
+         StackExchange.Redis. Redis-dependent tests self-skip when no server is reachable. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Storage.Redis\OptunaSharp.Storage.Redis.csproj" />
   </ItemGroup>
 
 </Project>

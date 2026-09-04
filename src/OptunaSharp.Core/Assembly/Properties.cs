@@ -22,6 +22,11 @@ using System.Runtime.CompilerServices;
 // signed automatically; one run from elsewhere must pass the signing properties itself.
 [assembly: InternalsVisibleTo("OptunaSharp.DotNetRunScript, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The Redis journal backend (satellite package OptunaSharp.Storage.Redis) serializes logs through
+// the same internal PyJson (so the on-wire bytes stay byte-compatible with Python Optuna) and raises
+// the experimental-class warning via OptunaWarnings/WarningCategory — both internal to Core.
+[assembly: InternalsVisibleTo("OptunaSharp.Storage.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 /// <summary>
 ///     The public half of the strong-name key OptunaSharp is signed with, as the hex literal
 ///     <see cref="InternalsVisibleToAttribute" /> expects.
