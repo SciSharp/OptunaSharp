@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>OptunaSharp.Tests.Artifacts</RootNamespace>
+    <!-- Strong-naming is set repo-wide in ../../Directory.Build.props. The stores under test are
+         public, so no InternalsVisibleTo is needed and Moq only proxies public SDK types. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- MSTest v3 metapackage: framework + adapter + source-generated discovery. -->
+    <PackageReference Include="MSTest" Version="3.8.3" />
+    <PackageReference Include="AwesomeAssertions" Version="9.3.0" />
+    <PackageReference Include="Moq" Version="4.20.72" />
+  </ItemGroup>
+
+  <!-- The four cloud artifact backends. Each brings OptunaSharp Core and its cloud SDK transitively,
+       so the mock-based tests can reference the SDK types (IAmazonS3, StorageClient, BlobClient, ...). -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OptunaSharp.Artifacts.S3\OptunaSharp.Artifacts.S3.csproj" />
+    <ProjectReference Include="..\..\src\OptunaSharp.Artifacts.R2\OptunaSharp.Artifacts.R2.csproj" />
+    <ProjectReference Include="..\..\src\OptunaSharp.Artifacts.Gcs\OptunaSharp.Artifacts.Gcs.csproj" />
+    <ProjectReference Include="..\..\src\OptunaSharp.Artifacts.AzureBlob\OptunaSharp.Artifacts.AzureBlob.csproj" />
+  </ItemGroup>
+
+</Project>

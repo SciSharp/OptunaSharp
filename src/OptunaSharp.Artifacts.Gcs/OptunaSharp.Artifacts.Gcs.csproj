@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp.Artifacts</RootNamespace>
+    <AssemblyName>OptunaSharp.Artifacts.Gcs</AssemblyName>
+    <Nullable>enable</Nullable>
+
+    <PackageId>OptunaSharp.Artifacts.Gcs</PackageId>
+    <Description>Google Cloud Storage (GCS) artifact store for OptunaSharp — a port of optuna.artifacts.GCSArtifactStore, backed by the official Google.Cloud.Storage.V1 client. Optional satellite package; OptunaSharp Core stays pure-managed and does not depend on it.</Description>
+    <PackageTags>Optuna;OptunaSharp;artifacts;GCS;GoogleCloudStorage;object-storage;HyperparameterOptimization;HPO;SciSharp</PackageTags>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Cloud.Storage.V1" Version="4.15.0" />
+  </ItemGroup>
+
+</Project>

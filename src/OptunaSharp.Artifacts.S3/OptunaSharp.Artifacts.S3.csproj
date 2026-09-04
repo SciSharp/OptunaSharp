@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp.Artifacts</RootNamespace>
+    <AssemblyName>OptunaSharp.Artifacts.S3</AssemblyName>
+    <Nullable>enable</Nullable>
+
+    <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/
+         license/version) is centralized in ../../Directory.Build.props. -->
+    <PackageId>OptunaSharp.Artifacts.S3</PackageId>
+    <Description>Amazon S3 (and S3-compatible) artifact store for OptunaSharp — a port of optuna.artifacts.Boto3ArtifactStore, backed by the official AWS SDK for .NET (AWSSDK.S3). Optional satellite package; OptunaSharp Core stays pure-managed and does not depend on it.</Description>
+    <PackageTags>Optuna;OptunaSharp;artifacts;S3;AWS;object-storage;HyperparameterOptimization;HPO;SciSharp</PackageTags>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+
+    <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <!-- OptunaSharp Core lives in this repo, so it is always a ProjectReference; `dotnet pack`
+       automatically records it as a dependency on the published "OptunaSharp" package. -->
+  <ItemGroup>
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" Version="4.0.102.4" />
+  </ItemGroup>
+
+</Project>

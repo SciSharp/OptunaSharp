@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp.Artifacts</RootNamespace>
+    <AssemblyName>OptunaSharp.Artifacts.AzureBlob</AssemblyName>
+    <Nullable>enable</Nullable>
+
+    <PackageId>OptunaSharp.Artifacts.AzureBlob</PackageId>
+    <Description>Azure Blob Storage artifact store for OptunaSharp — an OptunaSharp extension (Optuna ships no Azure backend). Backed by the official Azure.Storage.Blobs and Azure.Identity clients; supports connection-string, caller-supplied client, and Microsoft Entra ID (DefaultAzureCredential) construction. OptunaSharp Core stays pure-managed and does not depend on it.</Description>
+    <PackageTags>Optuna;OptunaSharp;artifacts;Azure;AzureBlob;BlobStorage;object-storage;HyperparameterOptimization;HPO;SciSharp</PackageTags>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.29.2" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+  </ItemGroup>
+
+</Project>

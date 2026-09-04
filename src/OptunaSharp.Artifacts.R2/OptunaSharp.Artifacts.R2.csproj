@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp.Artifacts</RootNamespace>
+    <AssemblyName>OptunaSharp.Artifacts.R2</AssemblyName>
+    <Nullable>enable</Nullable>
+
+    <PackageId>OptunaSharp.Artifacts.R2</PackageId>
+    <Description>Cloudflare R2 artifact store for OptunaSharp — an OptunaSharp extension (Optuna ships no R2 backend). R2 is S3-compatible, so this reuses OptunaSharp.Artifacts.S3 (the AWS SDK for .NET) pre-configured for the R2 endpoint. Cloudflare publishes no official .NET SDK for R2.</Description>
+    <PackageTags>Optuna;OptunaSharp;artifacts;Cloudflare;R2;S3;object-storage;HyperparameterOptimization;HPO;SciSharp</PackageTags>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <!-- R2 is S3-compatible: it reuses the S3 backend, and (through that project reference) also
+       gets OptunaSharp Core. `dotnet pack` records the "OptunaSharp.Artifacts.S3" dependency. -->
+  <ItemGroup>
+    <ProjectReference Include="..\OptunaSharp.Artifacts.S3\OptunaSharp.Artifacts.S3.csproj" />
+  </ItemGroup>
+
+  <!-- Declared directly because this package's own code uses AWSSDK types (AmazonS3Config/Client). -->
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" Version="4.0.102.4" />
+  </ItemGroup>
+
+</Project>
