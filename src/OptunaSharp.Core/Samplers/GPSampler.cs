@@ -24,11 +24,12 @@ namespace OptunaSharp.Samplers;
 ///     (ULP drift from scipy's OpenBLAS BLAS + the erf/ucrt class in LogEI), the documented GP boundary
 ///     — <b>not</b> bit-for-bit like the MT19937 samplers.</para>
 ///
-///     <para><b>Scope (PORTING_PLAN Phase 3.2 part 3d):</b> the single-objective, unconstrained,
-///     sequential path (acquisition = LogEI) is ported. Multi-objective (LogEHVI), constrained
-///     (LogCEI/LogCEHVI), and running-trial q-batch (qLogEI/qLogEHVI) acquisition functions — which
-///     ride <c>box_decomposition</c> and the QMC normal Sobol' sampler — are deferred to a later part
-///     and raise <see cref="NotImplementedException" /> for now.</para>
+///     <para><b>Scope (PORTING_PLAN Phase 3.2 part 3e, in progress):</b> the single-objective
+///     sequential paths are ported — unconstrained (acquisition = <see cref="LogEI" />, part 3d) and
+///     constrained (<see cref="LogCEI" /> = LogEI + Σ <see cref="LogPI" />, part 3e-2). Multi-objective
+///     (<c>LogEHVI</c>/<c>LogCEHVI</c>, which ride the box decomposition + the QMC normal Sobol'
+///     sampler) and running-trial q-batch (<c>qLogEI</c>/<c>qLogEHVI</c>/<c>qLogCEI</c>) acquisition
+///     functions are deferred to later parts and raise <see cref="NotImplementedException" /> for now.</para>
 /// </summary>
 /// <example>
 ///     <code>
@@ -61,6 +62,7 @@ public class GPSampler : BaseSampler
 
     // We cache the kernel parameters for initial values of fitting the next time.
     private List<GPRegressor>? _gprsCacheList;
+    private List<GPRegressor>? _constraintsGprsCacheList;
 
     // Control parameters of the acquisition function optimization.
     private readonly int _nPreliminarySamples = 2048;
@@ -174,10 +176,9 @@ public class GPSampler : BaseSampler
             .ToList();
         double[,] normalizedParams = internalSearchSpace.GetNormalizedParams(completedParams);
 
-        if (runningTrials.Count > 0)
-            throw new NotImplementedException(
-                "GPSampler with running trials (q-batch acquisition qLogEI/qLogEHVI) is not yet "
-                + "ported (PORTING_PLAN Phase 3.2 part 3d covers the single-objective sequential path).");
+        // Running-trial q-batch acquisition (qLogEI/qLogEHVI/qLogCEI) is deferred to a later part;
+        // each branch below throws when running trials are present.
+        bool hasRunning = runningTrials.Count > 0;
 
         var directions = study.Directions;
         int nObjectives = directions.Count;
@@ -191,42 +192,72 @@ public class GPSampler : BaseSampler
             for (int j = 0; j < nObjectives; j++)
                 values[t, j] = sign[j] * tv[j];
         }
-        double[,] standardizedScoreVals = StandardizeValues(values);
+        (double[,] standardizedScoreVals, _, _) = StandardizeValues(values);
 
         if (_gprsCacheList != null
             && _gprsCacheList[0].InverseSquaredLengthscales.Length != internalSearchSpace.Dim)
             _gprsCacheList = null;  // Clear cache if the search space changes.
 
-        if (ConstrainedOptimization.IsConstrainedOptimization(completedTrials))
-            throw new NotImplementedException(
-                "GPSampler constrained optimization (LogCEI/LogCEHVI) is not yet ported "
-                + "(PORTING_PLAN Phase 3.2 part 3d covers the single-objective unconstrained path).");
-        if (nObjectives != 1)
-            throw new NotImplementedException(
-                "GPSampler multi-objective optimization (LogEHVI) is not yet ported "
-                + "(PORTING_PLAN Phase 3.2 part 3d covers the single-objective path).");
+        // Fit one GP regressor per objective over the completed trials.
+        bool[] isCategorical = internalSearchSpace.IsCategorical;
+        var gprsList = new List<GPRegressor>();
+        for (int i = 0; i < nObjectives; i++)
+        {
+            var yi = new double[n];
+            for (int t = 0; t < n; t++)
+                yi[t] = standardizedScoreVals[t, i];
+            GPRegressor? cache = _gprsCacheList != null ? _gprsCacheList[i] : null;
+            gprsList.Add(GPRegressor.FitKernelParams(
+                normalizedParams, yi, isCategorical, _minimumNoise, _deterministic, cache));
+        }
+        _gprsCacheList = gprsList;
 
-        var y = new double[n];
-        for (int t = 0; t < n; t++)
-            y[t] = standardizedScoreVals[t, 0];
-
-        GPRegressor? cache = _gprsCacheList != null ? _gprsCacheList[0] : null;
-        GPRegressor gpr = GPRegressor.FitKernelParams(
-            normalizedParams, y, internalSearchSpace.IsCategorical,
-            _minimumNoise, _deterministic, cache);
-        _gprsCacheList = new List<GPRegressor> { gpr };
-
-        double threshold = y.Max();
-        var acqf = new LogEI(gpr, internalSearchSpace, threshold);
-
-        // best_params = normalized_params[argmax(standardized_score_vals[:, 0])][None, :].
-        int argmaxIdx = 0;
-        for (int t = 1; t < n; t++)
-            if (y[t] > y[argmaxIdx]) argmaxIdx = t;
-        int dim = internalSearchSpace.Dim;
-        var bestParams = new double[1, dim];
-        for (int d = 0; d < dim; d++)
-            bestParams[0, d] = normalizedParams[argmaxIdx, d];
+        IAcquisitionFunc acqf;
+        double[,]? bestParams;
+        if (!ConstrainedOptimization.IsConstrainedOptimization(completedTrials))
+        {
+            if (nObjectives == 1)
+            {
+                if (hasRunning)
+                    throw NotYetPorted("qLogEI (single-objective with running trials)", "3e q-batch");
+                acqf = new LogEI(gprsList[0], internalSearchSpace, ColumnMax(standardizedScoreVals, 0));
+                bestParams = BestParamsRow(normalizedParams, ArgMaxColumn(standardizedScoreVals, 0));
+            }
+            else
+            {
+                throw hasRunning
+                    ? NotYetPorted("qLogEHVI (multi-objective with running trials)", "3e q-batch")
+                    : NotYetPorted("LogEHVI (multi-objective)", "3e MO");
+            }
+        }
+        else
+        {
+            if (nObjectives == 1)
+            {
+                (double[,] constraintVals, bool[] isFeasible) =
+                    GetConstraintValsAndFeasibility(completedTrials);
+                // y_with_neginf = np.where(is_feasible, standardized_score_vals[:, 0], -inf).
+                var yWithNegInf = new double[n];
+                for (int t = 0; t < n; t++)
+                    yWithNegInf[t] = isFeasible[t] ? standardizedScoreVals[t, 0] : double.NegativeInfinity;
+                (List<GPRegressor> constrGprList, double[] constrThresholdList) =
+                    GetConstraintsAcqfArgs(constraintVals, internalSearchSpace, normalizedParams);
+                int iOpt = ArgMax(yWithNegInf);
+                double bestFeasibleY = yWithNegInf[iOpt];
+                if (hasRunning)
+                    throw NotYetPorted(
+                        "qLogCEI (single-objective constrained with running trials)", "3e q-batch");
+                acqf = new LogCEI(
+                    gprsList[0], internalSearchSpace, bestFeasibleY, constrGprList, constrThresholdList);
+                bestParams = double.IsNegativeInfinity(bestFeasibleY)
+                    ? null
+                    : BestParamsRow(normalizedParams, iOpt);
+            }
+            else
+            {
+                throw NotYetPorted("LogCEHVI (multi-objective constrained)", "3e MO/constrained");
+            }
+        }
 
         (double[] normalizedParam, _) = OptimMixed.OptimizeAcqfMixed(
             acqf, bestParams, _nPreliminarySamples, _nLocalSearch, _tol, _rng.Rng);
@@ -239,17 +270,131 @@ public class GPSampler : BaseSampler
     }
 
     /// <summary>
+    ///     <c>_get_constraint_vals_and_feasibility</c> — stack each trial's constraint values into an
+    ///     <c>(n, n_constraints)</c> matrix (raising the verbatim <c>ValueError</c> when the count
+    ///     differs across trials) and the per-trial feasibility mask (<c>all constraints ≤ 0</c>).
+    /// </summary>
+    private static (double[,] ConstraintVals, bool[] IsFeasible) GetConstraintValsAndFeasibility(
+        List<FrozenTrial> trials)
+    {
+        var rows = trials.Select(t => t.Constraints.Values.ToList()).ToList();
+        int nc = rows[0].Count;
+        if (rows.Any(r => r.Count != nc))
+            throw new NumSharp.ValueError("The number of constraints must be the same for all trials.");
+
+        int n = trials.Count;
+        var constraintVals = new double[n, nc];
+        var isFeasible = new bool[n];
+        for (int i = 0; i < n; i++)
+        {
+            bool feasible = true;
+            for (int j = 0; j < nc; j++)
+            {
+                constraintVals[i, j] = rows[i][j];
+                if (!(rows[i][j] <= 0.0))
+                    feasible = false;
+            }
+            isFeasible[i] = feasible;
+        }
+        return (constraintVals, isFeasible);
+    }
+
+    /// <summary>
+    ///     <c>_get_constraints_acqf_args</c> — fit one GP per constraint (over the sign-flipped,
+    ///     standardized constraint values, since constraints are minimized) and return the constraint
+    ///     GPs together with their standardized-zero thresholds <c>−mean / max(EPS, std)</c>. Uses the
+    ///     cross-trial <see cref="_constraintsGprsCacheList" /> for warm starts, cleared when the
+    ///     search-space dimension changes (mirroring Optuna's check against the objective cache).
+    /// </summary>
+    private (List<GPRegressor> Gprs, double[] Thresholds) GetConstraintsAcqfArgs(
+        double[,] constraintVals, GpSearchSpace internalSearchSpace, double[,] normalizedParams)
+    {
+        int n = constraintVals.GetLength(0);
+        int nc = constraintVals.GetLength(1);
+        // Flip the sign of constraints since they are always to be minimized.
+        var negConstraintVals = new double[n, nc];
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < nc; j++)
+                negConstraintVals[i, j] = -constraintVals[i, j];
+        (double[,] standardized, double[] means, double[] stds) = StandardizeValues(negConstraintVals);
+
+        if (_gprsCacheList != null
+            && _gprsCacheList[0].InverseSquaredLengthscales.Length != internalSearchSpace.Dim)
+            _constraintsGprsCacheList = null;  // Clear cache if the search space changes.
+
+        var thresholds = new double[nc];
+        for (int j = 0; j < nc; j++)
+            thresholds[j] = -means[j] / Math.Max(Eps, stds[j]);
+
+        bool[] isCategorical = internalSearchSpace.IsCategorical;
+        var gprs = new List<GPRegressor>();
+        for (int j = 0; j < nc; j++)
+        {
+            var vals = new double[n];
+            for (int i = 0; i < n; i++)
+                vals[i] = standardized[i, j];
+            GPRegressor? cache = _constraintsGprsCacheList != null ? _constraintsGprsCacheList[j] : null;
+            gprs.Add(GPRegressor.FitKernelParams(
+                normalizedParams, vals, isCategorical, _minimumNoise, _deterministic, cache));
+        }
+        _constraintsGprsCacheList = gprs;
+        return (gprs, thresholds);
+    }
+
+    /// <summary>NumPy <c>np.argmax</c>: the first index of the maximum (−inf-safe for all-infeasible masks).</summary>
+    private static int ArgMax(double[] values)
+    {
+        int best = 0;
+        for (int i = 1; i < values.Length; i++)
+            if (values[i] > values[best]) best = i;
+        return best;
+    }
+
+    /// <summary>First argmax of column <paramref name="col" /> — <c>np.argmax(standardized_score_vals)</c> for a single objective.</summary>
+    private static int ArgMaxColumn(double[,] mat, int col)
+    {
+        int best = 0;
+        for (int i = 1; i < mat.GetLength(0); i++)
+            if (mat[i, col] > mat[best, col]) best = i;
+        return best;
+    }
+
+    /// <summary>Max of column <paramref name="col" /> — <c>standardized_score_vals[:, col].max()</c>.</summary>
+    private static double ColumnMax(double[,] mat, int col)
+    {
+        double max = double.NegativeInfinity;
+        for (int i = 0; i < mat.GetLength(0); i++)
+            if (mat[i, col] > max) max = mat[i, col];
+        return max;
+    }
+
+    /// <summary><c>normalized_params[idx, np.newaxis]</c> — the single best point as a <c>(1, dim)</c> warmstart.</summary>
+    private static double[,] BestParamsRow(double[,] normalizedParams, int idx)
+    {
+        int dim = normalizedParams.GetLength(1);
+        var row = new double[1, dim];
+        for (int d = 0; d < dim; d++)
+            row[0, d] = normalizedParams[idx, d];
+        return row;
+    }
+
+    private static NotImplementedException NotYetPorted(string what, string part)
+        => new($"GPSampler {what} is not yet ported (PORTING_PLAN Phase 3.2 part {part}).");
+
+    /// <summary>
     ///     <c>_standardize_values</c> — clip non-finite values (<c>warn_and_convert_inf</c>) then
     ///     per-objective standardize <c>(v − mean) / max(EPS, std)</c> (population std, matching
-    ///     <c>np.std</c>). Returns only the standardized matrix (the means/stds are used for the
-    ///     constraint path, deferred).
+    ///     <c>np.std</c>). Returns the standardized matrix plus the per-column means/stds (the
+    ///     constraint path needs the means/stds for its thresholds).
     /// </summary>
-    private static double[,] StandardizeValues(double[,] values)
+    private static (double[,] Standardized, double[] Means, double[] Stds) StandardizeValues(double[,] values)
     {
         double[,] clipped = WarnAndConvertInf(values);
         int n = clipped.GetLength(0);
         int m = clipped.GetLength(1);
         var result = new double[n, m];
+        var means = new double[m];
+        var stds = new double[m];
         for (int j = 0; j < m; j++)
         {
             var col = new double[n];
@@ -257,11 +402,13 @@ public class GPSampler : BaseSampler
                 col[t] = clipped[t, j];
             double mean = MathUtil.Mean(col);
             double std = MathUtil.Std(col);
+            means[j] = mean;
+            stds[j] = std;
             double denom = Math.Max(Eps, std);
             for (int t = 0; t < n; t++)
                 result[t, j] = (col[t] - mean) / denom;
         }
-        return result;
+        return (result, means, stds);
     }
 
     /// <summary>

@@ -7,12 +7,14 @@ using OptunaSharp.Internal;
 namespace OptunaSharp.Tests.Gp;
 
 /// <summary>
-///     Unit coverage for the GP LogEI acquisition function (PORTING_PLAN Phase 3.2 part 3b —
+///     Unit coverage for the GP acquisition functions (PORTING_PLAN Phase 3.2 parts 3b/3e —
 ///     <c>optuna/_gp/acqf.py</c>): <c>standard_logei</c>/<c>logei</c>, <see cref="Erf.Erfcx" />, and
 ///     <see cref="LogEI" />'s batched evaluation plus the hand-derived gradient that replaces
-///     autograd. Scalar values are pinned to live-Optuna float64 figures; the gradient is checked
-///     against a central finite difference (oracle-free). Byte-tolerance parity vs live autograd lives
-///     in the interop <c>GpAcqfParityTests</c>.
+///     autograd (part 3b); and the constrained single-objective acqfs <see cref="LogPI" /> and
+///     <see cref="LogCEI" /> = LogEI + Σ LogPI (part 3e-2). Scalar values are pinned to live-Optuna
+///     float64 figures; gradients are checked against a central finite difference (oracle-free), and
+///     the LogCEI composition is asserted exact. Byte-tolerance parity vs live autograd lives in the
+///     interop <c>GpAcqfParityTests</c>.
 /// </summary>
 [TestClass]
 public class AcqfTests
@@ -92,5 +94,76 @@ public class AcqfTests
         (double val, double[] grad) = acqf.EvalAcqfWithGrad(new[] { 0.4 });
         val.Should().Be(0.0);
         grad.Should().Equal(0.0);
+    }
+
+    // ---- LogPI / LogCEI (Phase 3.2 part 3e-2 — constrained single-objective) -------------------
+
+    [TestMethod]
+    public void LogPI_BatchMatchesSinglePoint()
+    {
+        (GPRegressor gpr, LogEI ei) = FitScenario();
+        var pi = new LogPI(gpr, ei.SearchSpace, threshold: 0.3);
+        double[] batch = pi.EvalAcqfNoGrad(new double[,] { { 0.15 }, { 0.45 }, { 0.7 } });
+        batch[0].Should().Be(pi.EvalAcqfNoGrad(new[] { 0.15 }));
+        batch[1].Should().Be(pi.EvalAcqfNoGrad(new[] { 0.45 }));
+        batch[2].Should().Be(pi.EvalAcqfNoGrad(new[] { 0.7 }));
+    }
+
+    [TestMethod]
+    public void LogPI_Gradient_MatchesFiniteDifference()
+    {
+        (GPRegressor gpr, LogEI ei) = FitScenario();
+        var pi = new LogPI(gpr, ei.SearchSpace, threshold: 0.3);
+        const double eps = 1e-7;
+        foreach (double xv in new[] { 0.15, 0.3, 0.45, 0.7 })
+        {
+            (double _, double[] grad) = pi.EvalAcqfWithGrad(new[] { xv });
+            double fPlus = pi.EvalAcqfNoGrad(new double[,] { { xv + eps } })[0];
+            double fMinus = pi.EvalAcqfNoGrad(new double[,] { { xv - eps } })[0];
+            double fd = (fPlus - fMinus) / (2 * eps);
+            grad[0].Should().BeApproximately(fd, 1e-4 * (1 + Math.Abs(fd)),
+                $"analytic ∂LogPI/∂x at {xv} must match the central difference");
+        }
+    }
+
+    [TestMethod]
+    public void LogCEI_EqualsLogEiPlusSumLogPi()
+    {
+        // LogCEI(x) = LogEI(x) + Σ LogPI_c(x) — the composition must be exact (same float ops).
+        (GPRegressor gpr, LogEI ei) = FitScenario();
+        GpSearchSpace space = ei.SearchSpace;
+        var pi = new LogPI(gpr, space, threshold: 0.2);
+        var cei = new LogCEI(gpr, space, threshold: 1.418560466127369, new[] { gpr }, new[] { 0.2 });
+        foreach (double xv in new[] { 0.15, 0.45, 0.7 })
+        {
+            cei.EvalAcqfNoGrad(new[] { xv }).Should()
+                .Be(ei.EvalAcqfNoGrad(new[] { xv }) + pi.EvalAcqfNoGrad(new[] { xv }));
+
+            (double vEi, double[] gEi) = ei.EvalAcqfWithGrad(new[] { xv });
+            (double vPi, double[] gPi) = pi.EvalAcqfWithGrad(new[] { xv });
+            (double vCei, double[] gCei) = cei.EvalAcqfWithGrad(new[] { xv });
+            vCei.Should().Be(vEi + vPi);
+            gCei[0].Should().Be(gEi[0] + gPi[0]);
+        }
+    }
+
+    [TestMethod]
+    public void LogCEI_NegInfThreshold_IgnoresObjectiveTerm()
+    {
+        // No feasible trial ⇒ objective threshold −∞ ⇒ the LogEI term is 0, leaving only constraints.
+        (GPRegressor gpr, LogEI ei) = FitScenario();
+        GpSearchSpace space = ei.SearchSpace;
+        var pi = new LogPI(gpr, space, threshold: 0.2);
+        var cei = new LogCEI(gpr, space, threshold: double.NegativeInfinity, new[] { gpr }, new[] { 0.2 });
+        cei.EvalAcqfNoGrad(new[] { 0.4 }).Should().Be(pi.EvalAcqfNoGrad(new[] { 0.4 }));
+    }
+
+    [TestMethod]
+    public void LogCEI_EmptyConstraints_Throws()
+    {
+        (GPRegressor gpr, LogEI ei) = FitScenario();
+        var act = () => new LogCEI(gpr, ei.SearchSpace, 0.0,
+            System.Array.Empty<GPRegressor>(), System.Array.Empty<double>());
+        act.Should().Throw<System.ArgumentException>();
     }
 }
