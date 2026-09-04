@@ -12,14 +12,14 @@
          Core stays pure managed — the NumSharp.Interop.OpenBLAS optional-package pattern.
 
          LightGBM's real Optuna identity is a TUNER (optuna.integration.lightgbm — LightGBMTuner /
-         LightGBMTunerCV, our Phase 5.7), not importance. This package is scoped to host BOTH: today the
-         (EXPERIMENTAL / off-label) LightGBM booster-importance backend, and later the tuner (the
-         Optuna-justified half). One package per heavy native dep. Naming follows OptunaSharp.Integration
-         .* (Optuna's optuna.integration.*); the importance evaluators are the histogram-GBM analog of
-         the FastTree boosters — boosting is not part of Optuna's importance, so no value-parity. -->
+         LightGBMTunerCV), which is now ported here (Phase 6.1). This package hosts BOTH: the tuner (the
+         Optuna-justified half) and the (EXPERIMENTAL / off-label) LightGBM booster-importance backends.
+         One package per heavy native dep. Naming follows OptunaSharp.Integration.* (Optuna's
+         optuna.integration.*); the importance evaluators are the histogram-GBM analog of the FastTree
+         boosters — boosting is not part of Optuna's importance, so no value-parity. -->
     <PackageId>OptunaSharp.Integration.LightGbm</PackageId>
-    <Description>OptunaSharp's LightGBM integration (a .NET port of Optuna's optuna.integration.lightgbm), backed by ML.NET's native LightGBM. TODAY: EXPERIMENTAL / off-label gradient-boosted-tree importance backends — LightGbmFanovaImportanceEvaluator and LightGbmMeanDecreaseImpurityImportanceEvaluator. Optuna's importance uses only scikit-learn's RandomForestRegressor (bagging); LightGBM is a histogram gradient booster whose trees fit the ensemble residual, so running fANOVA/MDI over them is a different, non-standard quantity with NO value-parity to Optuna (weak ranking agreement at best) — prefer the canonical FanovaImportanceEvaluator / MeanDecreaseImpurityImportanceEvaluator in Core. PLANNED (Phase 5.7): the LightGBMTuner / LightGBMTunerCV analog, which is LightGBM's actual Optuna role. Part of the SciSharp STACK.</Description>
-    <PackageTags>Optuna;OptunaSharp;LightGbm;LightGBM;Integration;Importance;fANOVA;MDI;GradientBoosting;Boosting;MLNET;Experimental;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
+    <Description>OptunaSharp's LightGBM integration (a .NET port of Optuna's optuna.integration.lightgbm / optuna_integration.lightgbm), backed by ML.NET's native LightGBM. LightGBMTuner / LightGBMTunerCV (and the train() drop-in): the stepwise LightGBM hyperparameter tuner — feature_fraction, num_leaves, bagging, regularization, min_child_samples in a fixed order — whose Optuna-driven search (GridSampler / TPESampler) is a faithful, oracle-validated port, with training bridged to ML.NET's native LightGBM (a Phase 6 adapter; inject ILightGbmTrainer for a different engine). Also ships EXPERIMENTAL / off-label gradient-boosted-tree importance backends (LightGbmFanovaImportanceEvaluator, LightGbmMeanDecreaseImpurityImportanceEvaluator): Optuna's importance uses only scikit-learn's RandomForestRegressor (bagging), so fANOVA/MDI over a LightGBM booster is a non-standard quantity with NO value-parity to Optuna — prefer the canonical evaluators in Core. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;LightGbm;LightGBM;Integration;Tuner;LightGBMTuner;Importance;fANOVA;MDI;GradientBoosting;Boosting;MLNET;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
 
     <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on missing/malformed
          doc comments — the surface is ported to match Optuna, not curated per-member. -->

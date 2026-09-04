@@ -19,7 +19,7 @@ namespace OptunaSharp.Integration.LightGbm;
 ///     them measures a different, non-standard quantity. There is <b>no value-parity with Python
 ///     Optuna</b> and only weak ranking agreement. Prefer Core's canonical, value-exact
 ///     <see cref="FanovaImportanceEvaluator" /> when parity matters. (LightGBM's actual Optuna role is
-///     the <c>optuna.integration.lightgbm</c> tuner — planned for Phase 5.7.)</para>
+///     the <c>optuna.integration.lightgbm</c> tuner — see <see cref="LightGBMTuner" />.)</para>
 /// </summary>
 public sealed class LightGbmFanovaImportanceEvaluator : BaseImportanceEvaluator
 {

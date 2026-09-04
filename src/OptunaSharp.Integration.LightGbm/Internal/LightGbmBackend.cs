@@ -30,7 +30,7 @@ namespace OptunaSharp.Integration.LightGbm;
 ///     <c>RandomForestRegressor</c> (bagging); LightGBM is a gradient booster whose trees fit the
 ///     ensemble's <i>residual</i>, not the objective, so fANOVA/MDI over a LightGBM ensemble measures a
 ///     different, non-standard quantity with no value-parity to Optuna. LightGBM's actual Optuna role is
-///     a tuner (<c>optuna.integration.lightgbm</c>, Phase 5.7).</para>
+///     a tuner (<c>optuna.integration.lightgbm</c>) — see <see cref="LightGBMTuner" />.</para>
 /// </summary>
 internal static class LightGbmBackend
 {

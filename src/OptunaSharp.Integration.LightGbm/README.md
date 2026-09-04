@@ -75,19 +75,61 @@ var imp = ImportanceFunctions.GetParamImportances(study, evaluator);
 is used as given. The `(nTrees, maxDepth, seed)` constructor is this overload fed a reproducible
 default options object.
 
-## Planned (Phase 5.7): the LightGBM **tuner** — the Optuna-justified half
+## The LightGBM **tuner** — the Optuna-justified half (Phase 6.1)
 
-LightGBM's real identity in Optuna is a **tuner**, not importance:
-[`optuna.integration.lightgbm`](https://optuna.readthedocs.io/en/stable/reference/integration.html)'s
-**`LightGBMTuner`** / **`LightGBMTunerCV`** — a stepwise tuner that sweeps the core LightGBM
-hyperparameters (`feature_fraction`, `num_leaves`, `bagging`, `min_child_samples`, regularization) in a
-fixed, well-tested order using Optuna under the hood, as a drop-in for `lightgbm.train`.
+LightGBM's real identity in Optuna is a **tuner**, not importance — and it is ported here:
+[`optuna_integration.lightgbm`](https://optuna.readthedocs.io/en/stable/reference/integration.html)'s
+**`LightGBMTuner`** / **`LightGBMTunerCV`** (and the `train` drop-in). It is a **stepwise** tuner that
+sweeps the core LightGBM hyperparameters in a fixed, well-tested order — `feature_fraction`, then
+`num_leaves`, then `bagging_fraction`/`bagging_freq`, then a fine `feature_fraction` pass, then
+`lambda_l1`/`lambda_l2`, then `min_child_samples` — each step a short Optuna study over a fresh
+`GridSampler` or `TPESampler`, holding the previously-found best fixed.
 
-This is the **Optuna-justified** addition and is scoped to **this package** (one package per heavy
-native dep), to be implemented under **Phase 5.7 (framework integrations)** — see
-`docs/PORTING_PLAN.md`. It is **not** part of the current importance-backends work; the importance
-evaluators above are an OptunaSharp-only extension. Until then, this package hosts the importance
-backends only.
+```csharp
+using OptunaSharp.Integration.LightGbm;
+
+var dtrain = new Dataset(xTrain, yTrain);       // features (float[][] or double[,]) + labels
+var dval   = new Dataset(xVal,   yVal);
+
+var lgbmParams = new Dictionary<string, object?>
+{
+    ["objective"] = "regression",
+    ["metric"]    = "l2",
+};
+
+var tuner = new LightGBMTuner(lgbmParams, dtrain, validSets: new[] { dval },
+    numBoostRound: 100, optunaSeed: 42);
+tuner.Run();
+
+var best        = tuner.BestParams;             // the tuned LightGBM parameters
+double score    = tuner.BestScore;              // the best validation metric
+var booster     = tuner.GetBestBooster();       // the best trial's trained model
+
+// Or the drop-in one-liner (the analog of optuna.integration.lightgbm.train):
+var booster2 = LightGBMTuner.Train(lgbmParams, dtrain, validSets: new[] { dval }, optunaSeed: 42);
+```
+
+**`LightGBMTunerCV`** is the cross-validation variant — same stepwise search, scored by k-fold CV on
+the training set (the analog of `lightgbm.cv`).
+
+### What is faithful, and what is an adapter
+
+The **stepwise search** — which parameters, in which order, with which sampler and seed — is a faithful
+port of `optuna_integration.lightgbm` and rides OptunaSharp's own bit-exact `GridSampler` / `TPESampler`.
+It is validated **against live Optuna's tuner** by a committed synthetic-scorer oracle: with the training
+call replaced by a deterministic score, the C# tuner reproduces Optuna's exact trial sequence — the
+grid- and integer-valued parameters bit-for-bit, the TPE-sampled continuous parameters to the erf
+tolerance (see `test/OptunaSharp.Tests.Integration.LightGbm`).
+
+The **training + metric evaluation** is an **adapter** over ML.NET's native LightGBM (this is a Phase 6
+framework-integration adapter — ML.NET's LightGBM is not Python's, so there is no bit-parity there). The
+first cut maps the `binary` and regression objectives. To plug a different engine — or a custom scorer —
+implement `ILightGbmTrainer` and pass it as the `trainer` argument; the default is `MlNetLightGbmTrainer`.
+
+> **Not yet ported:** cross-process booster sharing via `model_dir` (the Python version pickles boosters;
+> ML.NET model persistence is different) — run tuning in a single process; and the ranking objectives
+> (`ndcg`/`map`) in the default trainer. `feature_name` / `categorical_feature` and the LightGBM-internal
+> `feval` / `callbacks` / `keep_training_booster` kwargs are Python-binding specifics and are omitted.
 
 ## License
 
