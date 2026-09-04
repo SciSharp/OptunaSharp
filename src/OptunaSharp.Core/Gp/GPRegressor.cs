@@ -1,5 +1,6 @@
 using System;
 using OptunaSharp.Internal;
+using OptunaSharp.Logging;
 
 namespace OptunaSharp.Gp;
 
@@ -41,6 +42,8 @@ namespace OptunaSharp.Gp;
 /// </summary>
 internal sealed class GPRegressor
 {
+    private static readonly Logger _logger = OptunaLogging.GetLogger("optuna._gp.gp");
+
     private readonly bool[] _isCategorical;
     private readonly double[,] _xTrain;   // (N, n_params)
     private readonly double[] _yTrain;     // (N,)
@@ -482,8 +485,8 @@ internal sealed class GPRegressor
     /// <summary>
     ///     <c>fit_kernel_params</c> — the robust entry point: fit starting from
     ///     <paramref name="gprCache" /> (the previous trial's kernel parameters) and, if that fails,
-    ///     retry from the all-ones default; if both fail, fall back to the default parameters
-    ///     (matching Optuna, which then logs a warning). <paramref name="isCategorical" /> flags the
+    ///     retry from the all-ones default; if both fail, fall back to the default parameters and log
+    ///     a warning (matching Optuna's <c>fit_kernel_params</c>). <paramref name="isCategorical" /> flags the
     ///     Hamming-distance dimensions; <paramref name="x" /> is the normalized training inputs and
     ///     <paramref name="y" /> the standardized objective.
     /// </summary>
@@ -498,6 +501,9 @@ internal sealed class GPRegressor
         GPRegressor defaultCache = Default();
         gprCache ??= Default();
 
+        // First try optimizing from the provided cache, then from the default parameters; if both
+        // fail, fall back to the default parameters — Optuna's fit_kernel_params robustness retry.
+        Exception? error = null;
         foreach (GPRegressor cache in new[] { gprCache, defaultCache })
         {
             try
@@ -508,12 +514,18 @@ internal sealed class GPRegressor
                     cache.KernelScale, cache.NoiseVar)
                     .FitInner(minimumNoise, deterministicObjective, gtol);
             }
-            catch (InvalidOperationException)
+            catch (Exception e) when (e is InvalidOperationException or NumSharp.LinAlgError)
             {
-                // Retry from the default kernel parameters (improves robustness), as Optuna does.
+                // Optuna catches RuntimeError here, which covers both scipy's "Optimization failed"
+                // (our InvalidOperationException from a nonzero L-BFGS-B warnflag) and torch's Cholesky
+                // failure (our NumSharp.LinAlgError). Retry from the default kernel parameters next.
+                error = e;
             }
         }
 
+        _logger.Warning(
+            $"The optimization of kernel parameters failed: \n{error?.Message}\n"
+            + "The default initial kernel parameters will be used instead.");
         GPRegressor fallback = Default();
         fallback.CacheMatrix();
         return fallback;
