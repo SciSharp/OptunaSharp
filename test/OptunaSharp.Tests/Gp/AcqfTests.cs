@@ -334,4 +334,58 @@ public class AcqfTests
         (QLogEI a2, _) = FitQLogEiScenario();
         a1.EvalAcqfNoGrad(new[] { 0.33 }).Should().Be(a2.EvalAcqfNoGrad(new[] { 0.33 }));
     }
+
+    // ---- qLogEHVI (Phase 3.2 part 3e-6 — multi-objective with running trials) ------------------
+
+    private static QLogEHVI FitQLogEhviScenario()
+    {
+        var x = new double[,] { { 0.1 }, { 0.35 }, { 0.5 }, { 0.72 }, { 0.9 }, { 0.25 }, { 0.6 }, { 0.8 } };
+        var y0 = new[] { 0.73, 1.26, 0.29, -1.14, -0.84, 1.41, -0.50, -1.21 };
+        var y1 = new[] { -0.90, 0.40, 1.10, 0.20, -1.30, -0.10, 1.35, 0.55 };
+        var gpr0 = GPRegressor.FitKernelParams(x, y0, new[] { false }, 1e-6, false, null, 1e-2);
+        var gpr1 = GPRegressor.FitKernelParams(x, y1, new[] { false }, 1e-6, false, null, 1e-2);
+        var space = new GpSearchSpace(new System.Collections.Generic.Dictionary<string, BaseDistribution>
+            { ["x"] = new FloatDistribution(0.0, 1.0) });
+        var yTrain = new double[8, 2];
+        for (int i = 0; i < 8; i++) { yTrain[i, 0] = y0[i]; yTrain[i, 1] = y1[i]; }
+        var xRunning = new double[,] { { 0.42 }, { 0.66 } };
+        return new QLogEHVI(new[] { gpr0, gpr1 }, space, yTrain, nQmcSamples: 64, qmcSeed: 11, xRunning);
+    }
+
+    [TestMethod]
+    public void QLogEHVI_BatchMatchesSinglePoint()
+    {
+        QLogEHVI acqf = FitQLogEhviScenario();
+        double[] batch = acqf.EvalAcqfNoGrad(new double[,] { { 0.15 }, { 0.45 }, { 0.7 } });
+        batch[0].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.15 }));
+        batch[1].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.45 }));
+        batch[2].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.7 }));
+    }
+
+    [TestMethod]
+    public void QLogEHVI_ValueAndGrad_ForwardsAgree()
+    {
+        QLogEHVI acqf = FitQLogEhviScenario();
+        foreach (double xv in new[] { 0.2, 0.55, 0.9 })
+        {
+            (double val, _) = acqf.EvalAcqfWithGrad(new[] { xv });
+            val.Should().BeApproximately(acqf.EvalAcqfNoGrad(new[] { xv }), 1e-12);
+        }
+    }
+
+    [TestMethod]
+    public void QLogEHVI_Gradient_MatchesFiniteDifference()
+    {
+        QLogEHVI acqf = FitQLogEhviScenario();
+        const double eps = 1e-7;
+        foreach (double xv in new[] { 0.15, 0.3, 0.45, 0.7, 0.85 })
+        {
+            (double _, double[] grad) = acqf.EvalAcqfWithGrad(new[] { xv });
+            double fPlus = acqf.EvalAcqfNoGrad(new[] { xv + eps });
+            double fMinus = acqf.EvalAcqfNoGrad(new[] { xv - eps });
+            double fd = (fPlus - fMinus) / (2 * eps);
+            grad[0].Should().BeApproximately(fd, 1e-4 * (1 + Math.Abs(fd)),
+                $"analytic ∂qLogEHVI/∂x at {xv} must match the central difference");
+        }
+    }
 }

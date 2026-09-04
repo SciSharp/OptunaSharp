@@ -100,6 +100,18 @@ public class GpRunningTrialsSamplerParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     [DataRow(0)]
     [DataRow(42)]
+    public void MultiObjectiveWithRunning_PerSuggestion_MatchesLiveOptuna(int seed)
+    {
+        // qLogEHVI — multi-objective with running trials.
+        RunAndAssert(
+            seed, nDir: 2, hasConstraints: false, nCompletedGp: 3, nRunning: 3,
+            objective: (a, b) => (new[] { a * a + b * b, (a - 2) * (a - 2) + b * b }, null));
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0)]
+    [DataRow(42)]
     public void SingleObjectiveConstrainedWithRunning_PerSuggestion_MatchesLiveOptuna(int seed)
     {
         // qLogCEI — single-objective constrained with running trials.

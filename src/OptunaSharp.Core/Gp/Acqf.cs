@@ -921,7 +921,7 @@ internal sealed class LogEHVI : IAcquisitionFunc
     ///     <c>acqf._get_reference_point(Y)</c> — <c>Y</c> is to be maximized, so <c>loss = −Y</c> is
     ///     minimized: <c>ref = nextafter(max(1.1·m, 0.9·m), +∞)</c> with <c>m = max_row(−Y)</c>.
     /// </summary>
-    private static double[] GetReferencePoint(double[,] yTrain)
+    internal static double[] GetReferencePoint(double[,] yTrain)
     {
         int n = yTrain.GetLength(0);
         int m = yTrain.GetLength(1);
@@ -944,7 +944,7 @@ internal sealed class LogEHVI : IAcquisitionFunc
     ///     losses that dominate the reference point, take their Pareto front, decompose, and flip the
     ///     signs back (<c>lower = −ubs</c>, <c>upper = −lbs</c>).
     /// </summary>
-    private static (double[,] Lower, double[,] Upper) GetNonDominatedBoxBoundsMax(double[,] yTrain, double[] refPoint)
+    internal static (double[,] Lower, double[,] Upper) GetNonDominatedBoxBoundsMax(double[,] yTrain, double[] refPoint)
     {
         int n = yTrain.GetLength(0);
         int m = yTrain.GetLength(1);
@@ -995,6 +995,194 @@ internal sealed class LogEHVI : IAcquisitionFunc
         }
         return ls;
     }
+}
+
+/// <summary>
+///     The q-batch log expected-hypervolume-improvement acquisition function — port of
+///     <c>acqf.qLogEHVI</c>, the acqf <see cref="GPSampler" /> maximizes for <b>multi-objective</b>
+///     optimization <b>with running trials</b> (PORTING_PLAN Phase 3.2 part 3e-6). Unlike
+///     <see cref="LogEHVI" /> (independent per-objective sampling + one box decomposition), each QMC
+///     draw gets its <b>own</b> box decomposition — computed from that draw's running fantasies
+///     (<see cref="ConditionalGPRegressor.GetFantasySamples" />) appended to <c>Y_train</c> — and the
+///     per-objective conditional query sample (<see cref="ConditionalGPRegressor.SampleQuerySamples" />).
+///     Per draw the log HVI is a <c>logsumexp</c> over that draw's boxes; the acqf is the log-mean-exp
+///     of those per-sample HVIs (Eq. (3) of arxiv 2006.05078). One conditional GP per objective, each
+///     seeded <c>qmc_seed + i</c>.
+///
+///     <para><b>Gradient</b> (the autograd replacement): the fantasies (hence the boxes) are constant,
+///     so the gradient flows only through the query samples; it chains a nested softmax (over the boxes
+///     within a sample, then over the samples) times the two-sided box-clamp mask times each objective's
+///     conditional-sample gradient.</para>
+/// </summary>
+internal sealed class QLogEHVI : IAcquisitionFunc
+{
+    private const double Eps = 1e-12;
+
+    private readonly ConditionalGPRegressor[] _condGprList;
+    private readonly int _nObjectives;
+    private readonly int _nQmc;
+    private readonly double[][,] _lowerBounds;   // per QMC draw: (n_boxes_s, n_obj) box lower bounds
+    private readonly double[][,] _intervals;     // per QMC draw: (n_boxes_s, n_obj) box widths, clamped ≥ EPS
+
+    internal QLogEHVI(
+        GPRegressor[] gprList, GpSearchSpace searchSpace, double[,] yTrain, int nQmcSamples, int qmcSeed,
+        double[,] normalizedParamsOfRunningTrials, double stabilizingNoise = 1e-12)
+    {
+        _nObjectives = yTrain.GetLength(1);
+        _condGprList = new ConditionalGPRegressor[_nObjectives];
+        for (int o = 0; o < _nObjectives; o++)
+            _condGprList[o] = new ConditionalGPRegressor(
+                gprList[o], normalizedParamsOfRunningTrials, nQmcSamples, qmcSeed + o, stabilizingNoise);
+        _nQmc = _condGprList[0].NQmc;
+        int nRunning = _condGprList[0].NRunning;
+        int nTrain = yTrain.GetLength(0);
+
+        // A per-QMC-draw box decomposition over Y_train ∪ {this draw's fantasies}, one shared ref point.
+        double[] refPoint = LogEHVI.GetReferencePoint(yTrain);
+        var fantasies = new double[_nObjectives][,];   // fantasies[o] = (n_qmc, n_running)
+        for (int o = 0; o < _nObjectives; o++)
+            fantasies[o] = _condGprList[o].GetFantasySamples();
+
+        _lowerBounds = new double[_nQmc][,];
+        _intervals = new double[_nQmc][,];
+        for (int s = 0; s < _nQmc; s++)
+        {
+            var yFantasy = new double[nTrain + nRunning, _nObjectives];
+            for (int t = 0; t < nTrain; t++)
+                for (int o = 0; o < _nObjectives; o++)
+                    yFantasy[t, o] = yTrain[t, o];
+            for (int i = 0; i < nRunning; i++)
+                for (int o = 0; o < _nObjectives; o++)
+                    yFantasy[nTrain + i, o] = fantasies[o][s, i];
+            (double[,] lower, double[,] upper) = LogEHVI.GetNonDominatedBoxBoundsMax(yFantasy, refPoint);
+            int nBoxes = lower.GetLength(0);
+            var interval = new double[nBoxes, _nObjectives];
+            for (int b = 0; b < nBoxes; b++)
+                for (int o = 0; o < _nObjectives; o++)
+                    interval[b, o] = Math.Max(Eps, upper[b, o] - lower[b, o]);
+            _lowerBounds[s] = lower;
+            _intervals[s] = interval;
+        }
+
+        SearchSpace = searchSpace;
+        LengthScales = LogEHVI.MeanLengthScales(gprList, searchSpace.Dim);
+    }
+
+    public GpSearchSpace SearchSpace { get; }
+    public double[] LengthScales { get; }
+
+    /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    public double[] EvalAcqfNoGrad(double[,] x)
+    {
+        int b = x.GetLength(0), dim = x.GetLength(1);
+        var result = new double[b];
+        var row = new double[dim];
+        for (int r = 0; r < b; r++)
+        {
+            for (int d = 0; d < dim; d++) row[d] = x[r, d];
+            result[r] = EvalAcqfNoGrad(row);
+        }
+        return result;
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    public double EvalAcqfNoGrad(double[] x)
+    {
+        var samplesByObj = new double[_nObjectives][];
+        for (int o = 0; o < _nObjectives; o++)
+            samplesByObj[o] = _condGprList[o].SampleQuerySamples(x);
+        double[] hvi = PerSampleLogHvi(samplesByObj, out _);
+        return LogMeanExp(hvi);
+    }
+
+    /// <summary><c>eval_acqf_with_grad</c> — value and the hand-derived nested-softmax gradient.</summary>
+    public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
+    {
+        int dim = x.Length;
+        var samplesByObj = new double[_nObjectives][];
+        var dSamplesByObj = new double[_nObjectives][,];
+        for (int o = 0; o < _nObjectives; o++)
+        {
+            (double[] samp, double[,] dsamp) = _condGprList[o].SampleQueryWithGrad(x);
+            samplesByObj[o] = samp;
+            dSamplesByObj[o] = dsamp;
+        }
+
+        double[] hvi = PerSampleLogHvi(samplesByObj, out double[][] termsPerS);
+        double logsumexpS = LogSumExp(hvi);
+        double value = logsumexpS - Math.Log(_nQmc);
+
+        // grad[d] = Σ_{s,b} exp(term[s][b] − logsumexpS) · Σ_o mask[s,b,o]·(1/raw)·∂samples[o][s]/∂x_d.
+        var grad = new double[dim];
+        for (int s = 0; s < _nQmc; s++)
+        {
+            double[,] lower = _lowerBounds[s];
+            double[,] interval = _intervals[s];
+            int nBoxes = lower.GetLength(0);
+            double[] term = termsPerS[s];
+            for (int b = 0; b < nBoxes; b++)
+            {
+                double w = Math.Exp(term[b] - logsumexpS);
+                if (w == 0.0) continue;
+                for (int o = 0; o < _nObjectives; o++)
+                {
+                    double raw = samplesByObj[o][s] - lower[b, o];
+                    if (!(raw > Eps && raw < interval[b, o]))
+                        continue;   // two-sided clamp → gradient only in the open interval
+                    double factor = w / raw;
+                    double[,] ds = dSamplesByObj[o];
+                    for (int d = 0; d < dim; d++)
+                        grad[d] += factor * ds[s, d];
+                }
+            }
+        }
+        return (value, grad);
+    }
+
+    /// <summary>
+    ///     <c>_per_sample_log_hvi</c> — for each QMC draw <c>s</c>, the log HVI
+    ///     <c>logsumexp_b Σ_o log(clamp(samples[o][s] − lower[s,b,o], EPS, interval[s,b,o]))</c>. Also
+    ///     returns the per-draw box terms (for the gradient's box softmax).
+    /// </summary>
+    private double[] PerSampleLogHvi(double[][] samplesByObj, out double[][] termsPerS)
+    {
+        var hvi = new double[_nQmc];
+        termsPerS = new double[_nQmc][];
+        for (int s = 0; s < _nQmc; s++)
+        {
+            double[,] lower = _lowerBounds[s];
+            double[,] interval = _intervals[s];
+            int nBoxes = lower.GetLength(0);
+            var term = new double[nBoxes];
+            for (int b = 0; b < nBoxes; b++)
+            {
+                double sumLog = 0.0;
+                for (int o = 0; o < _nObjectives; o++)
+                {
+                    double raw = samplesByObj[o][s] - lower[b, o];
+                    double iv = interval[b, o];
+                    double diff = raw < Eps ? Eps : (raw > iv ? iv : raw);
+                    sumLog += Math.Log(diff);
+                }
+                term[b] = sumLog;
+            }
+            hvi[s] = LogSumExp(term);
+            termsPerS[s] = term;
+        }
+        return hvi;
+    }
+
+    private static double LogSumExp(double[] vals)
+    {
+        double m = double.NegativeInfinity;
+        foreach (double v in vals) if (v > m) m = v;
+        if (double.IsNegativeInfinity(m)) return m;
+        double sum = 0.0;
+        foreach (double v in vals) sum += Math.Exp(v - m);
+        return m + Math.Log(sum);
+    }
+
+    private static double LogMeanExp(double[] vals) => LogSumExp(vals) - Math.Log(vals.Length);
 }
 
 /// <summary>

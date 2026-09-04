@@ -25,13 +25,13 @@ namespace OptunaSharp.Samplers;
 ///     (ULP drift from scipy's OpenBLAS BLAS + the erf/ucrt class in LogEI), the documented GP boundary
 ///     — <b>not</b> bit-for-bit like the MT19937 samplers.</para>
 ///
-///     <para><b>Scope (PORTING_PLAN Phase 3.2 part 3e, in progress):</b> all sequential (no-running)
-///     paths are ported — single-objective unconstrained (<see cref="LogEI" />, part 3d), single-
-///     objective constrained (<see cref="LogCEI" /> = LogEI + Σ <see cref="LogPI" />, part 3e-2),
-///     multi-objective unconstrained (<see cref="LogEHVI" />, part 3e-4), and multi-objective
-///     constrained (<see cref="LogCEHVI" /> = LogEHVI + Σ LogPI, part 3e-5). Only the running-trial
-///     q-batch acqfs (<c>qLogEI</c>/<c>qLogEHVI</c>/<c>qLogCEI</c>, which ride the
-///     <c>ConditionalGPRegressor</c>) are deferred and raise <see cref="NotImplementedException" />.</para>
+///     <para><b>Scope (PORTING_PLAN Phase 3.2 part 3e — complete):</b> every path is ported. Sequential
+///     (no running trials): single-objective unconstrained (<see cref="LogEI" />), constrained
+///     (<see cref="LogCEI" />), multi-objective (<see cref="LogEHVI" />), and multi-objective constrained
+///     (<see cref="LogCEHVI" />). With running trials (asked but not yet told): the q-batch acqfs
+///     (<see cref="QLogEI" />, <see cref="QLogCEI" />, <see cref="QLogEHVI" />) built on the
+///     <see cref="ConditionalGPRegressor" />, and the Kriging-Believer <see cref="LogCEHVI" /> for the
+///     multi-objective constrained case.</para>
 /// </summary>
 /// <example>
 ///     <code>
@@ -239,11 +239,14 @@ public class GPSampler : BaseSampler
             }
             else
             {
-                if (hasRunning)
-                    throw NotYetPorted("qLogEHVI (multi-objective with running trials)", "3e q-batch");
                 int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
-                acqf = new LogEHVI(
-                    gprsList.ToArray(), internalSearchSpace, standardizedScoreVals, _nQmcSamplesEhvi, qmcSeed);
+                if (hasRunning)
+                    acqf = new QLogEHVI(
+                        gprsList.ToArray(), internalSearchSpace, standardizedScoreVals, _nQmcSamplesEhvi,
+                        qmcSeed, normalizedParamsOfRunningTrials!);
+                else
+                    acqf = new LogEHVI(
+                        gprsList.ToArray(), internalSearchSpace, standardizedScoreVals, _nQmcSamplesEhvi, qmcSeed);
                 bestParams = GetBestParamsForMultiObjective(normalizedParams, standardizedScoreVals);
             }
         }
@@ -475,9 +478,6 @@ public class GPSampler : BaseSampler
         }
         return result;
     }
-
-    private static NotImplementedException NotYetPorted(string what, string part)
-        => new($"GPSampler {what} is not yet ported (PORTING_PLAN Phase 3.2 part {part}).");
 
     /// <summary>
     ///     <c>_standardize_values</c> — clip non-finite values (<c>warn_and_convert_inf</c>) then
