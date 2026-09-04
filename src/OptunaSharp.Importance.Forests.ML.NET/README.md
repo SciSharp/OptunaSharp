@@ -50,6 +50,31 @@ Both accept `nTrees` (default 64), `maxDepth` (default 64), and `seed` (default 
 `GetParamImportances` evaluator (when none is passed) is the pure-managed
 `PedAnovaImportanceEvaluator` (Core).
 
+### Full control: the ML.NET trainer options
+
+Each evaluator also has an overload that takes the **complete `FastForestRegressionTrainer.Options`**,
+so every knob of the ML.NET forest is controllable — not just three:
+
+```csharp
+using Microsoft.ML.Trainers.FastTree;
+
+var evaluator = new FastForestFanovaImportanceEvaluator(new FastForestRegressionTrainer.Options
+{
+    NumberOfTrees = 200,
+    NumberOfLeaves = 50,
+    FeatureFraction = 0.7,              // per-split feature subsampling — absent from the simple ctor
+    MinimumExampleCountPerLeaf = 5,
+    MaximumBinCountPerFeature = 512,
+    Seed = 0,
+    NumberOfThreads = 1,               // set Seed + a single thread for a reproducible result
+});
+var imp = ImportanceFunctions.GetParamImportances(study, evaluator);
+```
+
+`LabelColumnName` / `FeatureColumnName` are managed by the evaluator (bound to the transformed-trial
+schema) and are overwritten; **every other field is used as given**. The `(nTrees, maxDepth, seed)`
+constructor is exactly this overload fed a reproducible default options object.
+
 ## Divergence from Python Optuna (this package's backend)
 
 ML.NET's `FastForest` is not tree-identical to scikit-learn's random forest — it bins features and

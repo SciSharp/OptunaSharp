@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.ML.Trainers.LightGbm;
 using OptunaSharp.Collections;
 using OptunaSharp.Importance;
 using OptunaSharp.Importance.Forests.Internal;
@@ -22,6 +23,7 @@ namespace OptunaSharp.Integration.LightGbm;
 /// </summary>
 public sealed class LightGbmFanovaImportanceEvaluator : BaseImportanceEvaluator
 {
+    private readonly LightGbmRegressionTrainer.Options? _options;
     private readonly int _nTrees;
     private readonly int _maxDepth;
     private readonly int? _seed;
@@ -36,9 +38,26 @@ public sealed class LightGbmFanovaImportanceEvaluator : BaseImportanceEvaluator
         _seed = seed;
     }
 
+    /// <summary>
+    ///     Full-control overload: fit with a caller-supplied
+    ///     <see cref="LightGbmRegressionTrainer.Options" />, exposing the <b>entire</b> ML.NET LightGBM
+    ///     API — <c>NumberOfIterations</c>, <c>NumberOfLeaves</c>, <c>LearningRate</c>,
+    ///     <c>MaximumBinCountPerFeature</c>, the nested <c>Booster</c> (GBDT/DART/GOSS), <c>Seed</c>,
+    ///     <c>NumberOfThreads</c>, … — rather than only <c>(n_trees, max_depth, seed)</c>.
+    /// </summary>
+    /// <param name="options">
+    ///     The LightGBM trainer options. <c>LabelColumnName</c> and <c>FeatureColumnName</c> are managed
+    ///     by the evaluator (bound to the transformed-trial schema) and are overwritten; every other
+    ///     field is used as given. For a reproducible result set <c>Seed</c> and <c>NumberOfThreads = 1</c>.
+    /// </param>
+    public LightGbmFanovaImportanceEvaluator(LightGbmRegressionTrainer.Options options)
+        => _options = options ?? throw new ArgumentNullException(nameof(options));
+
     /// <inheritdoc />
     public override OrderedDict<string, double> Evaluate(
         Study study, IReadOnlyList<string>? @params = null, Func<FrozenTrial, double>? target = null)
         => ForestImportance.EvaluateFanova(study, @params, target,
-            (x, y, nFeatures) => LightGbmBackend.Fit(x, y, nFeatures, _nTrees, _maxDepth, _seed));
+            (x, y, nFeatures) => _options is null
+                ? LightGbmBackend.Fit(x, y, nFeatures, _nTrees, _maxDepth, _seed)
+                : LightGbmBackend.Fit(x, y, nFeatures, _options));
 }

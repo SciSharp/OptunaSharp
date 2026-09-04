@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using AwesomeAssertions;
+using Microsoft.ML.Trainers.FastTree;
 using NumSharp;
 using OptunaSharp.Importance;
 using OptunaSharp.Importance.Booster;
@@ -169,6 +170,63 @@ public class BoosterImportanceEvaluatorTests
             imp["k"].Should().Be(0.0, $"{b.Name}: a single-valued distribution has importance exactly 0");
             imp["x"].Should().BeGreaterThan(0.0, b.Name);
         }
+    }
+
+    // ---- Full-API options overload: the caller supplies the real ML.NET trainer Options, exposing
+    //      the entire FastTree / FastTreeTweedie surface (LearningRate, Shrinkage, bagging, pruning,
+    //      the Tweedie Index, …) — not just (n_trees, max_depth, seed). ----
+
+    private static FastTreeRegressionTrainer.Options FtOptions(double learningRate = 0.2, int seed = 0)
+        => new()
+        {
+            NumberOfTrees = 64, NumberOfLeaves = 32, MinimumExampleCountPerLeaf = 1,
+            FeatureFraction = 1.0, NumberOfThreads = 1, Seed = seed, FeatureSelectionSeed = seed,
+            LearningRate = learningRate,
+        };
+
+    private static FastTreeTweedieTrainer.Options FttOptions(double learningRate = 0.2, int seed = 0)
+        => new()
+        {
+            NumberOfTrees = 64, NumberOfLeaves = 32, MinimumExampleCountPerLeaf = 1,
+            FeatureFraction = 1.0, NumberOfThreads = 1, Seed = seed, FeatureSelectionSeed = seed,
+            LearningRate = learningRate,
+        };
+
+    [TestMethod]
+    public void Options_Overload_RanksNormalizesAndReproducible()
+    {
+        var study = MakeStudy(seed: 0, nTrials: 80);
+        var evaluators = new (string Name, Func<BaseImportanceEvaluator> Make)[]
+        {
+            ("fasttree-fanova", () => new FastTreeFanovaImportanceEvaluator(FtOptions())),
+            ("fasttree-mdi", () => new FastTreeMeanDecreaseImpurityImportanceEvaluator(FtOptions())),
+            ("tweedie-fanova", () => new FastTreeTweedieFanovaImportanceEvaluator(FttOptions())),
+            ("tweedie-mdi", () => new FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator(FttOptions())),
+        };
+        foreach (var (name, make) in evaluators)
+        {
+            var imp = ImportanceFunctions.GetParamImportances(study, make());
+            imp.Keys.First().Should().Be("x", $"options-{name}: x dominates the objective (10*x^2)");
+            imp.Values.Sum().Should().BeApproximately(1.0, 1e-9, name);
+            SameImportances(make().Evaluate(study), make().Evaluate(study))
+                .Should().BeTrue($"options-{name}: a fixed options config (Seed + 1 thread) is reproducible");
+        }
+    }
+
+    [TestMethod]
+    public void Options_LearningRate_ExposesControlBeyondSimpleCtor()
+    {
+        var study = MakeStudy(seed: 0, nTrials: 80);
+        // LearningRate is not reachable through the simple (n_trees, max_depth, seed) ctor at all; the
+        // options overload exposes it, and it changes the boosted fit -> different importances.
+        SameImportances(
+                new FastTreeFanovaImportanceEvaluator(FtOptions(learningRate: 0.05)).Evaluate(study),
+                new FastTreeFanovaImportanceEvaluator(FtOptions(learningRate: 0.40)).Evaluate(study))
+            .Should().BeFalse("FastTree LearningRate (a knob absent from the simple ctor) must reach the fit");
+        SameImportances(
+                new FastTreeTweedieFanovaImportanceEvaluator(FttOptions(learningRate: 0.05)).Evaluate(study),
+                new FastTreeTweedieFanovaImportanceEvaluator(FttOptions(learningRate: 0.40)).Evaluate(study))
+            .Should().BeFalse("FastTreeTweedie LearningRate must reach the fit");
     }
 
     private static Study MakeMultiObjectiveStudy()

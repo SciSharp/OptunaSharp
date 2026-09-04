@@ -19,24 +19,76 @@ namespace OptunaSharp.Integration.LightGbm;
 ///     re-exposes LightGBM's trees as the same <c>RegressionTreeBase</c> shape as FastForest/FastTree,
 ///     so the fANOVA walk and MDI read them uniformly.
 ///
+///     <para>Two fit overloads back the two evaluator constructors: a <b>simple</b> one that derives
+///     reproducible default options from <c>(n_trees, max_depth, seed)</c>, and a <b>full-API</b> one
+///     that takes a caller-supplied <see cref="LightGbmRegressionTrainer.Options" /> verbatim (only the
+///     two schema column names are managed; the whole LightGBM surface — including the nested
+///     <c>Booster</c> options — is the caller's). The <see cref="MLContext" /> seed is left unset: with
+///     <c>options.Seed</c> fixed and a single thread the result is independent of it.</para>
+///
 ///     <para><b>Experimental / off-label.</b> Optuna's importance uses only scikit-learn's
 ///     <c>RandomForestRegressor</c> (bagging); LightGBM is a gradient booster whose trees fit the
 ///     ensemble's <i>residual</i>, not the objective, so fANOVA/MDI over a LightGBM ensemble measures a
 ///     different, non-standard quantity with no value-parity to Optuna. LightGBM's actual Optuna role is
-///     a tuner (<c>optuna.integration.lightgbm</c>, Phase 5.7). For reproducibility the ensemble is
-///     fitted single-threaded from the given seed.</para>
+///     a tuner (<c>optuna.integration.lightgbm</c>, Phase 5.7).</para>
 /// </summary>
 internal static class LightGbmBackend
 {
     private const string LabelCol = "Label";
     private const string FeatureCol = "Features";
 
-    internal static SklearnLikeTree[] Fit(
-        float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed)
+    /// <summary>Simple path — reproducible defaults from <c>(n_trees, max_depth, seed)</c>.</summary>
+    internal static SklearnLikeTree[] Fit(float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed)
+        => Fit(x, y, nFeatures, DefaultOptions(nTrees, maxDepth, seed, y.Length));
+
+    /// <summary>
+    ///     Full-API path — fit LightGBM with a caller-supplied
+    ///     <see cref="LightGbmRegressionTrainer.Options" /> (only the two schema column names are
+    ///     overwritten; <c>NumberOfIterations</c>, <c>NumberOfLeaves</c>, <c>LearningRate</c>,
+    ///     <c>MaximumBinCountPerFeature</c>, the nested <c>Booster</c>, <c>Seed</c>,
+    ///     <c>NumberOfThreads</c>, … are the caller's).
+    /// </summary>
+    internal static SklearnLikeTree[] Fit(float[,] x, double[] y, int nFeatures, LightGbmRegressionTrainer.Options options)
+    {
+        var ml = new MLContext();
+        IDataView dataView = LoadData(ml, x, y, nFeatures);
+
+        options.LabelColumnName = LabelCol;
+        options.FeatureColumnName = FeatureCol;
+
+        var model = ml.Regression.Trainers.LightGbm(options).Fit(dataView);
+        return Adapt(model.Model.TrainedTreeEnsemble.Trees, nFeatures, x, y);
+    }
+
+    private static LightGbmRegressionTrainer.Options DefaultOptions(int nTrees, int maxDepth, int? seed, int n)
+    {
+        var options = new LightGbmRegressionTrainer.Options
+        {
+            NumberOfIterations = nTrees,
+            NumberOfLeaves = LeavesFromDepth(maxDepth, n),
+            MinimumExampleCountPerLeaf = 1,
+            NumberOfThreads = 1,         // determinism + the NumSharp single-threaded-kernel rule
+        };
+        if (seed.HasValue)
+            options.Seed = seed.Value;
+        return options;
+    }
+
+    private static SklearnLikeTree[] Adapt(
+        IReadOnlyList<RegressionTreeBase> trees, int nFeatures, float[,] x, double[] y)
+        => trees.Select(tree => MlNetTreeEnsembleAdapter.ToSklearnLikeTree(tree, nFeatures, x, y)).ToArray();
+
+    // A depth-d binary tree has at most 2^d leaves; a tree can never have more leaves than rows.
+    private static int LeavesFromDepth(int maxDepth, int n)
+    {
+        int leafCap = Math.Max(2, n);
+        int fromDepth = maxDepth >= 30 ? int.MaxValue : (1 << maxDepth);
+        return Math.Max(2, Math.Min(fromDepth, leafCap));
+    }
+
+    private static IDataView LoadData(MLContext ml, float[,] x, double[] y, int nFeatures)
     {
         int n = y.Length;
-        var ml = new MLContext(seed: seed);
-
         var rows = new InputRow[n];
         for (int i = 0; i < n; i++)
         {
@@ -48,32 +100,8 @@ internal static class LightGbmBackend
 
         var schema = SchemaDefinition.Create(typeof(InputRow));
         schema[nameof(InputRow.Features)].ColumnType = new VectorDataViewType(NumberDataViewType.Single, nFeatures);
-        IDataView dataView = ml.Data.LoadFromEnumerable(rows, schema);
-
-        // A depth-d binary tree has at most 2^d leaves; a tree can never have more leaves than rows.
-        int leafCap = Math.Max(2, n);
-        int fromDepth = maxDepth >= 30 ? int.MaxValue : (1 << maxDepth);
-        int numberOfLeaves = Math.Max(2, Math.Min(fromDepth, leafCap));
-
-        var options = new LightGbmRegressionTrainer.Options
-        {
-            LabelColumnName = LabelCol,
-            FeatureColumnName = FeatureCol,
-            NumberOfIterations = nTrees,
-            NumberOfLeaves = numberOfLeaves,
-            MinimumExampleCountPerLeaf = 1,
-            NumberOfThreads = 1,         // determinism + the NumSharp single-threaded-kernel rule
-        };
-        if (seed.HasValue)
-            options.Seed = seed.Value;
-
-        var model = ml.Regression.Trainers.LightGbm(options).Fit(dataView);
-        return Adapt(model.Model.TrainedTreeEnsemble.Trees, nFeatures, x, y);
+        return ml.Data.LoadFromEnumerable(rows, schema);
     }
-
-    private static SklearnLikeTree[] Adapt(
-        IReadOnlyList<RegressionTreeBase> trees, int nFeatures, float[,] x, double[] y)
-        => trees.Select(tree => MlNetTreeEnsembleAdapter.ToSklearnLikeTree(tree, nFeatures, x, y)).ToArray();
 
     private sealed class InputRow
     {

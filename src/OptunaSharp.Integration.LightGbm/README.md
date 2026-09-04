@@ -50,6 +50,31 @@ LightGBM ensemble is fitted single-threaded from the given `seed` for reproducib
 and MDI formula are shared with Core (validated against Optuna's own `test_tree.py`); only the
 underlying tree ensemble differs.
 
+### Full control: the ML.NET trainer options
+
+Each evaluator also has an overload taking the **complete `LightGbmRegressionTrainer.Options`**, so the
+entire LightGBM surface is controllable — learning rate, number of leaves, bin count, categorical
+handling, and the nested `Booster` (GBDT / DART / GOSS):
+
+```csharp
+using Microsoft.ML.Trainers.LightGbm;
+
+var evaluator = new LightGbmFanovaImportanceEvaluator(new LightGbmRegressionTrainer.Options
+{
+    NumberOfIterations = 300,
+    NumberOfLeaves = 63,
+    LearningRate = 0.05,               // absent from the simple ctor
+    MaximumBinCountPerFeature = 255,
+    Seed = 0,
+    NumberOfThreads = 1,               // set Seed + a single thread for a reproducible result
+});
+var imp = ImportanceFunctions.GetParamImportances(study, evaluator);
+```
+
+`LabelColumnName` / `FeatureColumnName` are managed by the evaluator and overwritten; every other field
+is used as given. The `(nTrees, maxDepth, seed)` constructor is this overload fed a reproducible
+default options object.
+
 ## Planned (Phase 5.7): the LightGBM **tuner** — the Optuna-justified half
 
 LightGBM's real identity in Optuna is a **tuner**, not importance:

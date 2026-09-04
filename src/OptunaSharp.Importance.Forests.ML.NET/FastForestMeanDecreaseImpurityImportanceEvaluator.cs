@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.ML.Trainers.FastTree;
 using OptunaSharp.Collections;
 using OptunaSharp.Importance.Forests.Internal;
 using OptunaSharp.Importance.Forests.MLNet;
@@ -19,6 +20,7 @@ namespace OptunaSharp.Importance.Forests;
 /// </summary>
 public sealed class FastForestMeanDecreaseImpurityImportanceEvaluator : BaseImportanceEvaluator
 {
+    private readonly FastForestRegressionTrainer.Options? _options;
     private readonly int _nTrees;
     private readonly int _maxDepth;
     private readonly int? _seed;
@@ -33,9 +35,25 @@ public sealed class FastForestMeanDecreaseImpurityImportanceEvaluator : BaseImpo
         _seed = seed;
     }
 
+    /// <summary>
+    ///     Full-control overload: fit the forest with a caller-supplied
+    ///     <see cref="FastForestRegressionTrainer.Options" />, exposing the <b>entire</b> ML.NET
+    ///     FastForest API rather than only <c>(n_trees, max_depth, seed)</c>.
+    /// </summary>
+    /// <param name="options">
+    ///     The FastForest trainer options. <c>LabelColumnName</c> and <c>FeatureColumnName</c> are
+    ///     managed by the evaluator (bound to the transformed-trial schema) and are overwritten; every
+    ///     other field is used as given. For a reproducible result set <c>Seed</c> and
+    ///     <c>NumberOfThreads = 1</c>.
+    /// </param>
+    public FastForestMeanDecreaseImpurityImportanceEvaluator(FastForestRegressionTrainer.Options options)
+        => _options = options ?? throw new ArgumentNullException(nameof(options));
+
     /// <inheritdoc />
     public override OrderedDict<string, double> Evaluate(
         Study study, IReadOnlyList<string>? @params = null, Func<FrozenTrial, double>? target = null)
         => ForestImportance.EvaluateMdi(study, @params, target,
-            (x, y, nFeatures) => FastForestBackend.Fit(x, y, nFeatures, _nTrees, _maxDepth, _seed));
+            (x, y, nFeatures) => _options is null
+                ? FastForestBackend.Fit(x, y, nFeatures, _nTrees, _maxDepth, _seed)
+                : FastForestBackend.Fit(x, y, nFeatures, _options));
 }

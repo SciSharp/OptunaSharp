@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using Microsoft.ML;
 using Microsoft.ML.Data;
@@ -18,43 +17,56 @@ namespace OptunaSharp.Importance.Forests.MLNet;
 ///     per-node impurity (variance) and weighted counts that MDI needs (ML.NET does not expose
 ///     per-node bootstrap statistics).
 ///
+///     <para>Two fit overloads back the two evaluator constructors: a <b>simple</b> one that derives a
+///     reproducible <see cref="FastForestRegressionTrainer.Options" /> from
+///     <c>(n_trees, max_depth, seed)</c>, and a <b>full-API</b> one that takes a caller-supplied
+///     <see cref="FastForestRegressionTrainer.Options" /> verbatim (only the two schema column names
+///     are managed). The <see cref="MLContext" /> seed is left unset: with <c>options.Seed</c> fixed
+///     and a single training thread the result is independent of it, so reproducibility is driven
+///     entirely by the options — which is what puts the caller in full control on the options path.</para>
+///
 ///     <para><b>Documented divergence.</b> FastForest is not tree-identical to scikit-learn (binned
 ///     features, leaf-wise growth, float32 thresholds; routed impurities rather than per-tree
 ///     bootstrap), so importances differ numerically from Python Optuna — the ranking of a dominant
-///     parameter is robust, exact values are not. The forest is fitted single-threaded from the seed
-///     for reproducibility.</para>
+///     parameter is robust, exact values are not.</para>
 /// </summary>
 internal static class FastForestBackend
 {
+    private const string LabelCol = "Label";
+    private const string FeatureCol = "Features";
+
+    /// <summary>Simple path — build the reproducible default options from <c>(n_trees, max_depth, seed)</c>.</summary>
     internal static SklearnLikeTree[] Fit(float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed)
+        => Fit(x, y, nFeatures, DefaultOptions(nTrees, maxDepth, seed, y.Length));
+
+    /// <summary>
+    ///     Full-API path — fit with a caller-supplied <see cref="FastForestRegressionTrainer.Options" />.
+    ///     Only <see cref="TrainerInputBaseWithLabel.LabelColumnName" /> /
+    ///     <c>FeatureColumnName</c> are overwritten (the fixed schema the transformed trials live in);
+    ///     every other knob — <c>NumberOfTrees</c>, <c>NumberOfLeaves</c>, <c>FeatureFraction</c>,
+    ///     bagging, <c>Seed</c>, <c>NumberOfThreads</c>, … — is the caller's.
+    /// </summary>
+    internal static SklearnLikeTree[] Fit(float[,] x, double[] y, int nFeatures, FastForestRegressionTrainer.Options options)
     {
-        int n = y.Length;
-        var mlContext = new MLContext(seed: seed);
+        var mlContext = new MLContext();
+        IDataView dataView = LoadData(mlContext, x, y, nFeatures);
 
-        var rows = new InputRow[n];
-        for (int i = 0; i < n; i++)
-        {
-            var features = new float[nFeatures];
-            for (int j = 0; j < nFeatures; j++)
-                features[j] = x[i, j];
-            rows[i] = new InputRow { Features = features, Label = (float)y[i] };
-        }
+        options.LabelColumnName = LabelCol;
+        options.FeatureColumnName = FeatureCol;
 
-        var schema = SchemaDefinition.Create(typeof(InputRow));
-        schema[nameof(InputRow.Features)].ColumnType = new VectorDataViewType(NumberDataViewType.Single, nFeatures);
-        IDataView dataView = mlContext.Data.LoadFromEnumerable(rows, schema);
+        var model = mlContext.Regression.Trainers.FastForest(options).Fit(dataView);
+        return model.Model.TrainedTreeEnsemble.Trees
+            .Select(tree => MlNetTreeEnsembleAdapter.ToSklearnLikeTree(tree, nFeatures, x, y))
+            .ToArray();
+    }
 
-        // A depth-d binary tree has at most 2^d leaves; a tree can never have more leaves than rows.
-        int leafCap = Math.Max(2, n);
-        int fromDepth = maxDepth >= 30 ? int.MaxValue : (1 << maxDepth);
-        int numberOfLeaves = Math.Max(2, Math.Min(fromDepth, leafCap));
-
+    /// <summary>The reproducible defaults the <c>(n_trees, max_depth, seed)</c> overload fits with.</summary>
+    private static FastForestRegressionTrainer.Options DefaultOptions(int nTrees, int maxDepth, int? seed, int n)
+    {
         var options = new FastForestRegressionTrainer.Options
         {
-            LabelColumnName = nameof(InputRow.Label),
-            FeatureColumnName = nameof(InputRow.Features),
             NumberOfTrees = nTrees,
-            NumberOfLeaves = numberOfLeaves,
+            NumberOfLeaves = LeavesFromDepth(maxDepth, n),
             MinimumExampleCountPerLeaf = 1,
             FeatureFraction = 1.0,       // sklearn RandomForestRegressor default (max_features=1.0)
             NumberOfThreads = 1,         // determinism + the NumSharp single-threaded-kernel rule
@@ -66,13 +78,32 @@ internal static class FastForestBackend
             options.Seed = seed.Value;
             options.FeatureSelectionSeed = seed.Value;
         }
+        return options;
+    }
 
-        var model = mlContext.Regression.Trainers.FastForest(options).Fit(dataView);
-        var ensemble = model.Model.TrainedTreeEnsemble;
+    // A depth-d binary tree has at most 2^d leaves; a tree can never have more leaves than rows.
+    private static int LeavesFromDepth(int maxDepth, int n)
+    {
+        int leafCap = Math.Max(2, n);
+        int fromDepth = maxDepth >= 30 ? int.MaxValue : (1 << maxDepth);
+        return Math.Max(2, Math.Min(fromDepth, leafCap));
+    }
 
-        return ensemble.Trees
-            .Select(tree => MlNetTreeEnsembleAdapter.ToSklearnLikeTree(tree, nFeatures, x, y))
-            .ToArray();
+    private static IDataView LoadData(MLContext mlContext, float[,] x, double[] y, int nFeatures)
+    {
+        int n = y.Length;
+        var rows = new InputRow[n];
+        for (int i = 0; i < n; i++)
+        {
+            var features = new float[nFeatures];
+            for (int j = 0; j < nFeatures; j++)
+                features[j] = x[i, j];
+            rows[i] = new InputRow { Features = features, Label = (float)y[i] };
+        }
+
+        var schema = SchemaDefinition.Create(typeof(InputRow));
+        schema[nameof(InputRow.Features)].ColumnType = new VectorDataViewType(NumberDataViewType.Single, nFeatures);
+        return mlContext.Data.LoadFromEnumerable(rows, schema);
     }
 
     private sealed class InputRow

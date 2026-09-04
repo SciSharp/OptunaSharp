@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using AwesomeAssertions;
+using Microsoft.ML.Trainers.FastTree;
 using NumSharp;
 using OptunaSharp.Importance;
 using OptunaSharp.Importance.Forests;
@@ -173,6 +174,54 @@ public class ForestImportanceEvaluatorTests
             imp["k"].Should().Be(0.0, $"{b.Name}: a single-valued distribution has importance exactly 0");
             imp["x"].Should().BeGreaterThan(0.0, b.Name);
         }
+    }
+
+    // ---- Full-API options overload (FastForest only; the native Core evaluators have no ML.NET
+    //      trainer options — they are the value-exact scikit-learn port). ----
+
+    private static FastForestRegressionTrainer.Options FfOptions(int numberOfLeaves = 64, int minPerLeaf = 1, int seed = 0)
+        => new()
+        {
+            NumberOfTrees = 64,
+            NumberOfLeaves = numberOfLeaves,
+            MinimumExampleCountPerLeaf = minPerLeaf,
+            FeatureFraction = 1.0,
+            NumberOfThreads = 1,
+            Seed = seed,
+            FeatureSelectionSeed = seed,
+            AllowEmptyTrees = true,
+            ShuffleLabels = false,
+        };
+
+    [TestMethod]
+    public void Options_Overload_RanksNormalizesAndReproducible()
+    {
+        var study = MakeStudy(seed: 0, nTrials: 80);
+        var evaluators = new (string Name, Func<BaseImportanceEvaluator> Make)[]
+        {
+            ("fanova", () => new FastForestFanovaImportanceEvaluator(FfOptions())),
+            ("mdi", () => new FastForestMeanDecreaseImpurityImportanceEvaluator(FfOptions())),
+        };
+        foreach (var (name, make) in evaluators)
+        {
+            var imp = ImportanceFunctions.GetParamImportances(study, make());
+            imp.Keys.First().Should().Be("x", $"options-{name}: x dominates the objective (10*x^2)");
+            imp.Values.Sum().Should().BeApproximately(1.0, 1e-9, name);
+            SameImportances(make().Evaluate(study), make().Evaluate(study))
+                .Should().BeTrue($"options-{name}: a fixed options config (Seed + 1 thread) is reproducible");
+        }
+    }
+
+    [TestMethod]
+    public void Options_ExposesControlBeyondSimpleCtor()
+    {
+        var study = MakeStudy(seed: 0);
+        // MinimumExampleCountPerLeaf is pinned to 1 by the simple (n_trees, max_depth, seed) ctor; via
+        // the options overload it is free — a larger value coarsens the forest and changes importances.
+        var fine = new FastForestFanovaImportanceEvaluator(FfOptions(minPerLeaf: 1)).Evaluate(study);
+        var coarse = new FastForestFanovaImportanceEvaluator(FfOptions(minPerLeaf: 15)).Evaluate(study);
+        SameImportances(fine, coarse).Should()
+            .BeFalse("MinimumExampleCountPerLeaf (a knob the simple ctor pins to 1) must reach the fit");
     }
 
     private static Study MakeMultiObjectiveStudy()

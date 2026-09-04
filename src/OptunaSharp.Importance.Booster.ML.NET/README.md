@@ -56,6 +56,33 @@ var imp = ImportanceFunctions.GetParamImportances(
 var canonical = ImportanceFunctions.GetParamImportances(study, new FanovaImportanceEvaluator(seed: 0));
 ```
 
+### Full control: the ML.NET trainer options
+
+Each evaluator also has an overload taking the **complete ML.NET trainer options**
+(`FastTreeRegressionTrainer.Options` / `FastTreeTweedieTrainer.Options`), so the entire boosting
+surface is controllable — learning rate, shrinkage, bagging, pruning, optimization algorithm, early
+stopping, and (for Tweedie) the variance-power `Index`:
+
+```csharp
+using Microsoft.ML.Trainers.FastTree;
+
+var evaluator = new FastTreeFanovaImportanceEvaluator(new FastTreeRegressionTrainer.Options
+{
+    NumberOfTrees = 300,
+    NumberOfLeaves = 32,
+    LearningRate = 0.05,          // absent from the simple ctor
+    Shrinkage = 1.0,
+    MinimumExampleCountPerLeaf = 5,
+    Seed = 0,
+    NumberOfThreads = 1,          // set Seed + a single thread for a reproducible result
+});
+var imp = ImportanceFunctions.GetParamImportances(study, evaluator);
+```
+
+`LabelColumnName` / `FeatureColumnName` are managed by the evaluator and overwritten; every other field
+is used as given. The `(nTrees, maxDepth, seed)` constructor is this overload fed a reproducible
+default options object.
+
 ## Implementation
 
 The fANOVA marginal-variance walk and the MDI formula are **shared with Core** (validated bit-for-bit

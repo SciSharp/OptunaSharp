@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.ML.Trainers.FastTree;
 using OptunaSharp.Collections;
 using OptunaSharp.Importance.Forests.Internal;
 
@@ -21,6 +22,7 @@ namespace OptunaSharp.Importance.Booster;
 /// </summary>
 public sealed class FastTreeMeanDecreaseImpurityImportanceEvaluator : BaseImportanceEvaluator
 {
+    private readonly FastTreeRegressionTrainer.Options? _options;
     private readonly int _nTrees;
     private readonly int _maxDepth;
     private readonly int? _seed;
@@ -35,9 +37,24 @@ public sealed class FastTreeMeanDecreaseImpurityImportanceEvaluator : BaseImport
         _seed = seed;
     }
 
+    /// <summary>
+    ///     Full-control overload: fit with a caller-supplied
+    ///     <see cref="FastTreeRegressionTrainer.Options" />, exposing the <b>entire</b> ML.NET FastTree
+    ///     API rather than only <c>(n_trees, max_depth, seed)</c>.
+    /// </summary>
+    /// <param name="options">
+    ///     The FastTree trainer options. <c>LabelColumnName</c> and <c>FeatureColumnName</c> are managed
+    ///     by the evaluator (bound to the transformed-trial schema) and are overwritten; every other
+    ///     field is used as given. For a reproducible result set <c>Seed</c> and <c>NumberOfThreads = 1</c>.
+    /// </param>
+    public FastTreeMeanDecreaseImpurityImportanceEvaluator(FastTreeRegressionTrainer.Options options)
+        => _options = options ?? throw new ArgumentNullException(nameof(options));
+
     /// <inheritdoc />
     public override OrderedDict<string, double> Evaluate(
         Study study, IReadOnlyList<string>? @params = null, Func<FrozenTrial, double>? target = null)
         => ForestImportance.EvaluateMdi(study, @params, target,
-            (x, y, nFeatures) => BoosterBackend.FitFastTree(x, y, nFeatures, _nTrees, _maxDepth, _seed));
+            (x, y, nFeatures) => _options is null
+                ? BoosterBackend.FitFastTree(x, y, nFeatures, _nTrees, _maxDepth, _seed)
+                : BoosterBackend.FitFastTree(x, y, nFeatures, _options));
 }
