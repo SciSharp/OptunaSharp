@@ -33,11 +33,13 @@ var study = Optuna.CreateStudy(
 
 var pruner = new ParamRepeatPruner(study);
 
+// dummy_param-0 has only 20 possible values, so across 40 trials the sampler is forced to repeat some —
+// each repeat is pruned, so only the ~unique values ever "complete".
 study.Optimize(t =>
 {
-    long p = t.SuggestInt("dummy_param-0", 1, 20);
-    pruner.CheckParams(t);   // prunes this trial if dummy_param-0 repeats an earlier completed trial
-    return p;
+    long p = t.SuggestInt("dummy_param-0", 1, 20);   // the one parameter — a small integer space
+    pruner.CheckParams(t);                           // prune this trial if its params repeat an earlier completed one
+    return p;                                        // trivial objective — the point is the repeat-pruning, not the value
 }, nTrials: 40);
 
 int completed = study.Trials.Count(t => t.State == TrialState.Complete);
@@ -81,12 +83,13 @@ public sealed class ParamRepeatPruner
             }
         }
 
+        // a match was found — record this repeat under the original trial, and prune past the allowance
         if (repeatedNumber > -1)
         {
             if (!_repeats.TryGetValue(repeatedNumber, out var seen))
-                _repeats[repeatedNumber] = seen = new List<int>();
+                _repeats[repeatedNumber] = seen = new List<int>();   // first repeat seen of that original
             seen.Add(current.Number);
-            if (seen.Count > _repeatsMax)
+            if (seen.Count > _repeatsMax)                            // repeatsMax = 0 → prune every repeat
                 throw new TrialPruned();
         }
         return repeatedNumber;

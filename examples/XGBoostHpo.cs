@@ -35,16 +35,19 @@ Console.WriteLine("Best hyperparameters:");
 foreach (var kv in study.BestParams)
     Console.WriteLine($"    {kv.Key}: {kv.Value}");
 
-// The XGBoost search space of the gist (xgb.train replaced by a deterministic surrogate RMSE).
+// the gist's flat 8-parameter XGBoost grid; xgb.train is replaced by a deterministic surrogate RMSE.
+// the exact space is byte-for-byte parity-checked in GistExampleParityTests.cs.
 static double Objective(Trial t)
 {
-    double eta = t.SuggestFloat("eta", 0.01, 0.3);
-    t.SuggestInt("max_depth", 3, 10);
-    double subsample = t.SuggestFloat("subsample", 0.5, 1.0);
-    t.SuggestFloat("colsample_bytree", 0.5, 1.0);
-    t.SuggestFloat("gamma", 0.0, 10.0);
-    t.SuggestFloat("min_child_weight", 0.1, 10.0);
-    t.SuggestFloat("lambda", 0.1, 10.0);
-    t.SuggestFloat("alpha", 0.0, 10.0);
-    return Math.Pow(eta - 0.1, 2.0) + Math.Pow(subsample - 0.8, 2.0);  // surrogate RMSE
+    double eta = t.SuggestFloat("eta", 0.01, 0.3);              // learning rate (gist uses a linear range — matched)
+    t.SuggestInt("max_depth", 3, 10);                          // tree depth (suggested + recorded; unused by the surrogate)
+    double subsample = t.SuggestFloat("subsample", 0.5, 1.0);  // row subsampling per tree
+    t.SuggestFloat("colsample_bytree", 0.5, 1.0);              // column subsampling per tree
+    t.SuggestFloat("gamma", 0.0, 10.0);                        // min loss reduction to make a split
+    t.SuggestFloat("min_child_weight", 0.1, 10.0);             // min summed child weight
+    t.SuggestFloat("lambda", 0.1, 10.0);                       // L2 regularization
+    t.SuggestFloat("alpha", 0.0, 10.0);                        // L1 regularization
+    // closed-form stand-in for RMSE: a bowl with its minimum at eta=0.1, subsample=0.8. Math.Pow (not
+    // eta*eta) matches Python's `x ** 2` bit-for-bit — the rule that keeps the parity test exact.
+    return Math.Pow(eta - 0.1, 2.0) + Math.Pow(subsample - 0.8, 2.0);
 }

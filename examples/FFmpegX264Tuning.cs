@@ -95,6 +95,7 @@ double Objective(Trial t)
         ? "no-deblock=1"
         : $"deblock={t.SuggestInt("deblockalpha", -6, 6)},{t.SuggestInt("deblockbeta", -6, 6)}";
 
+    // each feature flag is a [0,1] categorical; when it's on AND maps to a real x264 option, append it
     var flags = new StringBuilder();
     foreach (var f in new[]
              {
@@ -104,12 +105,15 @@ double Objective(Trial t)
         if (t.SuggestCategorical(f, new[] { 0, 1 }) != 0 && FlagOpt(f) is { } opt)
             flags.Append(':').Append(opt);
 
+    // assemble the full x264-params string: fixed keyint + every tuned knob + ssim=1 so libx264 reports SSIM
     string x264 =
         $"keyint=12:ref={refs}:qcomp={qcomp.ToString("0.####", inv)}:bframes=3:b-adapt={bAdapt}:" +
         $"subme={subme}:trellis={trellis}:partitions={partitions}:me={me}:merange={meRange}:" +
         $"direct={direct}:rc-lookahead={rcLookahead}:min-keyint={minKeyint}:scenecut={scenecut}:" +
         $"{deblock}{flags}{psy}:ssim=1";
 
+    // SuccessiveHalving rungs: encode a longer slice each time, report SSIM, and prune trials that are
+    // clearly behind before spending time on the longer encodes
     double ssim = 0;
     foreach (int dur in rungs)
     {
@@ -128,7 +132,8 @@ double Encode(string src, int dur, string x264Params)
         $"-y -hide_banner -nostdin -i \"{src}\" -t {dur} -an -c:v libx264 -b:v 100k -s 320x240 " +
         $"-x264-params \"{x264Params}\" -f null -", 120);
     if (code != 0)
-        return 0.0;
+        return 0.0;                              // an invalid x264 combo → treat as worst (SSIM 0)
+    // libx264 prints e.g. "SSIM Mean Y:0.987654 (19.1db)" on stderr when ssim=1 — pull the number out
     var m = Regex.Match(err, @"SSIM Mean Y:\s*([0-9.]+)");
     return m.Success ? double.Parse(m.Groups[1].Value, inv) : 0.0;
 }
