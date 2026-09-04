@@ -45,11 +45,12 @@ OptunaSharp can share a live journal file with no external package on either sid
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 3.2 part 3e-6** — the running-trial **q-batch** acqfs (`ConditionalGPRegressor` + `qLogEI`/`qLogPI`/`qLogCEI`/`qLogEHVI` + the `append_running_data` Kriging-Believer path for `LogCEHVI`-with-running) → un-throw the last `GPSampler` branches. Then **3.3 GP terminators**. **All sequential (no-running) `GPSampler` paths (3e-1…3e-5) ✅ done — SO, SO-constrained, MO, MO-constrained all run end-to-end and per-suggestion-match live Optuna.**
+### ▶ CONTINUE HERE: **Phase 3.3 — GP terminators** (`RegretBoundEvaluator` default + `EMMREvaluator`, `terminator/improvement/*`) → un-throw the 2.6 placeholder evaluators and wire `_terminator_improvement` (viz 3.1). **Phase 3.2 is COMPLETE — the ENTIRE `GPSampler` is ported: every sequential AND running-trial path, single- and multi-objective, unconstrained and constrained, runs end-to-end and per-suggestion-matches live Optuna.**
 
-> **The whole single-objective + multi-objective (sequential) GP stack is ported and validated vs live
-> Optuna/torch/scipy:** the fit (parts 1–2), transforms + posterior (3a), LogEI (3b), scrambled Sobol'
-> preliminary sampling (3c), the mixed acqf optimizer + `GPSampler` (3d), and **part 3e sub-parts 1–5:**
+> **The whole `GPSampler` is ported and validated vs live Optuna/torch/scipy:** the fit (parts 1–2),
+> transforms + posterior (3a), LogEI (3b), scrambled Sobol' preliminary sampling (3c), the mixed acqf
+> optimizer + `GPSampler` (3d), **part 3e sub-parts 1–5** (the sequential MO/constrained acqfs), and
+> **part 3e-6** (the running-trial q-batch acqfs):
 > - **3e-1** — `box_decomposition.py: get_non_dominated_box_bounds` (`Internal/Hypervolume.cs`, the 2.10
 >   remainder; bit-exact vs Optuna).
 > - **3e-2** — `LogPI` + `LogCEI` (`Gp/Acqf.cs`) → the **SO constrained** branch. No QMC.
@@ -60,22 +61,20 @@ OptunaSharp can share a live journal file with no external package on either sid
 > - **3e-4** — `LogEHVI` (`Gp/Acqf.cs`) → the **MO** branch (rides 3e-1 + 3e-3; hand-derived logsumexp/
 >   box-clamp gradient).
 > - **3e-5** — `LogCEHVI` (`Gp/Acqf.cs`) → the **MO constrained** branch (= LogEHVI over feasible + Σ LogPI).
+> - **3e-6** — the **running-trial** branches (`ConditionalGPRegressor` + `qLogEI`/`qLogPI`/`qLogCEI`/
+>   `qLogEHVI` + the Kriging-Believer `append_running_data` path). Committed in four steps `741b793`
+>   (3e-6a: `append_running_data`/`_extend_cholesky`/`PosteriorJoint` + KB `LogEHVI`/`LogPI`/`LogCEHVI`
+>   + MO-constrained running), `a75b14e` (3e-6b: `ConditionalGPRegressor` + `qLogEI`), `c33d7b3` (3e-6c:
+>   `qLogPI` + `qLogCEI`), `51ec724` (3e-6d: `qLogEHVI`). The `sample_joint_posterior` gradient +
+>   `amax`/`logsumexp` reduction gradients are hand-derived (the hardest gradient in the GP stack).
 >
 > Each sub-part: eval **and** hand-derived gradient parity vs live Optuna autograd (fixed-hyperparameter
-> acqf sweeps) + a per-suggestion **replay** parity of the sampler branch (float-sphere + mixed spaces,
-> continuous within a normalized envelope, discrete/int exact). Tolerance, not bit-exact — the documented
-> GP boundary.
+> acqf sweeps) + a per-suggestion **replay** parity of the sampler branch (for 3e-6, an ask/tell schedule
+> that leaves trials RUNNING before the trial under test, RNG in lock-step). Tolerance, not bit-exact —
+> the documented GP boundary. Suite after 3e-6: **533 unit + 252 interop**, both TFMs, none skipped.
 >
-> **Next (3e-6):** the running-trial branches (all throw `NotYetPorted(..., "3e q-batch")` today). Needs
-> `gp.py: ConditionalGPRegressor` (`posterior(joint=True)`, `_extend_cholesky`, `sample_joint_posterior`,
-> `get_fantasy_samples`, `append_running_data`), the q-acqf classes (`qLogEI`/`qLogPI`/`qLogEHVI` +
-> `_compute_mean_max_utility`/`_per_sample_log_hvi`, `qLogCEI` compose) — and their gradients through the
-> joint posterior + `amax`/`logsumexp` (the hardest gradient in the GP stack). Then wire the four
-> `SampleRelativeImpl` running branches (`normalized_params_of_running_trials`) + the `LogPI`/`LogEHVI`
-> running-data path. Then **3.3 GP terminators** (`RegretBoundEvaluator` default + `EMMREvaluator`).
->
-> **Also still open:** the 2.12 `QMCSampler` `scramble=true` follow-up (throws today; `Internal/ScrambledSobol`
-> is ready — a quick wire-up).
+> **Still open (small, independent of 3.3):** the 2.12 `QMCSampler` `scramble=true` follow-up (throws
+> today; `Internal/ScrambledSobol` is ready — a quick wire-up).
 
 Phases 0, 1 and **2.1–2.16 are complete** — **Phase 2 (all native features) is DONE** — and **Phase 3 is
 now in progress**. The whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP
@@ -233,8 +232,8 @@ BLAS/LAPACK drift from scipy's by ULPs — the documented GP boundary). The plot
   `ChoiceNoReplaceWeighted` ×2, determinism, in-bounds/on-grid, all-categorical no-continuous) + 7 interop
   (`GpOptimMixedParityTests` 5-space sweep; `GpSamplerParityTests` float-sphere ×3 + mixed ×2 replay +
   convergence). Suite: **499 unit + 225 interop**, both TFMs, none skipped.
-- ✅ **3.2 part 3e — the sequential MO/constrained acqf surface (5 of 6 sub-parts; only running q-batch
-  remains).** Un-throws every no-running `GPSampler` branch. **3e-1** `box_decomposition.py:
+- ✅ **3.2 part 3e — the MO/constrained + running-trial acqf surface (all 6 sub-parts done; the entire
+  `GPSampler` runs end-to-end).** Un-throws every `GPSampler` branch. **3e-1** `box_decomposition.py:
   get_non_dominated_box_bounds` → `Internal/Hypervolume.cs` (the 2.10 remainder; the Lacour17 Alg. 2
   upper-bound-set recurrence; **bit-exact vs Optuna** — only coordinates/negation/max/lexsort, no
   summation). **3e-2** `LogPI` + `LogCEI` (`Gp/Acqf.cs`) → the **SO-constrained** branch: LogPI =
@@ -258,8 +257,28 @@ BLAS/LAPACK drift from scipy's by ULPs — the documented GP boundary). The plot
   + mixed spaces; continuous within a 2e-2…5e-2 normalized envelope, discrete/int **exact**). Tolerance,
   the documented GP boundary (posterior rides the managed triangular solve; QMC samples match torch
   ~1e-15). Commits `8381d37`/`4873140`/`0d731c8`/`055747c`/`6284a8f`. Suite after 3e-5: **525 unit + 238
-  interop**, both TFMs, none skipped. **Remaining 3e-6:** `ConditionalGPRegressor` (`gp.py`) + the four
-  q-acqfs (running trials) + their joint-posterior/`amax`/`logsumexp` gradients.
+  interop**, both TFMs, none skipped. **3e-6 — the running-trial q-batch surface (un-throws the last four
+  branches; the ENTIRE `GPSampler` now runs end-to-end).** `ConditionalGPRegressor`
+  (`Gp/ConditionalGPRegressor.cs`, port of `gp.py`) conditions the GP on pre-sampled running fantasies:
+  `posterior(joint=True)` (`PosteriorJoint`), `append_running_data` (Kriging Believer — bordered/block
+  `_extend_cholesky` + `_solve_cholesky` over the augmented data), `get_fantasy_samples`,
+  `sample_joint_posterior` (forward + the query-sample gradient — only the query column depends on `x`).
+  The four q-acqfs (`Gp/Acqf.cs`): **3e-6a** the Kriging-Believer path in `LogPI`/`LogEHVI`/`LogCEHVI`
+  (`normalizedParamsOfRunningTrials`) → the MO-constrained running branch (which stays `LogCEHVI`, not a
+  q-acqf); **3e-6b** `qLogEI` + `_compute_mean_max_utility` (`Acqf.MeanMaxUtility[WithGrad]`, the
+  `amax`/`logsumexp` reduction) → the SO running branch; **3e-6c** `qLogPI` (`logsigmoid`) + `qLogCEI`
+  (composes the qLogEI + Σ qLogPI per-sample log utilities, each constraint seeded `qmc_seed+i+1`) → the
+  SO-constrained running branch; **3e-6d** `qLogEHVI` (per-QMC-draw box decomposition from that draw's
+  fantasies + `_per_sample_log_hvi`, nested-softmax gradient) → the MO running branch. **The
+  `sample_joint_posterior` gradient and the `amax`/`logsumexp` reduction gradients are hand-derived — the
+  hardest gradient in the GP stack** (autograd's `amax` selects the per-sample argmax; the gradient flows
+  only where the query column wins). Validated: each acqf eval+gradient vs live Optuna autograd
+  (fixed-hyperparameter sweeps, eval <1e-7, grad <1e-5, finite-only to skip autograd's `amax`-kink nans)
+  + a per-suggestion **replay** parity for each running branch — an ask/tell schedule that leaves trials
+  RUNNING before the trial under test, replayed through live Optuna (running trials left RUNNING with
+  their shared params, RNG in lock-step; continuous within 5e-2 normalized, int/discrete exact) — plus
+  KB-acqf and qLogEI/qLogEHVI unit tests (FD gradients). Commits `741b793`/`a75b14e`/`c33d7b3`/`51ec724`.
+  Suite after 3e-6: **533 unit + 252 interop**, both TFMs, none skipped.
 - ✅ **3.1 part 1 — viz data layer foundations (`OptunaSharp.Visualization`).** Ported the pure (non-plotly)
   half of `_utils.py` (`VisualizationUtils`: `CheckPlotArgs`/`IsLogScale`/`IsNumerical`/`FilterNonfinite`/
   `IsReverseScale`) plus the three simplest `_get_*_info` builders — `_optimization_history.py`
@@ -341,7 +360,7 @@ moment OptunaSharp.Core loads. Keep it.
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
 | 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp (3.2) + QMC scrambling deferred to their consumers |
-| 3 — Native heavy tail | 🟩 | **3.1 COMPLETE**; **3.2 nearly complete** — §7 autodiff gate **GREEN & CLOSED**: the GP fit is fully ported (part 1 hand-derived MLL gradient ~1e-13 vs autograd; part 2 managed L-BFGS-B port of scipy's `__lbfgsb.c` → `FitKernelParams` matches Optuna ~1e-14) so GP stays native, no TorchSharp; **3.2 parts 3a–3d + 3e-1…3e-5 done — every SEQUENTIAL `GPSampler` path runs end-to-end** (SO/SO-constrained/MO/MO-constrained: LogEI/LogCEI/LogEHVI/LogCEHVI, all eval+gradient & per-suggestion-replay parity vs live Optuna); box decomposition (3e-1) + torch scrambled-Sobol normal QMC (3e-3, matched to torch ~1e-15) landed. **Next** 3e-6 running-trial q-batch (`ConditionalGPRegressor` + qLogEI/qLogPI/qLogCEI/qLogEHVI), then 3.3 GP terminators. Rendering `plot_*`→5.2 |
+| 3 — Native heavy tail | 🟩 | **3.1 COMPLETE**; **3.2 COMPLETE** — §7 autodiff gate **GREEN & CLOSED**: the GP fit is fully ported (part 1 hand-derived MLL gradient ~1e-13 vs autograd; part 2 managed L-BFGS-B port of scipy's `__lbfgsb.c` → `FitKernelParams` matches Optuna ~1e-14) so GP stays native, no TorchSharp; **the ENTIRE `GPSampler` runs end-to-end** — every sequential path (3a–3d + 3e-1…3e-5: LogEI/LogCEI/LogEHVI/LogCEHVI) AND every running-trial q-batch path (3e-6: `ConditionalGPRegressor` + qLogEI/qLogPI/qLogCEI/qLogEHVI + KB `LogCEHVI`), all eval+gradient & per-suggestion-replay parity vs live Optuna. **Next** 3.3 GP terminators. Rendering `plot_*`→5.2 |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
 
@@ -1101,12 +1120,12 @@ multivariate/group/MOTPE/constrained) + MedianPruner, parity-verified against Py
 the erf path, erf-tolerance on the truncnorm density), persisted to a journal file Python can open.
 Zero external deps.
 
-## Phase 3 — Native heavy tail — 🟩 IN PROGRESS (3.1 done; 3.2 single-objective GPSampler done, 3e/3.3 remain)
+## Phase 3 — Native heavy tail — 🟩 IN PROGRESS (3.1 done; 3.2 GPSampler COMPLETE; 3.3 GP terminators remain)
 
 | # | Feature | Optuna source | py SLOC | est. C# | Difficulty | Notes |
 |---|---|---|--:|--:|---|---|
 | 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | ✅ | **COMPLETE** — all 13 `_get_*_info` builders in `OptunaSharp.Visualization` (optimization-history/EDF/intermediate-values/hypervolume-history/param-importances/slice/pareto-front/contour/rank/parallel_coordinate/timeline + `_utils`), bit-exact/erf-tolerance vs live Optuna. rank RGB→5.2, MO PC draw_order `[Misaligned]`, `_terminator_improvement`→3.3. Rendering `plot_*`→5.2 |
-| 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, L-BFGS-B (managed port of scipy's `__lbfgsb.c` — NOT "already numpy"; see §0), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | 🔴 | **🟩 gate GREEN & CLOSED (parts 1–2 done):** prior + kernel + MLL + **hand-derived gradient** (~1e-13 vs autograd) + **managed L-BFGS-B** (`Internal/LBfgsB.cs`, port of scipy `__lbfgsb.c`) + `FitKernelParams` (~1e-14 vs Optuna). Native confirmed; tolerance-exact via 2.15 cholesky/solve_triangular + hand-written BLAS. **Parts 3a–3d done — single-objective `GPSampler` runs end-to-end:** `GpSearchSpace` + `Posterior`; LogEI eval+gradient (`Gp/Acqf.cs`); scrambled Sobol' (`Internal/ScrambledSobol.cs`, bit-exact vs scipy — NumSharp PCG64 matches numpy); `Gp/OptimMixed.cs` (`optimize_acqf_mixed` + gradient ascent + exhaustive/Brent discrete search; numpy `choice(replace=False,p=)` reproduced) + `Internal/BrentMinimizer.cs` + `Samplers/GPSampler.cs`. Tolerance-parity vs live Optuna: `optimize_acqf_mixed` achieved-value <1e-6; per-suggestion GP replay <1e-2 normalized (discrete exact). **Parts 3e-1…3e-5 done — every sequential `GPSampler` path runs end-to-end:** box decomposition (`Internal/Hypervolume.cs`, bit-exact); `LogPI`+`LogCEI` (SO constrained); `qmc.sample_from_normal_sobol` (`Gp/Qmc.cs`+`Internal/TorchMt19937.cs`+cephes `TruncNorm.Ndtri` — torch's scrambled Sobol' reproduced to ~1e-15); `LogEHVI` (MO); `LogCEHVI` (MO constrained). Each: eval+hand-derived-gradient parity vs Optuna autograd + per-suggestion sampler replay. **Remaining (3e-6):** running-trial q-batch — `ConditionalGPRegressor` + `qLogEI`/`qLogPI`/`qLogCEI`/`qLogEHVI` + the `append_running_data` path → un-throw the four running branches |
+| 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, L-BFGS-B (managed port of scipy's `__lbfgsb.c` — NOT "already numpy"; see §0), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | ✅ | **✅ COMPLETE — the entire `GPSampler` is ported. Gate GREEN & CLOSED (parts 1–2):** prior + kernel + MLL + **hand-derived gradient** (~1e-13 vs autograd) + **managed L-BFGS-B** (`Internal/LBfgsB.cs`, port of scipy `__lbfgsb.c`) + `FitKernelParams` (~1e-14 vs Optuna). Native confirmed; tolerance-exact via 2.15 cholesky/solve_triangular + hand-written BLAS. **Parts 3a–3d done — single-objective `GPSampler` runs end-to-end:** `GpSearchSpace` + `Posterior`; LogEI eval+gradient (`Gp/Acqf.cs`); scrambled Sobol' (`Internal/ScrambledSobol.cs`, bit-exact vs scipy — NumSharp PCG64 matches numpy); `Gp/OptimMixed.cs` (`optimize_acqf_mixed` + gradient ascent + exhaustive/Brent discrete search; numpy `choice(replace=False,p=)` reproduced) + `Internal/BrentMinimizer.cs` + `Samplers/GPSampler.cs`. Tolerance-parity vs live Optuna: `optimize_acqf_mixed` achieved-value <1e-6; per-suggestion GP replay <1e-2 normalized (discrete exact). **Parts 3e-1…3e-5 done — every sequential `GPSampler` path runs end-to-end:** box decomposition (`Internal/Hypervolume.cs`, bit-exact); `LogPI`+`LogCEI` (SO constrained); `qmc.sample_from_normal_sobol` (`Gp/Qmc.cs`+`Internal/TorchMt19937.cs`+cephes `TruncNorm.Ndtri` — torch's scrambled Sobol' reproduced to ~1e-15); `LogEHVI` (MO); `LogCEHVI` (MO constrained). Each: eval+hand-derived-gradient parity vs Optuna autograd + per-suggestion sampler replay. **Part 3e-6 done — every running-trial path runs end-to-end:** `ConditionalGPRegressor` (`Gp/ConditionalGPRegressor.cs`: `sample_joint_posterior`/`append_running_data`/`_extend_cholesky`, forward + query-sample gradient) + `qLogEI`/`qLogPI`/`qLogCEI`/`qLogEHVI` (`Gp/Acqf.cs`, the `amax`/`logsumexp` reduction gradients hand-derived) + the Kriging-Believer `LogCEHVI` for MO-constrained-with-running. Per-suggestion replay uses an ask/tell schedule that leaves trials RUNNING before the trial under test (RNG in lock-step). Suite: **533 unit + 252 interop**, both TFMs |
 | 3.3 | GP terminators: `RegretBoundEvaluator` (default), `EMMREvaluator` | `terminator/improvement/*` | ~230 | 700 | 🔴 | rides 3.2 (posterior/acqf now available) |
 
 **Phase 3 ≈ 3.5k py → ~11.7k C#. Estimate: 10–13 weeks (GP is 8–10).**
