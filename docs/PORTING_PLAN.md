@@ -56,7 +56,7 @@ OptunaSharp can share a live journal file with no external package on either sid
 > wired as `Visualization/TerminatorImprovement.cs` (the plotly `_get_improvement_plot` stays Tier X 5.2).
 > **Tolerance parity vs live Optuna** (the documented GP boundary — the fit's ~1e-3 hyperparameter drift
 > propagates through the posterior; RegretBound/EMMR criteria agree to a few 1e-3 relative, asserted at
-> 3e-2). Commit `df04479`. Suite: **544 unit + 259 interop**, both TFMs, none skipped.
+> 3e-2). Commit `28e517f`. Suite: **544 unit + 259 interop**, both TFMs, none skipped.
 
 > **The whole `GPSampler` is ported and validated vs live Optuna/torch/scipy:** the fit (parts 1–2),
 > transforms + posterior (3a), LogEI (3b), scrambled Sobol' preliminary sampling (3c), the mixed acqf
