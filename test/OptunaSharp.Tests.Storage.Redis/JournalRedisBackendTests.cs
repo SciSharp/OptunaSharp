@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using NumSharp;                          // ValueError
 using OptunaSharp;
 using OptunaSharp.Collections;
+using OptunaSharp.Internal;              // OptunaWarnings / WarningCategory (Core friend grant)
 using OptunaSharp.Samplers;
 using OptunaSharp.Storages.Journal;
 using StackExchange.Redis;
@@ -362,5 +364,76 @@ public class JournalRedisBackendTests
         var reloaded = Optuna.CreateStudy(storage: readStorage, studyName: studyName, loadIfExists: true);
         reloaded.GetTrials().Count.Should().Be(writtenCount);
         reloaded.BestValue.Should().Be(bestValue);
+    }
+
+    // ----------------------------------------------------------------- read poll / backoff
+
+    [TestMethod]
+    public void ReadLogs_PollsUntilAPendingLogAppears()
+    {
+        // read_logs polls (with exponential backoff) for a log whose counter slot exists but whose
+        // value has not been written yet — a concurrent writer caught between INCR and SET. Seed that
+        // state and make the value appear mid-read; the reader must block then complete.
+        RedisSession.EnsureReachable();
+        string prefix = RedisSession.UniquePrefix();
+        var db = RedisSession.RawConnection().GetDatabase();
+        db.StringSet($"{prefix}:log_number", 1);            // max = 1 (slots 0 and 1)
+        db.StringSet($"{prefix}:log:0", "{\"op\": 0}");
+        // log:1 intentionally absent -> the reader will poll for it.
+
+        var backend = RedisSession.NewBackend(prefix);
+        var readTask = Task.Run(() => backend.ReadLogs(0).ToList());
+
+        // Let the reader reach the poll loop on the missing log:1 (past at least one backoff), then supply it.
+        Thread.Sleep(300);
+        db.StringSet($"{prefix}:log:1", "{\"op\": 1}");
+
+        readTask.Wait(TimeSpan.FromSeconds(15)).Should().BeTrue("ReadLogs must return once the pending log appears");
+        var logs = readTask.Result;
+        logs.Should().HaveCount(2);
+        logs[1]["op"].Should().Be(1L);
+    }
+
+    // ----------------------------------------------------------------- experimental warning
+
+    [TestMethod]
+    public void Constructor_RaisesExperimentalWarning()
+    {
+        // @experimental_class("3.1.0"): constructing the backend must raise Optuna's ExperimentalWarning
+        // with the verbatim message (asserted via Core's internal warning seam — hence the friend grant).
+        RedisSession.EnsureReachable();
+        (string Message, WarningCategory Category)? captured = null;
+        void Handler(string m, WarningCategory c) => captured = (m, c);
+
+        OptunaWarnings.WarningRaised += Handler;
+        try
+        {
+            _ = RedisSession.NewBackend(RedisSession.UniquePrefix());
+        }
+        finally
+        {
+            OptunaWarnings.WarningRaised -= Handler;
+        }
+
+        captured.Should().NotBeNull();
+        captured!.Value.Category.Should().Be(WarningCategory.ExperimentalWarning);
+        captured.Value.Message.Should().Be(
+            "JournalRedisBackend is experimental (supported from v3.1.0). The interface can change in the future.");
+    }
+
+    // ----------------------------------------------------------------- shared-multiplexer ctor
+
+    [TestMethod]
+    public void SharedMultiplexerConstructor_RoundTrips()
+    {
+        // The internal ctor binds to an already-built multiplexer (an app sharing one connection across
+        // many backends) instead of connecting from the URL.
+        RedisSession.EnsureReachable();
+        using ConnectionMultiplexer mux = RedisSession.RawConnection();
+        string prefix = RedisSession.UniquePrefix();
+
+        var backend = new JournalRedisBackend(RedisSession.Url, mux, useCluster: false, prefix: prefix);
+        backend.AppendLogs(new[] { Log(0, "shared") });
+        backend.ReadLogs(0).Single()["worker"].Should().Be("shared");
     }
 }

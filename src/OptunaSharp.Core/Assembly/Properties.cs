@@ -27,6 +27,10 @@ using System.Runtime.CompilerServices;
 // the experimental-class warning via OptunaWarnings/WarningCategory — both internal to Core.
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// Its test project asserts that experimental warning fired via the internal OptunaWarnings.WarningRaised
+// event (same reason the interop suite is a friend).
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 /// <summary>
 ///     The public half of the strong-name key OptunaSharp is signed with, as the hex literal
 ///     <see cref="InternalsVisibleToAttribute" /> expects.
