@@ -25,12 +25,13 @@ namespace OptunaSharp.Samplers;
 ///     (ULP drift from scipy's OpenBLAS BLAS + the erf/ucrt class in LogEI), the documented GP boundary
 ///     — <b>not</b> bit-for-bit like the MT19937 samplers.</para>
 ///
-///     <para><b>Scope (PORTING_PLAN Phase 3.2 part 3e, in progress):</b> the sequential (no-running)
+///     <para><b>Scope (PORTING_PLAN Phase 3.2 part 3e, in progress):</b> all sequential (no-running)
 ///     paths are ported — single-objective unconstrained (<see cref="LogEI" />, part 3d), single-
-///     objective constrained (<see cref="LogCEI" /> = LogEI + Σ <see cref="LogPI" />, part 3e-2), and
-///     multi-objective unconstrained (<see cref="LogEHVI" />, part 3e-4). Multi-objective constrained
-///     (<c>LogCEHVI</c>) and the running-trial q-batch acqfs (<c>qLogEI</c>/<c>qLogEHVI</c>/<c>qLogCEI</c>)
-///     are deferred to later parts and raise <see cref="NotImplementedException" /> for now.</para>
+///     objective constrained (<see cref="LogCEI" /> = LogEI + Σ <see cref="LogPI" />, part 3e-2),
+///     multi-objective unconstrained (<see cref="LogEHVI" />, part 3e-4), and multi-objective
+///     constrained (<see cref="LogCEHVI" /> = LogEHVI + Σ LogPI, part 3e-5). Only the running-trial
+///     q-batch acqfs (<c>qLogEI</c>/<c>qLogEHVI</c>/<c>qLogCEI</c>, which ride the
+///     <c>ConditionalGPRegressor</c>) are deferred and raise <see cref="NotImplementedException" />.</para>
 /// </summary>
 /// <example>
 ///     <code>
@@ -260,7 +261,23 @@ public class GPSampler : BaseSampler
             }
             else
             {
-                throw NotYetPorted("LogCEHVI (multi-objective constrained)", "3e MO/constrained");
+                (double[,] constraintVals, bool[] isFeasible) =
+                    GetConstraintValsAndFeasibility(completedTrials);
+                (List<GPRegressor> constrGprList, double[] constrThresholdList) =
+                    GetConstraintsAcqfArgs(constraintVals, internalSearchSpace, normalizedParams);
+                bool isAllInfeasible = !isFeasible.Any(f => f);
+                if (hasRunning)
+                    throw NotYetPorted(
+                        "multi-objective constrained with running trials (LogCEHVI q-batch)", "3e q-batch");
+                int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
+                double[,]? yFeasible = isAllInfeasible ? null : FilterRows(standardizedScoreVals, isFeasible);
+                acqf = new LogCEHVI(
+                    gprsList.ToArray(), internalSearchSpace, yFeasible, _nQmcSamplesEhvi, qmcSeed,
+                    constrGprList, constrThresholdList);
+                bestParams = isAllInfeasible
+                    ? null
+                    : GetBestParamsForMultiObjective(
+                        FilterRows(normalizedParams, isFeasible), FilterRows(standardizedScoreVals, isFeasible));
             }
         }
 
@@ -423,6 +440,25 @@ public class GPSampler : BaseSampler
                 best[r, d] = normalizedParams[idx, d];
         }
         return best;
+    }
+
+    /// <summary><c>a[mask]</c> for a 2-D array — the rows where <paramref name="mask" /> is <c>true</c>, in order.</summary>
+    private static double[,] FilterRows(double[,] a, bool[] mask)
+    {
+        int cols = a.GetLength(1);
+        int kept = 0;
+        for (int i = 0; i < mask.Length; i++)
+            if (mask[i]) kept++;
+        var result = new double[kept, cols];
+        int r = 0;
+        for (int i = 0; i < mask.Length; i++)
+        {
+            if (!mask[i]) continue;
+            for (int c = 0; c < cols; c++)
+                result[r, c] = a[i, c];
+            r++;
+        }
+        return result;
     }
 
     private static NotImplementedException NotYetPorted(string what, string part)

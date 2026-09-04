@@ -220,4 +220,47 @@ public class AcqfTests
             val.Should().BeApproximately(acqf.EvalAcqfNoGrad(new[] { xv }), 1e-12);
         }
     }
+
+    // ---- LogCEHVI (Phase 3.2 part 3e-5 — multi-objective constrained) --------------------------
+
+    private static (GPRegressor[] Gprs, GpSearchSpace Space, double[,] YTrain, GPRegressor ConstraintGpr) FitCehviScenario()
+    {
+        var x = new double[,] { { 0.1 }, { 0.35 }, { 0.5 }, { 0.72 }, { 0.9 }, { 0.25 }, { 0.6 }, { 0.8 } };
+        var y0 = new[] { 0.73, 1.26, 0.29, -1.14, -0.84, 1.41, -0.50, -1.21 };
+        var y1 = new[] { -0.90, 0.40, 1.10, 0.20, -1.30, -0.10, 1.35, 0.55 };
+        var yc = new[] { 0.30, -0.70, 0.90, -0.20, 1.10, -0.40, 0.15, -0.95 };
+        var gpr0 = GPRegressor.FitKernelParams(x, y0, new[] { false }, 1e-6, false, null, 1e-2);
+        var gpr1 = GPRegressor.FitKernelParams(x, y1, new[] { false }, 1e-6, false, null, 1e-2);
+        var cgpr = GPRegressor.FitKernelParams(x, yc, new[] { false }, 1e-6, false, null, 1e-2);
+        var space = new GpSearchSpace(new System.Collections.Generic.Dictionary<string, BaseDistribution>
+            { ["x"] = new FloatDistribution(0.0, 1.0) });
+        var yTrain = new double[8, 2];
+        for (int i = 0; i < 8; i++) { yTrain[i, 0] = y0[i]; yTrain[i, 1] = y1[i]; }
+        return (new[] { gpr0, gpr1 }, space, yTrain, cgpr);
+    }
+
+    [TestMethod]
+    public void LogCEHVI_EqualsLogEhviPlusSumLogPi()
+    {
+        (GPRegressor[] gprs, GpSearchSpace space, double[,] yTrain, GPRegressor cgpr) = FitCehviScenario();
+        var ehvi = new LogEHVI(gprs, space, yTrain, nQmcSamples: 128, qmcSeed: 42);
+        var pi = new LogPI(cgpr, space, threshold: 0.1);
+        var cehvi = new LogCEHVI(gprs, space, yTrain, 128, 42, new[] { cgpr }, new[] { 0.1 });
+        foreach (double xv in new[] { 0.2, 0.55, 0.9 })
+        {
+            cehvi.EvalAcqfNoGrad(new[] { xv }).Should()
+                .BeApproximately(ehvi.EvalAcqfNoGrad(new[] { xv }) + pi.EvalAcqfNoGrad(new[] { xv }), 1e-12);
+        }
+    }
+
+    [TestMethod]
+    public void LogCEHVI_NoFeasible_IsConstraintsOnly()
+    {
+        // Y_feasible = null (all infeasible) ⇒ the LogEHVI term is dropped, leaving only the constraints.
+        (GPRegressor[] gprs, GpSearchSpace space, _, GPRegressor cgpr) = FitCehviScenario();
+        var pi = new LogPI(cgpr, space, threshold: 0.1);
+        var cehvi = new LogCEHVI(gprs, space, yFeasible: null, 128, 42, new[] { cgpr }, new[] { 0.1 });
+        foreach (double xv in new[] { 0.3, 0.7 })
+            cehvi.EvalAcqfNoGrad(new[] { xv }).Should().Be(pi.EvalAcqfNoGrad(new[] { xv }));
+    }
 }

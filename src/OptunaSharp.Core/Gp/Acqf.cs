@@ -368,17 +368,8 @@ internal sealed class LogEHVI : IAcquisitionFunc
                 _intervals[b, i] = Math.Max(Eps, upper[b, i] - lower[b, i]);
 
         // length_scales = mean over objectives of each GP's per-parameter length scales (preconditioning).
-        int dim = searchSpace.Dim;
-        var ls = new double[dim];
-        for (int d = 0; d < dim; d++)
-        {
-            double s = 0.0;
-            foreach (GPRegressor gpr in _gprList)
-                s += gpr.LengthScales[d];
-            ls[d] = s / _gprList.Length;
-        }
         SearchSpace = searchSpace;
-        LengthScales = ls;
+        LengthScales = MeanLengthScales(_gprList, searchSpace.Dim);
     }
 
     public GpSearchSpace SearchSpace { get; }
@@ -602,5 +593,114 @@ internal sealed class LogEHVI : IAcquisitionFunc
                 upper[b, j] = -lbs[b][j];
             }
         return (lower, upper);
+    }
+
+    /// <summary>Mean over the objective GPs of each per-parameter length scale (the acqf-optimizer preconditioning).</summary>
+    internal static double[] MeanLengthScales(GPRegressor[] gprList, int dim)
+    {
+        var ls = new double[dim];
+        for (int d = 0; d < dim; d++)
+        {
+            double s = 0.0;
+            foreach (GPRegressor gpr in gprList)
+                s += gpr.LengthScales[d];
+            ls[d] = s / gprList.Length;
+        }
+        return ls;
+    }
+}
+
+/// <summary>
+///     The log constrained-expected-hypervolume-improvement acquisition function — port of
+///     <c>acqf.LogCEHVI</c>, the acqf <see cref="GPSampler" /> maximizes for <b>multi-objective
+///     constrained</b> optimization (PORTING_PLAN Phase 3.2 part 3e-5). Assuming independence between
+///     the objectives and each constraint, it is the log expected hypervolume improvement over the
+///     <b>feasible</b> trials plus the summed log feasible-probabilities:
+///     <c>LogCEHVI(x) = LogEHVI_feasible(x) + Σ_c LogPI_c(x)</c>. When there is no feasible trial the
+///     <see cref="LogEHVI" /> term is dropped and only the constraint terms remain (the optimizer then
+///     drives toward feasibility).
+///
+///     <para><b>Scope:</b> the no-running-trials path (the running-trial Kriging-Believer variant is
+///     deferred to the q-batch part).</para>
+/// </summary>
+internal sealed class LogCEHVI : IAcquisitionFunc
+{
+    private readonly LogEHVI? _acqf;
+    private readonly LogPI[] _constraintsAcqfList;
+
+    internal LogCEHVI(
+        GPRegressor[] gprList, GpSearchSpace searchSpace, double[,]? yFeasible,
+        int nQmcSamples, int qmcSeed,
+        IReadOnlyList<GPRegressor> constraintsGprList, IReadOnlyList<double> constraintsThresholdList,
+        double stabilizingNoise = 1e-12)
+    {
+        if (constraintsGprList.Count != constraintsThresholdList.Count || constraintsGprList.Count == 0)
+            throw new ArgumentException("constraints_gpr_list and constraints_threshold_list must be non-empty and equal-length.");
+
+        _acqf = yFeasible != null
+            ? new LogEHVI(gprList, searchSpace, yFeasible, nQmcSamples, qmcSeed, stabilizingNoise)
+            : null;
+        _constraintsAcqfList = new LogPI[constraintsGprList.Count];
+        for (int i = 0; i < constraintsGprList.Count; i++)
+            _constraintsAcqfList[i] = new LogPI(constraintsGprList[i], searchSpace, constraintsThresholdList[i], stabilizingNoise);
+
+        SearchSpace = searchSpace;
+        LengthScales = LogEHVI.MeanLengthScales(gprList, searchSpace.Dim);
+    }
+
+    public GpSearchSpace SearchSpace { get; }
+    public double[] LengthScales { get; }
+
+    /// <summary><c>eval_acqf_no_grad</c> — <c>Σ LogPI_c(x)</c> (+ <c>LogEHVI(x)</c> when there is a feasible term) over a batch.</summary>
+    public double[] EvalAcqfNoGrad(double[,] x)
+    {
+        int b = x.GetLength(0);
+        var result = new double[b];
+        foreach (LogPI c in _constraintsAcqfList)
+        {
+            double[] cv = c.EvalAcqfNoGrad(x);
+            for (int i = 0; i < b; i++)
+                result[i] += cv[i];
+        }
+        if (_acqf != null)
+        {
+            double[] ev = _acqf.EvalAcqfNoGrad(x);
+            for (int i = 0; i < b; i++)
+                result[i] += ev[i];
+        }
+        return result;
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    public double EvalAcqfNoGrad(double[] x)
+    {
+        double v = 0.0;
+        foreach (LogPI c in _constraintsAcqfList)
+            v += c.EvalAcqfNoGrad(x);
+        if (_acqf != null)
+            v += _acqf.EvalAcqfNoGrad(x);
+        return v;
+    }
+
+    /// <summary><c>eval_acqf_with_grad</c> — the summed value and gradient of the constraint terms (and the feasible EHVI term when present).</summary>
+    public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
+    {
+        double value = 0.0;
+        var grad = new double[x.Length];
+        foreach (LogPI c in _constraintsAcqfList)
+        {
+            (double cv, double[] cg) = c.EvalAcqfWithGrad(x);
+            value += cv;
+            for (int d = 0; d < grad.Length; d++)
+                grad[d] += cg[d];
+        }
+        if (_acqf != null)
+        {
+            (double ev, double[] eg) = _acqf.EvalAcqfWithGrad(x);
+            value += ev;
+            for (int d = 0; d < grad.Length; d++)
+                grad[d] += eg[d];
+        }
+        return (value, grad);
     }
 }

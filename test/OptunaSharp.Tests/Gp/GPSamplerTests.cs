@@ -93,20 +93,39 @@ public class GPSamplerTests
             .Should().Equal(Params(RunMultiObjective(seed: 5, nTrials: 16)));
     }
 
-    [TestMethod]
-    public void MultiObjectiveConstrained_Throws_NotImplemented()
+    // A 2-objective constrained problem (LogCEHVI): feasible when a <= 1.
+    private static Study RunMultiObjectiveConstrained(int seed, int nTrials)
     {
-        // MO + constraints (LogCEHVI) is still deferred — lock the placeholder.
         var study = Optuna.CreateStudy(
-            sampler: new GPSampler(seed: 0),
+            sampler: new GPSampler(seed: seed),
             directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
-        var act = () => study.Optimize(t =>
+        study.Optimize(t =>
         {
             double a = t.SuggestFloat("a", -5, 5);
             double b = t.SuggestFloat("b", -5, 5);
             t.SetConstraint("0", a - 1.0);
-            return (IReadOnlyList<double>)new[] { a * a + b * b, (a - 1) * (a - 1) + b * b };
-        }, nTrials: 12);
-        act.Should().Throw<NotImplementedException>().WithMessage("*LogCEHVI*");
+            return (IReadOnlyList<double>)new[] { a * a + b * b, (a - 2) * (a - 2) + b * b };
+        }, nTrials: nTrials);
+        return study;
+    }
+
+    [TestMethod]
+    public void MultiObjectiveConstrained_RunsEndToEnd()
+    {
+        Study study = RunMultiObjectiveConstrained(seed: 0, nTrials: 24);
+        study.Trials.Count.Should().Be(24);
+        // Both feasibility outcomes must appear (so LogCEHVI is genuinely exercised).
+        study.Trials.Should().Contain(t => t.Constraints.Values.All(c => c <= 0.0));
+        study.Trials.Should().Contain(t => t.Constraints.Values.Any(c => c > 0.0));
+    }
+
+    [TestMethod]
+    public void MultiObjectiveConstrained_SameSeed_Reproducible()
+    {
+        List<(double, double)> Params(Study s) => s.Trials
+            .Select(t => ((double)t.Params["a"]!, (double)t.Params["b"]!)).ToList();
+
+        Params(RunMultiObjectiveConstrained(seed: 3, nTrials: 16))
+            .Should().Equal(Params(RunMultiObjectiveConstrained(seed: 3, nTrials: 16)));
     }
 }
