@@ -45,7 +45,7 @@ OptunaSharp can share a live journal file with no external package on either sid
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 4 — external storage (Tier X)** — this begins the Tier X external-dependency work (RDB/Redis/gRPC storage, etc.); the `ICachedStorageBackend` seam for 4.1 was declared back in 1.2. **TIER N IS COMPLETE — the entire native Optuna algorithm surface is ported (every sampler incl. TPE/NSGA/CMA-ES/GP, every pruner, MO machinery, PED-ANOVA, terminators incl. the GP evaluators, the visualization data layer, in-memory + journal-file persistence), pure managed on NumSharp(+OpenBLAS).** Also still open (small, independent): the 2.12 `QMCSampler` `scramble=true` wire-up (`Internal/ScrambledSobol` is ready; throws today).
+### ▶ CONTINUE HERE: **Phase 4 — external storage (Tier X)** — this begins the Tier X external-dependency work (RDB/Redis/gRPC storage, etc.); the `ICachedStorageBackend` seam for 4.1 was declared back in 1.2. **TIER N IS COMPLETE — the entire native Optuna algorithm surface is ported (every sampler incl. TPE/NSGA/CMA-ES/GP, every pruner, MO machinery, PED-ANOVA, terminators incl. the GP evaluators, the visualization data layer, in-memory + journal-file persistence), pure managed on NumSharp(+OpenBLAS).** The 2.12 `QMCSampler` `scramble=true` wire-up is **DONE for Sobol'** (the default engine; full-state bit-identical vs live Optuna — see the 2.12 done-item). The one remaining native sliver is **scrambled Halton** (`qmc_type="halton", scramble=true`, throws with a clear message): it needs numpy's PCG64 `shuffle`/`random_interval` (scipy's `_van_der_corput_permutations`), which NumSharp does not yet expose publicly → a small NumSharp upstream primitive is the prerequisite.
 
 > **Phase 3.3 is COMPLETE (2026-09-04).** The two GP improvement evaluators are ported and un-throw:
 > `RegretBoundEvaluator` (the default, `terminator/improvement/evaluator.py` — `_get_beta`,
@@ -84,8 +84,9 @@ OptunaSharp can share a live journal file with no external package on either sid
 > that leaves trials RUNNING before the trial under test, RNG in lock-step). Tolerance, not bit-exact —
 > the documented GP boundary. Suite after 3e-6: **533 unit + 252 interop**, both TFMs, none skipped.
 >
-> **Still open (small, independent — now the last native loose end):** the 2.12 `QMCSampler`
-> `scramble=true` follow-up (throws today; `Internal/ScrambledSobol` is ready — a quick wire-up).
+> **Still open (small, independent — the last native sliver):** the 2.12 `QMCSampler`
+> `scramble=true` is **wired for Sobol'** (the default; bit-identical vs live Optuna). Only scrambled
+> **Halton** remains (throws), pending a NumSharp PCG64 `shuffle` primitive.
 
 Phases 0, 1, **2.1–2.16 and 3.1–3.3 are complete** — **Phase 2 (all native features) is DONE** and
 **Phase 3 (native heavy tail) is DONE, so TIER N is COMPLETE**. The whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP
@@ -372,9 +373,14 @@ BLAS/LAPACK drift from scipy's by ULPs — the documented GP boundary). The plot
   tolerance-trajectory parity seeds.
 - **2.10 remainder — `box_decomposition.py`** ✅ **DONE** (Phase 3.2 part 3e-1): `get_non_dominated_box_bounds`
   ported into `Internal/Hypervolume.cs`, bit-exact vs Optuna, consumed by the GP `LogEHVI`/`LogCEHVI` acqfs.
-- **2.12 remainder — QMC scrambling** is now **UNBLOCKED** (Phase 3.2 part 3c): `Internal/ScrambledSobol.cs`
-  ports scipy's scrambled Sobol' bit-exact (NumSharp's `default_rng`/PCG64 matches numpy). The `QMCSampler`
-  `scramble=true` path can now be wired to it — a quick follow-up (still throws today).
+- **2.12 remainder — QMC scrambling** ✅ **DONE for Sobol'** (see the 2.12 done-item): `QMCSampler`
+  `scramble=true` with the default `qmc_type="sobol"` is wired through `Internal/ScrambledSobol.cs`
+  (bit-exact vs scipy; full-state bit-identical vs live Optuna). The `seed` is handled exactly as Optuna
+  (`np.random.PCG64().random_raw()` when unseeded), and the `qmc:<sha256>` counter hash folds in
+  `scramble`/`seed` byte-for-byte. **Only scrambled Halton stays open** (`qmc_type="halton",
+  scramble=true` throws): it needs numpy's PCG64 `shuffle`/`random_interval` (scipy's
+  `_van_der_corput_permutations`), which NumSharp exposes no public primitive for — a NumSharp upstream
+  addition is the prerequisite.
 - After 2.16: Phase 3 (viz data layer, GP). GP's `torch.linalg.cholesky`/`solve_triangular` map to
   `LinAlg.Cholesky` (byte-exact) + `LinAlg.SolveTriangular` (the one still-managed primitive — NumSharp
   exposes no LAPACK `dtrtrs`; route it through NumSharp once it gains the binding).
@@ -396,7 +402,7 @@ moment OptunaSharp.Core loads. Keep it.
 |---|---|---|
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
-| 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp (3.2) + QMC scrambling deferred to their consumers |
+| 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC — Sobol' both scrambled & unscrambled + Halton unscrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp landed in 3.2; only scrambled **Halton** remains (needs a NumSharp PCG64 `shuffle`) |
 | 3 — Native heavy tail | ✅ | **COMPLETE (3.1 + 3.2 + 3.3).** 3.1 viz data layer; 3.2 §7 autodiff gate **GREEN & CLOSED** — the GP fit fully ported (hand-derived MLL gradient ~1e-13 vs autograd; managed L-BFGS-B port of scipy's `__lbfgsb.c`) and **the ENTIRE `GPSampler`** (every sequential 3a–3e-5 + running-trial q-batch 3e-6 path), no TorchSharp; **3.3 GP terminators** — `RegretBoundEvaluator` (default) + `EMMREvaluator` un-thrown (`UCB`/`LCB` acqfs + `OptimSample` + the deferred `_get_improvement_info` viz builder), tolerance parity vs live Optuna. **Tier N is COMPLETE.** Rendering `plot_*`→5.2 |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
@@ -578,9 +584,27 @@ moment OptunaSharp.Core loads. Keep it.
   `qmc:`+sha256(`json.dumps(qmc_vars)`) study-attr counter — **byte-identical to Python**, so full study
   state matches and cross-language journals share the counter). **Verified vs live Optuna: bit-exact
   (max abs diff 0.0)** over Sobol+Halton × float/int/categorical/log-float × seeds. 10 unit + 6
-  live-interop full-state-parity seeds. **Scrambling deferred** — scipy scrambles with its internal
-  PCG64 inside compiled Cython; `scramble=true` throws (NumSharp has PCG64, but scipy's compiled
-  scramble is not reproducible without its source).
+  live-interop full-state-parity seeds. **Scrambling deferred at the time** — scipy scrambles with its
+  internal PCG64 inside compiled Cython; `scramble=true` threw (NumSharp has PCG64, but scipy's compiled
+  scramble looked non-reproducible without its source). Superseded by the follow-up below.
+- ✅ **2.12 follow-up — scrambled Sobol' `QMCSampler(scramble=true)`** (`d0f68eb`). Un-throws
+  the scramble path for the default `qmc_type="sobol"` by routing `_sample_qmc` through
+  `Internal/ScrambledSobol.cs` (the Phase 3.2 part-3c bit-exact port of `scipy.stats.qmc.Sobol(scramble=True)`
+  — LMS + digital shift seeded by `numpy.random.default_rng(seed)`; the earlier "not reproducible without
+  scipy's Cython" concern was resolved once NumSharp's `default_rng`/PCG64 was shown byte-identical to numpy).
+  `Sobol(d, seed, scramble=True).fast_forward(sample_id).random(1)` is the point at index `sample_id` of the
+  scrambled sequence, i.e. `ScrambledSobol.Random(d, sample_id+1, seed)[sample_id]` (verified bit-exact vs
+  scipy over the `fast_forward` cases). The `seed` follows Optuna exactly (`np.random.PCG64().random_raw()`
+  when unseeded — drawn from NumSharp entropy, never `System.Random`; the explicit `seed` otherwise), and
+  `_find_sample_id`'s `qmc:`+sha256 counter now folds in `scramble=true`/`seed` **byte-identically to Python**
+  (JSON + hash verified equal). **Only scrambled Halton stays open** — `qmc_type="halton", scramble=true`
+  throws a clear `NotImplementedException`: it needs numpy's PCG64 `shuffle`/`random_interval` (scipy's
+  `_van_der_corput_permutations`), which NumSharp exposes no public primitive for (its PCG64 `NextUInt32` is
+  `internal`, no public `random_raw`) — a small NumSharp upstream addition is the prerequisite, so this is
+  the last native sliver. 5 new unit (`QmcSamplerTests`: Halton-scramble throws, Sobol-scramble constructs,
+  the pinned seed=42 scrambled trajectory vs Optuna, same-seed reproducibility, scrambled≠unscrambled) + 3
+  live-interop full-state parity (`QmcSamplerParityTests`: mixed-space seed 0/42 + a power-of-two run vs live
+  `QMCSampler(scramble=True)`). Suite: **548 unit + 262 interop**, both TFMs, none skipped.
 - ✅ **2.13** — `feat(samplers): Phase 2.13 — NSGAIISampler (NSGA-II)`. The full genetic-algorithm
   MO sampler, ported structure-for-structure into `Samplers/Nsgaii/*` + `Samplers/BaseGASampler.cs`
   + `Samplers/NSGAIISampler.cs`. `BaseGASampler` (generation attribution + parent-population cache in
