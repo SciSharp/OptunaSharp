@@ -1,0 +1,36 @@
+# Integration-test emulators for the OptunaSharp cloud artifact backends.
+#
+#   Bring up:   docker compose -f test/OptunaSharp.Tests.Artifacts/docker-compose.yml up -d
+#   Run tests:  dotnet test test/OptunaSharp.Tests.Artifacts -c Release --filter TestCategory=Integration
+#   Tear down:  docker compose -f test/OptunaSharp.Tests.Artifacts/docker-compose.yml down -v
+#
+# Every backend is exercised against a local, credential-free emulator — no cloud account needed:
+#   - MinIO            -> S3 (Boto3ArtifactStore) AND Cloudflare R2 (R2ArtifactStore; R2 is S3-compatible)
+#   - Azurite          -> Azure Blob (AzureBlobArtifactStore)   [Microsoft's official emulator]
+#   - fake-gcs-server  -> Google Cloud Storage (GCSArtifactStore)
+#
+# The integration tests self-skip (Assert.Inconclusive) when an emulator's port is not reachable, so
+# they are safe to run without Docker. Set OPTUNASHARP_ARTIFACT_EMULATORS_REQUIRED=1 to make an absent
+# emulator a hard failure instead (for CI once wired).
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API endpoint (used by the S3 + R2 tests)
+      - "9001:9001"   # web console (browsing only)
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck
+    ports:
+      - "10000:10000" # Blob service endpoint
+
+  fake-gcs-server:
+    image: fsouza/fake-gcs-server:latest
+    command: -scheme http -host 0.0.0.0 -port 4443 -public-host localhost:4443
+    ports:
+      - "4443:4443"   # GCS JSON API endpoint
