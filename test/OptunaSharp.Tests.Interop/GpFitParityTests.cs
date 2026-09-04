@@ -81,6 +81,68 @@ public class GpFitParityTests : OptunaInteropTestBase
         }
     }
 
+    private const string FitHelper =
+        "import numpy as np, torch\n" +
+        "import optuna._gp.gp as _gp\n" +
+        "import optuna._gp.prior as _gp_prior\n" +
+        "def _gp_fit(X, Y, isc):\n" +
+        "    gpr = _gp.fit_kernel_params(X=X, Y=Y, is_categorical=isc,\n" +
+        "        log_prior=_gp_prior.default_log_prior, minimum_noise=1e-6,\n" +
+        "        deterministic_objective=False, gpr_cache=None, gtol=1e-2)\n" +
+        "    loss = float(-gpr.marginal_log_likelihood() - _gp_prior.default_log_prior(gpr))\n" +
+        "    return (gpr.inverse_squared_lengthscales.detach().numpy().tolist(),\n" +
+        "            float(gpr.kernel_scale), float(gpr.noise_var), loss)\n";
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void FitKernelParams_MatchesOptuna_Sweep()
+    {
+        PythonSession.EnsureOrInconclusive();
+        PyExec(FitHelper);
+        var rng = new Random(31337);
+        for (int trial = 0; trial < 20; trial++)
+        {
+            int nParams = 1 + rng.Next(3);
+            int nPoints = nParams + 5 + rng.Next(6);
+            var isCat = new bool[nParams];
+            if (rng.NextDouble() < 0.4)
+                isCat[rng.Next(nParams)] = true;
+
+            var x = new double[nPoints, nParams];
+            for (int i = 0; i < nPoints; i++)
+                for (int dd = 0; dd < nParams; dd++)
+                    x[i, dd] = isCat[dd] ? rng.Next(3) : rng.NextDouble();
+            var y = new double[nPoints];
+            for (int i = 0; i < nPoints; i++)
+                y[i] = rng.NextDouble() * 3 - 1.5;
+
+            GPRegressor gpr = GPRegressor.FitKernelParams(x, y, isCat, 1e-6, false, null, 1e-2);
+            var fitted = new double[nParams + 2];
+            for (int dd = 0; dd < nParams; dd++) fitted[dd] = gpr.InverseSquaredLengthscales[dd];
+            fitted[nParams] = gpr.KernelScale;
+            fitted[nParams + 1] = gpr.NoiseVar;
+            double lossCs = -gpr.MarginalLogLikelihood() - Prior.DefaultLogPrior(gpr);
+
+            PyExec(
+                $"X = np.array({Lit(x)})\n" +
+                $"Y = np.array({Lit(y)})\n" +
+                $"isc = np.array({Lit(isCat)})\n" +
+                $"fcs = np.array({Lit(fitted)})\n" +
+                $"loss_cs = {lossCs.ToString("R", CultureInfo.InvariantCulture)}\n" +
+                "isl, ks, nv, loss_py = _gp_fit(X, Y, isc)\n" +
+                "fpy = np.array(list(isl) + [ks, nv])\n" +
+                "d_rel = float(np.max(np.abs(fpy - fcs) / (1.0 + np.abs(fpy))))\n" +
+                "d_loss = float(abs(loss_cs - loss_py))\n");
+
+            // "Same optimum" is judged by the achieved objective, which is well-defined even where
+            // the argmin sits in a flat region: with Optuna's loose gtol=1e-2 the projected gradient
+            // is tiny at the stop, so ULP-level path differences let the two fits settle ~1e-3 apart
+            // in the hyperparameters while the minimized loss agrees far more tightly.
+            PyFloat("d_loss").Should().BeLessThan(1e-4, $"fit loss trial={trial} nP={nPoints} nD={nParams}");
+            PyFloat("d_rel").Should().BeLessThan(2e-2, $"fit params trial={trial} nP={nPoints} nD={nParams}");
+        }
+    }
+
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void LossAndGrad_Deterministic_MatchesAutograd_Sweep()

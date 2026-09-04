@@ -274,6 +274,105 @@ internal sealed class GPRegressor
         return (loss, grad);
     }
 
+    private double[,]? _covYYChol;
+    private double[] _covYYInvY = Array.Empty<double>();
+
+    /// <summary>
+    ///     <c>_cache_matrix()</c> — factor <c>C = K + noise_var·I = L·Lᵀ</c> once and precompute
+    ///     <c>C⁻¹y</c>, the quantities the posterior (acquisition functions, Phase 3.2 part 3) needs.
+    /// </summary>
+    internal void CacheMatrix()
+    {
+        double[,] c = Kernel();
+        for (int i = 0; i < _n; i++)
+            c[i, i] += NoiseVar;
+        _covYYChol = LinAlg.Cholesky(c);
+        // C⁻¹y = L⁻ᵀ(L⁻¹y).
+        double[] invLy = LinAlg.SolveTriangular(_covYYChol, _yTrain, upper: false);
+        double[,] lt = Transpose(_covYYChol);
+        _covYYInvY = LinAlg.SolveTriangular(lt, invLy, upper: true);
+    }
+
+    /// <summary>
+    ///     <c>_fit_kernel_params</c> — maximize the marginal log likelihood over the (log-transformed)
+    ///     kernel hyperparameters with the ported <see cref="LBfgsB" /> (scipy's <c>l-bfgs-b</c>), then
+    ///     set the fitted hyperparameters and cache the covariance. <paramref name="gtol" /> maps to
+    ///     L-BFGS-B's <c>pgtol</c> exactly as <c>scipy.optimize.minimize(method="l-bfgs-b")</c> does
+    ///     (the other options keep their defaults: <c>factr = 1e7</c>, <c>m = 10</c>). Throws when the
+    ///     optimizer does not converge (Optuna's <c>RuntimeError("Optimization failed: ...")</c>).
+    /// </summary>
+    private GPRegressor FitInner(double minimumNoise, bool deterministicObjective, double gtol)
+    {
+        int nParams = _nParams;
+        var initial = new double[nParams + 2];
+        for (int d = 0; d < nParams; d++)
+            initial[d] = Math.Log(InverseSquaredLengthscales[d]);
+        initial[nParams] = Math.Log(KernelScale);
+        // 0.99 * minimum_noise is subtracted to keep the initial noise strictly above the floor.
+        initial[nParams + 1] = Math.Log(NoiseVar - 0.99 * minimumNoise);
+
+        LBfgsB.Result res = LBfgsB.Minimize(
+            rawParams => LossAndGrad(rawParams, minimumNoise, deterministicObjective),
+            initial, bounds: null, m: 10, factr: 1e7, pgtol: gtol, maxfun: 15000, maxiter: 15000, maxls: 20);
+        if (res.WarnFlag != 0)
+            throw new InvalidOperationException("Optimization failed");
+
+        double[] xOpt = res.X;
+        for (int d = 0; d < nParams; d++)
+            InverseSquaredLengthscales[d] = Math.Exp(xOpt[d]);
+        KernelScale = Math.Exp(xOpt[nParams]);
+        NoiseVar = deterministicObjective ? minimumNoise : minimumNoise + Math.Exp(xOpt[nParams + 1]);
+        CacheMatrix();
+        return this;
+    }
+
+    /// <summary>
+    ///     <c>fit_kernel_params</c> — the robust entry point: fit starting from
+    ///     <paramref name="gprCache" /> (the previous trial's kernel parameters) and, if that fails,
+    ///     retry from the all-ones default; if both fail, fall back to the default parameters
+    ///     (matching Optuna, which then logs a warning). <paramref name="isCategorical" /> flags the
+    ///     Hamming-distance dimensions; <paramref name="x" /> is the normalized training inputs and
+    ///     <paramref name="y" /> the standardized objective.
+    /// </summary>
+    internal static GPRegressor FitKernelParams(
+        double[,] x, double[] y, bool[] isCategorical,
+        double minimumNoise, bool deterministicObjective,
+        GPRegressor? gprCache = null, double gtol = 1e-2)
+    {
+        int dim = x.GetLength(1);
+        GPRegressor Default() => new(isCategorical, x, y, Ones(dim), 1.0, 1.0);
+
+        GPRegressor defaultCache = Default();
+        gprCache ??= Default();
+
+        foreach (GPRegressor cache in new[] { gprCache, defaultCache })
+        {
+            try
+            {
+                return new GPRegressor(
+                    isCategorical, x, y,
+                    (double[])cache.InverseSquaredLengthscales.Clone(),
+                    cache.KernelScale, cache.NoiseVar)
+                    .FitInner(minimumNoise, deterministicObjective, gtol);
+            }
+            catch (InvalidOperationException)
+            {
+                // Retry from the default kernel parameters (improves robustness), as Optuna does.
+            }
+        }
+
+        GPRegressor fallback = Default();
+        fallback.CacheMatrix();
+        return fallback;
+    }
+
+    private static double[] Ones(int n)
+    {
+        var a = new double[n];
+        Array.Fill(a, 1.0);
+        return a;
+    }
+
     private static double[,] Transpose(double[,] a)
     {
         int rows = a.GetLength(0), cols = a.GetLength(1);
