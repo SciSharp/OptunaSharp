@@ -46,6 +46,14 @@ public class GpQBatchAcqfParityTests : OptunaInteropTestBase
         "    return out\n" +
         "def _qlogei(X, isc, Y, isl, ks, nv, thr, n_qmc, seed, Xr, xs):\n" +
         "    a = _acqf.qLogEI(_build(X, Y, isc, isl, ks, nv), _space(X.shape[1]), thr, n_qmc, seed, Xr)\n" +
+        "    return a.eval_acqf_no_grad(xs).tolist(), _grads(a, xs)\n" +
+        "def _qlogpi(X, isc, Y, isl, ks, nv, thr, n_qmc, seed, Xr, xs):\n" +
+        "    a = _acqf.qLogPI(_build(X, Y, isc, isl, ks, nv), _space(X.shape[1]), thr, n_qmc, seed, Xr)\n" +
+        "    return a.eval_acqf_no_grad(xs).tolist(), _grads(a, xs)\n" +
+        "def _qlogcei(X, isc, Yo, islo, kso, nvo, thr, Yc, islc, ksc, nvc, cthrs, n_qmc, seed, Xr, xs):\n" +
+        "    go = _build(X, Yo, isc, islo, kso, nvo)\n" +
+        "    gc = [_build(X, np.array(Yc[i]), isc, np.array(islc[i]), ksc[i], nvc[i]) for i in range(len(Yc))]\n" +
+        "    a = _acqf.qLogCEI(go, _space(X.shape[1]), thr, n_qmc, seed, gc, list(cthrs), Xr)\n" +
         "    return a.eval_acqf_no_grad(xs).tolist(), _grads(a, xs)\n";
 
     // Compare grads element-wise, excluding entries where Optuna's autograd is non-finite.
@@ -105,6 +113,126 @@ public class GpQBatchAcqfParityTests : OptunaInteropTestBase
             PyFloat("d_eval").Should().BeLessThan(1e-7, $"qLogEI eval trial={trial} dim={dim} nRun={nRunning}");
             PyFloat("d_grad").Should().BeLessThan(1e-5, $"qLogEI grad trial={trial} dim={dim} nRun={nRunning}");
         }
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void QLogPI_EvalAndGrad_MatchesOptuna_Sweep()
+    {
+        PythonSession.EnsureOrInconclusive();
+        PyExec(Helper);
+        var rng = new Random(778899);
+        for (int trial = 0; trial < 12; trial++)
+        {
+            int dim = 1 + rng.Next(2);
+            int nPoints = dim + 6 + rng.Next(3);
+            int nRunning = 1 + rng.Next(3);
+            int nQuery = 5;
+            int nQmc = 32;
+            int qmcSeed = rng.Next(1, 1_000_000);
+            var isCat = new bool[dim];
+
+            double[,] x = RandMatrix(rng, nPoints, dim);
+            var y = new double[nPoints];
+            double ymin = double.MaxValue, ymax = double.MinValue;
+            for (int i = 0; i < nPoints; i++) { y[i] = rng.NextDouble() * 2 - 1; ymin = Math.Min(ymin, y[i]); ymax = Math.Max(ymax, y[i]); }
+            var isl = new double[dim];
+            for (int d = 0; d < dim; d++) isl[d] = 0.5 + rng.NextDouble() * 8;
+            double ks = 0.3 + rng.NextDouble() * 2;
+            double nv = 1e-4 + rng.NextDouble() * 0.2;
+            double thr = ymin - 0.3 + rng.NextDouble() * (ymax - ymin + 0.6);
+            double[,] xr = RandMatrix(rng, nRunning, dim);
+            double[,] xs = RandMatrix(rng, nQuery, dim);
+
+            var gpr = new GPRegressor(isCat, x, y, isl, ks, nv);
+            gpr.CacheMatrix();
+            var acqf = new QLogPI(gpr, DummySpace(dim), thr, nQmc, qmcSeed, xr);
+            double[] ng = acqf.EvalAcqfNoGrad(xs);
+            double[][] grads = RowGrads(acqf, xs);
+
+            PyExec(
+                $"X = np.array({Lit(x)}, dtype=float)\nisc = np.array({Lit(isCat)})\n" +
+                $"Y = np.array({Lit(y)}, dtype=float)\nisl = np.array({Lit(isl)}, dtype=float)\n" +
+                $"Xr = np.array({Lit(xr)}, dtype=float)\nxs = np.array({Lit(xs)}, dtype=float)\n" +
+                $"ng_cs = np.array({Lit(ng)})\ngr_cs = {Lit2(grads)}\n" +
+                $"ng_py, gr_py = _qlogpi(X, isc, Y, isl, {Fmt(ks)}, {Fmt(nv)}, {Fmt(thr)}, {nQmc}, {qmcSeed}, Xr, xs)\n" +
+                "ng_py = np.array(ng_py)\n" +
+                "d_eval = float(np.max(np.abs(ng_py - ng_cs) / (1.0 + np.abs(ng_py))))\n" +
+                CompareGrad);
+            PyFloat("d_eval").Should().BeLessThan(1e-7, $"qLogPI eval trial={trial} dim={dim} nRun={nRunning}");
+            PyFloat("d_grad").Should().BeLessThan(1e-5, $"qLogPI grad trial={trial} dim={dim} nRun={nRunning}");
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void QLogCEI_EvalAndGrad_MatchesOptuna_Sweep()
+    {
+        PythonSession.EnsureOrInconclusive();
+        PyExec(Helper);
+        var rng = new Random(224466);
+        for (int trial = 0; trial < 12; trial++)
+        {
+            int dim = 1 + rng.Next(2);
+            int nCons = 1 + rng.Next(2);
+            int nPoints = dim + 6 + rng.Next(3);
+            int nRunning = 1 + rng.Next(3);
+            int nQuery = 5;
+            int nQmc = 32;
+            int qmcSeed = rng.Next(1, 1_000_000);
+            var isCat = new bool[dim];
+
+            double[,] x = RandMatrix(rng, nPoints, dim);
+            (double[] yo, double[] islo, double kso, double nvo, double ymin, double ymax) = RandGp(rng, nPoints, dim);
+            double thr = ymin - 0.3 + rng.NextDouble() * (ymax - ymin + 0.6);
+
+            var yc = new double[nCons][];
+            var islc = new double[nCons][];
+            var ksc = new double[nCons];
+            var nvc = new double[nCons];
+            var cthrs = new double[nCons];
+            var consGprs = new GPRegressor[nCons];
+            for (int c = 0; c < nCons; c++)
+            {
+                (double[] y, double[] isl, double ks, double nv, double cmin, double cmax) = RandGp(rng, nPoints, dim);
+                yc[c] = y; islc[c] = isl; ksc[c] = ks; nvc[c] = nv;
+                cthrs[c] = cmin - 0.3 + rng.NextDouble() * (cmax - cmin + 0.6);
+                var g = new GPRegressor(isCat, x, y, isl, ks, nv);
+                g.CacheMatrix();
+                consGprs[c] = g;
+            }
+            double[,] xr = RandMatrix(rng, nRunning, dim);
+            double[,] xs = RandMatrix(rng, nQuery, dim);
+
+            var gObj = new GPRegressor(isCat, x, yo, islo, kso, nvo);
+            gObj.CacheMatrix();
+            var acqf = new QLogCEI(gObj, DummySpace(dim), thr, nQmc, qmcSeed, consGprs, cthrs, xr);
+            double[] ng = acqf.EvalAcqfNoGrad(xs);
+            double[][] grads = RowGrads(acqf, xs);
+
+            PyExec(
+                $"X = np.array({Lit(x)}, dtype=float)\nisc = np.array({Lit(isCat)})\n" +
+                $"Yo = np.array({Lit(yo)}, dtype=float)\nislo = np.array({Lit(islo)}, dtype=float)\n" +
+                $"Yc = {Lit2(yc)}\nislc = {Lit2(islc)}\nksc = {Lit(ksc)}\nnvc = {Lit(nvc)}\ncthrs = {Lit(cthrs)}\n" +
+                $"Xr = np.array({Lit(xr)}, dtype=float)\nxs = np.array({Lit(xs)}, dtype=float)\n" +
+                $"ng_cs = np.array({Lit(ng)})\ngr_cs = {Lit2(grads)}\n" +
+                $"ng_py, gr_py = _qlogcei(X, isc, Yo, islo, {Fmt(kso)}, {Fmt(nvo)}, {Fmt(thr)}, Yc, islc, ksc, nvc, cthrs, {nQmc}, {qmcSeed}, Xr, xs)\n" +
+                "ng_py = np.array(ng_py)\n" +
+                "d_eval = float(np.max(np.abs(ng_py - ng_cs) / (1.0 + np.abs(ng_py))))\n" +
+                CompareGrad);
+            PyFloat("d_eval").Should().BeLessThan(1e-7, $"qLogCEI eval trial={trial} dim={dim} nCons={nCons} nRun={nRunning}");
+            PyFloat("d_grad").Should().BeLessThan(1e-5, $"qLogCEI grad trial={trial} dim={dim} nCons={nCons} nRun={nRunning}");
+        }
+    }
+
+    private static (double[] Y, double[] Isl, double Ks, double Nv, double Ymin, double Ymax) RandGp(Random rng, int nPoints, int dim)
+    {
+        var y = new double[nPoints];
+        double ymin = double.MaxValue, ymax = double.MinValue;
+        for (int i = 0; i < nPoints; i++) { y[i] = rng.NextDouble() * 2 - 1; ymin = Math.Min(ymin, y[i]); ymax = Math.Max(ymax, y[i]); }
+        var isl = new double[dim];
+        for (int d = 0; d < dim; d++) isl[d] = 0.5 + rng.NextDouble() * 8;
+        return (y, isl, 0.3 + rng.NextDouble() * 2, 1e-4 + rng.NextDouble() * 0.2, ymin, ymax);
     }
 
     private static double[][] RowGrads(IAcquisitionFunc acqf, double[,] xs)

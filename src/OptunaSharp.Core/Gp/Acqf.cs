@@ -91,6 +91,50 @@ internal static class Acqf
             sum += Math.Exp(maxVal[s] - lseMax);
         return lseMax + Math.Log(sum) - Math.Log(nQmc);
     }
+
+    /// <summary>
+    ///     <see cref="MeanMaxUtility" /> plus its gradient w.r.t. the query point. The q-batch acqfs share
+    ///     the invariant that <b>only the last (query) column</b> of <paramref name="logUtil" /> depends
+    ///     on <c>x</c> (the running-fantasy columns are constant), with derivative
+    ///     <paramref name="dQuery" /> (<c>n_qmc × dim</c>). The gradient flows through the <c>amax</c>
+    ///     selection (per-sample argmax) and the <c>logsumexp</c> softmax — nonzero only where the query
+    ///     column wins that sample's max.
+    /// </summary>
+    internal static (double Value, double[] Grad) MeanMaxUtilityWithGrad(double[,] logUtil, double[,] dQuery)
+    {
+        int nQmc = logUtil.GetLength(0);
+        int q = logUtil.GetLength(1);
+        int queryCol = q - 1;
+        int dim = dQuery.GetLength(1);
+
+        var maxVal = new double[nQmc];
+        var argmax = new int[nQmc];
+        double lseMax = double.NegativeInfinity;
+        for (int s = 0; s < nQmc; s++)
+        {
+            double m = double.NegativeInfinity;
+            int am = 0;
+            for (int j = 0; j < q; j++)
+                if (logUtil[s, j] > m) { m = logUtil[s, j]; am = j; }
+            maxVal[s] = m; argmax[s] = am;
+            if (m > lseMax) lseMax = m;
+        }
+        double expSum = 0.0;
+        for (int s = 0; s < nQmc; s++)
+            expSum += Math.Exp(maxVal[s] - lseMax);
+        double value = lseMax + Math.Log(expSum) - Math.Log(nQmc);
+
+        var grad = new double[dim];
+        for (int s = 0; s < nQmc; s++)
+        {
+            if (argmax[s] != queryCol)
+                continue;   // gradient flows only when the query column is this sample's max
+            double softmax = Math.Exp(maxVal[s] - lseMax) / expSum;
+            for (int d = 0; d < dim; d++)
+                grad[d] += softmax * dQuery[s, d];
+        }
+        return (value, grad);
+    }
 }
 
 /// <summary>
@@ -296,58 +340,189 @@ internal sealed class QLogEI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
-    public double EvalAcqfNoGrad(double[] x)
-    {
-        if (double.IsNegativeInfinity(_threshold))
-            return 0.0;
-        return Acqf.MeanMaxUtility(PerSampleLogUtility(_condGpr.SampleJointPosterior(x)));
-    }
+    public double EvalAcqfNoGrad(double[] x) => Acqf.MeanMaxUtility(ComputePerSampleLogUtility(x));
 
     /// <summary><c>eval_acqf_with_grad</c> — value and the hand-derived gradient through amax/logsumexp.</summary>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
-        int dim = x.Length;
-        if (double.IsNegativeInfinity(_threshold))
-            return (0.0, new double[dim]);
+        (double[,] logUtil, double[,] dQuery) = ComputePerSampleLogUtilityWithGrad(x);
+        return Acqf.MeanMaxUtilityWithGrad(logUtil, dQuery);
+    }
+}
 
+/// <summary>
+///     The q-batch log probability-of-improvement acquisition function — port of <c>acqf.qLogPI</c>. It
+///     is the running-trial analogue of <see cref="LogPI" />: <see cref="GPSampler" /> uses it, summed
+///     over the constraint GPs, as the feasibility term of <see cref="QLogCEI" /> (single-objective
+///     constrained optimization with running trials, PORTING_PLAN Phase 3.2 part 3e-6). Per QMC draw it
+///     forms the joint-posterior sample over the running trials plus the query point
+///     (<see cref="ConditionalGPRegressor" />), applies the smooth feasibility indicator
+///     <c>logsigmoid((y − threshold)/τ)</c> (τ = 1e-2), and reduces with <see cref="Acqf.MeanMaxUtility" />.
+/// </summary>
+internal sealed class QLogPI : IAcquisitionFunc
+{
+    private readonly ConditionalGPRegressor _condGpr;
+    private readonly double _threshold;
+    private readonly double _tau;
+
+    internal QLogPI(
+        GPRegressor gpr, GpSearchSpace searchSpace, double threshold, int nQmcSamples, int qmcSeed,
+        double[,] normalizedParamsOfRunningTrials, double stabilizingNoise = 1e-12, double tau = 1e-2)
+    {
+        _threshold = threshold;
+        _tau = tau;
+        _condGpr = new ConditionalGPRegressor(
+            gpr, normalizedParamsOfRunningTrials, nQmcSamples, qmcSeed, stabilizingNoise);
+        SearchSpace = searchSpace;
+        LengthScales = gpr.LengthScales;
+    }
+
+    public GpSearchSpace SearchSpace { get; }
+    public double[] LengthScales { get; }
+
+    private double[,] PerSampleLogUtility(double[,] yPost)
+    {
+        int nQmc = yPost.GetLength(0), q = yPost.GetLength(1);
+        var lu = new double[nQmc, q];
+        for (int s = 0; s < nQmc; s++)
+            for (int j = 0; j < q; j++)
+                lu[s, j] = LogSigmoid((yPost[s, j] - _threshold) / _tau);
+        return lu;
+    }
+
+    /// <summary><c>compute_per_sample_log_utility(x)</c> — <c>logsigmoid((y_post − threshold)/τ)</c>, shape <c>(n_qmc, r+1)</c>.</summary>
+    internal double[,] ComputePerSampleLogUtility(double[] x)
+        => PerSampleLogUtility(_condGpr.SampleJointPosterior(x));
+
+    /// <summary>The per-sample log utility and its x-gradient (through the query column only).</summary>
+    internal (double[,] LogUtil, double[,] DQuery) ComputePerSampleLogUtilityWithGrad(double[] x)
+    {
         (double[,] yPost, double[,] dSamples) = _condGpr.SampleJointPosteriorWithGrad(x);
         int nQmc = yPost.GetLength(0);
-        int q = yPost.GetLength(1);
-        int queryCol = q - 1;
-        double[,] lu = PerSampleLogUtility(yPost);
-
-        // amax over the q-batch (track the argmax) then logsumexp over the samples.
-        var maxVal = new double[nQmc];
-        var argmax = new int[nQmc];
-        double lseMax = double.NegativeInfinity;
+        int queryCol = yPost.GetLength(1) - 1;
+        int dim = dSamples.GetLength(1);
+        var dq = new double[nQmc, dim];
         for (int s = 0; s < nQmc; s++)
         {
-            double m = double.NegativeInfinity;
-            int am = 0;
-            for (int j = 0; j < q; j++)
-                if (lu[s, j] > m) { m = lu[s, j]; am = j; }
-            maxVal[s] = m; argmax[s] = am;
-            if (m > lseMax) lseMax = m;
-        }
-        double expSum = 0.0;
-        for (int s = 0; s < nQmc; s++)
-            expSum += Math.Exp(maxVal[s] - lseMax);
-        double value = lseMax + Math.Log(expSum) - Math.Log(nQmc);
-
-        // grad only flows where the per-sample max is the query column and the clamp mask is active.
-        var grad = new double[dim];
-        for (int s = 0; s < nQmc; s++)
-        {
-            if (argmax[s] != queryCol)
-                continue;
-            double v = yPost[s, queryCol] - _threshold;
-            if (!(v > Eps))
-                continue;
-            double factor = Math.Exp(maxVal[s] - lseMax) / expSum / v;
+            // d logsigmoid(arg)/d y_post = sigmoid(−arg)/τ = 1/((1 + e^arg)·τ).
+            double arg = (yPost[s, queryCol] - _threshold) / _tau;
+            double dlog = 1.0 / (1.0 + Math.Exp(arg)) / _tau;
             for (int d = 0; d < dim; d++)
-                grad[d] += factor * dSamples[s, d];
+                dq[s, d] = dlog * dSamples[s, d];
         }
-        return (value, grad);
+        return (PerSampleLogUtility(yPost), dq);
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    public double[] EvalAcqfNoGrad(double[,] x)
+    {
+        int b = x.GetLength(0), dim = x.GetLength(1);
+        var result = new double[b];
+        var row = new double[dim];
+        for (int r = 0; r < b; r++)
+        {
+            for (int d = 0; d < dim; d++) row[d] = x[r, d];
+            result[r] = EvalAcqfNoGrad(row);
+        }
+        return result;
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    public double EvalAcqfNoGrad(double[] x) => Acqf.MeanMaxUtility(ComputePerSampleLogUtility(x));
+
+    /// <summary><c>eval_acqf_with_grad</c> — value and the hand-derived gradient through amax/logsumexp.</summary>
+    public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
+    {
+        (double[,] logUtil, double[,] dQuery) = ComputePerSampleLogUtilityWithGrad(x);
+        return Acqf.MeanMaxUtilityWithGrad(logUtil, dQuery);
+    }
+
+    /// <summary><c>torch.nn.functional.logsigmoid(v) = min(0,v) − log1p(e^(−|v|))</c> — the numerically stable log σ.</summary>
+    private static double LogSigmoid(double v)
+        => v >= 0 ? -MathUtil.Log1p(Math.Exp(-v)) : v - MathUtil.Log1p(Math.Exp(v));
+}
+
+/// <summary>
+///     The q-batch log constrained-expected-improvement acquisition function — port of
+///     <c>acqf.qLogCEI</c>, the acqf <see cref="GPSampler" /> maximizes for single-objective
+///     <b>constrained</b> optimization <b>with running trials</b> (PORTING_PLAN Phase 3.2 part 3e-6). It
+///     composes the per-QMC-sample log feasible improvement — the <see cref="QLogEI" /> objective utility
+///     plus the summed <see cref="QLogPI" /> constraint utilities — and reduces the sum with
+///     <see cref="Acqf.MeanMaxUtility" /> (so the max-over-q-batch is taken on the joint feasible
+///     improvement, not per acqf). Each constraint <see cref="QLogPI" /> uses the QMC seed
+///     <c>qmc_seed + i + 1</c> (its own fantasies), matching Optuna. When there is no feasible trial the
+///     objective threshold is <c>−∞</c> and its utility is 0, leaving only the constraint terms.
+/// </summary>
+internal sealed class QLogCEI : IAcquisitionFunc
+{
+    private readonly QLogEI _acqf;
+    private readonly QLogPI[] _constraintsAcqfList;
+
+    internal QLogCEI(
+        GPRegressor gpr, GpSearchSpace searchSpace, double threshold, int nQmcSamples, int qmcSeed,
+        IReadOnlyList<GPRegressor> constraintsGprList, IReadOnlyList<double> constraintsThresholdList,
+        double[,] normalizedParamsOfRunningTrials, double stabilizingNoise = 1e-12)
+    {
+        if (constraintsGprList.Count != constraintsThresholdList.Count || constraintsGprList.Count == 0)
+            throw new ArgumentException("constraints_gpr_list and constraints_threshold_list must be non-empty and equal-length.");
+
+        _acqf = new QLogEI(
+            gpr, searchSpace, threshold, nQmcSamples, qmcSeed, normalizedParamsOfRunningTrials, stabilizingNoise);
+        _constraintsAcqfList = new QLogPI[constraintsGprList.Count];
+        for (int i = 0; i < constraintsGprList.Count; i++)
+            _constraintsAcqfList[i] = new QLogPI(
+                constraintsGprList[i], searchSpace, constraintsThresholdList[i], nQmcSamples, qmcSeed + i + 1,
+                normalizedParamsOfRunningTrials, stabilizingNoise);
+
+        SearchSpace = searchSpace;
+        LengthScales = gpr.LengthScales;
+    }
+
+    public GpSearchSpace SearchSpace { get; }
+    public double[] LengthScales { get; }
+
+    /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    public double[] EvalAcqfNoGrad(double[,] x)
+    {
+        int b = x.GetLength(0), dim = x.GetLength(1);
+        var result = new double[b];
+        var row = new double[dim];
+        for (int r = 0; r < b; r++)
+        {
+            for (int d = 0; d < dim; d++) row[d] = x[r, d];
+            result[r] = EvalAcqfNoGrad(row);
+        }
+        return result;
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    public double EvalAcqfNoGrad(double[] x)
+    {
+        double[,] logUtil = _acqf.ComputePerSampleLogUtility(x);
+        foreach (QLogPI c in _constraintsAcqfList)
+            AddInPlace(logUtil, c.ComputePerSampleLogUtility(x));
+        return Acqf.MeanMaxUtility(logUtil);
+    }
+
+    /// <summary><c>eval_acqf_with_grad</c> — value and gradient of the composed feasible-improvement utility.</summary>
+    public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
+    {
+        (double[,] logUtil, double[,] dQuery) = _acqf.ComputePerSampleLogUtilityWithGrad(x);
+        foreach (QLogPI c in _constraintsAcqfList)
+        {
+            (double[,] lu, double[,] dq) = c.ComputePerSampleLogUtilityWithGrad(x);
+            AddInPlace(logUtil, lu);
+            AddInPlace(dQuery, dq);
+        }
+        return Acqf.MeanMaxUtilityWithGrad(logUtil, dQuery);
+    }
+
+    private static void AddInPlace(double[,] a, double[,] b)
+    {
+        int rows = a.GetLength(0), cols = a.GetLength(1);
+        for (int i = 0; i < rows; i++)
+            for (int j = 0; j < cols; j++)
+                a[i, j] += b[i, j];
     }
 }
 

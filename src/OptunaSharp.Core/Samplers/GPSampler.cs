@@ -262,10 +262,15 @@ public class GPSampler : BaseSampler
                 int iOpt = ArgMax(yWithNegInf);
                 double bestFeasibleY = yWithNegInf[iOpt];
                 if (hasRunning)
-                    throw NotYetPorted(
-                        "qLogCEI (single-objective constrained with running trials)", "3e q-batch");
-                acqf = new LogCEI(
-                    gprsList[0], internalSearchSpace, bestFeasibleY, constrGprList, constrThresholdList);
+                {
+                    int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
+                    acqf = new QLogCEI(
+                        gprsList[0], internalSearchSpace, bestFeasibleY, _nQmcSamplesQei, qmcSeed,
+                        constrGprList, constrThresholdList, normalizedParamsOfRunningTrials!);
+                }
+                else
+                    acqf = new LogCEI(
+                        gprsList[0], internalSearchSpace, bestFeasibleY, constrGprList, constrThresholdList);
                 bestParams = double.IsNegativeInfinity(bestFeasibleY)
                     ? null
                     : BestParamsRow(normalizedParams, iOpt);
