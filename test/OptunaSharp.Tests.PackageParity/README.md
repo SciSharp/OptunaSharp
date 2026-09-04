@@ -53,7 +53,7 @@ isolated.
 ## docker compose + real external services
 
 The gate is orchestrated with **docker compose**, the same way the source-backed integration suites
-stand up real, credential-free services (`OptunaSharp.Tests.Storage.Redis` → Redis;
+stand up real, credential-free services (`OptunaSharp.Tests.Storage` → Redis;
 `OptunaSharp.Tests.Artifacts` → MinIO/Azurite/fake-gcs emulators). `docker-compose.yml` here **reuses**
 the Redis service definition via `include:` (no duplication) and runs the package-parity test container
 alongside it.

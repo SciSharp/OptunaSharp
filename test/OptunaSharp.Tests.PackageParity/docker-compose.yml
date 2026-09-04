@@ -1,6 +1,6 @@
 # docker-compose orchestration for the ISOLATED package-parity gate.
 #
-# Fits the same pattern the source-backed integration suites use (OptunaSharp.Tests.Storage.Redis,
+# Fits the same pattern the source-backed integration suites use (OptunaSharp.Tests.Storage,
 # OptunaSharp.Tests.Artifacts): stand up real, credential-free external services and test against
 # them. The difference here is the execution model:
 #
@@ -21,7 +21,7 @@
 
 include:
   # Reuse the Redis service definition from the storage suite rather than duplicate it.
-  - ../OptunaSharp.Tests.Storage.Redis/docker-compose.yml
+  - ../OptunaSharp.Tests.Storage/docker-compose.yml
 
 services:
   package-parity:

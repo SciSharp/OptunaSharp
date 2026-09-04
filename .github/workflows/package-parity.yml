@@ -110,7 +110,7 @@ jobs:
         with:
           sparse-checkout: |
             test/OptunaSharp.Tests.PackageParity
-            test/OptunaSharp.Tests.Storage.Redis/docker-compose.yml
+            test/OptunaSharp.Tests.Storage/docker-compose.yml
           sparse-checkout-cone-mode: false
       - name: Pull the deployed feed into the project
         uses: actions/download-artifact@v4
