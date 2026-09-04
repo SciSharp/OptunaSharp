@@ -7,11 +7,13 @@ using OptunaSharp.Storages;
 namespace OptunaSharp.Tests.Interop;
 
 /// <summary>
-///     Full-state bit-parity of the (non-scrambled) QMCSampler against live Optuna. The Sobol' and
-///     Halton engines are deterministic and reproduce <c>scipy.stats.qmc</c> exactly, the first trial
-///     is drawn by the independent <see cref="RandomSampler" /> (MT19937), and the <c>qmc:&lt;sha256&gt;</c>
-///     sample-id counter in the study system attrs is byte-identical — so the whole study state
-///     (every trial's params/values/distributions and the system attrs) must agree bit-for-bit.
+///     Full-state bit-parity of the QMCSampler against live Optuna. The Sobol' and Halton engines are
+///     deterministic and reproduce <c>scipy.stats.qmc</c> exactly — including <b>scrambled Sobol'</b>
+///     (the linear-matrix-scramble + digital shift seeded by <c>numpy.random.default_rng(seed)</c>) —
+///     the first trial is drawn by the independent <see cref="RandomSampler" /> (MT19937), and the
+///     <c>qmc:&lt;sha256&gt;</c> sample-id counter in the study system attrs is byte-identical (its hash
+///     folds in <c>scramble</c>/<c>seed</c> when scrambling) — so the whole study state (every trial's
+///     params/values/distributions and the system attrs) must agree bit-for-bit.
 /// </summary>
 [TestClass]
 public class QmcSamplerParityTests : OptunaInteropTestBase
@@ -83,6 +85,69 @@ public class QmcSamplerParityTests : OptunaInteropTestBase
         AssertFullParity(csStudy,
             "study = optuna.create_study(study_name='qmc', " +
             $"sampler=optuna.samplers.QMCSampler(qmc_type='{qmcType}', scramble=False, seed=7))\n" +
+            "def _obj(t):\n" +
+            "    a = t.suggest_float('a', -10, 10)\n" +
+            "    b = t.suggest_float('b', 0, 5, step=0.5)\n" +
+            "    c = t.suggest_int('c', 0, 100, step=10)\n" +
+            "    return a + b + c\n" +
+            "study.optimize(_obj, n_trials=32)\n");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0)]
+    [DataRow(42)]
+    public void ScrambledSobol_MixedSpace_FullState_IsBitIdentical(int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // Scrambled Sobol' over the same mixed space. The scramble is seeded by the explicit `seed`
+        // (fixed for the sampler instance), so the whole study state stays bit-identical to Python's.
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "qmc",
+            sampler: new QMCSampler(qmcType: "sobol", scramble: true, seed: seed));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -1, 1);
+            long y = t.SuggestInt("y", -5, 5);
+            t.SuggestCategorical("z", new CategoricalChoice[] { "a", "b", "c" });
+            t.SuggestFloat("lx", 1e-3, 1e3, log: true);
+            return Math.Pow(x, 2.0) + y;
+        }, nTrials: 16);
+
+        AssertFullParity(csStudy,
+            "study = optuna.create_study(study_name='qmc', " +
+            $"sampler=optuna.samplers.QMCSampler(qmc_type='sobol', scramble=True, seed={seed}))\n" +
+            "def _obj(t):\n" +
+            "    x = t.suggest_float('x', -1, 1)\n" +
+            "    y = t.suggest_int('y', -5, 5)\n" +
+            "    t.suggest_categorical('z', ['a', 'b', 'c'])\n" +
+            "    t.suggest_float('lx', 1e-3, 1e3, log=True)\n" +
+            "    return x ** 2 + y\n" +
+            "study.optimize(_obj, n_trials=16)\n");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void ScrambledSobol_PowerOfTwo_FullState_IsBitIdentical()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // Scrambled Sobol' over a power-of-two trial count (the Sobol' balance regime) + a stepped int.
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "qmc",
+            sampler: new QMCSampler(qmcType: "sobol", scramble: true, seed: 7));
+        csStudy.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -10, 10);
+            double b = t.SuggestFloat("b", 0, 5, step: 0.5);
+            long c = t.SuggestInt("c", 0, 100, step: 10);
+            return a + b + c;
+        }, nTrials: 32);
+
+        AssertFullParity(csStudy,
+            "study = optuna.create_study(study_name='qmc', " +
+            "sampler=optuna.samplers.QMCSampler(qmc_type='sobol', scramble=True, seed=7))\n" +
             "def _obj(t):\n" +
             "    a = t.suggest_float('a', -10, 10)\n" +
             "    b = t.suggest_float('b', 0, 5, step=0.5)\n" +

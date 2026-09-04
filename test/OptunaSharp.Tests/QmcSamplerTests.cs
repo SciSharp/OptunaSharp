@@ -77,10 +77,73 @@ public class QmcSamplerTests
     // ---- sampler behavior ---------------------------------------------------------------------
 
     [TestMethod]
-    public void Scramble_ThrowsNotImplemented()
+    public void HaltonScramble_ThrowsNotImplemented()
     {
-        var act = () => new QMCSampler(scramble: true);
-        act.Should().Throw<NotImplementedException>().WithMessage("*scramble*");
+        // Scrambled Halton is the one deferred combination (needs numpy's PCG64 shuffle); scrambled
+        // Sobol' (the default qmc_type) is fully supported.
+        var act = () => new QMCSampler(qmcType: "halton", scramble: true, seed: 0);
+        act.Should().Throw<NotImplementedException>().WithMessage("*halton*");
+    }
+
+    [TestMethod]
+    public void SobolScramble_Constructs()
+    {
+        var act = () => new QMCSampler(qmcType: "sobol", scramble: true, seed: 0);
+        act.Should().NotThrow();
+    }
+
+    [TestMethod]
+    public void ScrambledSobol_Trajectory_MatchesOptuna()
+    {
+        // Pinned to live optuna QMCSampler(qmc_type='sobol', scramble=True, seed=42): trial 0 is the
+        // independent RandomSampler(42) draw, trials 1..7 the scrambled Sobol' relative samples.
+        var study = Optuna.CreateStudy(
+            sampler: new QMCSampler(qmcType: "sobol", scramble: true, seed: 42, warnIndependentSampling: false));
+        study.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -1, 1);
+            long y = t.SuggestInt("y", -1, 3);
+            t.SuggestCategorical("z", new CategoricalChoice[] { "a", "b", "c" });
+            return Math.Pow(x, 2.0) + y;
+        }, nTrials: 8);
+
+        study.Trials.Select(t => (double)t.Params["x"]).Should().Equal(
+            -0.250919762305275, -0.13794105127453804, 0.7396270707249641, 0.15583090111613274,
+            -0.7262669429183006, -0.9132113959640265, 0.4677744638174772, 0.92768351174891);
+    }
+
+    [TestMethod]
+    public void ScrambledSobol_SameSeed_ProducesIdenticalTrials()
+    {
+        List<double> Run()
+        {
+            var study = Optuna.CreateStudy(
+                sampler: new QMCSampler(qmcType: "sobol", scramble: true, seed: 11, warnIndependentSampling: false));
+            study.Optimize(t =>
+            {
+                double x = t.SuggestFloat("x", -1, 1);
+                long y = t.SuggestInt("y", -5, 5);
+                return Math.Pow(x, 2.0) + y;
+            }, nTrials: 16);
+            return study.Trials.Select(t => (double)t.Params["x"]).ToList();
+        }
+
+        Run().Should().Equal(Run());
+    }
+
+    [TestMethod]
+    public void ScrambledSobol_DiffersFromUnscrambled()
+    {
+        List<double> Run(bool scramble)
+        {
+            var study = Optuna.CreateStudy(
+                sampler: new QMCSampler(qmcType: "sobol", scramble: scramble, seed: 5, warnIndependentSampling: false));
+            study.Optimize(t => t.SuggestFloat("x", -1, 1), nTrials: 8);
+            // Trial 0 is the (seed-shared) independent sampler for both; the QMC relative samples differ.
+            return study.Trials.Skip(1).Select(t => (double)t.Params["x"]).ToList();
+        }
+
+        Run(scramble: true).Should().NotEqual(Run(scramble: false));
     }
 
     [TestMethod]
