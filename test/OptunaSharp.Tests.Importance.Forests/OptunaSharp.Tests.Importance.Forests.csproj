@@ -22,7 +22,7 @@
   <ItemGroup>
     <!-- The satellite under test (transitively brings Core + ML.NET). Core is also referenced
          explicitly for Optuna.CreateStudy / RandomSampler used by the evaluator tests. -->
-    <ProjectReference Include="..\..\src\OptunaSharp.Importance.Forests\OptunaSharp.Importance.Forests.csproj" />
+    <ProjectReference Include="..\..\src\OptunaSharp.Importance.Forests.ML.NET\OptunaSharp.Importance.Forests.ML.NET.csproj" />
     <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
   </ItemGroup>
 

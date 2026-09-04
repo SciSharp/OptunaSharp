@@ -29,7 +29,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Tests.Artifacts
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Tests.Storage.Redis", "test\OptunaSharp.Tests.Storage.Redis\OptunaSharp.Tests.Storage.Redis.csproj", "{32A9D0E2-ECE9-4B44-BA23-D29B9114C32B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Importance.Forests", "src\OptunaSharp.Importance.Forests\OptunaSharp.Importance.Forests.csproj", "{B86F46D9-D2E0-4683-8EF0-1432806B6D0F}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Importance.Forests.ML.NET", "src\OptunaSharp.Importance.Forests.ML.NET\OptunaSharp.Importance.Forests.ML.NET.csproj", "{B86F46D9-D2E0-4683-8EF0-1432806B6D0F}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Tests.Importance.Forests", "test\OptunaSharp.Tests.Importance.Forests\OptunaSharp.Tests.Importance.Forests.csproj", "{D6326852-0342-48E6-BC9C-DF3F9E2F65B3}"
 EndProject

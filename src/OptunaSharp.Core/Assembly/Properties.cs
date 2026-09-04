@@ -27,12 +27,13 @@ using System.Runtime.CompilerServices;
 // the experimental-class warning via OptunaWarnings/WarningCategory — both internal to Core.
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
-// The forest-based importance evaluators (satellite package OptunaSharp.Importance.Forests — the
-// ML.NET FastForest backend, Phase 5.1) reuse Core's internal forest machinery: SklearnLikeTree /
-// FanovaTree / Fanova / Mdi / ForestImportance (the shared algorithm), plus SearchSpaceTransform, the
-// optuna/importance/_base.py helpers in ImportanceBase, the intersection search space, and the
-// ValueError/OptunaWarnings seam.
-[assembly: InternalsVisibleTo("OptunaSharp.Importance.Forests, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// The ML.NET FastForest backend (satellite package OptunaSharp.Importance.Forests.ML.NET, Phase 5.1)
+// reuses Core's internal forest machinery: SklearnLikeTree / FanovaTree / Fanova / Mdi /
+// ForestImportance (the shared algorithm), plus SearchSpaceTransform, the optuna/importance/_base.py
+// helpers in ImportanceBase, the intersection search space, and the ValueError/OptunaWarnings seam.
+// (Core owns the OptunaSharp.Importance.Forests namespace; the ML.NET backend is a subordinate,
+// optional package — hence the .ML.NET assembly-name suffix.)
+[assembly: InternalsVisibleTo("OptunaSharp.Importance.Forests.ML.NET, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
 // The forests test project reaches the internal fANOVA tree machinery (SklearnLikeTree, FanovaTree,
 // the native CART port) directly — the port of Optuna's test_tree.py asserts against the tree

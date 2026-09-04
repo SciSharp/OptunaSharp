@@ -3,14 +3,17 @@
   <PropertyGroup>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <RootNamespace>OptunaSharp</RootNamespace>
-    <AssemblyName>OptunaSharp.Importance.Forests</AssemblyName>
+    <AssemblyName>OptunaSharp.Importance.Forests.ML.NET</AssemblyName>
 
     <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/
          license/version) is centralized in ../../Directory.Build.props. This is a Tier X satellite:
          it pulls a foreign runtime (ML.NET's FastForest / native FastTree), so it ships separately
-         and Core stays pure managed — the NumSharp.Interop.OpenBLAS optional-package pattern. -->
-    <PackageId>OptunaSharp.Importance.Forests</PackageId>
-    <Description>Random-forest parameter-importance evaluators for OptunaSharp (a .NET port of Optuna): FanovaImportanceEvaluator (fANOVA — Hutter et al. 2014) and MeanDecreaseImpurityImportanceEvaluator (MDI). Ports of optuna.importance.FanovaImportanceEvaluator / MeanDecreaseImpurityImportanceEvaluator, with the underlying random forest fitted by ML.NET FastForest instead of scikit-learn. Because the forests are not tree-identical to scikit-learn's, importance values differ numerically from Python Optuna (documented divergence); the fANOVA marginal-variance algorithm and the MDI formula themselves are faithful ports. Part of the SciSharp STACK.</Description>
+         and Core stays pure managed — the NumSharp.Interop.OpenBLAS optional-package pattern. The
+         canonical fANOVA/MDI evaluators are pure-managed in Core (OptunaSharp); this package is an
+         optional ML.NET FastForest *backend*, hence the .ML.NET suffix (Core owns the
+         OptunaSharp.Importance.Forests namespace). -->
+    <PackageId>OptunaSharp.Importance.Forests.ML.NET</PackageId>
+    <Description>An ML.NET FastForest backend for OptunaSharp's forest-based parameter-importance evaluators (a .NET port of Optuna): FastForestFanovaImportanceEvaluator (fANOVA — Hutter et al. 2014) and FastForestMeanDecreaseImpurityImportanceEvaluator (MDI). The canonical FanovaImportanceEvaluator / MeanDecreaseImpurityImportanceEvaluator ship in Core as a pure-managed, bit-exact port of scikit-learn's RandomForestRegressor (value-parity with Python Optuna); this package fits the random forest with ML.NET FastForest instead, which is not tree-identical to scikit-learn, so its importance values differ numerically from Optuna (documented divergence; the fANOVA/MDI algorithm is shared with Core). Part of the SciSharp STACK.</Description>
     <PackageTags>Optuna;OptunaSharp;Importance;fANOVA;MDI;RandomForest;MLNET;FastForest;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
 
     <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on missing/malformed

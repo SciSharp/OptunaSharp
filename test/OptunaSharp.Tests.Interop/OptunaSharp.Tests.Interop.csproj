@@ -28,7 +28,7 @@
     <!-- The forest-based importance evaluators (fANOVA + MDI), so their live ranking-parity vs
          Optuna's scikit-learn-backed evaluators can run in-process. Transitively brings ML.NET.
          Those tests self-skip when scikit-learn is not importable in the Python env. -->
-    <ProjectReference Include="..\..\src\OptunaSharp.Importance.Forests\OptunaSharp.Importance.Forests.csproj" />
+    <ProjectReference Include="..\..\src\OptunaSharp.Importance.Forests.ML.NET\OptunaSharp.Importance.Forests.ML.NET.csproj" />
   </ItemGroup>
 
 </Project>
