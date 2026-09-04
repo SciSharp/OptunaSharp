@@ -27,11 +27,17 @@ using System.Runtime.CompilerServices;
 // the experimental-class warning via OptunaWarnings/WarningCategory — both internal to Core.
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
-// The forest-based importance evaluators (satellite package OptunaSharp.Importance.Forests — fANOVA
-// + Mean Decrease Impurity, Phase 5.1) reuse the internal SearchSpaceTransform, the shared
-// optuna/importance/_base.py helpers ported into ImportanceBase, the intersection search space, and
-// the ValueError/OptunaWarnings seam — all internal to Core.
+// The forest-based importance evaluators (satellite package OptunaSharp.Importance.Forests — the
+// ML.NET FastForest backend, Phase 5.1) reuse Core's internal forest machinery: SklearnLikeTree /
+// FanovaTree / Fanova / Mdi / ForestImportance (the shared algorithm), plus SearchSpaceTransform, the
+// optuna/importance/_base.py helpers in ImportanceBase, the intersection search space, and the
+// ValueError/OptunaWarnings seam.
 [assembly: InternalsVisibleTo("OptunaSharp.Importance.Forests, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
+// The forests test project reaches the internal fANOVA tree machinery (SklearnLikeTree, FanovaTree,
+// the native CART port) directly — the port of Optuna's test_tree.py asserts against the tree
+// algorithm with no forest involved, and the native-forest tests reach CartRandomForest.
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Forests, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
 /// <summary>
 ///     The public half of the strong-name key OptunaSharp is signed with, as the hex literal

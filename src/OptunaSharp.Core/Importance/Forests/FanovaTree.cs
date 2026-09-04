@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Importance.Forests.Internal;
 
@@ -203,9 +204,7 @@ internal sealed class FanovaTree
         }
 
         double value = WeightedAverage(values, weights);
-        double weight = 0.0;
-        foreach (double w in weights)
-            weight += w;
+        double weight = MathUtil.PairwiseSum(weights);  // numpy weights.sum() (pairwise)
 
         return (value, weight);
     }
@@ -380,32 +379,39 @@ internal sealed class FanovaTree
 
     // ---- numeric helpers -------------------------------------------------------------------
 
-    /// <summary><c>np.average(values, weights) = sum(v*w) / sum(w)</c>.</summary>
+    /// <summary>
+    ///     <c>np.average(values, weights)</c> = <c>(values*weights).sum() / weights.sum()</c>. Both
+    ///     reductions are numpy's pairwise summation (<see cref="MathUtil.PairwiseSum" />), so this is
+    ///     bit-exact vs Optuna even for the large midpoint arrays a real forest produces (not just the
+    ///     ≤3-element <c>test_tree.py</c> cases where pairwise == sequential).
+    /// </summary>
     private static double WeightedAverage(IReadOnlyList<double> values, IReadOnlyList<double> weights)
     {
-        double weightedSum = 0.0;
-        double weightTotal = 0.0;
-        for (int i = 0; i < values.Count; i++)
+        int n = values.Count;
+        var products = new double[n];
+        var w = new double[n];
+        for (int i = 0; i < n; i++)
         {
-            weightedSum += values[i] * weights[i];
-            weightTotal += weights[i];
+            products[i] = values[i] * weights[i];
+            w[i] = weights[i];
         }
-        return weightedSum / weightTotal;
+        return MathUtil.PairwiseSum(products) / MathUtil.PairwiseSum(w);
     }
 
-    /// <summary><c>np.average((values - avg)**2, weights)</c>.</summary>
+    /// <summary><c>np.average((values - avg)**2, weights)</c> (pairwise reductions).</summary>
     private static double WeightedSquaredDeviation(
         IReadOnlyList<double> values, IReadOnlyList<double> weights, double average)
     {
-        double weightedSum = 0.0;
-        double weightTotal = 0.0;
-        for (int i = 0; i < values.Count; i++)
+        int n = values.Count;
+        var products = new double[n];
+        var w = new double[n];
+        for (int i = 0; i < n; i++)
         {
             double d = values[i] - average;
-            weightedSum += d * d * weights[i];
-            weightTotal += weights[i];
+            products[i] = d * d * weights[i];
+            w[i] = weights[i];
         }
-        return weightedSum / weightTotal;
+        return MathUtil.PairwiseSum(products) / MathUtil.PairwiseSum(w);
     }
 
     /// <summary><c>itertools.product</c> over ranges <c>[0, dims[k])</c>, yielding index tuples.</summary>
