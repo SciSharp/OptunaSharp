@@ -6,11 +6,11 @@ using NumSharp;
 namespace OptunaSharp.Internal;
 
 /// <summary>
-///     Port of <c>optuna/_hypervolume/*</c> — the exact hypervolume calculator (<c>wfg.py</c>) and
-///     the greedy Hypervolume Subset Selection Problem solver (<c>hssp.py</c>). Consumed by TPE's
-///     multi-objective trial split (<see cref="TpeTrialSplit" />). <c>box_decomposition.py</c>
-///     (<c>get_non_dominated_box_bounds</c>) is deferred with its only consumer, the GP acquisition
-///     function (PORTING_PLAN Phase 3.2).
+///     Port of <c>optuna/_hypervolume/*</c> — the exact hypervolume calculator (<c>wfg.py</c>), the
+///     greedy Hypervolume Subset Selection Problem solver (<c>hssp.py</c>), and the box decomposition
+///     of the non-dominated region (<c>box_decomposition.py</c>: <see cref="GetNonDominatedBoxBounds" />,
+///     Phase 3.2 part 3e). Consumed by TPE's multi-objective trial split
+///     (<see cref="TpeTrialSplit" />) and the GP log-EHVI acquisition function.
 ///
 ///     <para><b>Numeric strategy.</b> NumPy <c>@</c>/<c>np.dot</c> is reproduced as a sequential dot
 ///     and <c>.prod(axis=-1)</c> as a sequential product. <see cref="ComputeHypervolume" /> agrees
@@ -421,6 +421,245 @@ internal static class Hypervolume
             }
         }
         return best;
+    }
+
+    // ===========================================================================================
+    // box_decomposition.py — get_non_dominated_box_bounds (PORTING_PLAN Phase 3.2 part 3e)
+    // ===========================================================================================
+
+    /// <summary>
+    ///     Port of <c>optuna/_hypervolume/box_decomposition.py: get_non_dominated_box_bounds</c> —
+    ///     decompose the non-dominated region below the Pareto front (and dominated by
+    ///     <paramref name="refPoint" />) into axis-aligned boxes, the box tiling the log-EHVI
+    ///     acquisition function (<c>acqf.logehvi</c>, Phase 3.2 part 3e) integrates over. The boxes
+    ///     extend to <c>-inf</c> along the improving directions (the non-dominated region is
+    ///     unbounded below), so lower bounds carry <c>-∞</c> entries and intervals <c>+∞</c> — the
+    ///     acqf clamps them. Returns the <c>(n_boxes, n_objectives)</c> lower and upper bounds.
+    ///
+    ///     <para>Follows Algorithm 2 of Lacour, Klamroth &amp; Fonseca (arxiv 1510.01963), refactored
+    ///     from BoTorch v0.13.0 exactly as Optuna's port is. <b>Bit-exact vs Optuna:</b> every value is
+    ///     a coordinate of <paramref name="lossVals" />/<paramref name="refPoint" /> (or ±∞) moved
+    ///     through negation, elementwise <c>max</c>, comparisons, and lexicographic <c>np.unique</c>
+    ///     sort — no summation, dot, or transcendental, so there is no float-order drift.</para>
+    /// </summary>
+    internal static (double[][] Lower, double[][] Upper) GetNonDominatedBoxBounds(
+        double[][] lossVals, double[] refPoint)
+    {
+        // assert np.all(np.isfinite(loss_vals)) — the caller clips before box decomposition.
+        foreach (double[] row in lossVals)
+            foreach (double v in row)
+                if (!double.IsFinite(v))
+                    throw new ArgumentException("loss_vals must be clipped before box decomposition.");
+
+        // Remove duplications and lexsort the solutions by ``np.unique``.
+        double[][] uniqueLexsorted = MultiObjective.UniqueRows(lossVals).UniqueRows;
+        bool[] onFront = MultiObjective.IsParetoFront(uniqueLexsorted, assumeUniqueLexsorted: true);
+        double[][] sortedParetoSols = Mask(uniqueLexsorted, onFront);
+
+        int nObjectives = refPoint.Length;  // loss_vals.shape[-1]
+        // The condition here follows BoTorch — box decomposition is used only for MO problems.
+        if (nObjectives > 4)
+            OptunaWarnings.Warn(
+                "Box decomposition (typically used by `GPSampler`) might be significantly slow for "
+                + "n_objectives > 4. Please consider using another sampler instead.");
+
+        return GetNonDominatedBoxBoundsInner(sortedParetoSols, refPoint);
+    }
+
+    /// <summary>Python <c>_get_non_dominated_box_bounds</c>. See <see cref="GetNonDominatedBoxBounds" />.</summary>
+    private static (double[][] Lower, double[][] Upper) GetNonDominatedBoxBoundsInner(
+        double[][] sortedParetoSols, double[] refPoint)
+    {
+        int m = refPoint.Length;
+        // neg_upper_bound_set = -_get_upper_bound_set(sorted_pareto_sols, ref_point)[0]
+        (List<double[]> upperBoundSet, _) = GetUpperBoundSet(sortedParetoSols, refPoint);
+        var negUpperBoundSet = new double[upperBoundSet.Count][];
+        for (int i = 0; i < upperBoundSet.Count; i++)
+            negUpperBoundSet[i] = Neg(upperBoundSet[i]);
+
+        // np.unique(..., axis=0) lexsorts by np.unique.
+        double[][] sortedNegUbs = MultiObjective.UniqueRows(negUpperBoundSet).UniqueRows;
+        var pointAtInfinity = new double[m];
+        Array.Fill(pointAtInfinity, double.PositiveInfinity);
+
+        // Only the Pareto solutions in the neg_upper_bound_set are needed.
+        bool[] front = MultiObjective.IsParetoFront(sortedNegUbs, assumeUniqueLexsorted: true);
+        double[][] filtered = Mask(sortedNegUbs, front);
+        (List<double[]> negLowerBoundSet, List<double[,]> negDefPoints) =
+            GetUpperBoundSet(filtered, pointAtInfinity);
+
+        // box_upper_bounds, box_lower_bounds = -_get_box_bounds(neg_lower_bound_set, neg_def_points, inf)
+        (double[][] bounds0, double[][] bounds1) =
+            GetBoxBounds(negLowerBoundSet, negDefPoints, pointAtInfinity);
+        var boxUpper = new double[bounds0.Length][];
+        var boxLower = new double[bounds1.Length][];
+        for (int i = 0; i < bounds0.Length; i++)
+        {
+            boxUpper[i] = Neg(bounds0[i]);
+            boxLower[i] = Neg(bounds1[i]);
+        }
+        return (boxLower, boxUpper);
+    }
+
+    /// <summary>
+    ///     Python <c>_get_upper_bound_set</c> (Algorithm 2 of Lacour17): the upper-bound set
+    ///     <c>U(N)</c> for the Pareto solutions (sorted w.r.t. the first objective) and their defining
+    ///     points. Returns <c>upper_bound_set</c> (each <c>(n_objectives,)</c>) and <c>def_points</c>
+    ///     (each <c>(n_objectives, n_objectives)</c>, indexed <c>[defining-dim, coordinate]</c>).
+    /// </summary>
+    private static (List<double[]> UpperBoundSet, List<double[,]> DefPoints) GetUpperBoundSet(
+        double[][] sortedParetoSols, double[] refPoint)
+    {
+        int m = refPoint.Length;
+        // upper_bound_set = [ref_point]  (Line 1 of Alg. 2).
+        var ubs = new List<double[]> { (double[])refPoint.Clone() };
+        // def_points[0] = -inf everywhere, with the diagonal set to ref_point (\hat{z}^k dummy point).
+        var dps = new List<double[,]>();
+        var dp0 = new double[m, m];
+        for (int k = 0; k < m; k++)
+            for (int j = 0; j < m; j++)
+                dp0[k, j] = k == j ? refPoint[k] : double.NegativeInfinity;
+        dps.Add(dp0);
+
+        foreach (double[] solution in sortedParetoSols)  // Sorted must be fulfilled.
+            (ubs, dps) = UpperBoundSetUpdate(solution, ubs, dps, m);
+
+        return (ubs, dps);
+    }
+
+    /// <summary>
+    ///     Python <c>_get_upper_bound_set.update</c> — the update rule (Section 2.2 of Lacour17) that
+    ///     folds one Pareto solution into the running upper-bound set / defining points. Replaces each
+    ///     dominated bound with the boxes it splits into, keeping the C-order enumeration of the
+    ///     <c>(bound, dimension)</c> updates so the output row order matches NumPy's boolean-mask
+    ///     flatten and <c>np.vstack</c> exactly.
+    /// </summary>
+    private static (List<double[]>, List<double[,]>) UpperBoundSetUpdate(
+        double[] sol, List<double[]> ubs, List<double[,]> dps, int m)
+    {
+        int nb = ubs.Count;
+        // is_dominated = np.all(sol < ubs, axis=-1)
+        var isDominated = new bool[nb];
+        bool anyDominated = false;
+        for (int i = 0; i < nb; i++)
+        {
+            bool all = true;
+            for (int d = 0; d < m; d++)
+                if (!(sol[d] < ubs[i][d])) { all = false; break; }
+            isDominated[i] = all;
+            anyDominated |= all;
+        }
+        if (!anyDominated)
+            return (ubs, dps);
+
+        // dominated_dps = dps[is_dominated]; local indices into the dominated subset.
+        var domIdx = new List<int>();
+        for (int i = 0; i < nb; i++)
+            if (isDominated[i]) domIdx.Add(i);
+
+        // For each dominated bound (C-order outer) and each dimension j (C-order inner):
+        //   maxval[j] = max over k (k != j and j != 0) of dominated_dps[i, k, j], else -inf,
+        //   and if sol[j] >= maxval[j], emit a new (ubs, dps) entry — Lines 2,3 of Alg. 2.
+        var newUbs = new List<double[]>();
+        var newDps = new List<double[,]>();
+        foreach (int i in domIdx)
+        {
+            double[,] dpi = dps[i];
+            double[] ubi = ubs[i];
+            for (int j = 0; j < m; j++)
+            {
+                double maxval = double.NegativeInfinity;
+                if (j != 0)  // j == 0 => whole column skipped (skip_ineq_judge[:, 0] = True) => -inf.
+                    for (int k = 0; k < m; k++)
+                        if (k != j && dpi[k, j] > maxval)  // skip the diagonal k == j.
+                            maxval = dpi[k, j];
+                if (sol[j] >= maxval)
+                {
+                    // new_dps[..] = dominated_dps[i] with row j (the defining dim) set to sol.
+                    var nd = (double[,])dpi.Clone();
+                    for (int c = 0; c < m; c++)
+                        nd[j, c] = sol[c];
+                    newDps.Add(nd);
+                    // new_ubs[..] = ubs[i] with coordinate j set to sol[j] (\bar{z}_j).
+                    var nu = (double[])ubi.Clone();
+                    nu[j] = sol[j];
+                    newUbs.Add(nu);
+                }
+            }
+        }
+
+        // np.vstack([ubs[~is_dominated], new_ubs]) — kept bounds (original order) then the new ones.
+        var resUbs = new List<double[]>();
+        var resDps = new List<double[,]>();
+        for (int i = 0; i < nb; i++)
+            if (!isDominated[i])
+            {
+                resUbs.Add(ubs[i]);
+                resDps.Add(dps[i]);
+            }
+        resUbs.AddRange(newUbs);
+        resDps.AddRange(newDps);
+        return (resUbs, resDps);
+    }
+
+    /// <summary>
+    ///     Python <c>_get_box_bounds</c> (Eq. (2) of Lacour17) — turn the upper-bound set and defining
+    ///     points into box <c>[lower, upper]</c> bounds, dropping empty boxes (<c>upper &lt;= lower</c>
+    ///     in any coordinate). Returns the two stacked halves the caller negates/swaps.
+    /// </summary>
+    private static (double[][] Bounds0, double[][] Bounds1) GetBoxBounds(
+        List<double[]> upperBoundSet, List<double[,]> defPoints, double[] refPoint)
+    {
+        int m = refPoint.Length;
+        int n = upperBoundSet.Count;
+        var keptBounds0 = new List<double[]>();
+        var keptBounds1 = new List<double[]>();
+        for (int i = 0; i < n; i++)
+        {
+            double[,] dpi = defPoints[i];
+            double[] ubi = upperBoundSet[i];
+            var b0 = new double[m];
+            var b1 = new double[m];
+            // bounds[0, :, 0] = def_points[:, 0, 0]; bounds[1, :, 0] = ref_point[0].
+            b0[0] = dpi[0, 0];
+            b1[0] = refPoint[0];
+            // bounds[0, :, 1:] = np.maximum.accumulate(def_points, axis=-2)[:, r, r+1]
+            //   => b0[j] = max_{k=0..j-1} def_points[i, k, j].  bounds[1, :, 1:] = upper_bound_set[:, 1:].
+            for (int j = 1; j < m; j++)
+            {
+                double acc = dpi[0, j];
+                for (int k = 1; k < j; k++)
+                    if (dpi[k, j] > acc) acc = dpi[k, j];
+                b0[j] = acc;
+                b1[j] = ubi[j];
+            }
+            // not_empty = ~np.any(bounds[1] <= bounds[0], axis=-1).
+            bool empty = false;
+            for (int j = 0; j < m; j++)
+                if (b1[j] <= b0[j]) { empty = true; break; }
+            if (!empty)
+            {
+                keptBounds0.Add(b0);
+                keptBounds1.Add(b1);
+            }
+        }
+        return (keptBounds0.ToArray(), keptBounds1.ToArray());
+    }
+
+    private static double[] Neg(double[] a)
+    {
+        var r = new double[a.Length];
+        for (int i = 0; i < a.Length; i++)
+            r[i] = -a[i];
+        return r;
+    }
+
+    private static double[][] Mask(double[][] rows, bool[] keep)
+    {
+        var result = new List<double[]>();
+        for (int i = 0; i < rows.Length; i++)
+            if (keep[i]) result.Add(rows[i]);
+        return result.ToArray();
     }
 
     /// <summary>Stable ascending argsort (NaN sorts last, mirroring NumPy).</summary>

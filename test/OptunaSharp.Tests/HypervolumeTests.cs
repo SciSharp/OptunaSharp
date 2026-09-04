@@ -225,6 +225,93 @@ public class HypervolumeTests
             new[] { 0.2, 0.8, 0.1 }, new[] { 0.65, 0.25, 0.45 },
         };
 
+    // ---- box_decomposition: get_non_dominated_box_bounds (Phase 3.2 part 3e) -------------------
+
+    [TestMethod]
+    public void GetNonDominatedBoxBounds_2d_HandVerified()
+    {
+        // Values pinned from live Optuna get_non_dominated_box_bounds (minimization loss vals).
+        var loss = new[]
+        {
+            new[] { 1.0, 4.0 }, new[] { 2.0, 2.0 }, new[] { 3.0, 1.0 },
+        };
+        var (lower, upper) = Hypervolume.GetNonDominatedBoxBounds(loss, new[] { 5.0, 5.0 });
+
+        double ni = double.NegativeInfinity;
+        lower.Should().BeEquivalentTo(new[]
+        {
+            new[] { ni, ni }, new[] { ni, 1.0 }, new[] { ni, 2.0 }, new[] { ni, 4.0 },
+        }, o => o.WithStrictOrdering());
+        upper.Should().BeEquivalentTo(new[]
+        {
+            new[] { 5.0, 1.0 }, new[] { 3.0, 2.0 }, new[] { 2.0, 4.0 }, new[] { 1.0, 5.0 },
+        }, o => o.WithStrictOrdering());
+    }
+
+    [TestMethod]
+    public void GetNonDominatedBoxBounds_3d_HandVerified()
+    {
+        var loss = new[]
+        {
+            new[] { 1.0, 3.0, 2.0 }, new[] { 2.0, 1.0, 3.0 },
+            new[] { 3.0, 2.0, 1.0 }, new[] { 2.0, 2.0, 2.0 },
+        };
+        var (lower, upper) = Hypervolume.GetNonDominatedBoxBounds(loss, new[] { 4.0, 4.0, 4.0 });
+
+        double ni = double.NegativeInfinity;
+        lower.Should().BeEquivalentTo(new[]
+        {
+            new[] { ni, ni, ni }, new[] { ni, ni, 1.0 }, new[] { ni, ni, 3.0 },
+            new[] { ni, 2.0, 1.0 }, new[] { ni, 1.0, 3.0 }, new[] { ni, 2.0, 2.0 },
+            new[] { ni, 3.0, 2.0 },
+        }, o => o.WithStrictOrdering());
+        upper.Should().BeEquivalentTo(new[]
+        {
+            new[] { 4.0, 4.0, 1.0 }, new[] { 4.0, 2.0, 3.0 }, new[] { 4.0, 1.0, 4.0 },
+            new[] { 3.0, 4.0, 2.0 }, new[] { 2.0, 3.0, 4.0 }, new[] { 2.0, 3.0, 3.0 },
+            new[] { 1.0, 4.0, 4.0 },
+        }, o => o.WithStrictOrdering());
+    }
+
+    [TestMethod]
+    public void GetNonDominatedBoxBounds_BoxesAreNonEmpty_UpperExceedsLower()
+    {
+        // Every returned box must satisfy upper > lower elementwise (the not_empty filter).
+        var loss = new[]
+        {
+            new[] { 0.1, 0.9 }, new[] { 0.4, 0.4 }, new[] { 0.8, 0.2 }, new[] { 0.3, 0.7 },
+        };
+        var (lower, upper) = Hypervolume.GetNonDominatedBoxBounds(loss, new[] { 1.0, 1.0 });
+        lower.Length.Should().Be(upper.Length).And.BeGreaterThan(0);
+        for (int i = 0; i < lower.Length; i++)
+            for (int d = 0; d < 2; d++)
+                (upper[i][d] > lower[i][d]).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void GetNonDominatedBoxBounds_DuplicateAndDominatedRows_MatchUniquePareto()
+    {
+        // Duplicated + dominated rows must collapse to the same decomposition as the unique front.
+        var withDup = new[]
+        {
+            new[] { 1.0, 4.0 }, new[] { 2.0, 2.0 }, new[] { 2.0, 2.0 },
+            new[] { 3.0, 1.0 }, new[] { 4.0, 4.0 }, // (4,4) is dominated by (2,2).
+        };
+        var unique = new[] { new[] { 1.0, 4.0 }, new[] { 2.0, 2.0 }, new[] { 3.0, 1.0 } };
+        var (lo1, up1) = Hypervolume.GetNonDominatedBoxBounds(withDup, new[] { 5.0, 5.0 });
+        var (lo2, up2) = Hypervolume.GetNonDominatedBoxBounds(unique, new[] { 5.0, 5.0 });
+        lo1.Should().BeEquivalentTo(lo2, o => o.WithStrictOrdering());
+        up1.Should().BeEquivalentTo(up2, o => o.WithStrictOrdering());
+    }
+
+    [TestMethod]
+    public void GetNonDominatedBoxBounds_NonFiniteLoss_Throws()
+    {
+        var loss = new[] { new[] { 1.0, double.PositiveInfinity }, new[] { 2.0, 2.0 } };
+        var act = () => Hypervolume.GetNonDominatedBoxBounds(loss, new[] { 5.0, 5.0 });
+        act.Should().Throw<ArgumentException>();
+    }
+
     private static double[] ReferencePoint(double[][] pts, double scale)
     {
         int m = pts[0].Length;
