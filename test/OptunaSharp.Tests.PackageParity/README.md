@@ -42,13 +42,34 @@ export PACKAGE_PARITY_ORACLE_DIR="$PWD/oracle" PACKAGE_PARITY_REQUIRE=1
 python gen_oracle.py
 dotnet test -c Release -f net10.0 -p:OptunaSharpPackageVersion=<ver>
 
-# Fully isolated (Docker) — mirrors CI
-docker build -t optunasharp-pkgparity -f Dockerfile . --build-arg OPTUNASHARP_VERSION=<ver>
-docker run --rm optunasharp-pkgparity
+# Fully isolated (Docker Compose) — mirrors CI
+OPTUNASHARP_VERSION=<ver> docker compose up --build --abort-on-container-exit --exit-code-from package-parity
+docker compose down -v
 ```
 
 The CI pipeline is `.github/workflows/package-parity.yml` (build → package → deploy → test), each stage
 isolated.
+
+## docker compose + real external services
+
+The gate is orchestrated with **docker compose**, the same way the source-backed integration suites
+stand up real, credential-free services (`OptunaSharp.Tests.Storage.Redis` → Redis;
+`OptunaSharp.Tests.Artifacts` → MinIO/Azurite/fake-gcs emulators). `docker-compose.yml` here **reuses**
+the Redis service definition via `include:` (no duplication) and runs the package-parity test container
+alongside it.
+
+One execution-model difference matters: those suites run `dotnet test` **on the host** and reach
+services at `localhost:<port>`; this gate runs the tests **inside a container** (so `src/` is never
+present), so it reaches services by their compose **service name** (`redis:6379`). Only
+endpoint-configurable backends compose cleanly into that model — `JournalRedisBackend` honours
+`OPTUNASHARP_REDIS_URL`, so Redis is wired now. The artifact emulators are still hardcoded to
+`localhost` in `ArtifactEmulators.cs`, so they compose in identically **once that helper honours an
+endpoint env var** — the one change needed to add packaged S3/GCS/Azure artifact parity here.
+
+Redis is up and reachable from the test container today; the **packaged** `JournalRedis` /
+artifact-store **parity tests** that consume it land once (1) the OpenBLAS blocker below is resolved so
+the packaged assembly loads, and (2) the satellite packages (`OptunaSharp.Storage.Redis`,
+`OptunaSharp.Artifacts.*`) are packed into `feed/` alongside Core.
 
 ## ⚠️ Known blocker this gate surfaces (as of the first run)
 

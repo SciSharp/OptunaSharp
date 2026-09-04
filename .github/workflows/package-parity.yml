@@ -95,28 +95,35 @@ jobs:
           path: feed
           retention-days: 5
 
-  # 4) TEST — ISOLATED. Sparse-checkout ONLY the package-parity project (src/ is never fetched), drop
-  #    the deployed feed into it, then build + run a Docker image whose context is just that project.
-  #    Real ML packages are pip-installed in the container; the packaged OptunaSharp is replayed
-  #    against their oracles.
+  # 4) TEST — ISOLATED, via docker compose (matching the source suites' service pattern). Sparse-
+  #    checkout ONLY the package-parity project + the reused Redis compose file (src/ is never
+  #    fetched), drop the deployed feed in, then `docker compose up` the test container alongside the
+  #    real Redis service. The test container's build context is just this project, so src/ never
+  #    enters the image; it reaches services by compose name (redis:6379). Real ML packages are
+  #    pip-installed in the container; the packaged OptunaSharp is replayed against their oracles.
   test:
     needs: [ package, deploy ]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout ONLY the isolated test project (no src/)
+      - name: Checkout the isolated test project + reused service compose (no src/)
         uses: actions/checkout@v4
         with:
-          sparse-checkout: test/OptunaSharp.Tests.PackageParity
+          sparse-checkout: |
+            test/OptunaSharp.Tests.PackageParity
+            test/OptunaSharp.Tests.Storage.Redis/docker-compose.yml
           sparse-checkout-cone-mode: false
       - name: Pull the deployed feed into the project
         uses: actions/download-artifact@v4
         with:
           name: deployed-feed
           path: test/OptunaSharp.Tests.PackageParity/feed
-      - name: Build the isolated image (context = the test project only; src/ never enters it)
+      - name: Package-parity via docker compose (test container + real Redis service)
+        env:
+          OPTUNASHARP_VERSION: ${{ needs.package.outputs.version }}
         run: |
-          docker build -t optunasharp-pkgparity \
-            --build-arg OPTUNASHARP_VERSION=${{ needs.package.outputs.version }} \
-            test/OptunaSharp.Tests.PackageParity
-      - name: Generate real-package oracles + replay against the packaged OptunaSharp
-        run: docker run --rm optunasharp-pkgparity
+          docker compose -f test/OptunaSharp.Tests.PackageParity/docker-compose.yml \
+            up --build --abort-on-container-exit --exit-code-from package-parity
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f test/OptunaSharp.Tests.PackageParity/docker-compose.yml down -v

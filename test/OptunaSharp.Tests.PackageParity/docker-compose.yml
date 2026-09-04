@@ -1,0 +1,42 @@
+# docker-compose orchestration for the ISOLATED package-parity gate.
+#
+# Fits the same pattern the source-backed integration suites use (OptunaSharp.Tests.Storage.Redis,
+# OptunaSharp.Tests.Artifacts): stand up real, credential-free external services and test against
+# them. The difference here is the execution model:
+#
+#   * Those suites run `dotnet test` ON THE HOST and reach services at localhost:<port>.
+#   * This gate runs the tests INSIDE a container (so `src/` is never present — see README), so it
+#     reaches services by their compose SERVICE NAME on the shared network (redis:6379, ...).
+#
+# Because of that, only endpoint-configurable services compose cleanly into the container model.
+# JournalRedisBackend takes OPTUNASHARP_REDIS_URL, so Redis is REUSED from the storage suite via
+# `include:` (no duplication) and wired below. The artifact emulators (MinIO/Azurite/fake-gcs) still
+# hardcode localhost in ArtifactEmulators.cs, so they compose in identically once that helper honours
+# an endpoint env var — tracked in the README.
+#
+#   Run:   OPTUNASHARP_VERSION=0.1.0 docker compose \
+#            -f test/OptunaSharp.Tests.PackageParity/docker-compose.yml \
+#            up --build --abort-on-container-exit --exit-code-from package-parity
+#   Down:  docker compose -f test/OptunaSharp.Tests.PackageParity/docker-compose.yml down -v
+
+include:
+  # Reuse the Redis service definition from the storage suite rather than duplicate it.
+  - ../OptunaSharp.Tests.Storage.Redis/docker-compose.yml
+
+services:
+  package-parity:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        OPTUNASHARP_VERSION: ${OPTUNASHARP_VERSION:-0.1.0}
+    environment:
+      OPTUNASHARP_VERSION: ${OPTUNASHARP_VERSION:-0.1.0}
+      PACKAGE_PARITY_ORACLE_DIR: /work/oracle
+      PACKAGE_PARITY_REQUIRE: "1"
+      # Reach the composed Redis by service name (the packaged JournalRedis parity uses this once the
+      # satellite is fed + the OpenBLAS blocker is resolved — see README).
+      OPTUNASHARP_REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
