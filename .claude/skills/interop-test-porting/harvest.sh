@@ -8,6 +8,10 @@
 #                                      (QUERY default 'import optuna', LIMIT default 100, max 1000)
 #   harvest.sh gists [QUERY]           Public gists matching QUERY, via HTML scrape (no gist API).
 #                                      Output: owner/gist_id  (QUERY default 'optuna create_study')
+#   harvest.sh gists-ranked [LIMIT] [QUERY...]
+#                                      Star-ranked gists (GraphQL Gist.stargazerCount — REST/HTML give
+#                                      no stars) across a pool gathered from QUERY... (default: several
+#                                      optuna queries). Output: STARS<TAB>owner/gist_id  (LIMIT default 25)
 #   harvest.sh file  OWNER/REPO PATH   Print a raw file from a repo (default branch).
 #   harvest.sh gist  GIST_ID [FILE]    Gist description + file list; or, with FILE, that file's content.
 #
@@ -62,10 +66,38 @@ cmd_gist() {
   fi
 }
 
+cmd_gists_ranked() {
+  # [LIMIT] [QUERY...] → STARS<TAB>owner/gist_id, descending. Gists carry no stars in REST/HTML, so
+  # gather a pool from the HTML search (several queries x pages) then enrich each via GraphQL.
+  local limit="${1:-25}"; shift 2>/dev/null || true
+  local queries=("$@")
+  [ "${#queries[@]}" -eq 0 ] && queries=("import optuna" "optuna study" "optuna create_study" \
+    "optuna TPESampler" "optuna suggest_float" "optuna objective trial" "optuna pruner")
+  local tmp; tmp="$(mktemp -d)"
+  local q p
+  for q in "${queries[@]}"; do
+    for p in 1 2 3; do
+      curl -s -A "Mozilla/5.0" "https://gist.github.com/search?q=$(urlenc "$q")&p=$p" 2>/dev/null \
+        | grep -oE 'href="/[A-Za-z0-9_-]+/[0-9a-f]{20,}"' | sed -E 's#href="/(.*)"#\1#'
+    done
+  done | sort -u > "$tmp/ids.txt"
+  local GQ='query($login:String!,$name:String!){user(login:$login){gist(name:$name){stargazerCount}}}'
+  local owner id sc
+  while IFS=/ read -r owner id; do
+    [ -z "$id" ] && continue
+    sc="$(GH api graphql -f query="$GQ" -F login="$owner" -F name="$id" \
+        --jq '.data.user.gist.stargazerCount // 0' 2>/dev/null)"
+    printf '%s\t%s/%s\n' "${sc:-0}" "$owner" "$id" >> "$tmp/stars.tsv"
+  done < "$tmp/ids.txt"
+  sort -t"$(printf '\t')" -k1,1nr "$tmp/stars.tsv" | head -n "$limit"
+  rm -rf "$tmp"
+}
+
 case "${1:-help}" in
-  repos) shift; cmd_repos "$@" ;;
-  gists) shift; cmd_gists "$@" ;;
-  file)  shift; cmd_file  "$@" ;;
-  gist)  shift; cmd_gist  "$@" ;;
-  *)     sed -n '2,25p' "$0" ;;   # print the usage header
+  repos)        shift; cmd_repos "$@" ;;
+  gists)        shift; cmd_gists "$@" ;;
+  gists-ranked) shift; cmd_gists_ranked "$@" ;;
+  file)         shift; cmd_file  "$@" ;;
+  gist)         shift; cmd_gist  "$@" ;;
+  *)            sed -n '2,29p' "$0" ;;   # print the usage header
 esac

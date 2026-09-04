@@ -33,12 +33,17 @@ pinning the specific patterns battle-tested code depends on.
 ```bash
 SK=.claude/skills/interop-test-porting
 bash $SK/harvest.sh repos 'import optuna' 100     # popular repos, ranked by stars (STARS<TAB>repo<TAB>path)
-bash $SK/harvest.sh gists 'optuna create_study'   # public gists (user/id) via HTML scrape — no gist API
+bash $SK/harvest.sh gists-ranked 25               # gists STAR-RANKED (STARS<TAB>owner/id), descending
+bash $SK/harvest.sh gists 'optuna create_study'   # or: just the raw gist ids for one query (no ranking)
 ```
 Caveats baked into the script: code search returns **no stars** (two hops — search, then enrich each
 repo via `repos/{o}/{r}`), is **rate-limited 10/min**, **capped at 1000 results**, and ranked by
-relevance not popularity — so it's a sample, not a census. Gists have no search API; the script
-scrapes `gist.github.com/search`. **The top gist authors are Optuna maintainers** — their gists are
+relevance not popularity — so it's a sample, not a census. Gists have no search API and **no stars in
+REST/HTML** either — `gists-ranked` scrapes `gist.github.com/search` for a pool, then enriches each
+via GraphQL `Gist.stargazerCount`. Reality check: the most-starred optuna gists are real workloads
+with heavy external objectives (ffmpeg, xgboost, rocksdb) — port the **search space** and pair it with
+a deterministic surrogate + fixed seed (RandomSampler → bit-exact), as in
+[`examples/`](../../../examples) / `GistExampleParityTests`. **The top gist authors are Optuna maintainers** — their gists are
 canonical. Known goldmine: keisuke-umezawa gist `d57c1a2acd4afebe3845ecec22a2b6bc` = ~20 study
 archetypes in one script (an oracle-corpus seed). See memory `battle-tested-optuna-usage-sources`.
 
