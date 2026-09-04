@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp</RootNamespace>
+    <AssemblyName>OptunaSharp.Storage.NRedisStack</AssemblyName>
+
+    <PackageId>OptunaSharp.Storage.NRedisStack</PackageId>
+    <Description>Redis journal-log backend for OptunaSharp on NRedisStack — Redis's official .NET client. NRedisStackJournalRedisBackend persists an Optuna study's operation log to a Redis server (standalone or cluster), byte-compatible with Python Optuna and the sibling StackExchange/ServiceStack backends. NRedisStack layers the Redis Stack modules on StackExchange.Redis; a journal needs only plain GET/SET/INCR/EVAL, served via the underlying IDatabase. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;Redis;NRedisStack;Storage;Journal;HyperparameterOptimization;HPO;SciSharp</PackageTags>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Redis's official .NET client. Brings StackExchange.Redis transitively (NRedisStack is a
+         superset of it); this backend uses the plain IDatabase surface for GET/SET/INCR/EVAL. -->
+    <PackageReference Include="NRedisStack" Version="1.7.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OptunaSharp.Storage.Redis\OptunaSharp.Storage.Redis.csproj" />
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

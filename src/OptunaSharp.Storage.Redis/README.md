@@ -1,73 +1,26 @@
 # OptunaSharp.Storage.Redis
 
-Redis journal-log backend for [**OptunaSharp**](https://github.com/SciSharp/OptunaSharp) — a .NET
-port of [Optuna](https://github.com/optuna/optuna), the define-by-run hyperparameter-optimization
-framework, and part of the [SciSharp STACK](https://github.com/SciSharp).
+Shared, **client-agnostic** primitives for the OptunaSharp Redis journal backends — with **no Redis
+client dependency of its own**. Part of [OptunaSharp](https://github.com/SciSharp/OptunaSharp) (a .NET
+port of Optuna) and the [SciSharp STACK](https://github.com/SciSharp).
 
-`JournalRedisBackend` persists an Optuna study's operation log to a Redis server (standalone or
-cluster). It is a faithful port of Optuna's `optuna.storages.journal.JournalRedisBackend` and is
-**byte-compatible with Python Optuna** on the wire — the same `{prefix}:log_number` counter,
-`{prefix}:log:{n}` entries, and `{prefix}:snapshot` blob — so a study written to Redis by Python
-Optuna can be read by OptunaSharp and vice versa.
+## What's here
 
-Built on [StackExchange.Redis](https://github.com/StackExchange/StackExchange.Redis).
+- **`RedisEndpoint` + `RedisUrl.Parse(url)`** — parse a `redis-py`-style URL (`redis://`, `rediss://`
+  TLS, `unix://`, with `[user]:[pass]@`, `/db`, `?db=`/`?username=`/`?password=`) into a neutral
+  endpoint. Each backend builds its own client from this.
+- **`RedisJournalProtocol`** — the Redis key layout (`{prefix}:log_number`, `{prefix}:log:{n}`,
+  `{prefix}:snapshot`), the atomic-append Lua script, and the experimental-warning text.
 
-## Why a separate package?
+Sharing these constants (rather than an implementation abstraction) is exactly what keeps the three
+**independent** client backends byte-identical against the same Redis, and byte-compatible with Python
+Optuna's `JournalRedisBackend`:
 
-OptunaSharp Core stays pure managed (NumSharp only). Anything that needs a foreign runtime — here, a
-Redis server via StackExchange.Redis — ships as its own package, mirroring Optuna's own optional
-dependencies. Install this only if you want the Redis backend.
+- **`OptunaSharp.Storage.StackExchange.Redis`** — on StackExchange.Redis (the de-facto standard, MIT)
+- **`OptunaSharp.Storage.NRedisStack`** — on NRedisStack (Redis's official client, MIT)
+- **`OptunaSharp.Storage.ServiceStack.Redis`** — on ServiceStack.Redis (commercial license)
 
-## Install
-
-```bash
-dotnet add package OptunaSharp.Storage.Redis
-```
-
-## Usage
-
-```csharp
-using OptunaSharp.Storages;
-using OptunaSharp.Storages.Journal;
-
-// A journal storage whose backend is a Redis server.
-var backend = new JournalRedisBackend("redis://localhost:6379");
-var storage = new JournalStorage(backend);
-
-var study = Optuna.CreateStudy(storage: storage);
-study.Optimize(trial => {
-    var x = trial.SuggestFloat("x", -10, 10);
-    return (x - 2) * (x - 2);
-}, nTrials: 20);
-```
-
-### Connection URL
-
-`redis://`, `rediss://` (TLS) and `unix://` are accepted, with an optional
-`[username]:[password]@` and `/db` (or `?db=`):
-
-```
-redis://localhost:6379
-redis://:password@localhost:6379/1
-rediss://user:password@redis.example.com:6380
-unix:///var/run/redis/redis.sock?db=0
-```
-
-### Cluster
-
-For a Redis **cluster**, pass `useCluster: true`. On a standalone server (the default) an append is a
-single atomic `EVAL` (increment-then-set) that keeps the preserved logs consistent; a cluster cannot
-slot-route the keys a script derives, so it falls back to two non-atomic commands — under network
-errors the preserved logs may be inconsistent.
-
-```csharp
-var backend = new JournalRedisBackend("redis://node1:6379", useCluster: true, prefix: "team-a");
-```
-
-## Status
-
-Experimental, tracking Optuna's own `@experimental_class("3.1.0")` marking (constructing the backend
-raises an `ExperimentalWarning`). The interface can change in the future.
+Reference one of those to actually use Redis storage; this package holds only the shared protocol.
 
 ## License
 

@@ -6,23 +6,28 @@
     <IsPackable>false</IsPackable>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
-    <PackageId>OptunaSharp.Tests.Storage</PackageId>
-    <!-- AssemblyName matches the friend granted in OptunaSharp.Storage.Redis's Assembly/Properties.cs,
-         so these tests can reach the internal RedisUrl adapter + the IConnectionMultiplexer ctor.
-         Strong-naming is set repo-wide in ../../Directory.Build.props. -->
+    <RootNamespace>OptunaSharp.Tests.Storage</RootNamespace>
+    <!-- AssemblyName matches the friend granted in each backend's + Core's Assembly/Properties.cs, so
+         these tests reach the internal ToConfiguration mappers, the shared-connection ctors, and Core's
+         OptunaWarnings.WarningRaised. Strong-naming is repo-wide in ../../Directory.Build.props. -->
+    <AssemblyName>OptunaSharp.Tests.Storage</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="MSTest" Version="3.8.3" />
     <PackageReference Include="AwesomeAssertions" Version="9.3.0" />
     <!-- Code-coverage collector: the "XPlat Code Coverage" data collector emits cobertura so the
-         full-API-coverage of OptunaSharp.Storage.Redis (JournalRedisBackend + RedisUrl) is measurable. -->
+         full-API-coverage of all three backends + the shared parser is measurable. -->
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The satellite under test (transitively brings Core + StackExchange.Redis). Core is also
-         referenced explicitly for JournalStorage / Optuna.CreateStudy used by the round-trip tests. -->
+    <!-- All three client backends under test (each transitively brings the shared package + Core +
+         its Redis client). The shared package + Core are referenced explicitly too, for RedisUrl.Parse
+         / RedisJournalProtocol and JournalStorage / Optuna.CreateStudy used across the suite. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Storage.StackExchange.Redis\OptunaSharp.Storage.StackExchange.Redis.csproj" />
+    <ProjectReference Include="..\..\src\OptunaSharp.Storage.NRedisStack\OptunaSharp.Storage.NRedisStack.csproj" />
+    <ProjectReference Include="..\..\src\OptunaSharp.Storage.ServiceStack.Redis\OptunaSharp.Storage.ServiceStack.Redis.csproj" />
     <ProjectReference Include="..\..\src\OptunaSharp.Storage.Redis\OptunaSharp.Storage.Redis.csproj" />
     <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
   </ItemGroup>

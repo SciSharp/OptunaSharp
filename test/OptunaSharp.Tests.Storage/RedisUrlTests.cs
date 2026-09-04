@@ -1,100 +1,101 @@
-using System.Net;
-using System.Net.Sockets;
 using AwesomeAssertions;
 using NumSharp;                          // ValueError
-using OptunaSharp.Storages.Journal;      // RedisUrl (internal — reachable via the friend grant)
-using StackExchange.Redis;
+using OptunaSharp.Storages.Journal;      // RedisUrl / RedisEndpoint (shared package)
 
 namespace OptunaSharp.Tests.Storage;
 
 /// <summary>
-///     Unit tests for the <c>redis://</c> → <see cref="ConfigurationOptions" /> adapter — the one
-///     piece of bespoke glue in the Redis journal backend (StackExchange.Redis has no URI parser;
-///     <c>redis-py</c>'s <c>Redis.from_url</c> gave Optuna this for free). No server required.
+///     Unit tests for the shared <c>redis://</c> → <see cref="RedisEndpoint" /> parser — the one bit of
+///     bespoke glue (StackExchange.Redis / ServiceStack have no common URI parser; redis-py's
+///     <c>from_url</c> gave Optuna this). All three backends build their client from this, so parsing
+///     once here is what keeps their connection interpretation identical. No server required.
 /// </summary>
 [TestClass]
 public class RedisUrlTests
 {
-    private static (string Host, int Port) Endpoint(ConfigurationOptions o)
-    {
-        o.EndPoints.Should().HaveCount(1);
-        return o.EndPoints[0] switch
-        {
-            DnsEndPoint d => (d.Host, d.Port),
-            IPEndPoint ip => (ip.Address.ToString(), ip.Port),
-            var ep => (ep.ToString()!, -1),
-        };
-    }
-
     [TestMethod]
     public void PlainHostPort()
     {
-        var o = RedisUrl.BuildConfiguration("redis://localhost:6379");
-        Endpoint(o).Should().Be(("localhost", 6379));
-        o.Ssl.Should().BeFalse();
-        o.DefaultDatabase.Should().BeNull();
-        o.User.Should().BeNull();
-        o.Password.Should().BeNull();
-        // redis-py connects lazily; construction must not fail if the server is momentarily down.
-        o.AbortOnConnectFail.Should().BeFalse();
+        var e = RedisUrl.Parse("redis://localhost:6379");
+        e.Host.Should().Be("localhost");
+        e.Port.Should().Be(6379);
+        e.Ssl.Should().BeFalse();
+        e.Db.Should().BeNull();
+        e.User.Should().BeNull();
+        e.Password.Should().BeNull();
+        e.UnixSocketPath.Should().BeNull();
     }
 
     [TestMethod]
-    public void DefaultsPortWhenOmitted()
-    {
-        Endpoint(RedisUrl.BuildConfiguration("redis://localhost")).Should().Be(("localhost", 6379));
-    }
+    public void DefaultsPortWhenOmitted() => RedisUrl.Parse("redis://localhost").Port.Should().Be(6379);
 
     [TestMethod]
     public void PasswordOnly_NoUser_WithDbInPath()
     {
-        var o = RedisUrl.BuildConfiguration("redis://:secret@127.0.0.1:6380/3");
-        Endpoint(o).Should().Be(("127.0.0.1", 6380));
-        o.Password.Should().Be("secret");
-        o.User.Should().BeNull();
-        o.DefaultDatabase.Should().Be(3);
+        var e = RedisUrl.Parse("redis://:secret@127.0.0.1:6380/3");
+        e.Host.Should().Be("127.0.0.1");
+        e.Port.Should().Be(6380);
+        e.Password.Should().Be("secret");
+        e.User.Should().BeNull();
+        e.Db.Should().Be(3);
     }
 
     [TestMethod]
     public void UserAndPercentEncodedPassword()
     {
-        var o = RedisUrl.BuildConfiguration("redis://alice:p%40ss@redis.example.com:6379/1");
-        o.User.Should().Be("alice");
-        o.Password.Should().Be("p@ss");   // %40 → '@', unescaped like redis-py.
-        o.DefaultDatabase.Should().Be(1);
+        var e = RedisUrl.Parse("redis://alice:p%40ss@redis.example.com:6379/1");
+        e.User.Should().Be("alice");
+        e.Password.Should().Be("p@ss");   // %40 → '@'
+        e.Db.Should().Be(1);
     }
 
     [TestMethod]
     public void RedissEnablesTls()
     {
-        var o = RedisUrl.BuildConfiguration("rediss://user:pw@redis.example.com:6380");
-        o.Ssl.Should().BeTrue();
-        o.SslHost.Should().Be("redis.example.com");
-        Endpoint(o).Should().Be(("redis.example.com", 6380));
+        var e = RedisUrl.Parse("rediss://user:pw@redis.example.com:6380");
+        e.Ssl.Should().BeTrue();
+        e.Host.Should().Be("redis.example.com");
+        e.Port.Should().Be(6380);
     }
 
     [TestMethod]
-    public void QueryDbOverridesPathDb()
+    public void QueryDbOverridesPathDb() => RedisUrl.Parse("redis://host:6379/2?db=5").Db.Should().Be(5);
+
+    [TestMethod]
+    public void QueryUsernameAndPassword()
     {
-        var o = RedisUrl.BuildConfiguration("redis://host:6379/2?db=5");
-        o.DefaultDatabase.Should().Be(5);   // ?db= wins over the /2 path (redis-py precedence).
+        var e = RedisUrl.Parse("redis://host:6379?username=alice&password=secret");
+        e.User.Should().Be("alice");
+        e.Password.Should().Be("secret");
+    }
+
+    [TestMethod]
+    public void UserOnly_NoPassword()
+    {
+        var e = RedisUrl.Parse("redis://alice@host:6379");
+        e.User.Should().Be("alice");
+        e.Password.Should().BeNull();
     }
 
     [TestMethod]
     public void UnixSocket()
     {
-        var o = RedisUrl.BuildConfiguration("unix:///var/run/redis/redis.sock?db=0&password=abc");
-        o.EndPoints.Should().HaveCount(1);
-        o.EndPoints[0].Should().BeOfType<UnixDomainSocketEndPoint>();
-        o.EndPoints[0].ToString().Should().Be("/var/run/redis/redis.sock");
-        o.DefaultDatabase.Should().Be(0);
-        o.Password.Should().Be("abc");
+        var e = RedisUrl.Parse("unix:///var/run/redis/redis.sock?db=0&password=abc");
+        e.UnixSocketPath.Should().Be("/var/run/redis/redis.sock");
+        e.Db.Should().Be(0);
+        e.Password.Should().Be("abc");
     }
 
     [TestMethod]
-    public void UnknownScheme_ThrowsValueError_VerbatimRedisPyMessage()
+    public void NonNumericDbPath_IsIgnored() => RedisUrl.Parse("redis://host:6379/not-a-db").Db.Should().BeNull();
+
+    [TestMethod]
+    public void ValuelessQueryFlag_IsIgnored() => RedisUrl.Parse("redis://host:6379?verbose&db=2").Db.Should().Be(2);
+
+    [TestMethod]
+    public void UnknownScheme_ThrowsValueError()
     {
-        var act = () => RedisUrl.BuildConfiguration("http://localhost:6379");
+        var act = () => RedisUrl.Parse("http://localhost:6379");
         act.Should().Throw<ValueError>()
             .WithMessage("*Redis URL must specify one of the following schemes (redis://, rediss://, unix://)*");
     }
@@ -102,37 +103,7 @@ public class RedisUrlTests
     [TestMethod]
     public void Malformed_ThrowsValueError()
     {
-        var act = () => RedisUrl.BuildConfiguration("not-a-url");
+        var act = () => RedisUrl.Parse("not-a-url");
         act.Should().Throw<ValueError>().WithMessage("*Invalid Redis URL*");
-    }
-
-    [TestMethod]
-    public void QueryUsernameAndPassword_Override()
-    {
-        var o = RedisUrl.BuildConfiguration("redis://host:6379?username=alice&password=secret");
-        o.User.Should().Be("alice");
-        o.Password.Should().Be("secret");
-    }
-
-    [TestMethod]
-    public void UserOnly_NoPassword()
-    {
-        var o = RedisUrl.BuildConfiguration("redis://alice@host:6379");
-        o.User.Should().Be("alice");
-        o.Password.Should().BeNull();
-    }
-
-    [TestMethod]
-    public void NonNumericDbPath_IsIgnored()
-    {
-        RedisUrl.BuildConfiguration("redis://host:6379/not-a-db").DefaultDatabase.Should().BeNull();
-    }
-
-    [TestMethod]
-    public void ValuelessQueryFlag_IsIgnored()
-    {
-        // A bare query flag (no '=') must parse without throwing; other params still apply.
-        var o = RedisUrl.BuildConfiguration("redis://host:6379?verbose&db=2");
-        o.DefaultDatabase.Should().Be(2);
     }
 }

@@ -22,10 +22,12 @@ using System.Runtime.CompilerServices;
 // signed automatically; one run from elsewhere must pass the signing properties itself.
 [assembly: InternalsVisibleTo("OptunaSharp.DotNetRunScript, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
-// The Redis journal backend (satellite package OptunaSharp.Storage.Redis) serializes logs through
-// the same internal PyJson (so the on-wire bytes stay byte-compatible with Python Optuna) and raises
-// the experimental-class warning via OptunaWarnings/WarningCategory — both internal to Core.
-[assembly: InternalsVisibleTo("OptunaSharp.Storage.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// The Redis journal backends (satellite packages, one per Redis client) serialize logs through the
+// same internal PyJson (so the on-wire bytes stay byte-compatible with Python Optuna) and raise the
+// experimental-class warning via OptunaWarnings/WarningCategory — both internal to Core.
+[assembly: InternalsVisibleTo("OptunaSharp.Storage.StackExchange.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+[assembly: InternalsVisibleTo("OptunaSharp.Storage.NRedisStack, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+[assembly: InternalsVisibleTo("OptunaSharp.Storage.ServiceStack.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
 // The ML.NET FastForest backend (satellite package OptunaSharp.Importance.Forests.ML.NET, Phase 5.1)
 // reuses Core's internal forest machinery: SklearnLikeTree / FanovaTree / Fanova / Mdi /
@@ -39,8 +41,9 @@ using System.Runtime.CompilerServices;
 // the native CART port) directly — the port of Optuna's test_tree.py asserts against the tree
 // algorithm with no forest involved, and the native-forest tests reach CartRandomForest.
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Forests, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
-// Its test project asserts that experimental warning fired via the internal OptunaWarnings.WarningRaised
-// event (same reason the interop suite is a friend).
+
+// The Redis backends' shared test project asserts that experimental warning fired via the internal
+// OptunaWarnings.WarningRaised event (same reason the interop suite is a friend).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
 /// <summary>

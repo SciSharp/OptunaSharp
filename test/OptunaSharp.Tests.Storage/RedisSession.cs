@@ -1,30 +1,38 @@
 using System;
-using OptunaSharp.Storages.Journal;    // RedisUrl (friend access), JournalRedisBackend
+using OptunaSharp.Storages.Journal;    // RedisUrl.Parse, the three backends (friend access to ToConfiguration)
 using StackExchange.Redis;
 
 namespace OptunaSharp.Tests.Storage;
 
 /// <summary>
-///     Reachability gating + connection factories for the Redis server defined in
-///     <c>docker-compose.yml</c> (this folder). Mirrors the Artifacts suite's
-///     <c>ArtifactEmulators</c> / the interop suite's <c>PythonSession.EnsureOrInconclusive</c>
-///     pattern: an <c>Integration</c> test calls <see cref="EnsureReachable" /> first and reports
-///     <see cref="Assert.Inconclusive(string)" /> when Redis is not reachable (so the suite is safe
-///     to run without Docker), unless <c>OPTUNASHARP_REDIS_REQUIRED</c> is truthy — then an absent
-///     server is a hard failure (for CI once wired).
+///     Reachability gating + backend factories for the Redis server defined in <c>docker-compose.yml</c>
+///     (this folder). Mirrors the Artifacts suite's <c>ArtifactEmulators</c> / the interop suite's
+///     <c>PythonSession.EnsureOrInconclusive</c>: an <c>Integration</c> test calls
+///     <see cref="EnsureReachable" /> first and reports <see cref="Assert.Inconclusive(string)" /> when
+///     Redis is unreachable (so the suite is safe without Docker), unless <c>OPTUNASHARP_REDIS_REQUIRED</c>
+///     is truthy (then absent = hard failure, for CI once wired).
 ///
 ///     Endpoint: <c>OPTUNASHARP_REDIS_URL</c> (default <c>redis://localhost:6379</c>).
 /// </summary>
 internal static class RedisSession
 {
-    public const int RedisPort = 6379;
-
     internal static string Url =>
         Environment.GetEnvironmentVariable("OPTUNASHARP_REDIS_URL") is { Length: > 0 } u ? u : "redis://localhost:6379";
 
+    /// <summary>
+    ///     The three client backends under test, addressable by name for the per-backend contract and
+    ///     the cross-library parity matrix. Each factory builds a backend bound to the test Redis under
+    ///     <c>prefix</c>, in the requested standalone/cluster mode.
+    /// </summary>
+    internal static readonly (string Name, Func<string, bool, BaseJournalBackend> Create)[] Backends =
+    {
+        ("StackExchange", (prefix, cluster) => new StackExchangeJournalRedisBackend(Url, cluster, prefix)),
+        ("NRedisStack",   (prefix, cluster) => new NRedisStackJournalRedisBackend(Url, cluster, prefix)),
+        ("ServiceStack",  (prefix, cluster) => new ServiceStackJournalRedisBackend(Url, cluster, prefix)),
+    };
+
     private static bool? _reachable;
 
-    /// <summary>Skip (Inconclusive) — or fail, if required — when Redis is not reachable.</summary>
     public static void EnsureReachable()
     {
         _reachable ??= Probe();
@@ -39,13 +47,9 @@ internal static class RedisSession
         Assert.Inconclusive(reason);
     }
 
-    /// <summary>A journal backend bound to the test Redis under a caller-chosen key prefix.</summary>
-    internal static JournalRedisBackend NewBackend(string prefix, bool useCluster = false)
-        => new(Url, useCluster: useCluster, prefix: prefix);
-
-    /// <summary>A raw multiplexer for inspecting/seeding keys directly (byte-compat assertions).</summary>
+    /// <summary>A raw StackExchange multiplexer for inspecting/seeding keys directly (byte-compat).</summary>
     internal static ConnectionMultiplexer RawConnection()
-        => ConnectionMultiplexer.Connect(RedisUrl.BuildConfiguration(Url));
+        => ConnectionMultiplexer.Connect(StackExchangeJournalRedisBackend.ToConfiguration(RedisUrl.Parse(Url)));
 
     /// <summary>A fresh, unique key prefix so parallel/repeat runs never collide on a shared server.</summary>
     internal static string UniquePrefix() => $"optunasharp-test:{Guid.NewGuid():N}";
@@ -60,10 +64,10 @@ internal static class RedisSession
     {
         try
         {
-            var options = RedisUrl.BuildConfiguration(Url);
+            var options = StackExchangeJournalRedisBackend.ToConfiguration(RedisUrl.Parse(Url));
             options.ConnectTimeout = 1500;
-            options.ConnectRetry = 0;            // one shot — don't spend seconds retrying an absent server.
-            options.AbortOnConnectFail = true;   // probe wants a hard yes/no, not lazy retries.
+            options.ConnectRetry = 0;
+            options.AbortOnConnectFail = true;
             using var mux = ConnectionMultiplexer.Connect(options);
             return mux.GetDatabase().Ping() >= TimeSpan.Zero;
         }

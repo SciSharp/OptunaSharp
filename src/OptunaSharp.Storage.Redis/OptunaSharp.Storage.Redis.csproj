@@ -5,44 +5,29 @@
     <RootNamespace>OptunaSharp</RootNamespace>
     <AssemblyName>OptunaSharp.Storage.Redis</AssemblyName>
 
-    <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/
-         license/version) is centralized in ../../Directory.Build.props. This is a Tier X satellite:
-         it pulls a foreign runtime (a Redis server via StackExchange.Redis), so it ships separately
-         and Core stays pure managed — the NumSharp.Interop.OpenBLAS optional-package pattern. -->
+    <!-- Shared, CLIENT-AGNOSTIC primitives for the Redis journal backends. No Redis client dependency:
+         the StackExchange / NRedisStack / ServiceStack backend packages each reference this and bring
+         their own client. Sharing the parser + key layout + Lua text (not an abstraction) is what keeps
+         those three byte-identical. -->
     <PackageId>OptunaSharp.Storage.Redis</PackageId>
-    <Description>Redis journal-log backend for OptunaSharp (a .NET port of Optuna). JournalRedisBackend persists an Optuna study's operation log to a Redis server — standalone or cluster — byte-compatible with Optuna's optuna.storages.journal.JournalRedisBackend, so a study can be shared with Python Optuna over the same Redis. Built on StackExchange.Redis. Part of the SciSharp STACK.</Description>
-    <PackageTags>Optuna;OptunaSharp;Redis;StackExchangeRedis;Storage;Journal;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
+    <Description>Shared, client-agnostic primitives for the OptunaSharp Redis journal backends: the redis:// URL parser (RedisEndpoint / RedisUrl), the Redis key layout, and the atomic append Lua script (RedisJournalProtocol). No Redis client dependency of its own — the StackExchange / NRedisStack / ServiceStack backend packages build on this. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;Redis;Storage;Journal;HPO;SciSharp</PackageTags>
 
-    <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on missing/malformed
-         doc comments — the surface is ported to match Optuna, not curated per-member. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
 
-    <!-- Emit the .pdb inside the .nupkg (the release pipeline pushes only *.nupkg). -->
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>optunasharp-icon.png</PackageIcon>
     <PackageOutputPath>../../packages</PackageOutputPath>
-
-    <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
-    <!-- Reuse the shared OptunaSharp package icon. -->
     <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The de-facto standard Redis client: MIT, native net8.0/net10.0, covers the full command
-         surface this backend needs (GET/SET/SETNX/INCR + Lua EVAL via ScriptEvaluate). -->
-    <PackageReference Include="StackExchange.Redis" Version="3.1.31" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- Core is in-repo, so reference it by project. Packing records a clean "OptunaSharp" package
-         dependency. Core transitively provides NumSharp (ValueError) + the internal PyJson/Warnings
-         this backend uses (granted via InternalsVisibleTo in Core's Assembly/Properties.cs). -->
     <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
   </ItemGroup>
 

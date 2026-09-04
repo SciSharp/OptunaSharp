@@ -9,15 +9,15 @@ using StackExchange.Redis;
 namespace OptunaSharp.Tests.Interop;
 
 /// <summary>
-///     Cross-language Redis persistence, live: Python Optuna writes a study to Redis via
-///     <c>JournalRedisBackend</c> → OptunaSharp reads and continues it → Python reads the
-///     C#-written operations back. Same Redis keys, both directions — the Redis analogue of
-///     <see cref="JournalInteropTests" /> (the journal-file gate). This proves the on-wire encoding
-///     (<c>json.dumps</c> logs under the shared <c>{prefix}:log:{n}</c> keys + <c>{prefix}:log_number</c>
-///     counter) is genuinely interchangeable across the language boundary.
+///     Cross-language Redis persistence, live: Python Optuna writes a study to Redis → OptunaSharp
+///     reads and continues it → Python reads the C#-written operations back. Same Redis keys, both
+///     directions — run against <b>each</b> of the three C# client backends (StackExchange /
+///     NRedisStack / ServiceStack), proving the on-wire encoding is interchangeable across the language
+///     boundary for every library (the cross-library C#↔C# parity lives in
+///     <c>OptunaSharp.Tests.Storage.CrossLibraryParityTests</c>).
 ///
 ///     Requires a reachable Redis AND redis-py in the interop Python; self-skips (Inconclusive)
-///     otherwise, exactly like the <c>RequiresPython</c> gate.
+///     otherwise, like the <c>RequiresPython</c> gate.
 /// </summary>
 [TestClass]
 public class JournalRedisInteropTests
@@ -34,7 +34,25 @@ public class JournalRedisInteropTests
     [TestCategory("RequiresPython")]
     [TestCategory("RequiresRedis")]
     [TestCategory("Integration")]
-    public void Python_Writes_CSharp_Continues_Python_ReadsBack()
+    public void StackExchange_Python_RoundTrip()
+        => RunParity(prefix => new StackExchangeJournalRedisBackend(Url, prefix: prefix));
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("RequiresRedis")]
+    [TestCategory("Integration")]
+    public void NRedisStack_Python_RoundTrip()
+        => RunParity(prefix => new NRedisStackJournalRedisBackend(Url, prefix: prefix));
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("RequiresRedis")]
+    [TestCategory("Integration")]
+    public void ServiceStack_Python_RoundTrip()
+        => RunParity(prefix => new ServiceStackJournalRedisBackend(Url, prefix: prefix));
+
+    /// <summary>Python writes → the given C# backend reads &amp; continues → Python reads the C# ops back.</summary>
+    private void RunParity(Func<string, BaseJournalBackend> createBackend)
     {
         PythonSession.EnsureOrInconclusive();
         EnsureRedisOrInconclusive();
@@ -62,8 +80,8 @@ public class JournalRedisInteropTests
             pythonBest = scope.Get("best").As<double>();
         }
 
-        // --- 2. OptunaSharp reads the study from Redis and continues it. -----------------
-        var storage = new JournalStorage(new JournalRedisBackend(Url, prefix: _prefix));
+        // --- 2. OptunaSharp reads the study from Redis and continues it (via this backend). ----
+        var storage = new JournalStorage(createBackend(_prefix));
         var study = Optuna.LoadStudy("interop", storage, sampler: new RandomSampler(seed: 7));
 
         study.Trials.Should().HaveCount(5, "all Python trials must replay from Redis");
