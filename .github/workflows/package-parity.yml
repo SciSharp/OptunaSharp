@@ -1,0 +1,122 @@
+name: Package Parity (isolated)
+
+# Build -> Package -> Deploy -> Test, each an ISOLATED job. The test job never sees src/: it
+# sparse-checks-out only the package-parity project and runs it in a Docker container whose build
+# context is that project alone. The container binds to the PACKAGED OptunaSharp (from a local feed)
+# and replays real Optuna + real xgboost/lightgbm/sklearn oracles against it. See
+# test/OptunaSharp.Tests.PackageParity/README.md.
+#
+# NOTE: until NumSharp.Interop.OpenBLAS is published to nuget.org (or made optional), the build/package
+# stages fail restore with NU1101 — a real finding this pipeline surfaces, not a harness bug.
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    paths:
+      - "src/**"
+      - "test/OptunaSharp.Tests.PackageParity/**"
+      - ".github/workflows/package-parity.yml"
+  pull_request:
+    branches: [ "master", "main" ]
+    paths:
+      - "src/**"
+      - "test/OptunaSharp.Tests.PackageParity/**"
+      - ".github/workflows/package-parity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOWARN: CS1591%3BCS1573%3BCS1572%3BCS1570%3BCS1574%3BCS1587%3BCS1711%3BCS1734
+
+jobs:
+  # 1) BUILD — compile the shipping project (isolated: proves it builds).
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+          dotnet-quality: 'preview'
+      - name: Build Core
+        run: dotnet build src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
+
+  # 2) PACKAGE — pack the .nupkg, run the strong-name gate, and upload it as the ONLY thing that
+  #    flows to the test stage.
+  package:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+          dotnet-quality: 'preview'
+      - name: Pack
+        id: pack
+        run: |
+          mkdir -p feed
+          dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release \
+            --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
+          VER=$(ls feed/OptunaSharp.*.nupkg | sed -E 's#.*/OptunaSharp\.(.+)\.nupkg#\1#')
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "packed OptunaSharp $VER"
+      - name: Strong-name gate on the packed assembly
+        run: dotnet run .github/scripts/verify_strong_name.cs -- feed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: optunasharp-feed
+          path: feed/*.nupkg
+          retention-days: 5
+
+  # 3) DEPLOY — stage the packed artifact into an isolated feed the test stage consumes. This is the
+  #    "deploy" boundary: only the .nupkg crosses it (swap for GitHub Packages for a hosted feed).
+  deploy:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: optunasharp-feed
+          path: feed
+      - run: |
+          echo "Deploying feed:"; ls -la feed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployed-feed
+          path: feed
+          retention-days: 5
+
+  # 4) TEST — ISOLATED. Sparse-checkout ONLY the package-parity project (src/ is never fetched), drop
+  #    the deployed feed into it, then build + run a Docker image whose context is just that project.
+  #    Real ML packages are pip-installed in the container; the packaged OptunaSharp is replayed
+  #    against their oracles.
+  test:
+    needs: [ package, deploy ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ONLY the isolated test project (no src/)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: test/OptunaSharp.Tests.PackageParity
+          sparse-checkout-cone-mode: false
+      - name: Pull the deployed feed into the project
+        uses: actions/download-artifact@v4
+        with:
+          name: deployed-feed
+          path: test/OptunaSharp.Tests.PackageParity/feed
+      - name: Build the isolated image (context = the test project only; src/ never enters it)
+        run: |
+          docker build -t optunasharp-pkgparity \
+            --build-arg OPTUNASHARP_VERSION=${{ needs.package.outputs.version }} \
+            test/OptunaSharp.Tests.PackageParity
+      - name: Generate real-package oracles + replay against the packaged OptunaSharp
+        run: docker run --rm optunasharp-pkgparity
