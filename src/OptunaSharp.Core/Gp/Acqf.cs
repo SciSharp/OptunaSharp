@@ -67,14 +67,36 @@ internal static class Acqf
 }
 
 /// <summary>
+///     The common surface the acqf optimizer (<see cref="OptimMixed" />) drives — port of
+///     <c>acqf.BaseAcquisitionFunc</c>. It exposes the kernel <see cref="LengthScales" /> (used for the
+///     gradient-ascent preconditioning), the normalized <see cref="SearchSpace" />, and the three
+///     evaluation entry points: batched <c>eval_acqf_no_grad</c>, its single-point form (the discrete
+///     line/exhaustive search), and value+gradient <c>eval_acqf_with_grad</c> (the gradient ascent).
+/// </summary>
+internal interface IAcquisitionFunc
+{
+    GpSearchSpace SearchSpace { get; }
+    double[] LengthScales { get; }
+
+    /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    double[] EvalAcqfNoGrad(double[,] x);
+
+    /// <summary><c>eval_acqf_no_grad</c> at a single point <c>(dim,)</c> — the discrete searches.</summary>
+    double EvalAcqfNoGrad(double[] x);
+
+    /// <summary><c>eval_acqf_with_grad</c> — value + ∂/∂x at a single point <c>(dim,)</c>.</summary>
+    (double Value, double[] Grad) EvalAcqfWithGrad(double[] x);
+}
+
+/// <summary>
 ///     The log-expected-improvement acquisition function — port of <c>acqf.LogEI</c>. It scores a
 ///     normalized point by the log expected improvement of the GP posterior over the current best
-///     value <c>threshold</c>. <see cref="EvalAcqfNoGrad" /> evaluates a batch (used for the
+///     value <c>threshold</c>. <see cref="EvalAcqfNoGrad(double[,])" /> evaluates a batch (used for the
 ///     preliminary QMC samples and the discrete search); <see cref="EvalAcqfWithGrad" /> returns the
 ///     value and the hand-derived gradient (the autograd replacement the acqf optimizer's gradient
 ///     ascent needs). When <c>threshold</c> is <c>−∞</c> (no feasible trial) the acqf is identically 0.
 /// </summary>
-internal sealed class LogEI
+internal sealed class LogEI : IAcquisitionFunc
 {
     private readonly GPRegressor _gpr;
     private readonly double _threshold;
@@ -89,11 +111,11 @@ internal sealed class LogEI
         LengthScales = gpr.LengthScales;
     }
 
-    internal GpSearchSpace SearchSpace { get; }
-    internal double[] LengthScales { get; }
+    public GpSearchSpace SearchSpace { get; }
+    public double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> — LogEI at each row of <paramref name="x" /> (<c>(B, dim)</c>).</summary>
-    internal double[] EvalAcqfNoGrad(double[,] x)
+    public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0);
         var result = new double[b];
@@ -105,8 +127,21 @@ internal sealed class LogEI
         return result;
     }
 
+    /// <summary><c>eval_acqf_no_grad</c> at a single point — the 0-d form used by the discrete searches.</summary>
+    public double EvalAcqfNoGrad(double[] x)
+    {
+        if (double.IsNegativeInfinity(_threshold))
+            return 0.0;
+        int dim = x.Length;
+        var row = new double[1, dim];
+        for (int d = 0; d < dim; d++)
+            row[0, d] = x[d];
+        (double[] mean, double[] var) = _gpr.Posterior(row);
+        return Acqf.LogEi(mean[0], var[0] + _stabilizingNoise, _threshold);
+    }
+
     /// <summary><c>eval_acqf_with_grad</c> — LogEI and ∂LogEI/∂x at a single point <paramref name="x" /> (<c>(dim,)</c>).</summary>
-    internal (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
+    public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         int dim = x.Length;
         if (double.IsNegativeInfinity(_threshold))

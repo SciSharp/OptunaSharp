@@ -45,20 +45,23 @@ OptunaSharp can share a live journal file with no external package on either sid
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 3.2 part 3d** — `optim_mixed` (gradient ascent + discrete search) → `GPSampler`. Scrambled Sobol' (3c) ✅ done — **the last blocker is cleared.**
+### ▶ CONTINUE HERE: **Phase 3.2 part 3e** — the MO / constrained / q-batch acqf → the remaining `GPSampler` paths, then **3.3 GP terminators**. The single-objective `GPSampler` (3d) ✅ done — **GP-based optimization runs end-to-end.**
 
-> **All GP building blocks are now ported and validated vs live Optuna/scipy:** the fit (parts 1–2), the
-> search-space transforms + posterior (3a), the LogEI acqf eval + gradient (3b), and the scrambled Sobol'
-> preliminary sampling (3c, closing the 2.12 gap — bit-exact vs scipy). **Next (3d):** `optim_mixed.py` —
-> `optimize_acqf_mixed` (draw `SampleNormalizedParams` → argmax + roulette `rng.choice(p=)` start points →
-> `local_search_mixed_batched`), `_gradient_ascent_batched` (drives `LBfgsB` on the LogEI gradient with the
-> lengthscale preconditioning + `(0, 1/s)` bounds), and the discrete `_exhaustive_search`/`_discrete_line_search`
-> (uses `EvalAcqfNoGrad`; the line search needs `scipy.optimize.minimize_scalar(method="brent")` — a small
-> extra port). Then wire `GPSampler` (single-objective path first). (`box_decomposition` + MO/constrained/q-batch
-> acqf — LogEHVI/qLogEI/… — and 3.3 GP terminators come after.)
+> **The whole single-objective GP stack is ported and validated vs live Optuna/scipy:** the fit (parts
+> 1–2), the search-space transforms + posterior (3a), the LogEI acqf eval + gradient (3b), the scrambled
+> Sobol' preliminary sampling (3c), and now the mixed acqf optimizer + `GPSampler` itself (3d). A default
+> `GPSampler(seed=…)` optimizes single-objective studies end-to-end. **Next (3e):** the acqf classes the
+> other `_sample_relative_impl` branches need — `qLogEI` (running trials → q-batch, rides
+> `ConditionalGPRegressor` + `qmc.sample_from_normal_sobol`), `LogEHVI`/`qLogEHVI` (multi-objective, rides
+> the deferred `_hypervolume/box_decomposition.py` `get_non_dominated_box_bounds` + `logehvi`),
+> `LogCEI`/`LogCEHVI` (constrained, compose `LogPI` over the constraint GPRs). Each currently throws a
+> `NotImplementedException` in `GPSampler.SampleRelativeImpl` with a pointer here. The wiring
+> (standardize → per-objective fit → acqf → `OptimMixed` → unnormalize → RNG threading) is already in
+> place, so 3e is "add the acqf classes + un-throw the branches." Then **3.3 GP terminators**
+> (`RegretBoundEvaluator` default + `EMMREvaluator`) — now unblocked by the GP posterior/acqf.
 >
-> **Bonus unblock:** the 2.12 `QMCSampler` `scramble=true` (which also throws today) can now be implemented with
-> `Internal/ScrambledSobol` — a quick follow-up.
+> **Also still open:** the 2.12 `QMCSampler` `scramble=true` follow-up (throws today; `Internal/ScrambledSobol`
+> is ready — a quick wire-up).
 
 Phases 0, 1 and **2.1–2.16 are complete** — **Phase 2 (all native features) is DONE** — and **Phase 3 is
 now in progress**. The whole TPE surface, pruners, PED-ANOVA, terminators, the MO hypervolume/HSSP
@@ -85,9 +88,9 @@ to a loose-`gtol` tolerance across a random sweep. **GP stays native (Tier N); T
 ⚠️ **Plan correction (settled):** `batched_lbfgsb.py` is NOT "already numpy" as §7's parenthetical assumed —
 it is a greenlet *wrapper* around `scipy.optimize.fmin_l_bfgs_b`, and `_fit_kernel_params` itself calls
 `scipy.optimize.minimize(method="l-bfgs-b")`; the managed L-BFGS-B port (`Internal/LBfgsB.cs`) is what keeps
-GP native. **Next is Phase 3.2 part 3** — the acquisition functions (`acqf.py`: LogEI/qLogEI/LogEHVI/…), the
-mixed continuous/discrete acqf optimizer (`optim_mixed.py`, which drives `LBfgsB` again), the internal
-`search_space.py` (normalize/unnormalize), and finally `GPSampler` itself — then 3.3 GP terminators. The GP
+GP native. **Phase 3.2 parts 3a–3d are done — the single-objective `GPSampler` runs end-to-end** (LogEI acqf,
+the `optim_mixed.py` mixed optimizer, and the sampler wiring; **next is 3e**, the MO/constrained/q-batch acqf,
+then 3.3 GP terminators). The GP
 forward/fit stays **tolerance-exact, not bit-for-bit** (managed `SolveTriangular` + hand-written L-BFGS-B
 BLAS/LAPACK drift from scipy's by ULPs — the documented GP boundary). The plotly rendering
 `plot_*`/`_get_*_plot` stays Tier X **5.2**.
@@ -180,6 +183,42 @@ BLAS/LAPACK drift from scipy's by ULPs — the documented GP boundary). The plot
   unblocks the 2.12 `QMCSampler` `scramble=true`** (a follow-up). 3 unit (`ScrambledSobolTests` ×2,
   `SearchSpaceTests.SampleNormalizedParams`) + 2 interop (`GpSobolParityTests`: scramble sweep +
   SampleNormalizedParams). Suite: **492 unit + 218 interop**, both TFMs, none skipped.
+- ✅ **3.2 part 3d — mixed acqf optimizer + `GPSampler` (single-objective path). GP-based optimization
+  runs end-to-end.** Three new files. `Gp/OptimMixed.cs` ports `optim_mixed.py`: `OptimizeAcqfMixed`
+  (scrambled-Sobol' preliminary draw → `argmax` + the roulette `rng.choice(replace=False, p=)` start
+  points → `LocalSearchMixedBatched`), `GradientAscentBatched` (the lengthscale-preconditioned L-BFGS-B
+  gradient ascent over the continuous dims — `z = x/l`, bounds `(0, 1/l)`, `pgtol=√tol`, `maxiter=200` —
+  driving the managed `LBfgsB` per row), and the discrete `ExhaustiveSearch`/`DiscreteLineSearch` +
+  the `LocalSearchMixedBatched` convergence bookkeeping (the `remaining_inds`/`last_changed_dims` masks,
+  index-list-faithful). `Internal/BrentMinimizer.cs` ports scipy's `minimize_scalar(method="brent")`
+  (the 3-point-bracket `Brent` class — `_mintol`/`_cg`, parabolic-vs-golden step) for the discrete line
+  search. `Samplers/GPSampler.cs` ports `samplers/_gp/sampler.py`: `infer_relative_search_space`
+  (intersection minus singles), `_standardize_values`/`warn_and_convert_inf`, per-objective
+  `GPRegressor.FitKernelParams` with the cross-trial cache, `LogEI` build (`threshold =
+  standardized.max()`, `best_params = normalized[argmax]`), `_optimize_acqf` → `OptimMixed`, and
+  `get_unnormalized_param`; the `gp:relative_params` chunked system-attr sharing is byte-compatible
+  (`PyJson.Dumps`). **The MO (`LogEHVI`), constrained (`LogCEI/LogCEHVI`), and running-trial q-batch
+  (`qLogEI/qLogEHVI`) branches throw `NotImplementedException`** pending 3e (their acqf classes ride the
+  deferred `box_decomposition` + `qmc.sample_from_normal_sobol`) — same placeholder pattern as the
+  earlier phases. **Key numeric enabler:** `ChoiceNoReplaceWeighted` reproduces numpy's
+  `RandomState.choice(replace=False, p=)` — the `random_sample(size−n_uniq)` loop + `cumsum`/`searchsorted`
+  cdf inversion + first-appearance dedup — bit-exact **and** advancing the RNG state identically
+  (verified vs numpy), keeping the sampler in per-suggestion RNG lock-step. **Validated vs live Optuna
+  (tolerance, the documented GP boundary):** `GpOptimMixedParityTests` runs `optimize_acqf_mixed` on an
+  identical fitted GPR + space + seed across 5 mixed spaces (float/int-small/int-big→Brent/categorical/
+  log-float/all-continuous) — the achieved acqf **value** matches to <1e-6 and OptunaSharp's optimum
+  scored by Optuna's own acqf to <1e-5 (the argmin itself drifts ~1e-4 in flat regions at the loose
+  `pgtol=1e-2` — validate by achieved value, not argmin). `GpSamplerParityTests` **replays** each C#
+  study trial-by-trial through Optuna's `GPSampler.sample_relative` on the identical history (re-synced
+  every trial → cascade-free, RNG locked): every GP suggestion matches to **<1e-2 in the normalized box**
+  (fit-drift envelope; discrete/int/categorical suggestions **exact**, `int_mismatches == 0`), plus an
+  end-to-end convergence sanity. **Why per-suggestion, not raw-trajectory:** the fit's ~1e-3 kernel-
+  hyperparameter drift moves the LogEI argmax ~1e-2, which run free occasionally flips a roulette/argmax
+  choice and diverges the tail — the sensitivity IS the GP boundary; re-syncing isolates the bound it
+  actually holds. 7 unit (`OptimMixedTests`: Brent min + invalid-bracket guard, numpy-pinned
+  `ChoiceNoReplaceWeighted` ×2, determinism, in-bounds/on-grid, all-categorical no-continuous) + 7 interop
+  (`GpOptimMixedParityTests` 5-space sweep; `GpSamplerParityTests` float-sphere ×3 + mixed ×2 replay +
+  convergence). Suite: **499 unit + 225 interop**, both TFMs, none skipped.
 - ✅ **3.1 part 1 — viz data layer foundations (`OptunaSharp.Visualization`).** Ported the pure (non-plotly)
   half of `_utils.py` (`VisualizationUtils`: `CheckPlotArgs`/`IsLogScale`/`IsNumerical`/`FilterNonfinite`/
   `IsReverseScale`) plus the three simplest `_get_*_info` builders — `_optimization_history.py`
@@ -260,7 +299,7 @@ moment OptunaSharp.Core loads. Keep it.
 | 0 — Core framework (0.1–0.9) | ✅ | walking-skeleton gate (0.9) bit-identical to Python for shared seed |
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
 | 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC non-scrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp (3.2) + QMC scrambling deferred to their consumers |
-| 3 — Native heavy tail | 🟩 | **3.1 COMPLETE**; **3.2 in progress** — §7 autodiff gate **GREEN & CLOSED**: the GP fit is fully ported (part 1 hand-derived MLL gradient ~1e-13 vs autograd; part 2 managed L-BFGS-B port of scipy's `__lbfgsb.c` → `FitKernelParams` matches Optuna ~1e-14) so GP stays native, no TorchSharp; **3.2 parts 3a+3b+3c done** (GpSearchSpace + posterior; LogEI eval+gradient; scrambled Sobol' bit-exact vs scipy — 2.12 gap closed); **next** 3d optim_mixed + GPSampler, then 3.3 GP terminators. Rendering `plot_*`→5.2 |
+| 3 — Native heavy tail | 🟩 | **3.1 COMPLETE**; **3.2 in progress** — §7 autodiff gate **GREEN & CLOSED**: the GP fit is fully ported (part 1 hand-derived MLL gradient ~1e-13 vs autograd; part 2 managed L-BFGS-B port of scipy's `__lbfgsb.c` → `FitKernelParams` matches Optuna ~1e-14) so GP stays native, no TorchSharp; **3.2 parts 3a–3d done — the single-objective `GPSampler` runs end-to-end** (GpSearchSpace + posterior; LogEI eval+gradient; scrambled Sobol'; `optim_mixed` mixed optimizer + Brent + `GPSampler` wiring, tolerance-parity vs live Optuna); **next** 3e MO/constrained/q-batch acqf (LogEHVI/qLogEI/…), then 3.3 GP terminators. Rendering `plot_*`→5.2 |
 | 4 — External storage (Tier X) | ⬜ | not started; `ICachedStorageBackend` seam for 4.1 already declared in 1.2 |
 | 5 — External integrations (Tier X) | ⬜ | not started |
 
@@ -1020,13 +1059,13 @@ multivariate/group/MOTPE/constrained) + MedianPruner, parity-verified against Py
 the erf path, erf-tolerance on the truncnorm density), persisted to a journal file Python can open.
 Zero external deps.
 
-## Phase 3 — Native heavy tail — 🟩 IN PROGRESS (3.1 done; 3.2 gate green, part 1 landed)
+## Phase 3 — Native heavy tail — 🟩 IN PROGRESS (3.1 done; 3.2 single-objective GPSampler done, 3e/3.3 remain)
 
 | # | Feature | Optuna source | py SLOC | est. C# | Difficulty | Notes |
 |---|---|---|--:|--:|---|---|
 | 3.1 | Visualization **data layer** | `visualization/_*.py` info builders | ~1,500 | 2,500 | ✅ | **COMPLETE** — all 13 `_get_*_info` builders in `OptunaSharp.Visualization` (optimization-history/EDF/intermediate-values/hypervolume-history/param-importances/slice/pareto-front/contour/rank/parallel_coordinate/timeline + `_utils`), bit-exact/erf-tolerance vs live Optuna. rank RGB→5.2, MO PC draw_order `[Misaligned]`, `_terminator_improvement`→3.3. Rendering `plot_*`→5.2 |
-| 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, L-BFGS-B (managed port of scipy's `__lbfgsb.c` — NOT "already numpy"; see §0), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | 🔴 | **🟩 gate GREEN & CLOSED (parts 1–2 done):** prior + kernel + MLL + **hand-derived gradient** (~1e-13 vs autograd) + **managed L-BFGS-B** (`Internal/LBfgsB.cs`, port of scipy `__lbfgsb.c`) + `FitKernelParams` (~1e-14 vs Optuna). Native confirmed; tolerance-exact via 2.15 cholesky/solve_triangular + hand-written BLAS. **Parts 3a+3b+3c done:** `GpSearchSpace` + `Posterior`; LogEI eval+gradient (`Gp/Acqf.cs`); scrambled Sobol' (`Internal/ScrambledSobol.cs`, bit-exact vs scipy — NumSharp PCG64 matches numpy). Remaining: optim_mixed → sampler |
-| 3.3 | GP terminators: `RegretBoundEvaluator` (default), `EMMREvaluator` | `terminator/improvement/*` | ~230 | 700 | 🔴 | rides 3.2 |
+| 3.2 | **GP stack, native path**: `gp.py` (Matérn-5/2 + MLL fit via hand-derived gradients), `acqf.py` (LogEI/qLogEI/LogPI), `optim_mixed`, L-BFGS-B (managed port of scipy's `__lbfgsb.c` — NOT "already numpy"; see §0), `prior`, `search_space` → `GPSampler` | `_gp/*`, `samplers/_gp/sampler.py` | 1,766 | 8,500 | 🔴 | **🟩 gate GREEN & CLOSED (parts 1–2 done):** prior + kernel + MLL + **hand-derived gradient** (~1e-13 vs autograd) + **managed L-BFGS-B** (`Internal/LBfgsB.cs`, port of scipy `__lbfgsb.c`) + `FitKernelParams` (~1e-14 vs Optuna). Native confirmed; tolerance-exact via 2.15 cholesky/solve_triangular + hand-written BLAS. **Parts 3a–3d done — single-objective `GPSampler` runs end-to-end:** `GpSearchSpace` + `Posterior`; LogEI eval+gradient (`Gp/Acqf.cs`); scrambled Sobol' (`Internal/ScrambledSobol.cs`, bit-exact vs scipy — NumSharp PCG64 matches numpy); `Gp/OptimMixed.cs` (`optimize_acqf_mixed` + gradient ascent + exhaustive/Brent discrete search; numpy `choice(replace=False,p=)` reproduced) + `Internal/BrentMinimizer.cs` + `Samplers/GPSampler.cs`. Tolerance-parity vs live Optuna: `optimize_acqf_mixed` achieved-value <1e-6; per-suggestion GP replay <1e-2 normalized (discrete exact). **Remaining (3e):** MO/constrained/q-batch acqf (`qLogEI`/`LogEHVI`/`LogCEI`/… — ride the deferred `box_decomposition` + `qmc.sample_from_normal_sobol`) → un-throw the `GPSampler` MO/constrained/running branches |
+| 3.3 | GP terminators: `RegretBoundEvaluator` (default), `EMMREvaluator` | `terminator/improvement/*` | ~230 | 700 | 🔴 | rides 3.2 (posterior/acqf now available) |
 
 **Phase 3 ≈ 3.5k py → ~11.7k C#. Estimate: 10–13 weeks (GP is 8–10).**
 Exit gate = **Tier N complete**: the full Optuna algorithm surface, pure managed, NumSharp-only.
