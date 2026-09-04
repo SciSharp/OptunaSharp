@@ -1,4 +1,4 @@
-# OptunaSharp.Importance.Forests
+# OptunaSharp.Importance.Forests.ML.NET
 
 An **ML.NET FastForest backend** for the forest-based parameter-importance evaluators of
 [OptunaSharp](https://github.com/SciSharp/OptunaSharp) — a .NET port of
@@ -32,7 +32,8 @@ runtime (native FastTree), so it ships **separately from Core** — the
 
 ```csharp
 using OptunaSharp;
-using OptunaSharp.Importance;
+using OptunaSharp.Importance;          // canonical evaluators (Core)
+using OptunaSharp.Importance.Forests;  // FastForest* backend (this package)
 
 var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 42));
 study.Optimize(t => { double x = t.SuggestFloat("x", -10, 10); return x * x; }, nTrials: 100);

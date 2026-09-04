@@ -2,6 +2,7 @@ using System.Linq;
 using AwesomeAssertions;
 using OptunaSharp.Distributions;
 using OptunaSharp.Importance;
+using OptunaSharp.Importance.Booster;
 using OptunaSharp.Importance.Forests;
 using OptunaSharp.Samplers;
 using Python.Runtime;
@@ -23,6 +24,10 @@ namespace OptunaSharp.Tests.Interop;
 ///       <item>The <b>FastForest</b> backend (ML.NET, satellite) is not tree-identical to
 ///         scikit-learn, so only the <b>ranking</b> is asserted: the dominant parameter matches
 ///         Optuna's on a well-separated problem.</item>
+///       <item>The <b>experimental boosters</b> (FastTree / FastTreeTweedie, the
+///         <c>OptunaSharp.Importance.Booster.ML.NET</c> satellite) are off-label for fANOVA/MDI (their
+///         trees fit residuals, not the objective), so — like FastForest — only the <b>ranking</b> is
+///         asserted, never values.</item>
 ///     </list>
 ///
 ///     <para>Optuna's forest evaluators require scikit-learn; the tests self-skip (Inconclusive) when
@@ -132,15 +137,51 @@ public class FanovaMdiImportanceParityTests : OptunaInteropTestBase
     }
 
     private void RunRankingParity(int seed, int nTrials, bool fanova)
+        => RunRankingParity(seed, nTrials, fanova
+                ? new FastForestFanovaImportanceEvaluator(seed: 0)
+                : new FastForestMeanDecreaseImpurityImportanceEvaluator(seed: 0),
+            fanova, "FastForest");
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 80)]
+    [DataRow(7, 100)]
+    public void FastTreeFanova_RankingAgreesWithLiveOptuna(int seed, int nTrials)
+        => RunRankingParity(seed, nTrials, new FastTreeFanovaImportanceEvaluator(seed: 0), fanova: true, "FastTree (fANOVA)");
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 80)]
+    [DataRow(7, 100)]
+    public void FastTreeMdi_RankingAgreesWithLiveOptuna(int seed, int nTrials)
+        => RunRankingParity(seed, nTrials, new FastTreeMeanDecreaseImpurityImportanceEvaluator(seed: 0), fanova: false, "FastTree (MDI)");
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 80)]
+    [DataRow(7, 100)]
+    public void FastTreeTweedieFanova_RankingAgreesWithLiveOptuna(int seed, int nTrials)
+        => RunRankingParity(seed, nTrials, new FastTreeTweedieFanovaImportanceEvaluator(seed: 0), fanova: true, "FastTreeTweedie (fANOVA)");
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 80)]
+    [DataRow(7, 100)]
+    public void FastTreeTweedieMdi_RankingAgreesWithLiveOptuna(int seed, int nTrials)
+        => RunRankingParity(seed, nTrials, new FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator(seed: 0), fanova: false, "FastTreeTweedie (MDI)");
+
+    // RANKING-only parity for an alternative backend (FastForest or the experimental boosters) vs
+    // Optuna's canonical scikit-learn evaluator: on this well-separated problem the dominant parameter
+    // (x1, via x1*x1) must be ranked first on both sides. Booster *values* diverge by design (they fit
+    // residuals, not the objective) and are never asserted — only the top-ranked parameter.
+    private void RunRankingParity(int seed, int nTrials, BaseImportanceEvaluator csEvaluator, bool fanova, string label)
     {
         PythonSession.EnsureOrInconclusive();
         RequireSklearnOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(CsObjective, nTrials: nTrials);
-        var csImp = ImportanceFunctions.GetParamImportances(csStudy, fanova
-            ? new FastForestFanovaImportanceEvaluator(seed: 0)
-            : new FastForestMeanDecreaseImpurityImportanceEvaluator(seed: 0));
+        var csImp = ImportanceFunctions.GetParamImportances(csStudy, csEvaluator);
 
         string pyEvaluator = fanova ? "FanovaImportanceEvaluator" : "MeanDecreaseImpurityImportanceEvaluator";
         PyExec(
@@ -150,9 +191,7 @@ public class FanovaMdiImportanceParityTests : OptunaInteropTestBase
             $"imp = optuna.importance.get_param_importances(study, evaluator=optuna.importance.{pyEvaluator}(seed=0))\n" +
             "imp_top = list(imp.keys())[0]\n");
 
-        // FastForest importances diverge in value from sklearn, but on this well-separated problem the
-        // dominant parameter (x1, via x1*x1) must be ranked first on both sides.
-        csImp.Keys.First().Should().Be("x1", $"FastForest must rank x1 first (seed {seed})");
+        csImp.Keys.First().Should().Be("x1", $"{label} must rank x1 first (seed {seed})");
         PyStr("imp_top").Should().Be("x1", $"live Optuna must also rank x1 first (seed {seed})");
         csImp.Values.Sum().Should().BeApproximately(1.0, 1e-9);
     }

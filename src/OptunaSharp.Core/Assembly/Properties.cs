@@ -42,6 +42,15 @@ using System.Runtime.CompilerServices;
 // algorithm with no forest involved, and the native-forest tests reach CartRandomForest.
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Forests, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The ML.NET gradient-boosting backends (satellite package OptunaSharp.Importance.Booster.ML.NET, a
+// Phase 5.1 EXPERIMENTAL / off-label extension — boosting is not part of Optuna's importance) reuse
+// the same Core-internal forest machinery as the FastForest backend: SklearnLikeTree / ForestImportance
+// (the shared evaluator body + ForestFit delegate) plus the linked MlNetTreeEnsembleAdapter, and the
+// SearchSpaceTransform / ImportanceBase / ValueError seam underneath them.
+[assembly: InternalsVisibleTo("OptunaSharp.Importance.Booster.ML.NET, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// Its test project mirrors the forests test project (backend-parameterised invariants).
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Booster, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 // The Redis backends' shared test project asserts that experimental warning fired via the internal
 // OptunaWarnings.WarningRaised event (same reason the interop suite is a friend).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpFriendKey.PublicKey)]

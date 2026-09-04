@@ -31,6 +31,10 @@
          Optuna's scikit-learn-backed evaluators can run in-process. Transitively brings ML.NET.
          Those tests self-skip when scikit-learn is not importable in the Python env. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Importance.Forests.ML.NET\OptunaSharp.Importance.Forests.ML.NET.csproj" />
+    <!-- The experimental gradient-boosting importance backends (FastTree / FastTreeTweedie), for
+         RANKING-only parity vs Optuna's canonical evaluators (boosters are off-label — never
+         value-parity). Same ML.NET native dependency as the FastForest backend. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Importance.Booster.ML.NET\OptunaSharp.Importance.Booster.ML.NET.csproj" />
   </ItemGroup>
 
 </Project>
