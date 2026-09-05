@@ -187,15 +187,21 @@ jobs:
         python -m pip install "numpy==2.4.2"
         python -m pip install -e src/optuna
         # Backends the parity tests drive LIVE: torch (GPSampler), cmaes (CmaEsSampler), scikit-learn
-        # (fANOVA / importance). CPU-only torch on Linux keeps the download small. redis-py is
-        # deliberately NOT installed here so the JournalRedis interop test self-skips (no server in
-        # this job; Redis is covered by the docker-compose Storage suite instead).
+        # (fANOVA / importance), matplotlib (visualization). CPU-only torch on Linux keeps the download
+        # small. scikit-learn is PINNED to 1.8.0: the native fANOVA/MDI forests are a byte-for-byte port
+        # of that release's RandomForestRegressor, so a newer sklearn (1.9.0) builds slightly different
+        # trees and breaks the 1e-12 value parity. redis-py is deliberately NOT installed here so the
+        # JournalRedis interop test self-skips (no server in this job; Redis is covered by the
+        # docker-compose Storage suite instead).
         if [ "$RUNNER_OS" = "Linux" ]; then
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
         else
           python -m pip install torch
         fi
-        python -m pip install cmaes scikit-learn
+        python -m pip install cmaes "scikit-learn==1.8.0" matplotlib
+        # find_libpython locates the loadable libpython across framework/venv/manylinux builds — the
+        # macOS framework build's INSTSONAME is a framework path that a naive LIBDIR join misses.
+        python -m pip install find_libpython
         # Re-pin numpy last: torch/optuna resolution can drag in a different numpy.
         python -m pip install "numpy==2.4.2"
         python -c "import numpy, optuna; print('optuna', optuna.__version__, '| numpy', numpy.__version__)"
@@ -206,15 +212,38 @@ jobs:
     - name: Resolve libpython (PYTHONNET_PYDLL)
       shell: bash
       run: |
-        python - <<'PY' >> "$GITHUB_ENV"
-        import os, sys, sysconfig
-        if os.name == 'nt':
-            p = os.path.join(sys.base_prefix, 'python%d%d.dll' % sys.version_info[:2])
-        else:
-            p = os.path.join(sysconfig.get_config_var('LIBDIR'), sysconfig.get_config_var('INSTSONAME'))
-        print('PYTHONNET_PYDLL=' + p)
+        PYDLL=$(python - <<'PY'
+        import os, sys, sysconfig, glob
+        # Primary: find_libpython (maintained, handles every build layout incl. the macOS framework).
+        try:
+            from find_libpython import find_libpython
+            p = find_libpython() or ''
+        except Exception:
+            p = ''
+        # Fallback: an existence-checked candidate list (never a blind LIBDIR+INSTSONAME join, which is
+        # what returned a non-existent path on the macOS runner and made pythonnet fail to load).
+        if not p or not os.path.isfile(p):
+            v = '%d.%d' % sys.version_info[:2]
+            libdir = sysconfig.get_config_var('LIBDIR') or ''
+            if os.name == 'nt':
+                cands = [os.path.join(sys.base_prefix, 'python%d%d.dll' % sys.version_info[:2])]
+            else:
+                ext = 'dylib' if sys.platform == 'darwin' else 'so'
+                cands = [
+                    os.path.join(libdir, 'libpython%s.%s' % (v, ext)),
+                    os.path.join(libdir, sysconfig.get_config_var('LDLIBRARY') or ''),
+                    os.path.join(libdir, sysconfig.get_config_var('INSTSONAME') or ''),
+                    os.path.join(sys.base_prefix, 'lib', 'libpython%s.%s' % (v, ext)),
+                ] + glob.glob(os.path.join(libdir, 'libpython%s*.%s' % (v, ext)))
+            p = next((c for c in cands if c and os.path.isfile(c)), '')
+        print(p)
         PY
-        echo "PYTHONNET_PYDLL resolved to: $PYTHONNET_PYDLL"
+        )
+        if [ -z "$PYDLL" ] || [ ! -f "$PYDLL" ]; then
+          echo "::error::could not resolve a loadable libpython (got '$PYDLL')"; exit 1
+        fi
+        echo "PYTHONNET_PYDLL=$PYDLL" >> "$GITHUB_ENV"
+        echo "PYTHONNET_PYDLL resolved to: $PYDLL"
 
     - name: Build
       run: dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
