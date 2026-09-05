@@ -16,11 +16,15 @@ namespace (journal backends in **`OptunaSharp.Storages.Journal`**).
 | `InMemoryStorage` | No (process lifetime) | Single process | — | Core |
 | `JournalStorage` + `JournalFileBackend` | Yes (a file) | Multi-process, multi-host (shared file) | **Yes** — Python Optuna reads/writes the same journal | Core |
 | `JournalStorage` + `JournalRedisBackend` | Yes (Redis) | Distributed workers | Yes (shared Redis keys) | `OptunaSharp.Storage.Redis` |
+| `RDBStorage` (SQLite) | Yes (a `.db` file) | Multi-process (one host) | **Yes** — Python Optuna opens the same SQLite file | `OptunaSharp.Storage.Sqlite` |
+| `GrpcStorageProxy` + `GrpcProxyServer` | Via the fronted backend | Distributed workers (over the network) | **Yes** — interoperates with Python's gRPC proxy | `OptunaSharp.Storage.Grpc` |
 | `CachedStorage` | Wraps another | Read-through cache over a backend | Inherited | Core |
 
-> RDB storage (SQLite / PostgreSQL / MySQL) and the gRPC storage proxy are on the roadmap
-> (Phases 4.1–4.4) and are not yet available. `StorageFunctions.GetStorage` throws a clear error for
-> `sqlite:///`, `postgresql://`, and similar URLs today.
+> The SQLite `RDBStorage` (`OptunaSharp.Storage.Sqlite`) and the gRPC storage proxy
+> (`OptunaSharp.Storage.Grpc`) ship as satellite packages today; EF Core providers for PostgreSQL/MySQL
+> (Phase 4.2) remain on the roadmap. Construct the RDB and gRPC storages directly (shown below) —
+> `StorageFunctions.GetStorage` resolves storages from a *value*, not from a `sqlite:///`/`postgresql://`
+> URL string.
 
 ## In-memory (the default)
 
@@ -98,6 +102,102 @@ var study = Optuna.CreateStudy(storage: storage, studyName: "dist", loadIfExists
 namespace multiple studies in one Redis instance. The keys and JSON payloads are shared with Python
 Optuna's Redis journal backend.
 
+## SQLite RDB storage (a persistent database file)
+
+For a persistent, single-host database, install **`OptunaSharp.Storage.Sqlite`** and use `RDBStorage`
+(namespace `OptunaSharp.Storages`). It writes Optuna's exact SQLite schema (alembic version and all), so
+**Python Optuna can open the same `.db` file** — and OptunaSharp can open one Python wrote.
+
+```csharp
+using OptunaSharp;
+using OptunaSharp.Storages;
+
+using var storage = new RDBStorage("sqlite:///optuna.db");
+var study = Optuna.CreateStudy(storage: storage, studyName: "sphere", loadIfExists: true);
+```
+
+`RDBStorage` implements `ICachedStorageBackend`, so `StorageFunctions.GetStorage` (and `Study`) front it
+with a `CachedStorage` automatically, mirroring Optuna's `get_storage`.
+
+## gRPC storage proxy (distributed, cross-language)
+
+The **gRPC storage proxy** lets many workers — on different machines, in different languages — share one
+storage over the network. A lightweight **client** forwards every storage operation to a **server** that
+fronts a real backend (typically the SQLite `RDBStorage`). Install **`OptunaSharp.Storage.Grpc`**; the
+client is `GrpcStorageProxy` and the server is `GrpcProxyServer`, both in `OptunaSharp.Storages.Grpc`. It
+is a faithful port of `optuna.storages.GrpcStorageProxy` / `run_grpc_proxy_server`, experimental since
+Optuna v4.2.0.
+
+### The server
+
+Run a server in front of any storage. Wrap an RDB backend with `StorageFunctions.GetStorage` (as Optuna
+advises) so the server keeps an in-process cache:
+
+```csharp
+using OptunaSharp.Storages;
+using OptunaSharp.Storages.Grpc;
+
+var backend = new RDBStorage("sqlite:///optuna.db");
+var storage = StorageFunctions.GetStorage(backend);
+GrpcProxyServer.RunGrpcProxyServer(storage, host: "0.0.0.0", port: 13000);  // blocks
+```
+
+Need a non-blocking server (tests, or embedding it in a host)? `GrpcProxyServer.MakeServer(...)` returns
+a startable `WebApplication`:
+
+```csharp
+var app = GrpcProxyServer.MakeServer(storage, "localhost", 13000);
+await app.StartAsync();
+// ... work ...
+await app.StopAsync();
+```
+
+The server self-hosts on Grpc.AspNetCore (Kestrel) over cleartext HTTP/2, matching grpc's insecure port.
+
+### The client
+
+`GrpcStorageProxy` is a `BaseStorage` — pass it to `Optuna.CreateStudy` / `Optuna.LoadStudy` like any
+other storage:
+
+```csharp
+using OptunaSharp;
+using OptunaSharp.Storages.Grpc;
+
+using var storage = new GrpcStorageProxy(host: "server-host", port: 13000);
+storage.WaitServerReady(TimeSpan.FromSeconds(10));
+
+var study = Optuna.CreateStudy(storage: storage, studyName: "dist", loadIfExists: true);
+study.Optimize(trial =>
+{
+    double x = trial.SuggestFloat("x", -10, 10);
+    return (x - 2) * (x - 2);
+}, nTrials: 100);
+```
+
+Many clients can point at one server and optimize the same study concurrently — the distributed-worker
+pattern the proxy exists for. Each client keeps an incremental trial cache (it re-fetches only new or
+still-unfinished trials), so re-reading a growing study stays cheap.
+
+### Cross-language
+
+The proxy speaks Optuna's own `api.proto`, so the two runtimes interoperate on the wire in **both
+directions**: an OptunaSharp client can drive a Python `run_grpc_proxy_server`, and a Python
+`GrpcStorageProxy` can drive an OptunaSharp server.
+
+```python
+# Python server; OptunaSharp (C#) clients connect to it
+from optuna.storages import run_grpc_proxy_server, get_storage
+run_grpc_proxy_server(get_storage("sqlite:///optuna.db"), host="0.0.0.0", port=13000)
+```
+
+Storage errors map through gRPC status codes exactly as Optuna does, so a missing study raises
+`KeyError`, a duplicate name a `DuplicatedStudyError`, a write to a finished trial an
+`UpdateFinishedTrialError`, and an invalid argument a `ValueError` — on either side of the wire.
+
+> Like Optuna, the gRPC proxy does **not** support `JournalStorage`; put the SQLite `RDBStorage` behind
+> the server. The transport is insecure (cleartext HTTP/2), matching Optuna — keep it behind your own
+> network boundary.
+
 ## Caching over a backend
 
 `CachedStorage` wraps another storage that implements `ICachedStorageBackend`, serving reads from an
@@ -157,6 +257,9 @@ names default to the `no-name-` prefix (`BaseStorage.DefaultStudyNamePrefix`), m
 | `optuna.storages.InMemoryStorage()` | `new InMemoryStorage()` |
 | `JournalStorage(JournalFileBackend("study.log"))` | `new JournalStorage(new JournalFileBackend("study.log"))` |
 | `JournalStorage(JournalRedisBackend("redis://…"))` | `new JournalStorage(new JournalRedisBackend("redis://…"))` |
+| `optuna.storages.RDBStorage("sqlite:///optuna.db")` | `new RDBStorage("sqlite:///optuna.db")` |
+| `optuna.storages.GrpcStorageProxy(host=…, port=…)` | `new GrpcStorageProxy(host: …, port: …)` |
+| `optuna.storages.run_grpc_proxy_server(storage, …)` | `GrpcProxyServer.RunGrpcProxyServer(storage, …)` |
 | `optuna.storages.RetryFailedTrialCallback` | `RetryHeartbeatStaleTrialCallback` |
 
 **Divergence.** Journal *snapshots* are serialized as JSON rather than Python `pickle` bytes, so a
