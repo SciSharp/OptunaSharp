@@ -18,6 +18,12 @@ internal sealed class ProgressBar
 
     internal ProgressBar(bool enabled, int? nTrials, double? timeout)
     {
+        // Match optuna/progress_bar.py: _ProgressBar.__init__ — warn (on the raw `enabled`, before
+        // the `_enabled` reduction below) when asked to show a bar with neither a trial count nor a
+        // timeout to size it against.
+        if (enabled && nTrials is null && timeout is null)
+            OptunaWarnings.Warn("Progress bar won't be displayed because n_trials and timeout are None.");
+
         _enabled = enabled && (nTrials is not null || timeout is not null);
         _nTrials = nTrials;
         _timeout = timeout;
