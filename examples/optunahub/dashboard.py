@@ -18,10 +18,12 @@ Docs: https://optuna-dashboard.readthedocs.io/en/latest/
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -80,19 +82,32 @@ def main() -> int:
         )
         return 1
 
-    view_url = f"http://{host}:{port}/"
-    print(f"  optuna-dashboard  ->  {view_url}")
+    base_url = f"http://{host}:{port}"
+    print(f"  optuna-dashboard  ->  {base_url}/")
     print(f"  storage           ->  {storage}")
     print("  (Ctrl+C to stop the dashboard.)")
 
-    # open the browser once the server has had a moment to bind the port.
+    # open the browser once the server is up — and jump STRAIGHT to the study's detail page (the rich
+    # history / importance / timeline plots), not the near-empty study-list landing page. we ask the
+    # dashboard's own API for the study id so the URL is always right (newest study wins).
     def _open_browser() -> None:
-        time.sleep(1.5)
-        if os.environ.get("OPTUNASHARP_NO_BROWSER") in (None, "", "0", "false", "False"):
+        if os.environ.get("OPTUNASHARP_NO_BROWSER") not in (None, "", "0", "false", "False"):
+            return
+        target = f"{base_url}/"
+        for _ in range(60):                                    # wait for the server, then resolve the study id
             try:
-                webbrowser.open(view_url)
+                with urllib.request.urlopen(f"{base_url}/api/studies", timeout=1) as resp:
+                    studies = json.load(resp).get("study_summaries", [])
+                if studies:
+                    sid = max(int(s["study_id"]) for s in studies)   # the just-persisted study is newest
+                    target = f"{base_url}/dashboard/studies/{sid}"
+                break
             except Exception:
-                pass
+                time.sleep(0.5)
+        try:
+            webbrowser.open(target)
+        except Exception:
+            pass
 
     threading.Thread(target=_open_browser, daemon=True).start()
 
