@@ -132,14 +132,23 @@ grid- and integer-valued parameters bit-for-bit, the TPE-sampled continuous para
 tolerance (see `test/OptunaSharp.Tests.Integration.LightGbm`).
 
 The **training + metric evaluation** is an **adapter** over ML.NET's native LightGBM (this is a Phase 6
-framework-integration adapter — ML.NET's LightGBM is not Python's, so there is no bit-parity there). The
-first cut maps the `binary` and regression objectives. To plug a different engine — or a custom scorer —
-implement `ILightGbmTrainer` and pass it as the `trainer` argument; the default is `MlNetLightGbmTrainer`.
+framework-integration adapter — ML.NET's LightGBM is not Python's, so there is no bit-parity there). It
+maps the **regression**, **binary**, **multiclass** (`multiclass` / `multiclassova` + aliases), and
+**ranking** (`lambdarank` / `rank_xendcg`, scored by ndcg@k / map@k) objectives. To plug a different
+engine — or a custom scorer — implement `ILightGbmTrainer` and pass it as the `trainer` argument; the
+default is `MlNetLightGbmTrainer`.
 
-> **Not yet ported:** cross-process booster sharing via `model_dir` (the Python version pickles boosters;
-> ML.NET model persistence is different) — run tuning in a single process; and the ranking objectives
-> (`ndcg`/`map`) in the default trainer. `feature_name` / `categorical_feature` and the LightGBM-internal
-> `feval` / `callbacks` / `keep_training_booster` kwargs are Python-binding specifics and are omitted.
+**`model_dir`** (cross-process / resumed booster sharing) is supported: each trial's booster is saved to
+the directory and `get_best_booster()` reloads the best one when it is not in the current process. Where
+Python pickles the `lightgbm.Booster`, the default trainer persists the ML.NET model (`MLContext.Model.Save`)
+plus a small JSON sidecar of the scores, behind the optional `ILightGbmBoosterStore` seam — so a custom
+trainer must implement that seam to use `model_dir` (the default one does).
+
+> **Adapter notes:** ML.NET's ranking trainer cannot represent a *degenerate single-leaf* tree (which
+> LightGBM legitimately produces under strong regularization / weak signal); the trainer absorbs that,
+> scoring such a fit as a constant predictor so the tuner runs on unaffected. `feature_name` /
+> `categorical_feature` and the LightGBM-internal `feval` / `callbacks` / `keep_training_booster` kwargs
+> are Python-binding specifics and are omitted.
 
 ## License
 

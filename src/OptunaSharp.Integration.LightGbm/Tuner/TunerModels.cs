@@ -163,3 +163,35 @@ public interface ILightGbmTrainer
     /// <summary>Cross-validate and return the metric aggregates — the analog of <c>lightgbm.cv</c>.</summary>
     CvResult Cv(CvRequest request);
 }
+
+/// <summary>
+///     The optional booster-persistence capability behind the tuner's <c>model_dir</c> feature — the
+///     analog of the Python tuner pickling each trial's booster to <c>{model_dir}/{trial}.pkl</c> so
+///     <see cref="LightGBMTuner.GetBestBooster" /> / <see cref="LightGBMTunerCV.GetBestBooster" /> can
+///     retrieve the best booster after resuming or across distributed workers. A trainer implements this
+///     to teach the tuner how to write and read <i>its own</i> model type (Python's pickle is not portable
+///     to a .NET / ML.NET model). The default <see cref="MlNetLightGbmTrainer" /> implements it (ML.NET's
+///     <c>MLContext.Model.Save</c> / <c>Load</c> plus a small JSON sidecar for the scores); supplying a
+///     <c>model_dir</c> with a custom <see cref="ILightGbmTrainer" /> that does not implement this is a
+///     construction-time error.
+///
+///     <para>Each method receives an extensionless base <paramref name="path" /> (e.g.
+///     <c>{model_dir}/3</c>); the store owns the concrete on-disk layout under it.</para>
+/// </summary>
+public interface ILightGbmBoosterStore
+{
+    /// <summary>Persist a single-fit booster (the <see cref="LightGBMTuner" /> path) under <paramref name="path" />.</summary>
+    void SaveBooster(Booster booster, string path);
+
+    /// <summary>Reload a booster previously written by <see cref="SaveBooster" />.</summary>
+    Booster LoadBooster(string path);
+
+    /// <summary>Persist a CV booster (the <see cref="LightGBMTunerCV" /> path) under <paramref name="path" />.</summary>
+    void SaveCvBooster(CvBooster booster, string path);
+
+    /// <summary>Reload a CV booster previously written by <see cref="SaveCvBooster" />.</summary>
+    CvBooster LoadCvBooster(string path);
+
+    /// <summary>Whether a booster (single-fit or CV) is stored under <paramref name="path" />.</summary>
+    bool BoosterExists(string path);
+}

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using NumSharp;
 using OptunaSharp.Collections;
@@ -81,6 +82,19 @@ public abstract class LightGbmBaseTuner : BaseTuner
         OptunaSeed = optunaSeed;
         Trainer = trainer ?? new MlNetLightGbmTrainer();
         _customObjective = GetCustomObjective(LgbmParams);
+
+        // `model_dir` persists each trial's booster to disk so a resumed / distributed `get_best_booster`
+        // can find it (Python pickles; the ML.NET port delegates to the trainer's ILightGbmBoosterStore).
+        // The default MlNetLightGbmTrainer implements it; a custom trainer must too, else fail fast here.
+        if (ModelDir is not null)
+        {
+            if (Trainer is not ILightGbmBoosterStore)
+                throw new NotSupportedException(
+                    $"`model_dir` requires the trainer to implement {nameof(ILightGbmBoosterStore)} so "
+                    + $"boosters can be persisted for a resumed / distributed `GetBestBooster`. The default "
+                    + $"{nameof(MlNetLightGbmTrainer)} does; the supplied {Trainer.GetType().Name} does not.");
+            Directory.CreateDirectory(ModelDir);
+        }
 
         // Should not alter data since `min_child_samples` is tuned (LightGBM `feature_pre_filter`).
         if (LgbmParams.TryGetValue("feature_pre_filter", out var fpf) && fpf is true)

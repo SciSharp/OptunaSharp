@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NumSharp;
 
 namespace OptunaSharp.Integration.LightGbm;
@@ -26,6 +27,14 @@ public sealed class Dataset
     /// <summary>Optional per-row weight (currently accepted for API parity; unused by the default trainer).</summary>
     public double[]? Weight { get; }
 
+    /// <summary>
+    ///     Optional query-group sizes for <b>ranking</b> objectives (<c>lambdarank</c> / <c>rank_xendcg</c>),
+    ///     the analog of LightGBM's <c>lgb.Dataset(..., group=[...])</c>. Each element is the number of
+    ///     consecutive rows forming one query group, so the sizes must sum to <see cref="NumRows" />. Left
+    ///     <c>null</c> for non-ranking datasets.
+    /// </summary>
+    public int[]? Group { get; }
+
     /// <summary>Optional feature names (accepted for API parity; the default trainer indexes by position).</summary>
     public IReadOnlyList<string>? FeatureName { get; }
 
@@ -35,10 +44,13 @@ public sealed class Dataset
     /// <summary>The number of feature columns (0 for an empty set).</summary>
     public int NumFeatures { get; }
 
+    /// <summary>The number of query groups (0 when <see cref="Group" /> is <c>null</c>).</summary>
+    internal int NumGroups => Group?.Length ?? 0;
+
     /// <summary>Construct from a jagged feature matrix (each inner array is one row's features).</summary>
     public Dataset(
         float[][] data, double[]? label = null, double[]? weight = null,
-        IReadOnlyList<string>? featureName = null)
+        IReadOnlyList<string>? featureName = null, int[]? group = null)
     {
         Data = data ?? throw new ArgumentNullException(nameof(data));
         NumFeatures = data.Length > 0 ? data[0].Length : 0;
@@ -51,23 +63,119 @@ public sealed class Dataset
         if (weight is not null && weight.Length != data.Length)
             throw new ValueError(
                 $"`weight` length ({weight.Length}) must equal the number of rows ({data.Length}).");
+        if (group is not null)
+        {
+            foreach (var g in group)
+                if (g <= 0)
+                    throw new ValueError($"Every `group` size must be positive; got {g}.");
+            int sum = group.Sum();
+            if (sum != data.Length)
+                throw new ValueError(
+                    $"`group` sizes must sum to the number of rows ({data.Length}); got {sum}.");
+        }
 
         Label = label;
         Weight = weight;
+        Group = group;
         FeatureName = featureName;
     }
 
     /// <summary>Convenience overload accepting a rectangular <c>double[,]</c> matrix (copied to floats).</summary>
     public Dataset(
         double[,] data, double[]? label = null, double[]? weight = null,
-        IReadOnlyList<string>? featureName = null)
-        : this(ToJagged(data), label, weight, featureName)
+        IReadOnlyList<string>? featureName = null, int[]? group = null)
+        : this(ToJagged(data), label, weight, featureName, group)
     {
     }
 
     /// <summary>The label, or a zero vector when this set is unlabeled (mirrors an all-zero target).</summary>
     internal double[] GetLabelOrZeros()
         => Label ?? new double[NumRows];
+
+    /// <summary>Per-row group id (0-based), expanded from <see cref="Group" /> sizes — for ML.NET ranking.</summary>
+    internal uint[] RowGroupIds()
+    {
+        if (Group is null)
+            throw new ValueError(
+                "A ranking objective (`lambdarank` / `rank_xendcg`) requires the dataset's `group` "
+                + "sizes, but none were supplied.");
+        var ids = new uint[NumRows];
+        int row = 0;
+        for (uint g = 0; g < Group.Length; g++)
+            for (int k = 0; k < Group[g]; k++)
+                ids[row++] = g;
+        return ids;
+    }
+
+    /// <summary>A contiguous row slice <c>[offset, offset + count)</c>, with group sizes recomputed for it.</summary>
+    internal Dataset Slice(int offset, int count)
+    {
+        var data = new float[count][];
+        var label = Label is null ? null : new double[count];
+        var weight = Weight is null ? null : new double[count];
+        for (int i = 0; i < count; i++)
+        {
+            data[i] = Data[offset + i];
+            if (label is not null) label[i] = Label![offset + i];
+            if (weight is not null) weight[i] = Weight![offset + i];
+        }
+
+        int[]? group = null;
+        if (Group is not null)
+        {
+            // Keep only the group cells overlapping [offset, offset + count), clipping the partial ends.
+            var sizes = new List<int>();
+            int start = 0;
+            foreach (int gs in Group)
+            {
+                int lo = Math.Max(start, offset);
+                int hi = Math.Min(start + gs, offset + count);
+                if (hi > lo) sizes.Add(hi - lo);
+                start += gs;
+            }
+            group = sizes.ToArray();
+        }
+
+        return new Dataset(data, label, weight, FeatureName, group);
+    }
+
+    /// <summary>
+    ///     Select whole query groups by group index (order preserved), recomputing <see cref="Group" />
+    ///     for the selection — the fold builder for ranking cross-validation, which must never split a group.
+    /// </summary>
+    internal Dataset SelectGroups(IReadOnlyList<int> groupIndices)
+    {
+        if (Group is null)
+            throw new ValueError("SelectGroups requires a grouped dataset.");
+
+        // Precompute each group's row offset.
+        var offsets = new int[Group.Length];
+        for (int g = 1; g < Group.Length; g++)
+            offsets[g] = offsets[g - 1] + Group[g - 1];
+
+        int total = groupIndices.Sum(g => Group[g]);
+        var data = new float[total][];
+        var label = Label is null ? null : new double[total];
+        var weight = Weight is null ? null : new double[total];
+        var sizes = new int[groupIndices.Count];
+
+        int row = 0;
+        for (int gi = 0; gi < groupIndices.Count; gi++)
+        {
+            int g = groupIndices[gi];
+            int off = offsets[g];
+            sizes[gi] = Group[g];
+            for (int k = 0; k < Group[g]; k++)
+            {
+                data[row] = Data[off + k];
+                if (label is not null) label[row] = Label![off + k];
+                if (weight is not null) weight[row] = Weight![off + k];
+                row++;
+            }
+        }
+
+        return new Dataset(data, label, weight, FeatureName, sizes);
+    }
 
     private static float[][] ToJagged(double[,] data)
     {

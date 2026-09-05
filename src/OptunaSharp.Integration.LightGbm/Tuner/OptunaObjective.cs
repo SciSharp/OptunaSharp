@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using OptunaSharp.Collections;
 using OptunaSharp.Internal;
+using OptunaSharp.Logging;
 
 namespace OptunaSharp.Integration.LightGbm;
 
@@ -24,6 +26,9 @@ internal class OptunaObjective : BaseTuner
 
     private const double Eps = 1e-12;                 // Python `_EPS`
     private const int DefaultTunerTreeDepth = 8;      // Python `_DEFAULT_TUNER_TREE_DEPTH`
+
+    // Port of `_logger = optuna.logging.get_logger(__name__)`; used to announce a saved booster (model_dir).
+    private protected static readonly Logger Log = OptunaLogging.GetLogger("optuna_integration.lightgbm");
 
     // The 7 tunable parameters (Python `_DEFAULT_LIGHTGBM_PARAMETERS` keys).
     internal static readonly string[] TunableParameters =
@@ -111,6 +116,15 @@ internal class OptunaObjective : BaseTuner
         double elapsedSecs = sw.Elapsed.TotalSeconds;
         double averageIterationTime = elapsedSecs / Math.Max(1, booster.CurrentIteration);
 
+        // Persist this trial's booster (Python `pickle.dump(booster, ...)`) so a resumed / distributed
+        // `get_best_booster` can retrieve it. Enabled only when `model_dir` is set.
+        if (ModelDir is not null && Trainer is ILightGbmBoosterStore store)
+        {
+            string path = BoosterPath(trial.Number);
+            store.SaveBooster(booster, path);
+            Log.Info($"The booster of trial#{trial.Number} was saved as {path}.");
+        }
+
         if (CompareValidationMetrics(valScore, BestScoreValue))
         {
             BestScoreValue = valScore;
@@ -120,6 +134,10 @@ internal class OptunaObjective : BaseTuner
         Postprocess(trial, elapsedSecs, averageIterationTime);
         return valScore;
     }
+
+    /// <summary>The extensionless base path for a trial's persisted booster (<c>{model_dir}/{trial}</c>).</summary>
+    private protected string BoosterPath(int trialNumber)
+        => Path.Combine(ModelDir!, trialNumber.ToString(CultureInfo.InvariantCulture));
 
     /// <summary>Port of <c>_postprocess</c> — record the elapsed / iteration-time / step / params attrs.</summary>
     protected void Postprocess(Trial trial, double elapsedSecs, double averageIterationTime)
@@ -182,6 +200,16 @@ internal sealed class OptunaObjectiveCV : OptunaObjective
         double valScore = valScores[^1];
         double elapsedSecs = sw.Elapsed.TotalSeconds;
         double averageIterationTime = elapsedSecs / Math.Max(1, valScores.Count);
+
+        // Persist this trial's CV booster (Python `pickle.dump((cvbooster.boosters, best_iteration), ...)`),
+        // matching Python's guard: only when `model_dir` is set AND `return_cvbooster` is on.
+        if (ModelDir is not null && _returnCvBooster && cvResults.CvBooster is not null
+            && Trainer is ILightGbmBoosterStore store)
+        {
+            string path = BoosterPath(trial.Number);
+            store.SaveCvBooster(cvResults.CvBooster, path);
+            Log.Info($"The booster of trial#{trial.Number} was saved as {path}.");
+        }
 
         if (CompareValidationMetrics(valScore, BestScoreValue))
         {

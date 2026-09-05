@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using NumSharp;
 
 namespace OptunaSharp.Integration.LightGbm;
@@ -30,7 +32,7 @@ public sealed class LightGBMTuner : LightGbmBaseTuner
     /// <param name="sampleSize">Optional cap on training rows used for tuning (keeps the last N rows).</param>
     /// <param name="study">Optional pre-created study; its direction must match the metric's.</param>
     /// <param name="optunaCallbacks">Optional callbacks invoked at the end of each Optuna trial.</param>
-    /// <param name="modelDir">Optional directory argument (booster disk-sharing is not yet supported).</param>
+    /// <param name="modelDir">Optional directory in which each trial's booster is saved (see <see cref="GetBestBooster" />); created if missing. Requires a trainer implementing <see cref="ILightGbmBoosterStore" /> (the default does).</param>
     /// <param name="showProgressBar">Accepted for parity; defaults to <c>false</c> (a .NET library divergence).</param>
     /// <param name="optunaSeed">Seed for the per-step <c>GridSampler</c>/<c>TPESampler</c> (reproducibility).</param>
     /// <param name="trainer">The training backend; defaults to <see cref="MlNetLightGbmTrainer" />.</param>
@@ -65,9 +67,10 @@ public sealed class LightGBMTuner : LightGbmBaseTuner
             BestScore, stepName, ModelDir);
 
     /// <summary>
-    ///     Port of <c>get_best_booster</c> — the booster of the best trial. Throws when the best booster
-    ///     is not available in this process (the disk-sharing path of the Python version, which relied on
-    ///     pickle, is not yet ported).
+    ///     Port of <c>get_best_booster</c> — the booster of the best trial. Returns the in-memory best when
+    ///     it belongs to the current best trial; otherwise (a resumed / distributed run) it is reloaded from
+    ///     <c>model_dir</c> via the trainer's <see cref="ILightGbmBoosterStore" /> — the analog of Python's
+    ///     pickle reload (the .NET port persists the ML.NET model + a JSON score sidecar, not a pickle).
     /// </summary>
     public Booster GetBestBooster()
     {
@@ -84,9 +87,16 @@ public sealed class LightGBMTuner : LightGbmBaseTuner
                 + "`LightGBMTuner.__init__` and make sure that boosters are shared with all "
                 + "processes.");
 
-        throw new ValueError(
-            $"The best booster cannot be found in {ModelDir}. Cross-process booster sharing via "
-            + "`model_dir` is not yet supported by the ML.NET port; run tuning in a single process.");
+        // The best booster exists on disk but not in this instance (resuming / parallelization).
+        var store = (ILightGbmBoosterStore)Trainer;   // guaranteed by the constructor when ModelDir is set
+        string path = Path.Combine(ModelDir, Study.BestTrial.Number.ToString(CultureInfo.InvariantCulture));
+        if (!store.BoosterExists(path))
+            throw new ValueError(
+                $"The best booster cannot be found in {ModelDir}. If you execute `LightGBMTuner` in "
+                + "distributed environment, please use network file system (e.g., NFS) to share models "
+                + "with multiple workers.");
+
+        return store.LoadBooster(path);
     }
 
     /// <summary>
