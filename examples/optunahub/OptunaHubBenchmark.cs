@@ -59,9 +59,26 @@ Console.WriteLine();
 
 // ── load a real OptunaHub benchmark ──────────────────────────────────────────────────────────────
 Console.Write("  loading " + C("benchmarks/bbob", "1;35") + " from OptunaHub … ");
-using var bbob = LoadBbob();                                   // network hub first, else the vendored submodule
-var problem = bbob.CreateProblem("Problem",                   // BBOB f1 = the Sphere, in 2 dimensions
-    new() { ["function_id"] = 1, ["dimension"] = 2 });
+OptunaHubModule bbob;
+OptunaHubProblem problem;
+try
+{
+    bbob = LoadBbob();                                        // network hub first, else the vendored submodule
+    problem = bbob.CreateProblem("Problem",                  // BBOB f1 = the Sphere, in 2 dimensions
+        new() { ["function_id"] = 1, ["dimension"] = 2 });
+}
+catch (Exception ex)
+{
+    // loading can still fail after the probe (no `git` on PATH, the submodule missing, a bbob/cocoex
+    // load error, a network hiccup) — report it instead of crashing.
+    Console.WriteLine(C("failed", "1;31"));
+    Console.WriteLine(C("  could not load benchmarks/bbob: " + ex.Message.Split('\n')[0], "1;33"));
+    Console.WriteLine("  ensure `pip install optunahub coco-experiment` succeeded, and either `git` is on");
+    Console.WriteLine("  PATH (the default hub download) or the registry submodule is initialized:");
+    Console.WriteLine(C("      git submodule update --init refs/optunahub-registry", "36"));
+    return;
+}
+using var _bbob = bbob;                                        // dispose the loaded module on exit
 Console.WriteLine(C("ok", "1;32"));
 
 Console.WriteLine($"  problem     : {C("BBOB f1 (Sphere)", "1;37")}, {problem.SearchSpace.Count}-D");
