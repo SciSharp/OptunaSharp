@@ -2,7 +2,7 @@ using System;
 using System.Linq;
 using AwesomeAssertions;
 using NumSharp;
-using OptunaSharp.Integration.Shap;
+using OptunaSharp.Importance.Shap;
 using OptunaSharp.Samplers;
 using Python.Runtime;
 

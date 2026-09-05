@@ -3,13 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using NumSharp;
 using OptunaSharp.Collections;
-using OptunaSharp.Importance;
 using OptunaSharp.Importance.Forests.Internal;
 using OptunaSharp.Importance.Forests.Internal.Cart;
-using OptunaSharp.Integration.Shap.Internal;
+using OptunaSharp.Importance.Shap.Internal;
 using OptunaSharp.Internal;
 
-namespace OptunaSharp.Integration.Shap;
+namespace OptunaSharp.Importance.Shap;
 
 /// <summary>
 ///     Shapley (SHAP) parameter-importance evaluator. Port of
@@ -21,15 +20,16 @@ namespace OptunaSharp.Integration.Shap;
 ///     <see cref="TrialState.Complete" /> trials from their parameter configurations, then computes each
 ///     feature's importance as the <b>mean absolute SHAP value</b> over the trials.</para>
 ///
-///     <para>Unlike the <c>optuna_integration</c> original — which depends on the third-party
-///     <c>shap</c> and <c>scikit-learn</c> Python packages — this is a pure-managed, byte-exact port:
-///     the surrogate is Core's bit-exact <c>RandomForestRegressor</c> port (the same forest
-///     <see cref="MeanDecreaseImpurityImportanceEvaluator" /> uses), and the tree-path-dependent
-///     Tree SHAP walk (<see cref="Internal.TreeShap" />) is a faithful port of
-///     <c>shap/cext/tree_shap.h</c>. With a fixed <c>seed</c> the importances match running Optuna's
-///     <c>ShapleyImportanceEvaluator</c> (SHAP 0.52.0) through pythonnet to within a few ULP. It lives
-///     in a separate package, mirroring Optuna's <c>optuna_integration.shap</c>, so Core's
-///     <c>OptunaSharp.Importance</c> stays a mirror of <c>optuna.importance</c>.</para>
+///     <para><b>Pure-managed, and byte-exact.</b> Optuna ships this evaluator in the separate
+///     <c>optuna_integration</c> package because there it depends on the third-party <c>shap</c> and
+///     <c>scikit-learn</c> Python packages. OptunaSharp's port needs <b>no foreign runtime</b> — the
+///     surrogate is Core's bit-exact <c>RandomForestRegressor</c> port (the same forest
+///     <see cref="MeanDecreaseImpurityImportanceEvaluator" /> uses) and the tree-path-dependent Tree
+///     SHAP walk (<see cref="Internal.TreeShap" />) is a faithful, pure-arithmetic port of
+///     <c>shap/cext/tree_shap.h</c> — so it lives in Core alongside the other importance evaluators
+///     (namespace <c>OptunaSharp.Importance.Shap</c>). With a fixed <c>seed</c> the importances match
+///     running Optuna's <c>ShapleyImportanceEvaluator</c> (SHAP 0.52.0) through pythonnet to within a
+///     few ULP.</para>
 /// </summary>
 public sealed class ShapleyImportanceEvaluator : BaseImportanceEvaluator
 {

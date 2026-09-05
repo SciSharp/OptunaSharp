@@ -1,7 +1,7 @@
 using System;
 using OptunaSharp.Importance.Forests.Internal;
 
-namespace OptunaSharp.Integration.Shap.Internal;
+namespace OptunaSharp.Importance.Shap.Internal;
 
 /// <summary>
 ///     Port of SHAP's <b>tree_path_dependent</b> Tree SHAP for the exact case

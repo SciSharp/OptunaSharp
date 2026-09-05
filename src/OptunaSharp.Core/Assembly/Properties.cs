@@ -80,15 +80,15 @@ using System.Runtime.CompilerServices;
 // Its test project mirrors the forests test project (backend-parameterised invariants).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Integration.LightGbm, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
-// The SHAP integration (satellite package OptunaSharp.Integration.Shap — the .NET analogue of
-// optuna_integration.shap's ShapleyImportanceEvaluator) is a pure-managed, byte-exact port with NO
-// foreign runtime: its Tree SHAP walk reads Core's bit-exact CartRandomForest / SklearnLikeTree (the
-// same forest MDI uses), and it drives the evaluate() pipeline through the same seam as the other
-// importance backends — the optuna/importance/_base.py helpers in ImportanceBase, the
-// SearchSpaceTransform, and the experimental-class warning via OptunaWarnings / WarningCategory.
-[assembly: InternalsVisibleTo("OptunaSharp.Integration.Shap, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
-// Its test project asserts committed-oracle parity against the internal TreeShap kernel (vs SHAP 0.52.0).
-[assembly: InternalsVisibleTo("OptunaSharp.Tests.Integration.Shap, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// The scikit-learn integration (satellite package OptunaSharp.Integration.Sklearn — the .NET analogue of
+// optuna_integration.sklearn) is a pure-managed, byte-exact port with NO foreign runtime: its
+// RandomForestRegressor reuses Core's bit-exact CART (DepthFirstTreeBuilder / BestSplitter /
+// SklearnLikeTree / SklearnRandom — the same forest MDI/SHAP use) and its KFold / cross_validate seed
+// draws ride LazyRandomState (NumSharp MT19937) + MathUtil.PairwiseSum, so SklearnEstimator makes the
+// Core OptunaSearchCV end-to-end byte-exact vs Python's optuna_integration.OptunaSearchCV.
+[assembly: InternalsVisibleTo("OptunaSharp.Integration.Sklearn, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// Its test project asserts byte-exact parity against those internal kernels (vs scikit-learn 1.8.0).
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Integration.Sklearn, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
 // The Redis backends' shared test project asserts that experimental warning fired via the internal
 // OptunaWarnings.WarningRaised event (same reason the interop suite is a friend).

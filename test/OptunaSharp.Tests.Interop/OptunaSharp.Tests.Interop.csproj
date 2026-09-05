@@ -53,7 +53,6 @@
     <!-- The experimental LightGBM importance backend, also RANKING-only vs live Optuna. Brings the
          native LightGBM binary (Microsoft.ML.LightGbm) transitively. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Integration.LightGbm\OptunaSharp.Integration.LightGbm.csproj" />
-    <ProjectReference Include="..\..\src\OptunaSharp.Integration.Shap\OptunaSharp.Integration.Shap.csproj" />
     <!-- The OptunaHub bridge (OptunaSharp.Interop.pythonnet), so the live end-to-end gate
          (OptunaHubBridgeParityTests) can load real OptunaHub packages via optunahub.load_local_module
          and drive an OptunaSharp study with them. Shares this project's embedded CPython engine; the

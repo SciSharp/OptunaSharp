@@ -6,18 +6,19 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using AwesomeAssertions;
 using NumSharp;
-using OptunaSharp.Integration.Shap;
+using OptunaSharp.Importance.Shap;
 using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
 
-namespace OptunaSharp.Tests.Integration.Shap;
+namespace OptunaSharp.Tests.Importance;
 
 /// <summary>
-///     Byte-exact regression tests for <see cref="ShapleyImportanceEvaluator" /> that need NO Python at
-///     test time: they replay a committed oracle (<c>oracle/shap_oracle.json</c>) produced by the real
-///     <c>optuna_integration.shap.ShapleyImportanceEvaluator</c> (shap 0.52.0 + scikit-learn 1.8.0), and
-///     assert the importances match <b>bit-for-bit</b> (raw IEEE-754). The live differential gate lives
-///     in <c>OptunaSharp.Tests.Interop.ShapleyImportanceParityTests</c>.
+///     Byte-exact regression tests for <see cref="ShapleyImportanceEvaluator" /> (Core,
+///     <c>OptunaSharp.Importance.Shap</c>) that need NO Python at test time: they replay a committed
+///     oracle (<c>oracle/shap_oracle.json</c>) produced by the real
+///     <c>optuna_integration.shap.ShapleyImportanceEvaluator</c> (shap 0.52.0 + scikit-learn 1.8.0),
+///     and assert the importances match <b>bit-for-bit</b> (raw IEEE-754). The live differential gate
+///     lives in <c>OptunaSharp.Tests.Interop.ShapleyImportanceParityTests</c>.
 ///
 ///     <para>Bit-exact parity is host-pinned to x64/x86 (the surrogate's float32 forest accumulation
 ///     isn't arm64-portable); the replay reports Inconclusive on other architectures, matching the
