@@ -1,5 +1,7 @@
+using System;
 using System.Linq;
 using AwesomeAssertions;
+using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Importance;
 using OptunaSharp.Importance.Booster;
@@ -95,7 +97,10 @@ public class FanovaMdiImportanceParityTests : OptunaInteropTestBase
 
     private void RunValueParity(int seed, int nTrials, string pyEvaluator)
     {
-        PythonSession.EnsureOrInconclusive();
+        // Native fANOVA/MDI assert VALUE parity to 1e-12 (near-bit-exact): the float32 forest
+        // accumulation isn't arm64-portable (~1e-3 there), so this is host-pinned to x64. The LightGbm
+        // RANKING parity (RunRankingParity) is ordinal, not bit-exact, and runs on every architecture.
+        PythonSession.EnsureBitExactHostOrInconclusive();
         RequireSklearnOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
@@ -197,7 +202,20 @@ public class FanovaMdiImportanceParityTests : OptunaInteropTestBase
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(CsObjective, nTrials: nTrials);
-        var csImp = ImportanceFunctions.GetParamImportances(csStudy, csEvaluator);
+        OrderedDict<string, double> csImp;
+        try
+        {
+            csImp = ImportanceFunctions.GetParamImportances(csStudy, csEvaluator);
+        }
+        catch (DllNotFoundException ex)
+        {
+            // Ranking is a tolerance test, not host-pinned, so it runs on every architecture — but a
+            // backend's native lib (ML.NET's lib_lightgbm) isn't shipped for every RID (notably
+            // osx-arm64). Where it can't load, self-skip rather than fail, matching the interop suite's
+            // dependency gates (RequireSklearnOrInconclusive, redis-py, ...).
+            Assert.Inconclusive($"{label}: native library unavailable on this platform — {ex.Message}");
+            return;
+        }
 
         string pyEvaluator = fanova ? "FanovaImportanceEvaluator" : "MeanDecreaseImpurityImportanceEvaluator";
         PyExec(

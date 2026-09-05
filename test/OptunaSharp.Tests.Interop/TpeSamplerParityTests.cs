@@ -307,7 +307,9 @@ public class TpeSamplerParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void StartupPhase_UsesRandomSampling_BitExact()
     {
-        PythonSession.EnsureOrInconclusive();
+        // The startup trials are pure RandomSampler internal reprs (bit-exact) — host-pinned to x64;
+        // the density-driven TPE trajectory tests use the erf tolerance and run on every architecture.
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         // Below n_startup_trials TPE delegates to RandomSampler(seed): those trials are bit-exact.
         var csStudy = Optuna.CreateStudy(

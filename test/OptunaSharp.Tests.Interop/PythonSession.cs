@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using Python.Runtime;
 
 namespace OptunaSharp.Tests.Interop;
@@ -70,6 +71,32 @@ public static class PythonSession
         if (RequireEngine())
             Assert.Fail(reason + " (OPTUNASHARP_PYTHONNET_REQUIRE_ENGINE is set, so this is a hard failure).");
         Assert.Inconclusive(reason);
+    }
+
+    /// <summary>
+    ///     <c>true</c> only where byte-identical parity to Optuna is reproducible: x86/x64. OptunaSharp's
+    ///     bit-exact claim relies on .NET's <c>Math.*</c> resolving to the SAME libm as NumPy — which
+    ///     holds on x64 (both call the platform ucrt/glibc) but NOT on arm64, where .NET ships its own
+    ///     libm and diverges by ~1 ULP. (BLAS-backed paths add a second per-CPU dependence via OpenBLAS
+    ///     DYNAMIC_ARCH.) So the pinned host for bit-exact tests is x64.
+    /// </summary>
+    public static bool BitExactHost =>
+        RuntimeInformation.ProcessArchitecture is Architecture.X64 or Architecture.X86;
+
+    /// <summary>
+    ///     Gate for BIT-EXACT parity tests: requires the engine AND a bit-exact host, else Inconclusive
+    ///     — mirroring NumSharp's <c>matmul_parity</c>/<c>linalg_parity</c> tiers ("Inconclusive off the
+    ///     pinned host"). Tolerance-based tests (TPE erf-tol, GP achieved-value, importance ranking) use
+    ///     <see cref="EnsureOrInconclusive" /> instead and run on every architecture.
+    /// </summary>
+    public static void EnsureBitExactHostOrInconclusive()
+    {
+        EnsureOrInconclusive();
+        if (!BitExactHost)
+            Assert.Inconclusive(
+                "bit-exact parity is host-pinned to x64 (.NET's arm64 libm differs from NumPy's by " +
+                $"~1 ULP); ProcessArchitecture={RuntimeInformation.ProcessArchitecture} reports " +
+                "Inconclusive, matching NumSharp's matmul_parity host-pin model. Runs on x64/x86.");
     }
 
     private static bool RequireEngine()

@@ -26,7 +26,7 @@ public class LinAlgParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void FixedMatrix_ByteExact_CholeskyEighSolve()
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
         PyExec("import numpy as np");
 
         var a = new[,] { { 4.0, 1.0, 2.0 }, { 1.0, 3.0, 0.0 }, { 2.0, 0.0, 5.0 } };
@@ -58,7 +58,7 @@ public class LinAlgParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void Cholesky_ByteExact_Sweep()
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
         PyExec("import numpy as np");
         var rng = new Random(7);
         for (int trial = 0; trial < 30; trial++)
@@ -78,7 +78,7 @@ public class LinAlgParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void Solve_ByteExact_Sweep()
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
         PyExec("import numpy as np");
         var rng = new Random(23);
         for (int trial = 0; trial < 30; trial++)
@@ -101,7 +101,7 @@ public class LinAlgParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void Eigh_ByteExactEigenvalues_MatchNumpy()
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
         PyExec("import numpy as np");
         var rng = new Random(17);
         for (int trial = 0; trial < 30; trial++)
@@ -128,7 +128,7 @@ public class LinAlgParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void SolveTriangular_Vector_MatchesScipy()
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
         PyExec("import numpy as np\nimport scipy.linalg as sla");
         var rng = new Random(11);
         for (int trial = 0; trial < 30; trial++)
@@ -159,7 +159,7 @@ public class LinAlgParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void SolveTriangular_Matrix_LeftAndRight_MatchScipy()
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
         PyExec("import numpy as np\nimport scipy.linalg as sla");
         var rng = new Random(13);
         for (int trial = 0; trial < 25; trial++)

@@ -21,7 +21,7 @@ public class GpNormalSobolParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void SampleFromNormalSobol_MatchesTorch_Sweep()
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
         PyExec(
             "import numpy as np\n" +
             "from optuna._gp.qmc import sample_from_normal_sobol\n");

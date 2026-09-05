@@ -27,7 +27,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(2026, 40)]
     public void OptimizationHistory_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(t =>
@@ -57,7 +57,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(13, 60)]
     public void OptimizationHistory_WithConstraints_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(t =>
@@ -89,7 +89,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(99, 35)]
     public void OptimizationHistory_ErrorBar_MultiStudy_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudies = new[]
         {
@@ -131,7 +131,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(7, 45)]
     public void Edf_SingleStudy_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = BuildQuadraticStudy("edf", seed, nTrials);
         var csInfo = Edf.GetInfo(csStudy);
@@ -154,7 +154,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(2027, 40)]
     public void Edf_MultiStudy_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudies = new[]
         {
@@ -186,7 +186,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(42, 30)]
     public void IntermediateValues_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(t =>
@@ -238,7 +238,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(7, 60)]
     public void HypervolumeHistory_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(
             directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
@@ -262,7 +262,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(3, 50)]
     public void HypervolumeHistory_WithConstraints_MixedDirection_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(
             directions: new[] { StudyDirection.Maximize, StudyDirection.Minimize },
@@ -300,7 +300,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(7)]
     public void ParamImportances_SingleObjective_Matches_LiveOptuna(int seed)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(ImpObjective, nTrials: 80);
@@ -321,7 +321,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(0)]
     public void ParamImportances_MultiObjective_Matches_LiveOptuna(int seed)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(
             directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
@@ -357,7 +357,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(7, 45)]
     public void Slice_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(SliceObjective, nTrials: nTrials);
@@ -386,7 +386,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(7, 60)]
     public void ParetoFront_TwoObjective_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(
             directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
@@ -419,7 +419,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(3, 50)]
     public void ParetoFront_ThreeObjective_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(
             directions: new[] { StudyDirection.Minimize, StudyDirection.Maximize, StudyDirection.Minimize },
@@ -453,7 +453,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(7, 45)]
     public void Contour_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(ContourObjective, nTrials: nTrials);
@@ -477,7 +477,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(7, 45)]
     public void Rank_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(ContourObjective, nTrials: nTrials);  // reuse: x/log-z/categorical-c + constraint.
@@ -569,7 +569,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(7, 45)]
     public void ParallelCoordinate_SingleObjective_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(ContourObjective, nTrials: nTrials);  // reuse: a/log-z... actually x/log-z/cat-c.
@@ -591,7 +591,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(11, 60)]
     public void ParallelCoordinate_MissingValues_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(t =>
@@ -627,7 +627,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(7, 55)]
     public void ParallelCoordinate_MultiObjective_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(
             directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
@@ -658,7 +658,7 @@ public class VisualizationParityTests : OptunaInteropTestBase
     [DataRow(7, 30)]
     public void Timeline_Matches_LiveOptuna(int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
         csStudy.Optimize(t =>

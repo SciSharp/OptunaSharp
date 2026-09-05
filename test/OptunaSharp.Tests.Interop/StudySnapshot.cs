@@ -177,6 +177,12 @@ public sealed class StudySnapshot
         DatetimeComparison datetimes = DatetimeComparison.NullnessOnly,
         bool compareStudyName = true)
     {
+        // Study-state parity is BIT-EXACT (see BitEqual below), so it is host-pinned to x64 — on arm64
+        // the .NET libm diverges from NumPy's by ~1 ULP and every FullState/Differential test would go
+        // red on a genuine hardware difference. Report Inconclusive there instead (NumSharp's
+        // matmul_parity host-pin model). The tolerance-based samplers assert on every architecture.
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
         var diffs = new List<string>();
 
         if (compareStudyName && expected.StudyName != actual.StudyName)

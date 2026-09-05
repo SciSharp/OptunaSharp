@@ -209,6 +209,13 @@ jobs:
 
     # Compute the libpython path and export it so pythonnet binds deterministically (PythonSession
     # honors PYTHONNET_PYDLL before its own probe). Works on all three OSes via the runner's python.
+    # ML.NET's LightGBM native (lib_lightgbm) needs the OpenMP runtime, which macOS lacks by default;
+    # brew provides it so the LightGbm ranking parity tests can load their backend. Where ML.NET ships
+    # no osx-arm64 native at all, those tests self-skip (Inconclusive) rather than fail.
+    - name: Install libomp for ML.NET LightGBM (macOS)
+      if: runner.os == 'macOS'
+      run: brew install libomp || true
+
     - name: Resolve libpython (PYTHONNET_PYDLL)
       shell: bash
       run: |

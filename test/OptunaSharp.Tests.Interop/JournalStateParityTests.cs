@@ -204,6 +204,9 @@ public class JournalStateParityTests : OptunaInteropTestBase
     [DataRow(403)]
     public void Journal_RawLine_Format_Parity(int seed)
     {
+        // Line-by-line float-repr (bit-equal) journal parity — host-pinned to x64 (arm64 libm drifts).
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
         // The SAME deterministic scenario is written to two fresh journals — one by Python,
         // one by OptunaSharp. After masking worker ids and timestamps, the two files must be
         // STRUCTURALLY IDENTICAL line by line: same op sequence, same keys, same payloads

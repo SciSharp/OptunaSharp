@@ -82,7 +82,8 @@ public class RandomSamplerParityTests
     [DataRow(20260830)]
     public void MixedSearchSpace_IsBitIdentical_ToLiveOptuna(int seed)
     {
-        PythonSession.EnsureOrInconclusive();
+        // Asserts bit-identical suggestions vs live Optuna — host-pinned to x64 (arm64 libm drifts ~1 ULP).
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         const int nTrials = 10;
         // Compute the C# side first, then open the GIL for the Python run + comparison.
