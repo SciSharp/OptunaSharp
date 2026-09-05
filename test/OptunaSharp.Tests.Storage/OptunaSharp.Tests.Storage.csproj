@@ -29,6 +29,9 @@
     <ProjectReference Include="..\..\src\OptunaSharp.Storage.NRedisStack\OptunaSharp.Storage.NRedisStack.csproj" />
     <ProjectReference Include="..\..\src\OptunaSharp.Storage.ServiceStack.Redis\OptunaSharp.Storage.ServiceStack.Redis.csproj" />
     <ProjectReference Include="..\..\src\OptunaSharp.Storage.Redis\OptunaSharp.Storage.Redis.csproj" />
+    <!-- The SQLite RDB storage (Phase 4.1). Needs no external service (native e_sqlite3 is bundled),
+         so its tests run in the normal unit-test lane. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Storage.Sqlite\OptunaSharp.Storage.Sqlite.csproj" />
     <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
   </ItemGroup>
 

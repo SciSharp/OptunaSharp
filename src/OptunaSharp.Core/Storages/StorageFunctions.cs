@@ -9,14 +9,18 @@ public static class StorageFunctions
     ///     Python <c>optuna.storages.get_storage</c> — only for internal usage. It might be
     ///     deprecated in the future.
     ///
-    ///     <c>null</c> maps to a fresh <see cref="InMemoryStorage" />. URL-string storages
-    ///     (<c>sqlite:///...</c>) arrive with the Tier X RDB packages; passing a string raises
-    ///     until then.
+    ///     <c>null</c> maps to a fresh <see cref="InMemoryStorage" />. An RDB-style backend (any
+    ///     <see cref="ICachedStorageBackend" />, e.g. the Tier X <c>OptunaSharp.Storage.Sqlite</c>
+    ///     <c>RDBStorage</c>) is wrapped in a <see cref="CachedStorage" /> — mirroring Python's
+    ///     <c>get_storage</c>, which returns <c>_CachedStorage(RDBStorage(...))</c>. Everything else
+    ///     (in-memory, journal, an already-wrapped cache) is returned as-is.
     /// </summary>
     public static BaseStorage GetStorage(BaseStorage? storage)
     {
         if (storage is null)
             return new InMemoryStorage();
+        if (storage is ICachedStorageBackend)
+            return new CachedStorage(storage);
         return storage;
     }
 

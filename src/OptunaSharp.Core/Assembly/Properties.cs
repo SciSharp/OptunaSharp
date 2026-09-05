@@ -29,6 +29,14 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.NRedisStack, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.ServiceStack.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The SQLite RDB storage (satellite package OptunaSharp.Storage.Sqlite, Phase 4.1) is an external
+// implementer of the ICachedStorageBackend seam (declared in CachedStorage.cs). Like InMemoryStorage
+// it must construct FrozenTrial/FrozenStudy with their internal identity fields set
+// (FrozenTrial.TrialId / SetValues, FrozenStudy.StudyId), serialize attr value_json through the same
+// internal PyJson (byte-compatible with Python Optuna), and map the trial/direction enums to their
+// stored names via the internal PythonName() helpers.
+[assembly: InternalsVisibleTo("OptunaSharp.Storage.Sqlite, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 // The ML.NET FastForest backend (satellite package OptunaSharp.Importance.Forests.ML.NET, Phase 5.1)
 // reuses Core's internal forest machinery: SklearnLikeTree / FanovaTree / Fanova / Mdi /
 // ForestImportance (the shared algorithm), plus SearchSpaceTransform, the optuna/importance/_base.py
