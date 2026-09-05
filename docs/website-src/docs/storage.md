@@ -126,7 +126,8 @@ storage over the network. A lightweight **client** forwards every storage operat
 fronts a real backend (typically the SQLite `RDBStorage`). Install **`OptunaSharp.Storage.Grpc`**; the
 client is `GrpcStorageProxy` and the server is `GrpcProxyServer`, both in `OptunaSharp.Storages.Grpc`. It
 is a faithful port of `optuna.storages.GrpcStorageProxy` / `run_grpc_proxy_server`, experimental since
-Optuna v4.2.0.
+Optuna v4.2.0. This is a summary — see the dedicated [gRPC Storage Proxy](../grpc/index.md) section for
+the full client and server reference.
 
 ### The server
 

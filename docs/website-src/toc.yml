@@ -4,6 +4,9 @@
 - name: Redis
   href: redis/
   homepage: redis/index.md
+- name: gRPC
+  href: grpc/
+  homepage: grpc/index.md
 - name: API
   href: api/
 - name: Source Code
