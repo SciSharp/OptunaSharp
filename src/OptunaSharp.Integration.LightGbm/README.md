@@ -75,6 +75,14 @@ var imp = ImportanceFunctions.GetParamImportances(study, evaluator);
 is used as given. The `(nTrees, maxDepth, seed)` constructor is this overload fed a reproducible
 default options object.
 
+Or **start from those reproducible defaults and tweak** just a few knobs with an
+`Action<LightGbmRegressionTrainer.Options>` — no need to restate the defaults:
+
+```csharp
+var evaluator = new LightGbmFanovaImportanceEvaluator(
+    o => { o.LearningRate = 0.05; o.Seed = 0; o.NumberOfThreads = 1; });
+```
+
 ## The LightGBM **tuner** — the Optuna-justified half (Phase 6.1)
 
 LightGBM's real identity in Optuna is a **tuner**, not importance — and it is ported here:

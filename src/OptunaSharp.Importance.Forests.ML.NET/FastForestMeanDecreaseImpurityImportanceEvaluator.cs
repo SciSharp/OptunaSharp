@@ -21,6 +21,7 @@ namespace OptunaSharp.Importance.Forests;
 public sealed class FastForestMeanDecreaseImpurityImportanceEvaluator : BaseImportanceEvaluator
 {
     private readonly FastForestRegressionTrainer.Options? _options;
+    private readonly Action<FastForestRegressionTrainer.Options>? _configure;
     private readonly int _nTrees;
     private readonly int _maxDepth;
     private readonly int? _seed;
@@ -49,11 +50,30 @@ public sealed class FastForestMeanDecreaseImpurityImportanceEvaluator : BaseImpo
     public FastForestMeanDecreaseImpurityImportanceEvaluator(FastForestRegressionTrainer.Options options)
         => _options = options ?? throw new ArgumentNullException(nameof(options));
 
+    /// <summary>
+    ///     Convenience between the two ctors above: start from the reproducible default options for
+    ///     <c>(nTrees, maxDepth, seed)</c> and <paramref name="configure" /> only the knobs you care
+    ///     about — without restating the defaults or the two managed column names. The whole FastForest
+    ///     options surface is reachable.
+    /// </summary>
+    /// <param name="configure">Applied to the default options just before fitting.</param>
+    /// <param name="nTrees">The number of trees in the forest (the options baseline).</param>
+    /// <param name="maxDepth">The maximum depth of each tree (derives the baseline leaf count).</param>
+    /// <param name="seed">Baseline seed; may be overridden inside <paramref name="configure" />.</param>
+    public FastForestMeanDecreaseImpurityImportanceEvaluator(
+        Action<FastForestRegressionTrainer.Options> configure, int nTrees = 64, int maxDepth = 64, int? seed = null)
+    {
+        _configure = configure ?? throw new ArgumentNullException(nameof(configure));
+        _nTrees = nTrees;
+        _maxDepth = maxDepth;
+        _seed = seed;
+    }
+
     /// <inheritdoc />
     public override OrderedDict<string, double> Evaluate(
         Study study, IReadOnlyList<string>? @params = null, Func<FrozenTrial, double>? target = null)
         => ForestImportance.EvaluateMdi(study, @params, target,
             (x, y, nFeatures) => _options is null
-                ? FastForestBackend.Fit(x, y, nFeatures, _nTrees, _maxDepth, _seed)
+                ? FastForestBackend.Fit(x, y, nFeatures, _nTrees, _maxDepth, _seed, _configure)
                 : FastForestBackend.Fit(x, y, nFeatures, _options));
 }

@@ -25,6 +25,7 @@ namespace OptunaSharp.Integration.LightGbm;
 public sealed class LightGbmMeanDecreaseImpurityImportanceEvaluator : BaseImportanceEvaluator
 {
     private readonly LightGbmRegressionTrainer.Options? _options;
+    private readonly Action<LightGbmRegressionTrainer.Options>? _configure;
     private readonly int _nTrees;
     private readonly int _maxDepth;
     private readonly int? _seed;
@@ -53,11 +54,30 @@ public sealed class LightGbmMeanDecreaseImpurityImportanceEvaluator : BaseImport
     public LightGbmMeanDecreaseImpurityImportanceEvaluator(LightGbmRegressionTrainer.Options options)
         => _options = options ?? throw new ArgumentNullException(nameof(options));
 
+    /// <summary>
+    ///     Convenience between the two ctors above: start from the reproducible default options for
+    ///     <c>(nTrees, maxDepth, seed)</c> and <paramref name="configure" /> only the knobs you care
+    ///     about (e.g. LearningRate, or the nested <c>Booster</c>) — without restating the defaults or
+    ///     the two managed column names.
+    /// </summary>
+    /// <param name="configure">Applied to the default options just before fitting.</param>
+    /// <param name="nTrees">The number of boosting iterations (the options baseline).</param>
+    /// <param name="maxDepth">The maximum number of leaves per tree is derived from this depth.</param>
+    /// <param name="seed">Baseline seed; may be overridden inside <paramref name="configure" />.</param>
+    public LightGbmMeanDecreaseImpurityImportanceEvaluator(
+        Action<LightGbmRegressionTrainer.Options> configure, int nTrees = 64, int maxDepth = 64, int? seed = null)
+    {
+        _configure = configure ?? throw new ArgumentNullException(nameof(configure));
+        _nTrees = nTrees;
+        _maxDepth = maxDepth;
+        _seed = seed;
+    }
+
     /// <inheritdoc />
     public override OrderedDict<string, double> Evaluate(
         Study study, IReadOnlyList<string>? @params = null, Func<FrozenTrial, double>? target = null)
         => ForestImportance.EvaluateMdi(study, @params, target,
             (x, y, nFeatures) => _options is null
-                ? LightGbmBackend.Fit(x, y, nFeatures, _nTrees, _maxDepth, _seed)
+                ? LightGbmBackend.Fit(x, y, nFeatures, _nTrees, _maxDepth, _seed, _configure)
                 : LightGbmBackend.Fit(x, y, nFeatures, _options));
 }

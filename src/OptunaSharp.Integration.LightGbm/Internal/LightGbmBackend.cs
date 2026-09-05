@@ -37,9 +37,15 @@ internal static class LightGbmBackend
     private const string LabelCol = "Label";
     private const string FeatureCol = "Features";
 
-    /// <summary>Simple path — reproducible defaults from <c>(n_trees, max_depth, seed)</c>.</summary>
-    internal static SklearnLikeTree[] Fit(float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed)
-        => Fit(x, y, nFeatures, DefaultOptions(nTrees, maxDepth, seed, y.Length));
+    /// <summary>Simple path — reproducible defaults from <c>(n_trees, max_depth, seed)</c>, then the optional tweak.</summary>
+    internal static SklearnLikeTree[] Fit(
+        float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed,
+        Action<LightGbmRegressionTrainer.Options>? configure = null)
+    {
+        var options = DefaultOptions(nTrees, maxDepth, seed, y.Length);
+        configure?.Invoke(options);
+        return Fit(x, y, nFeatures, options);
+    }
 
     /// <summary>
     ///     Full-API path — fit LightGBM with a caller-supplied

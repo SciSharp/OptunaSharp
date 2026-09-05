@@ -224,6 +224,22 @@ public class ForestImportanceEvaluatorTests
             .BeFalse("MinimumExampleCountPerLeaf (a knob the simple ctor pins to 1) must reach the fit");
     }
 
+    [TestMethod]
+    public void Configure_Overload_TweaksDefaultsRanksAndReproducible()
+    {
+        var study = MakeStudy(seed: 0, nTrials: 80);
+        // Start from the reproducible defaults and tweak only what we care about.
+        BaseImportanceEvaluator Make() => new FastForestFanovaImportanceEvaluator(
+            o => { o.MinimumExampleCountPerLeaf = 15; o.Seed = 0; o.NumberOfThreads = 1; });
+
+        var imp = ImportanceFunctions.GetParamImportances(study, Make());
+        imp.Keys.First().Should().Be("x", "configure: x dominates the objective (10*x^2)");
+        imp.Values.Sum().Should().BeApproximately(1.0, 1e-9);
+        SameImportances(Make().Evaluate(study), Make().Evaluate(study)).Should().BeTrue("configure is reproducible");
+        SameImportances(Make().Evaluate(study), new FastForestFanovaImportanceEvaluator(seed: 0).Evaluate(study))
+            .Should().BeFalse("the configure tweak (MinimumExampleCountPerLeaf=15) must reach the fit");
+    }
+
     private static Study MakeMultiObjectiveStudy()
     {
         var study = Optuna.CreateStudy(

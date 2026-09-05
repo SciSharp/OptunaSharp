@@ -23,6 +23,7 @@ namespace OptunaSharp.Importance.Booster;
 public sealed class FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator : BaseImportanceEvaluator
 {
     private readonly FastTreeTweedieTrainer.Options? _options;
+    private readonly Action<FastTreeTweedieTrainer.Options>? _configure;
     private readonly int _nTrees;
     private readonly int _maxDepth;
     private readonly int? _seed;
@@ -52,11 +53,30 @@ public sealed class FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator : Bas
     public FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator(FastTreeTweedieTrainer.Options options)
         => _options = options ?? throw new ArgumentNullException(nameof(options));
 
+    /// <summary>
+    ///     Convenience between the two ctors above: start from the reproducible default options for
+    ///     <c>(nTrees, maxDepth, seed)</c> and <paramref name="configure" /> only the knobs you care
+    ///     about (e.g. the Tweedie <c>Index</c> or LearningRate) — without restating the defaults or the
+    ///     two managed column names.
+    /// </summary>
+    /// <param name="configure">Applied to the default options just before fitting.</param>
+    /// <param name="nTrees">The number of boosting iterations (the options baseline).</param>
+    /// <param name="maxDepth">The maximum depth of each tree (derives the baseline leaf count).</param>
+    /// <param name="seed">Baseline seed; may be overridden inside <paramref name="configure" />.</param>
+    public FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator(
+        Action<FastTreeTweedieTrainer.Options> configure, int nTrees = 64, int maxDepth = 64, int? seed = null)
+    {
+        _configure = configure ?? throw new ArgumentNullException(nameof(configure));
+        _nTrees = nTrees;
+        _maxDepth = maxDepth;
+        _seed = seed;
+    }
+
     /// <inheritdoc />
     public override OrderedDict<string, double> Evaluate(
         Study study, IReadOnlyList<string>? @params = null, Func<FrozenTrial, double>? target = null)
         => ForestImportance.EvaluateMdi(study, @params, target,
             (x, y, nFeatures) => _options is null
-                ? BoosterBackend.FitFastTreeTweedie(x, y, nFeatures, _nTrees, _maxDepth, _seed)
+                ? BoosterBackend.FitFastTreeTweedie(x, y, nFeatures, _nTrees, _maxDepth, _seed, _configure)
                 : BoosterBackend.FitFastTreeTweedie(x, y, nFeatures, _options));
 }

@@ -75,6 +75,14 @@ var imp = ImportanceFunctions.GetParamImportances(study, evaluator);
 schema) and are overwritten; **every other field is used as given**. The `(nTrees, maxDepth, seed)`
 constructor is exactly this overload fed a reproducible default options object.
 
+Or **start from those reproducible defaults and tweak** just a few knobs with an
+`Action<FastForestRegressionTrainer.Options>` — no need to restate the defaults:
+
+```csharp
+var evaluator = new FastForestFanovaImportanceEvaluator(
+    o => { o.FeatureFraction = 0.7; o.Seed = 0; o.NumberOfThreads = 1; });
+```
+
 ## Divergence from Python Optuna (this package's backend)
 
 ML.NET's `FastForest` is not tree-identical to scikit-learn's random forest — it bins features and

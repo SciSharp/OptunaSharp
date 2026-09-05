@@ -83,6 +83,14 @@ var imp = ImportanceFunctions.GetParamImportances(study, evaluator);
 is used as given. The `(nTrees, maxDepth, seed)` constructor is this overload fed a reproducible
 default options object.
 
+Or **start from those reproducible defaults and tweak** just a few knobs with an
+`Action<FastTreeRegressionTrainer.Options>` (or `...FastTreeTweedieTrainer.Options`):
+
+```csharp
+var evaluator = new FastTreeFanovaImportanceEvaluator(
+    o => { o.LearningRate = 0.05; o.Seed = 0; o.NumberOfThreads = 1; });
+```
+
 ## Implementation
 
 The fANOVA marginal-variance walk and the MDI formula are **shared with Core** (validated bit-for-bit

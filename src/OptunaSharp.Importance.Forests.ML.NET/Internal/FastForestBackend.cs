@@ -35,9 +35,18 @@ internal static class FastForestBackend
     private const string LabelCol = "Label";
     private const string FeatureCol = "Features";
 
-    /// <summary>Simple path — build the reproducible default options from <c>(n_trees, max_depth, seed)</c>.</summary>
-    internal static SklearnLikeTree[] Fit(float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed)
-        => Fit(x, y, nFeatures, DefaultOptions(nTrees, maxDepth, seed, y.Length));
+    /// <summary>
+    ///     Simple path — build the reproducible default options from <c>(n_trees, max_depth, seed)</c>,
+    ///     then apply the optional <paramref name="configure" /> tweak (start-from-defaults) before fitting.
+    /// </summary>
+    internal static SklearnLikeTree[] Fit(
+        float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed,
+        Action<FastForestRegressionTrainer.Options>? configure = null)
+    {
+        var options = DefaultOptions(nTrees, maxDepth, seed, y.Length);
+        configure?.Invoke(options);
+        return Fit(x, y, nFeatures, options);
+    }
 
     /// <summary>
     ///     Full-API path — fit with a caller-supplied <see cref="FastForestRegressionTrainer.Options" />.

@@ -36,10 +36,15 @@ internal static class BoosterBackend
 
     // ---- FastTree (MART — least-squares gradient boosting) ----
 
-    /// <summary>Simple path — reproducible defaults from <c>(n_trees, max_depth, seed)</c>.</summary>
+    /// <summary>Simple path — reproducible defaults from <c>(n_trees, max_depth, seed)</c>, then the optional tweak.</summary>
     internal static SklearnLikeTree[] FitFastTree(
-        float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed)
-        => FitFastTree(x, y, nFeatures, DefaultFastTreeOptions(nTrees, maxDepth, seed, y.Length));
+        float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed,
+        Action<FastTreeRegressionTrainer.Options>? configure = null)
+    {
+        var options = DefaultFastTreeOptions(nTrees, maxDepth, seed, y.Length);
+        configure?.Invoke(options);
+        return FitFastTree(x, y, nFeatures, options);
+    }
 
     /// <summary>
     ///     Full-API path — fit FastTree with a caller-supplied
@@ -78,10 +83,15 @@ internal static class BoosterBackend
 
     // ---- FastTreeTweedie (Tweedie-loss gradient boosting) ----
 
-    /// <summary>Simple path — reproducible defaults from <c>(n_trees, max_depth, seed)</c>.</summary>
+    /// <summary>Simple path — reproducible defaults from <c>(n_trees, max_depth, seed)</c>, then the optional tweak.</summary>
     internal static SklearnLikeTree[] FitFastTreeTweedie(
-        float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed)
-        => FitFastTreeTweedie(x, y, nFeatures, DefaultFastTreeTweedieOptions(nTrees, maxDepth, seed, y.Length));
+        float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed,
+        Action<FastTreeTweedieTrainer.Options>? configure = null)
+    {
+        var options = DefaultFastTreeTweedieOptions(nTrees, maxDepth, seed, y.Length);
+        configure?.Invoke(options);
+        return FitFastTreeTweedie(x, y, nFeatures, options);
+    }
 
     /// <summary>
     ///     Full-API path — fit FastTreeTweedie with a caller-supplied
