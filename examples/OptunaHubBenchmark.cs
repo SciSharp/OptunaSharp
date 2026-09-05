@@ -29,6 +29,7 @@ using OptunaSharp.Logging;
 using OptunaSharp.Interop.PythonNet;
 
 Native.EnableVirtualTerminal();   // make ANSI colors work on legacy Windows consoles too
+try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { /* redirected handle — leave as-is */ }
 OptunaLogging.DisableDefaultHandler();   // silence OptunaSharp's own INFO logs — our colored view replaces them
 
 // color helpers (ANSI). off when NO_COLOR is set or output is piped, unless FORCE_COLOR overrides.
@@ -96,7 +97,17 @@ void Render(Study s, FrozenTrial t)
     Console.WriteLine($"  {C($"#{t.Number,3}", "90")}  cur {cur,11:F4}  {bar}  best {bestCell}");
 }
 
-study.Optimize(problem.SingleObjective, nTrials: 45, callbacks: new[] { (Action<Study, FrozenTrial>)Render });
+try
+{
+    study.Optimize(problem.SingleObjective, nTrials: 45, callbacks: new[] { (Action<Study, FrozenTrial>)Render });
+}
+catch (Exception ex)
+{
+    // a bridged hub problem evaluates in Python; if that fails mid-run, report it instead of crashing.
+    Console.WriteLine();
+    Console.WriteLine(C("  optimization stopped early: " + ex.Message.Split('\n')[0], "1;33"));
+    return;
+}
 
 // ── result ───────────────────────────────────────────────────────────────────────────────────────
 Console.WriteLine();

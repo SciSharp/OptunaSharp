@@ -33,6 +33,7 @@ using OptunaSharp.Logging;
 using OptunaSharp.Interop.PythonNet;
 
 Native.EnableVirtualTerminal();
+try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { /* redirected handle — leave as-is */ }
 OptunaLogging.DisableDefaultHandler();   // silence OptunaSharp's own INFO logs — our colored view replaces them
 
 bool color = Environment.GetEnvironmentVariable("FORCE_COLOR") is { Length: > 0 }
@@ -75,32 +76,39 @@ var skipped = new List<(string Label, string Why)>();
 foreach (var entry in roster)
 {
     Console.Write($"  running {C(entry.Label.PadRight(18), entry.Code)} ");
-    BaseSampler sampler;
-    IDisposable[] owned;
+    IDisposable[] owned = Array.Empty<IDisposable>();
     try
     {
+        // load may fail (package/deps missing). the whole run is inside the try because a bridged
+        // sampler can ALSO fail during optimization, not just at load — e.g. optuna's CmaEsSampler
+        // imports its `cmaes` backend lazily on the first sample_relative — so any failure just skips
+        // this sampler instead of crashing the shootout.
+        BaseSampler sampler;
         (sampler, owned) = entry.Make();
+
+        var curve = new List<double>(nTrials);
+        double? best = null;
+        var study = Optuna.CreateStudy(sampler: sampler, direction: StudyDirection.Minimize);
+        study.Optimize(Rastrigin, nTrials: nTrials, callbacks: new[] { (Action<Study, FrozenTrial>)((s, t) =>
+        {
+            double v = t.Value ?? double.NaN;
+            best = best is null ? v : Math.Min(best.Value, v);   // track best-so-far for the convergence curve
+            curve.Add(best.Value);
+        }) });
+
+        results.Add((entry.Label, entry.Code, study.BestValue, curve));
+        Console.WriteLine(C($"done  best={study.BestValue:F4}", entry.Code));
     }
     catch (Exception ex)
     {
-        skipped.Add((entry.Label, ex.Message.Split('\n')[0]));
-        Console.WriteLine(C("skipped (missing dependency)", "90"));
-        continue;
+        string reason = FirstLine(ex.Message);
+        skipped.Add((entry.Label, reason));
+        Console.WriteLine(C("skipped — " + reason, "90"));
     }
-
-    var curve = new List<double>(nTrials);
-    double? best = null;
-    var study = Optuna.CreateStudy(sampler: sampler, direction: StudyDirection.Minimize);
-    study.Optimize(Rastrigin, nTrials: nTrials, callbacks: new[] { (Action<Study, FrozenTrial>)((s, t) =>
+    finally
     {
-        double v = t.Value ?? double.NaN;
-        best = best is null ? v : Math.Min(best.Value, v);   // track best-so-far for the convergence curve
-        curve.Add(best.Value);
-    }) });
-
-    results.Add((entry.Label, entry.Code, study.BestValue, curve));
-    foreach (var d in owned) d.Dispose();
-    Console.WriteLine(C($"done  best={study.BestValue:F4}", entry.Code));
+        foreach (var d in owned) d.Dispose();
+    }
 }
 
 // ── leaderboard with colored convergence sparklines ──────────────────────────────────────────────
@@ -170,6 +178,8 @@ static string Spark(List<double> curve, double lo, double hi)
     }
     return new string(chars);
 }
+
+static string FirstLine(string s) => (s.Split('\n')[0]).Trim();
 
 static bool TryProbe(out string reason)
 {
