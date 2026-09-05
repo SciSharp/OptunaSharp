@@ -72,8 +72,10 @@ var imp = ImportanceFunctions.GetParamImportances(study, evaluator);
 ```
 
 `LabelColumnName` / `FeatureColumnName` are managed by the evaluator and overwritten; every other field
-is used as given. The `(nTrees, maxDepth, seed)` constructor is this overload fed a reproducible
-default options object.
+is used as given. (Of the trainer's four column-name fields, only those two can bind — the importance
+schema has no weight or group column, so `ExampleWeightColumnName` / `RowGroupColumnName` are
+unsupported and throw a clear `ArgumentException` if set.) The `(nTrees, maxDepth, seed)` constructor is
+this overload fed a reproducible default options object.
 
 Or **start from those reproducible defaults and tweak** just a few knobs with an
 `Action<LightGbmRegressionTrainer.Options>` — no need to restate the defaults:

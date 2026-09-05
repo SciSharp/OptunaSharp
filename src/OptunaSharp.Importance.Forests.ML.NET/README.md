@@ -72,8 +72,11 @@ var imp = ImportanceFunctions.GetParamImportances(study, evaluator);
 ```
 
 `LabelColumnName` / `FeatureColumnName` are managed by the evaluator (bound to the transformed-trial
-schema) and are overwritten; **every other field is used as given**. The `(nTrees, maxDepth, seed)`
-constructor is exactly this overload fed a reproducible default options object.
+schema) and are overwritten; **every other field is used as given**. (Of the trainer's four
+column-name fields, only those two can bind — the importance schema has no weight or group column, so
+`ExampleWeightColumnName` / `RowGroupColumnName` are unsupported; setting either throws a clear
+`ArgumentException` rather than a cryptic ML.NET error.) The `(nTrees, maxDepth, seed)` constructor is
+exactly this overload fed a reproducible default options object.
 
 Or **start from those reproducible defaults and tweak** just a few knobs with an
 `Action<FastForestRegressionTrainer.Options>` — no need to restate the defaults:

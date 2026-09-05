@@ -56,6 +56,8 @@ internal static class LightGbmBackend
     /// </summary>
     internal static SklearnLikeTree[] Fit(float[,] x, double[] y, int nFeatures, LightGbmRegressionTrainer.Options options)
     {
+        RequireImportanceSchema(options.ExampleWeightColumnName, options.RowGroupColumnName);
+
         var ml = new MLContext();
         IDataView dataView = LoadData(ml, x, y, nFeatures);
 
@@ -83,6 +85,21 @@ internal static class LightGbmBackend
     private static SklearnLikeTree[] Adapt(
         IReadOnlyList<RegressionTreeBase> trees, int nFeatures, float[,] x, double[] y)
         => trees.Select(tree => MlNetTreeEnsembleAdapter.ToSklearnLikeTree(tree, nFeatures, x, y)).ToArray();
+
+    // The importance transform hands the trainer only a label + a feature vector — there is no
+    // per-trial weight or group column — so these two of the trainer's four column-name options cannot
+    // bind. Fail fast with a clear message instead of ML.NET's cryptic "column not found" at Fit time.
+    private static void RequireImportanceSchema(string? exampleWeightColumnName, string? rowGroupColumnName)
+    {
+        if (exampleWeightColumnName is not null)
+            throw new ArgumentException(
+                "ExampleWeightColumnName is not supported: the importance transform provides only a label " +
+                "and a feature vector. Leave it unset.", "options");
+        if (rowGroupColumnName is not null)
+            throw new ArgumentException(
+                "RowGroupColumnName is not supported: the importance transform provides only a label and a " +
+                "feature vector. Leave it unset.", "options");
+    }
 
     // A depth-d binary tree has at most 2^d leaves; a tree can never have more leaves than rows.
     private static int LeavesFromDepth(int maxDepth, int n)

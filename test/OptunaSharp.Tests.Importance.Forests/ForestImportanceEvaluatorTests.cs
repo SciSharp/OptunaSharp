@@ -240,6 +240,24 @@ public class ForestImportanceEvaluatorTests
             .Should().BeFalse("the configure tweak (MinimumExampleCountPerLeaf=15) must reach the fit");
     }
 
+    [TestMethod]
+    public void Options_UnsupportedColumns_ThrowClearly()
+    {
+        var study = MakeStudy(seed: 0);
+        // The importance schema has only label + features; the trainer's other two column-name fields
+        // (of four) cannot bind, so the evaluator rejects them with a clear message rather than a
+        // cryptic ML.NET "column not found" deep in Fit.
+        var weighted = FfOptions();
+        weighted.ExampleWeightColumnName = "w";
+        Action act1 = () => new FastForestFanovaImportanceEvaluator(weighted).Evaluate(study);
+        act1.Should().Throw<ArgumentException>().WithMessage("*ExampleWeightColumnName*");
+
+        var grouped = FfOptions();
+        grouped.RowGroupColumnName = "g";
+        Action act2 = () => new FastForestFanovaImportanceEvaluator(grouped).Evaluate(study);
+        act2.Should().Throw<ArgumentException>().WithMessage("*RowGroupColumnName*");
+    }
+
     private static Study MakeMultiObjectiveStudy()
     {
         var study = Optuna.CreateStudy(

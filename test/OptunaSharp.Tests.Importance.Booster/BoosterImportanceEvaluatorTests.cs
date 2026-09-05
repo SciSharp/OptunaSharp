@@ -245,6 +245,23 @@ public class BoosterImportanceEvaluatorTests
             .Should().BeFalse("the configure tweak (LearningRate=0.05) must reach the fit");
     }
 
+    [TestMethod]
+    public void Options_UnsupportedColumns_ThrowClearly()
+    {
+        var study = MakeStudy(seed: 0);
+        // Only label + features exist in the importance schema; ExampleWeight / RowGroup columns cannot
+        // bind, so the evaluator rejects them with a clear message rather than a cryptic ML.NET error.
+        var weighted = FtOptions();
+        weighted.ExampleWeightColumnName = "w";
+        Action act1 = () => new FastTreeFanovaImportanceEvaluator(weighted).Evaluate(study);
+        act1.Should().Throw<ArgumentException>().WithMessage("*ExampleWeightColumnName*");
+
+        var grouped = FtOptions();
+        grouped.RowGroupColumnName = "g";
+        Action act2 = () => new FastTreeFanovaImportanceEvaluator(grouped).Evaluate(study);
+        act2.Should().Throw<ArgumentException>().WithMessage("*RowGroupColumnName*");
+    }
+
     private static Study MakeMultiObjectiveStudy()
     {
         var study = Optuna.CreateStudy(

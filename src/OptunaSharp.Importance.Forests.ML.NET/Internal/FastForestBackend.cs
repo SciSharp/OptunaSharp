@@ -57,6 +57,8 @@ internal static class FastForestBackend
     /// </summary>
     internal static SklearnLikeTree[] Fit(float[,] x, double[] y, int nFeatures, FastForestRegressionTrainer.Options options)
     {
+        RequireImportanceSchema(options.ExampleWeightColumnName, options.RowGroupColumnName);
+
         var mlContext = new MLContext();
         IDataView dataView = LoadData(mlContext, x, y, nFeatures);
 
@@ -88,6 +90,21 @@ internal static class FastForestBackend
             options.FeatureSelectionSeed = seed.Value;
         }
         return options;
+    }
+
+    // The importance transform hands the trainer only a label + a feature vector — there is no
+    // per-trial weight or group column — so these two of the trainer's four column-name options cannot
+    // bind. Fail fast with a clear message instead of ML.NET's cryptic "column not found" at Fit time.
+    private static void RequireImportanceSchema(string? exampleWeightColumnName, string? rowGroupColumnName)
+    {
+        if (exampleWeightColumnName is not null)
+            throw new ArgumentException(
+                "ExampleWeightColumnName is not supported: the importance transform provides only a label " +
+                "and a feature vector. Leave it unset.", "options");
+        if (rowGroupColumnName is not null)
+            throw new ArgumentException(
+                "RowGroupColumnName is not supported: the importance transform provides only a label and a " +
+                "feature vector. Leave it unset.", "options");
     }
 
     // A depth-d binary tree has at most 2^d leaves; a tree can never have more leaves than rows.
