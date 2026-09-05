@@ -17,3 +17,7 @@
 	path = refs/optunahub-web
 	url = https://github.com/optuna/optunahub-web.git
 	branch = main
+[submodule "refs/optuna-integration"]
+	path = refs/optuna-integration
+	url = https://github.com/optuna/optuna-integration.git
+	branch = main
