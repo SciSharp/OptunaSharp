@@ -80,6 +80,16 @@ using System.Runtime.CompilerServices;
 // Its test project mirrors the forests test project (backend-parameterised invariants).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Integration.LightGbm, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The SHAP integration (satellite package OptunaSharp.Integration.Shap — the .NET analogue of
+// optuna_integration.shap's ShapleyImportanceEvaluator) is a pure-managed, byte-exact port with NO
+// foreign runtime: its Tree SHAP walk reads Core's bit-exact CartRandomForest / SklearnLikeTree (the
+// same forest MDI uses), and it drives the evaluate() pipeline through the same seam as the other
+// importance backends — the optuna/importance/_base.py helpers in ImportanceBase, the
+// SearchSpaceTransform, and the experimental-class warning via OptunaWarnings / WarningCategory.
+[assembly: InternalsVisibleTo("OptunaSharp.Integration.Shap, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// Its test project asserts committed-oracle parity against the internal TreeShap kernel (vs SHAP 0.52.0).
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Integration.Shap, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 // The Redis backends' shared test project asserts that experimental warning fired via the internal
 // OptunaWarnings.WarningRaised event (same reason the interop suite is a friend).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpFriendKey.PublicKey)]

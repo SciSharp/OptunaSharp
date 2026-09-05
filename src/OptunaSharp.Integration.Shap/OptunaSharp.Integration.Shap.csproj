@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp</RootNamespace>
+    <AssemblyName>OptunaSharp.Integration.Shap</AssemblyName>
+
+    <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/
+         license/version) is centralized in ../../Directory.Build.props.
+
+         THE SHAP INTEGRATION — a .NET analogue of optuna_integration.shap (which Optuna also
+         re-exports as optuna.integration.ShapleyImportanceEvaluator; the optuna.integration.shap shim
+         is deprecated). Unlike the storage/ML.NET satellites this one pulls NO foreign runtime: the
+         Tree SHAP walk is pure arithmetic and the surrogate forest is Core's bit-exact
+         RandomForestRegressor port. It still ships as a separate package — mirroring where Optuna puts
+         it (a dependency on the third-party `shap` + `scikit-learn` there) — so Core's
+         OptunaSharp.Importance stays a 1-to-1 mirror of optuna.importance
+         (FanovaImportanceEvaluator / MeanDecreaseImpurityImportanceEvaluator / PedAnovaImportanceEvaluator).
+         The evaluator keeps the namespace OptunaSharp.Integration.Shap to mirror optuna_integration.shap. -->
+    <PackageId>OptunaSharp.Integration.Shap</PackageId>
+    <Description>The SHAP integration for OptunaSharp (a .NET port of Optuna): ShapleyImportanceEvaluator, a Shapley (SHAP) parameter-importance evaluator. Fits a random forest that predicts the objective values of completed trials from their parameters, then scores each parameter by its mean absolute SHAP value. A .NET analogue of optuna_integration.shap (Optuna re-exports it as optuna.integration.ShapleyImportanceEvaluator). Unlike the Python original — which depends on the third-party shap and scikit-learn packages — this is a pure-managed, byte-exact port: the surrogate is Core's bit-exact scikit-learn RandomForestRegressor port (the same forest the Mean Decrease Impurity evaluator uses) and the tree-path-dependent Tree SHAP walk is a faithful port of shap/cext/tree_shap.h, so with a fixed seed the importances match Optuna's ShapleyImportanceEvaluator (SHAP 0.52.0) to within a few ULP. The canonical FanovaImportanceEvaluator / MeanDecreaseImpurityImportanceEvaluator / PedAnovaImportanceEvaluator ship in Core (OptunaSharp), mirroring optuna.importance. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;Integration;SHAP;Shapley;TreeSHAP;TreeExplainer;Importance;RandomForest;FeatureImportance;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
+
+    <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on missing/malformed
+         doc comments — the surface is ported to match Optuna, not curated per-member. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <!-- Emit the .pdb inside the .nupkg (the release pipeline pushes only *.nupkg). -->
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+
+    <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- Reuse the shared OptunaSharp package icon. -->
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core is in-repo, so reference it by project. Packing records a clean "OptunaSharp" package
+         dependency. This package pulls NO foreign runtime — Tree SHAP is pure arithmetic. Core
+         transitively provides NumSharp (ValueError) + the internal SearchSpaceTransform /
+         ImportanceBase helpers / SklearnLikeTree / CartRandomForest / OptunaWarnings this evaluator
+         reaches (granted via InternalsVisibleTo in Core's Assembly/Properties.cs). -->
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

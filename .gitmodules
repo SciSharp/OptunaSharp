@@ -21,3 +21,11 @@
 	path = refs/optuna-integration
 	url = https://github.com/optuna/optuna-integration.git
 	branch = main
+[submodule "refs/shap"]
+	path = refs/shap
+	url = https://github.com/shap/shap.git
+	branch = master
+[submodule "refs/scikit-learn"]
+	path = refs/scikit-learn
+	url = https://github.com/scikit-learn/scikit-learn.git
+	branch = main
