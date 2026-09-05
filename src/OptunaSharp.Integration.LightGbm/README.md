@@ -26,7 +26,7 @@ pattern) and Core stays pure managed.
 **Prefer** the canonical, value-exact `FanovaImportanceEvaluator` /
 `MeanDecreaseImpurityImportanceEvaluator` in Core (a pure-managed, bit-exact port of scikit-learn's
 `RandomForestRegressor`), or the faithful ML.NET FastForest backend
-(`OptunaSharp.Importance.Forests.ML.NET`). Use the LightGBM importance backends only for
+(`OptunaSharp.Integration.ML.NET`). Use the LightGBM importance backends only for
 experimentation / consistency with a LightGBM pipeline.
 
 ```csharp

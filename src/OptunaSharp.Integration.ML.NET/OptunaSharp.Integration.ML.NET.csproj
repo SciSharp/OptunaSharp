@@ -3,20 +3,31 @@
   <PropertyGroup>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <RootNamespace>OptunaSharp</RootNamespace>
-    <AssemblyName>OptunaSharp.Importance.Forests.ML.NET</AssemblyName>
+    <AssemblyName>OptunaSharp.Integration.ML.NET</AssemblyName>
 
     <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/
          license/version) is centralized in ../../Directory.Build.props. This is a Tier X satellite:
          it pulls a foreign runtime (ML.NET's FastForest / native FastTree), so it ships separately
-         and Core stays pure managed — the NumSharp.Interop.OpenBLAS optional-package pattern. The
-         canonical fANOVA/MDI evaluators are pure-managed in Core (OptunaSharp, namespace
-         OptunaSharp.Importance); this package's public evaluators live in their own child namespace
-         OptunaSharp.Importance.Forests (every alternative backend gets one, so the "which is the real
-         one" question is answered by the name), and the .ML.NET assembly suffix marks it as the
-         ML.NET FastForest backend, distinct from Core's pure-managed OptunaSharp. -->
-    <PackageId>OptunaSharp.Importance.Forests.ML.NET</PackageId>
-    <Description>An ML.NET FastForest backend for OptunaSharp's forest-based parameter-importance evaluators (a .NET port of Optuna): FastForestFanovaImportanceEvaluator (fANOVA — Hutter et al. 2014) and FastForestMeanDecreaseImpurityImportanceEvaluator (MDI). The canonical FanovaImportanceEvaluator / MeanDecreaseImpurityImportanceEvaluator ship in Core as a pure-managed, bit-exact port of scikit-learn's RandomForestRegressor (value-parity with Python Optuna); this package fits the random forest with ML.NET FastForest instead, which is not tree-identical to scikit-learn, so its importance values differ numerically from Optuna (documented divergence; the fANOVA/MDI algorithm is shared with Core). Part of the SciSharp STACK.</Description>
-    <PackageTags>Optuna;OptunaSharp;Importance;fANOVA;MDI;RandomForest;MLNET;FastForest;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
+         and Core stays pure managed — the NumSharp.Interop.OpenBLAS optional-package pattern.
+
+         THE ML.NET INTEGRATION. This one package hosts every ML.NET-backed importance evaluator that
+         rides the Microsoft.ML.FastTree runtime — the FastForest bagging ensemble and the
+         FastTree / FastTreeTweedie gradient boosters. (LightGBM keeps its own package,
+         OptunaSharp.Integration.LightGbm, because it carries a distinct heavy native runtime —
+         Microsoft.ML.LightGbm, per-RID binaries — and maps 1-to-1 to Optuna's own
+         optuna.integration.lightgbm module + tuner: one package per heavy native dep.)
+
+         The canonical fANOVA/MDI evaluators (FanovaImportanceEvaluator /
+         MeanDecreaseImpurityImportanceEvaluator) ship in Core (OptunaSharp, namespace
+         OptunaSharp.Importance) as a pure-managed, bit-exact port of scikit-learn's
+         RandomForestRegressor (value-parity with Python Optuna). This package's public evaluators keep
+         their own child namespaces — OptunaSharp.Importance.Forests (the faithful FastForest backend)
+         and OptunaSharp.Importance.Booster (the EXPERIMENTAL / off-label gradient boosters) — so the
+         "which is the real one" question is answered by the namespace, and the .ML.NET assembly suffix
+         marks the ML.NET dependency, distinct from Core's pure-managed OptunaSharp. -->
+    <PackageId>OptunaSharp.Integration.ML.NET</PackageId>
+    <Description>The ML.NET integration for OptunaSharp (a .NET port of Optuna): ML.NET-backed forest parameter-importance evaluators over the Microsoft.ML.FastTree runtime. A faithful FastForest backend — FastForestFanovaImportanceEvaluator (fANOVA — Hutter et al. 2014) and FastForestMeanDecreaseImpurityImportanceEvaluator (MDI) — plus EXPERIMENTAL / off-label gradient-boosted-tree backends (ML.NET FastTree and FastTreeTweedie): FastTree/FastTreeTweedie {Fanova,MeanDecreaseImpurity}ImportanceEvaluator. The canonical FanovaImportanceEvaluator / MeanDecreaseImpurityImportanceEvaluator ship in Core as a pure-managed, bit-exact port of scikit-learn's RandomForestRegressor (value-parity with Python Optuna); FastForest fits that same bagging model with ML.NET (ranking parity — values diverge, not tree-identical to scikit-learn), while the boosters fit the ensemble residual rather than the objective, so fANOVA/MDI over them is off-label — a non-standard quantity with NO value-parity to Optuna (weak ranking agreement at best). Prefer the canonical Core evaluators when Optuna parity matters. LightGBM lives in the separate OptunaSharp.Integration.LightGbm package (distinct heavy native runtime + Optuna tuner identity). Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;Integration;MLNET;Importance;fANOVA;MDI;RandomForest;FastForest;FastTree;FastTreeTweedie;GradientBoosting;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
 
     <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on missing/malformed
          doc comments — the surface is ported to match Optuna, not curated per-member. -->
@@ -39,10 +50,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- ML.NET's FastForest is the random-forest backend (the analogue of Optuna's
-         sklearn.ensemble.RandomForestRegressor). Microsoft.ML.FastTree carries the FastForest
-         trainer + the RegressionTree structure the fANOVA tree-walk reads; Microsoft.ML carries
-         MLContext / IDataView / LoadFromEnumerable. Both MIT, native FastTree binaries per RID. -->
+    <!-- ML.NET's FastForest (the analogue of Optuna's sklearn.ensemble.RandomForestRegressor) and the
+         FastTree / FastTreeTweedie gradient boosters all live in Microsoft.ML.FastTree, which also
+         carries the RegressionTree structure the fANOVA tree-walk + MDI read; Microsoft.ML carries
+         MLContext / IDataView / LoadFromEnumerable. Both MIT, native FastTree binaries per RID. The
+         boosters introduce NO new native dependency beyond FastForest's. -->
     <PackageReference Include="Microsoft.ML" Version="4.0.3" />
     <PackageReference Include="Microsoft.ML.FastTree" Version="4.0.3" />
   </ItemGroup>
@@ -50,17 +62,18 @@
   <ItemGroup>
     <!-- Core is in-repo, so reference it by project. Packing records a clean "OptunaSharp" package
          dependency. Core transitively provides NumSharp (ValueError) + the internal
-         SearchSpaceTransform / ImportanceBase helpers / intersection search space / OptunaWarnings
-         this package uses (granted via InternalsVisibleTo in Core's Assembly/Properties.cs). -->
+         SearchSpaceTransform / ImportanceBase helpers / SklearnLikeTree / ForestImportance / intersection
+         search space / OptunaWarnings these evaluators reach (granted via InternalsVisibleTo in Core's
+         Assembly/Properties.cs). -->
     <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- The ML.NET tree-ensemble -> SklearnLikeTree adapter is shared by every ML.NET importance
-         backend (FastForest here, FastTree/FastTreeTweedie, LightGBM). It is a linked source file
-         rather than a runtime package, so no backend depends on another and Core stays pure managed;
-         each host assembly is a Core friend, which is what grants the adapter access to the internal
-         SklearnLikeTree. -->
+         backend — this package's FastForest + FastTree/FastTreeTweedie evaluators and the separate
+         OptunaSharp.Integration.LightGbm package. It is a linked source file rather than a runtime
+         package, so no package depends on another and Core stays pure managed; each host assembly is a
+         Core friend, which is what grants the adapter access to the internal SklearnLikeTree. -->
     <Compile Include="..\_shared\MlNetTreeEnsembleAdapter.cs" Link="Internal\MlNetTreeEnsembleAdapter.cs" />
   </ItemGroup>
 

@@ -22,7 +22,7 @@ namespace OptunaSharp.Importance;
 ///     RandomForestRegressor</b> (the same forest Optuna uses), so with a fixed seed the importances
 ///     match Python Optuna to ~1 ULP. (An ML.NET FastForest backend is also available as
 ///     <c>OptunaSharp.Importance.Forests.FastForestFanovaImportanceEvaluator</c> in the
-///     <c>OptunaSharp.Importance.Forests.ML.NET</c> package.)</para>
+///     <c>OptunaSharp.Integration.ML.NET</c> package.)</para>
 /// </summary>
 public sealed class FanovaImportanceEvaluator : BaseImportanceEvaluator
 {

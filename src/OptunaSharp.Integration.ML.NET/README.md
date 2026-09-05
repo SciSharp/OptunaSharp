@@ -1,19 +1,29 @@
-# OptunaSharp.Importance.Forests.ML.NET
+# OptunaSharp.Integration.ML.NET
 
-An **ML.NET FastForest backend** for the forest-based parameter-importance evaluators of
-[OptunaSharp](https://github.com/SciSharp/OptunaSharp) — a .NET port of
+The **ML.NET integration** for [OptunaSharp](https://github.com/SciSharp/OptunaSharp) — a .NET port of
 [Optuna](https://github.com/optuna/optuna), part of the [SciSharp STACK](https://github.com/SciSharp).
 
-## Two backends
+This package hosts the ML.NET-backed **forest parameter-importance** evaluators that ride the
+`Microsoft.ML.FastTree` runtime:
 
-OptunaSharp ships fANOVA and Mean-Decrease-Impurity importance in **two forms**:
+- a **faithful FastForest** backend (bagging — the same model Optuna uses), and
+- **experimental / off-label** gradient boosters (`FastTree` and `FastTreeTweedie`).
 
-| Evaluator | Where | Random forest | Optuna parity |
+> LightGBM is **not** here — it keeps its own package,
+> [`OptunaSharp.Integration.LightGbm`](https://www.nuget.org/packages/OptunaSharp.Integration.LightGbm),
+> because it carries a distinct heavy native runtime (`Microsoft.ML.LightGbm`, per-RID binaries) and
+> maps 1-to-1 to Optuna's own `optuna.integration.lightgbm` module + tuner. One package per heavy
+> native dep.
+
+## Where importance lives
+
+OptunaSharp ships fANOVA and Mean-Decrease-Impurity importance in **three forms**:
+
+| Evaluator | Package | Random forest | Optuna parity |
 |---|---|---|---|
-| `FanovaImportanceEvaluator` | **Core** (`OptunaSharp`) | pure-managed, **bit-exact port of scikit-learn's `RandomForestRegressor`** | **value-exact (~1 ULP)** |
-| `MeanDecreaseImpurityImportanceEvaluator` | **Core** (`OptunaSharp`) | same native CART | **value-exact (~1 ULP)** |
-| `FastForestFanovaImportanceEvaluator` | **this package** | ML.NET `FastForest` | ranking-only (values diverge) |
-| `FastForestMeanDecreaseImpurityImportanceEvaluator` | **this package** | ML.NET `FastForest` | ranking-only (values diverge) |
+| `FanovaImportanceEvaluator` / `MeanDecreaseImpurityImportanceEvaluator` | **Core** (`OptunaSharp`) | pure-managed, **bit-exact port of scikit-learn's `RandomForestRegressor`** | **value-exact (~1 ULP)** |
+| `FastForestFanovaImportanceEvaluator` / `FastForestMeanDecreaseImpurityImportanceEvaluator` | **this package** | ML.NET `FastForest` (bagging) | ranking-only, faithful model |
+| `FastTree…` / `FastTreeTweedie…` `{Fanova,MeanDecreaseImpurity}ImportanceEvaluator` | **this package** | ML.NET gradient boosting | ⚠ off-label, weak ranking only |
 
 The **canonical** evaluators live in Core and are pure-managed (NumSharp only): they fit a
 byte-for-byte reproduction of scikit-learn's CART (`our_rand_r`, the MSE criterion, the introsort
@@ -22,13 +32,18 @@ NumPy-exact MT19937), so with a fixed seed their importances **match Python Optu
 (the residual is ~1 ULP from numpy's pairwise float reductions). **You do not need this package for
 Optuna parity.**
 
-**This package** is an *alternative backend*: it fits the forest with
-[ML.NET](https://github.com/dotnet/machinelearning)'s `FastForest` instead. Use it if you specifically
-want ML.NET's random forest (e.g. consistency with an existing ML.NET pipeline). It pulls a foreign
-runtime (native FastTree), so it ships **separately from Core** — the
-`NumSharp.Interop.OpenBLAS` optional-package pattern.
+**This package** is a set of *alternative backends* that fit the forest with
+[ML.NET](https://github.com/dotnet/machinelearning) instead. They pull a foreign runtime (native
+FastTree), so they ship **separately from Core** — the `NumSharp.Interop.OpenBLAS` optional-package
+pattern.
 
-## Usage
+## 1. FastForest — the faithful backend
+
+`FastForestFanovaImportanceEvaluator` / `FastForestMeanDecreaseImpurityImportanceEvaluator`
+(namespace `OptunaSharp.Importance.Forests`) fit ML.NET's `FastForest` — the same *bagging* random
+forest Optuna uses. Use it if you specifically want ML.NET's forest (e.g. consistency with an existing
+ML.NET pipeline). Ranking of a dominant parameter is robust; exact values differ from Optuna (ML.NET's
+forest is not tree-identical to scikit-learn — see *Divergence* below).
 
 ```csharp
 using OptunaSharp;
@@ -46,14 +61,46 @@ var ffFanova = ImportanceFunctions.GetParamImportances(
     study, new FastForestFanovaImportanceEvaluator(seed: 0));
 ```
 
-Both accept `nTrees` (default 64), `maxDepth` (default 64), and `seed` (default `null`). The default
-`GetParamImportances` evaluator (when none is passed) is the pure-managed
-`PedAnovaImportanceEvaluator` (Core).
+## 2. FastTree / FastTreeTweedie — experimental boosters
 
-### Full control: the ML.NET trainer options
+> ⚠️ **Experimental / non-Optuna.** Read this before using them.
 
-Each evaluator also has an overload that takes the **complete `FastForestRegressionTrainer.Options`**,
-so every knob of the ML.NET forest is controllable — not just three:
+Optuna's importance module (`optuna.importance`) uses **only** `sklearn.ensemble.RandomForestRegressor`
+(bagging). **There is no gradient boosting anywhere in Optuna's importance.** These evaluators fit
+boosted trees instead:
+
+- **Bagging / random forest** (what fANOVA/MDI were designed for): independent trees, each fits the
+  target `y`, ensemble = **average**.
+- **Gradient boosting** (`FastTree` = MART, `FastTreeTweedie` = Tweedie-loss MART): sequential trees,
+  each fits the **residual** of the ensemble-so-far, ensemble = **weighted sum**. The trees model
+  residuals, not the objective, so running fANOVA/MDI over them means something **different** — a
+  non-standard quantity with **no basis in Optuna**.
+
+Consequently these evaluators have **no value-parity with Python Optuna** and only weak ranking
+agreement. **Prefer** the canonical, value-exact evaluators in Core, or the faithful FastForest backend
+above. They live in namespace `OptunaSharp.Importance.Booster`:
+`FastTreeFanovaImportanceEvaluator`, `FastTreeMeanDecreaseImpurityImportanceEvaluator`,
+`FastTreeTweedieFanovaImportanceEvaluator`, `FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator`.
+
+```csharp
+using OptunaSharp;
+using OptunaSharp.Importance;          // ImportanceFunctions, canonical evaluators
+using OptunaSharp.Importance.Booster;  // the experimental booster backends (this package)
+
+// EXPERIMENTAL booster backend — ranking only, no Optuna value-parity:
+var imp = ImportanceFunctions.GetParamImportances(
+    study, new FastTreeFanovaImportanceEvaluator(seed: 0));
+
+// For Optuna parity, use the canonical Core evaluator instead:
+var canonical = ImportanceFunctions.GetParamImportances(study, new FanovaImportanceEvaluator(seed: 0));
+```
+
+## Constructors and full trainer control
+
+Every evaluator takes `nTrees` (default 64), `maxDepth` (default 64), and `seed` (default `null`).
+Each also has an overload that takes the **complete ML.NET trainer options** — for FastForest
+`FastForestRegressionTrainer.Options`, for the boosters `FastTreeRegressionTrainer.Options` /
+`FastTreeTweedieTrainer.Options` — so the entire ML.NET surface is controllable, not just three knobs:
 
 ```csharp
 using Microsoft.ML.Trainers.FastTree;
@@ -72,30 +119,31 @@ var imp = ImportanceFunctions.GetParamImportances(study, evaluator);
 ```
 
 `LabelColumnName` / `FeatureColumnName` are managed by the evaluator (bound to the transformed-trial
-schema) and are overwritten; **every other field is used as given**. (Of the trainer's four
-column-name fields, only those two can bind — the importance schema has no weight or group column, so
+schema) and are overwritten; **every other field is used as given**. (Of the trainer's four column-name
+fields, only those two can bind — the importance schema has no weight or group column, so
 `ExampleWeightColumnName` / `RowGroupColumnName` are unsupported; setting either throws a clear
 `ArgumentException` rather than a cryptic ML.NET error.) The `(nTrees, maxDepth, seed)` constructor is
 exactly this overload fed a reproducible default options object.
 
 Or **start from those reproducible defaults and tweak** just a few knobs with an
-`Action<FastForestRegressionTrainer.Options>` — no need to restate the defaults:
+`Action<…Options>` — no need to restate the defaults:
 
 ```csharp
 var evaluator = new FastForestFanovaImportanceEvaluator(
     o => { o.FeatureFraction = 0.7; o.Seed = 0; o.NumberOfThreads = 1; });
 ```
 
-## Divergence from Python Optuna (this package's backend)
+## Divergence from Python Optuna
 
-ML.NET's `FastForest` is not tree-identical to scikit-learn's random forest — it bins features and
-grows trees leaf-wise (not depth-wise), thresholds are float32, and for MDI the node impurities are
-recomputed by routing the training set through the fitted trees (ML.NET exposes no per-node
-statistics). Consequently the **importance values differ numerically** from Python Optuna — the
-ranking of a clearly-dominant parameter is robust, exact values are not. The fANOVA marginal-variance
-algorithm and the MDI formula themselves are shared with Core (and validated bit-for-bit against
-Optuna's own `test_tree.py`); only the underlying forest differs. For reproducibility the forest is
-fitted single-threaded from the given `seed`.
+ML.NET's tree ensembles are not tree-identical to scikit-learn's random forest — they bin features and
+grow trees leaf-wise (not depth-wise), thresholds are float32, and node impurities are recomputed by
+routing the training set through the fitted trees (ML.NET exposes no per-node statistics).
+Consequently the **importance values differ numerically** from Python Optuna — the ranking of a
+clearly-dominant parameter is robust, exact values are not. For the gradient boosters the trees fit
+residuals, so fANOVA/MDI over them is off-label (a different, non-Optuna quantity). The fANOVA
+marginal-variance walk and the MDI formula themselves are **shared with Core** (validated bit-for-bit
+against Optuna's own `test_tree.py`); only the underlying forest differs. For reproducibility each
+ensemble is fitted single-threaded from the given `seed`.
 
 ## License
 

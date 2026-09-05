@@ -6,11 +6,11 @@ namespace OptunaSharp.Importance.MLNet;
 /// <summary>
 ///     Adapts an ML.NET tree ensemble into Core's <see cref="SklearnLikeTree" />s — the shared shape
 ///     read by the fANOVA marginal-variance walk and MDI. This is a <b>linked source file</b> compiled
-///     into every ML.NET importance backend (<c>OptunaSharp.Importance.Forests.ML.NET</c>,
-///     <c>OptunaSharp.Importance.Booster.ML.NET</c>, <c>OptunaSharp.Integration.LightGbm</c>) rather
-///     than a shared runtime package, so no package takes a dependency on another and Core stays pure
-///     managed. Each host assembly is a Core friend (<c>InternalsVisibleTo</c>), which is what grants
-///     access to the internal <see cref="SklearnLikeTree" />.
+///     into every ML.NET importance backend (<c>OptunaSharp.Integration.ML.NET</c> — the FastForest and
+///     FastTree/FastTreeTweedie ensembles — and <c>OptunaSharp.Integration.LightGbm</c>) rather than a
+///     shared runtime package, so no package takes a dependency on another and Core stays pure managed.
+///     Each host assembly is a Core friend (<c>InternalsVisibleTo</c>), which is what grants access to
+///     the internal <see cref="SklearnLikeTree" />.
 ///
 ///     <para><see cref="RegressionTreeBase" /> is the common base of <b>every</b> ML.NET tree ensemble:
 ///     FastForest (bagging), FastTree / FastTreeTweedie (gradient boosting) and LightGBM all expose

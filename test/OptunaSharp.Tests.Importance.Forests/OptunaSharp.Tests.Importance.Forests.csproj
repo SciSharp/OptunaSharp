@@ -7,7 +7,7 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <RootNamespace>OptunaSharp.Tests.Importance.Forests</RootNamespace>
-    <!-- AssemblyName matches the friend granted in OptunaSharp.Importance.Forests's
+    <!-- AssemblyName matches the friend granted in Core's and OptunaSharp.Integration.ML.NET's
          Assembly/Properties.cs, so these tests can reach the internal fANOVA tree machinery
          (SklearnLikeTree / FanovaTree) — the port of Optuna's test_tree.py asserts against the tree
          algorithm directly. Strong-naming is set repo-wide in ../../Directory.Build.props. -->
@@ -22,7 +22,7 @@
   <ItemGroup>
     <!-- The satellite under test (transitively brings Core + ML.NET). Core is also referenced
          explicitly for Optuna.CreateStudy / RandomSampler used by the evaluator tests. -->
-    <ProjectReference Include="..\..\src\OptunaSharp.Importance.Forests.ML.NET\OptunaSharp.Importance.Forests.ML.NET.csproj" />
+    <ProjectReference Include="..\..\src\OptunaSharp.Integration.ML.NET\OptunaSharp.Integration.ML.NET.csproj" />
     <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
   </ItemGroup>
 

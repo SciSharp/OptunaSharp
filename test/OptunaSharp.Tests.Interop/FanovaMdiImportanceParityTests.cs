@@ -28,7 +28,7 @@ namespace OptunaSharp.Tests.Interop;
 ///         scikit-learn, so only the <b>ranking</b> is asserted: the dominant parameter matches
 ///         Optuna's on a well-separated problem.</item>
 ///       <item>The <b>experimental gradient boosters</b> (FastTree / FastTreeTweedie in the
-///         <c>OptunaSharp.Importance.Booster.ML.NET</c> satellite, and LightGBM in
+///         <c>OptunaSharp.Integration.ML.NET</c> satellite, and LightGBM in
 ///         <c>OptunaSharp.Integration.LightGbm</c>) are off-label for fANOVA/MDI (their trees fit
 ///         residuals, not the objective), so — like FastForest — only the <b>ranking</b> is asserted,
 ///         never values.</item>

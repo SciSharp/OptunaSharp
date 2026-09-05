@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-// Friend assemblies. Every name carries PublicKey= because OptunaSharp.Importance.Forests is
+// Friend assemblies. Every name carries PublicKey= because OptunaSharp.Integration.ML.NET is
 // strong-named (see Directory.Build.props at the repo root): the compiler rejects a keyless
 // InternalsVisibleTo from a signed assembly with CS1726.
 //
@@ -9,18 +9,22 @@ using System.Runtime.CompilerServices;
 // NOT an access control; it is a compile-time convenience. The literal is duplicated from Core's
 // OptunaSharpFriendKey (which is internal to Core, hence not reusable across the assembly boundary).
 
-// The unit-test project reaches the internal fANOVA tree/forest machinery (SklearnLikeTree,
+// The forests test project reaches the internal fANOVA tree/forest machinery (SklearnLikeTree,
 // FanovaTree, Fanova, RandomForestRegressor) — the port of optuna/importance/_fanova/_tree.py's
 // test_tree.py cases assert against the tree algorithm directly, with no ML.NET forest involved.
-[assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Forests, PublicKey=" + OptunaSharpForestsFriendKey.PublicKey)]
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Forests, PublicKey=" + OptunaSharpMLNetFriendKey.PublicKey)]
+
+// The booster test project reaches this package's internal booster backend (BoosterBackend) + the
+// shared MlNetTreeEnsembleAdapter linked into this assembly.
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Booster, PublicKey=" + OptunaSharpMLNetFriendKey.PublicKey)]
 
 /// <summary>
-///     The public half of the strong-name key OptunaSharp.Importance.Forests is signed with, as the
+///     The public half of the strong-name key OptunaSharp.Integration.ML.NET is signed with, as the
 ///     hex literal <see cref="InternalsVisibleToAttribute" /> expects. Mirrors Core's
 ///     <c>OptunaSharpFriendKey.PublicKey</c> and the repo-root <c>Directory.Build.props</c>
 ///     (Microsoft's published open-source key, token <c>cc7b13ffcd2ddd51</c>).
 /// </summary>
-internal static class OptunaSharpForestsFriendKey
+internal static class OptunaSharpMLNetFriendKey
 {
     internal const string PublicKey =
         "00240000048000009400000006020000002400005253413100040000010001004b86c4cb78549b34" +

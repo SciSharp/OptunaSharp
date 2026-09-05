@@ -45,26 +45,22 @@ using System.Runtime.CompilerServices;
 // OptunaWarnings / WarningCategory — all internal to Core.
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.Grpc, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
-// The ML.NET FastForest backend (satellite package OptunaSharp.Importance.Forests.ML.NET, Phase 5.1)
-// reuses Core's internal forest machinery: SklearnLikeTree / FanovaTree / Fanova / Mdi /
-// ForestImportance (the shared algorithm), plus SearchSpaceTransform, the optuna/importance/_base.py
-// helpers in ImportanceBase, the intersection search space, and the ValueError/OptunaWarnings seam.
-// (Core owns the OptunaSharp.Importance.Forests namespace; the ML.NET backend is a subordinate,
-// optional package — hence the .ML.NET assembly-name suffix.)
-[assembly: InternalsVisibleTo("OptunaSharp.Importance.Forests.ML.NET, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// The ML.NET importance backends (satellite package OptunaSharp.Integration.ML.NET, Phase 5.1) reuse
+// Core's internal forest machinery: SklearnLikeTree / FanovaTree / Fanova / Mdi / ForestImportance
+// (the shared algorithm + the ForestFit delegate), plus the linked MlNetTreeEnsembleAdapter,
+// SearchSpaceTransform, the optuna/importance/_base.py helpers in ImportanceBase, the intersection
+// search space, and the ValueError/OptunaWarnings seam. The one package hosts both the faithful
+// FastForest backend and the EXPERIMENTAL / off-label FastTree/FastTreeTweedie gradient boosters
+// (boosting is not part of Optuna's importance). (Core owns the OptunaSharp.Importance.Forests /
+// .Booster namespaces; the ML.NET backends are a subordinate, optional package — hence the .ML.NET
+// assembly-name suffix. LightGBM keeps its own package, OptunaSharp.Integration.LightGbm, below.)
+[assembly: InternalsVisibleTo("OptunaSharp.Integration.ML.NET, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
 // The forests test project reaches the internal fANOVA tree machinery (SklearnLikeTree, FanovaTree,
 // the native CART port) directly — the port of Optuna's test_tree.py asserts against the tree
 // algorithm with no forest involved, and the native-forest tests reach CartRandomForest.
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Forests, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
-
-// The ML.NET gradient-boosting backends (satellite package OptunaSharp.Importance.Booster.ML.NET, a
-// Phase 5.1 EXPERIMENTAL / off-label extension — boosting is not part of Optuna's importance) reuse
-// the same Core-internal forest machinery as the FastForest backend: SklearnLikeTree / ForestImportance
-// (the shared evaluator body + ForestFit delegate) plus the linked MlNetTreeEnsembleAdapter, and the
-// SearchSpaceTransform / ImportanceBase / ValueError seam underneath them.
-[assembly: InternalsVisibleTo("OptunaSharp.Importance.Booster.ML.NET, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
-// Its test project mirrors the forests test project (backend-parameterised invariants).
+// The booster test project mirrors the forests test project (backend-parameterised invariants).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Importance.Booster, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
 // The LightGBM integration (satellite package OptunaSharp.Integration.LightGbm) hosts an EXPERIMENTAL /

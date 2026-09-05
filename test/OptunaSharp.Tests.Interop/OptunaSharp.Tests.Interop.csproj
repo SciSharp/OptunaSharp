@@ -36,14 +36,12 @@
          both directions. Self-skips when Python/optuna or grpcio is absent, like the other RequiresPython
          tests. Brings ASP.NET Core (server host) + Grpc.Net.Client transitively. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Storage.Grpc\OptunaSharp.Storage.Grpc.csproj" />
-    <!-- The forest-based importance evaluators (fANOVA + MDI), so their live ranking-parity vs
-         Optuna's scikit-learn-backed evaluators can run in-process. Transitively brings ML.NET.
-         Those tests self-skip when scikit-learn is not importable in the Python env. -->
-    <ProjectReference Include="..\..\src\OptunaSharp.Importance.Forests.ML.NET\OptunaSharp.Importance.Forests.ML.NET.csproj" />
-    <!-- The experimental gradient-boosting importance backends (FastTree / FastTreeTweedie), for
-         RANKING-only parity vs Optuna's canonical evaluators (boosters are off-label — never
-         value-parity). Same ML.NET native dependency as the FastForest backend. -->
-    <ProjectReference Include="..\..\src\OptunaSharp.Importance.Booster.ML.NET\OptunaSharp.Importance.Booster.ML.NET.csproj" />
+    <!-- The ML.NET importance backends (OptunaSharp.Integration.ML.NET): the faithful FastForest
+         (fANOVA + MDI) for live ranking-parity vs Optuna's scikit-learn-backed evaluators, plus the
+         EXPERIMENTAL gradient boosters (FastTree / FastTreeTweedie) for RANKING-only parity (boosters
+         are off-label — never value-parity). Transitively brings ML.NET; those tests self-skip when
+         scikit-learn is not importable in the Python env. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Integration.ML.NET\OptunaSharp.Integration.ML.NET.csproj" />
     <!-- The experimental LightGBM importance backend, also RANKING-only vs live Optuna. Brings the
          native LightGBM binary (Microsoft.ML.LightGbm) transitively. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Integration.LightGbm\OptunaSharp.Integration.LightGbm.csproj" />

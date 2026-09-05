@@ -5,6 +5,18 @@
 > **Governs:** how the ML.NET-backed importance evaluators are split across packages/namespaces,
 > and how LightGBM is scoped. Read `docs/PORTING_PLAN.md` §5.1 first for the phase context.
 
+> **⚠️ Update (2026-09-05) — packages consolidated.** The two FastTree-runtime importance packages
+> described below — `OptunaSharp.Importance.Forests.ML.NET` (FastForest) and
+> `OptunaSharp.Importance.Booster.ML.NET` (FastTree/FastTreeTweedie) — have since been **merged into a
+> single package `OptunaSharp.Integration.ML.NET`.** They shared the exact same native dependency
+> (`Microsoft.ML.FastTree`), so one package now hosts both (the faithful FastForest backend + the
+> experimental boosters). **Public namespaces are unchanged** (`OptunaSharp.Importance.Forests` /
+> `OptunaSharp.Importance.Booster`) — only the assembly / `PackageId` changed. **LightGBM stays its
+> own package** (`OptunaSharp.Integration.LightGbm`): distinct heavy native runtime
+> (`Microsoft.ML.LightGbm`) + its own Optuna identity (`optuna.integration.lightgbm`), per the
+> "one package per heavy native dep" rule. The §1 taxonomy table reflects the merge; the WI-1…WI-4
+> work items further down are the original build history and still name the pre-merge packages.
+
 ---
 
 ## ✅ STATUS — COMPLETE (all work items landed on `master`)
@@ -44,10 +56,10 @@ importance.** So:
   pure-managed, **bit-exact scikit-learn CART port in Core** (Tier N, value-parity vs live Optuna).
   Nothing below changes them.
 - The **ML.NET FastForest** backend is the only *faithful* ML.NET analog (same model as Optuna, ranking
-  parity) → package `OptunaSharp.Importance.Forests.ML.NET`.
+  parity) → package `OptunaSharp.Integration.ML.NET`.
 - **Boosters** (FastTree / FastTreeTweedie) have **no Optuna basis** and are *off-label* for fANOVA/MDI
   (their trees fit residuals, so the importances are a different, non-standard quantity). They ship as
-  clearly-labelled **experimental extensions** in a separate package `OptunaSharp.Importance.Booster.ML.NET`.
+  clearly-labelled **experimental extensions** alongside FastForest in `OptunaSharp.Integration.ML.NET`.
 - **LightGBM's** real Optuna identity is a **tuner** (`optuna.integration.lightgbm` — our Phase 5.7),
   not importance. It goes in **`OptunaSharp.Integration.LightGbm`**, which will host the tuner *and* a
   LightGBM booster-importance backend (one package per heavy native dep).
@@ -67,8 +79,8 @@ importance.** So:
 | Concern | Package = AssemblyName = PackageId | Public evaluator namespace | Internal namespace | ML.NET dep | Optuna basis |
 |---|---|---|---|---|---|
 | Canonical fANOVA/MDI (native CART) | `OptunaSharp` (Core) | `OptunaSharp.Importance` | `OptunaSharp.Importance.Forests.Internal[.Cart]` | none (NumSharp) | ✅ RandomForest, **value-exact** |
-| FastForest backend | `OptunaSharp.Importance.Forests.ML.NET` | `OptunaSharp.Importance.Forests` | `OptunaSharp.Importance.Forests.MLNet` | `Microsoft.ML` + `Microsoft.ML.FastTree` | ~ same model, **ranking** parity |
-| Boosters: FastTree, FastTreeTweedie | `OptunaSharp.Importance.Booster.ML.NET` | `OptunaSharp.Importance.Booster` | `OptunaSharp.Importance.Booster` | `Microsoft.ML` + `Microsoft.ML.FastTree` | ⚠ **none — experimental** |
+| FastForest backend | `OptunaSharp.Integration.ML.NET` | `OptunaSharp.Importance.Forests` | `OptunaSharp.Importance.Forests.MLNet` | `Microsoft.ML` + `Microsoft.ML.FastTree` | ~ same model, **ranking** parity |
+| Boosters: FastTree, FastTreeTweedie | `OptunaSharp.Integration.ML.NET` *(same pkg — merged)* | `OptunaSharp.Importance.Booster` | `OptunaSharp.Importance.Booster` | `Microsoft.ML` + `Microsoft.ML.FastTree` | ⚠ **none — experimental** |
 | LightGBM: importance now, tuner (5.7) later | `OptunaSharp.Integration.LightGbm` | `OptunaSharp.Integration.LightGbm` | `OptunaSharp.Integration.LightGbm` | `Microsoft.ML` + `Microsoft.ML.LightGbm` | ⚠ importance off-label; **tuner = `optuna.integration.lightgbm`** |
 
 **Namespace rule (apply consistently):** `OptunaSharp.Importance` holds only the **Optuna-faithful
