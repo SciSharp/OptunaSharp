@@ -5,3 +5,15 @@
 	path = src/NumSharp
 	url = https://github.com/SciSharp/NumSharp.git
 	branch = journey3
+[submodule "refs/optunahub"]
+	path = refs/optunahub
+	url = https://github.com/optuna/optunahub.git
+	branch = main
+[submodule "refs/optunahub-registry"]
+	path = refs/optunahub-registry
+	url = https://github.com/optuna/optunahub-registry.git
+	branch = main
+[submodule "refs/optunahub-web"]
+	path = refs/optunahub-web
+	url = https://github.com/optuna/optunahub-web.git
+	branch = main

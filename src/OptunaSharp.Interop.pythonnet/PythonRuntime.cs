@@ -1,0 +1,235 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+using Python.Runtime;
+
+namespace OptunaSharp.Interop.PythonNet;
+
+/// <summary>
+///     Process-wide embedded-CPython session for the OptunaHub bridge — the analog of NumSharp's
+///     <c>PythonRuntimeInterop</c>. Owns discovery of a libpython, one-time
+///     <see cref="PythonEngine" /> initialization, the GIL entry point every Python call goes through,
+///     and a per-session cache of the modules the bridge touches (<c>optuna</c>, <c>optunahub</c>,
+///     <c>builtins</c>).
+///     <para>
+///     CPython+pythonnet cannot re-initialize after <c>Py_Finalize</c>, so the engine lifecycle is
+///     process-scoped: <see cref="Initialize" /> is idempotent and there is no public shutdown.
+///     </para>
+///     <para><b>GIL discipline:</b> anything that touches a <see cref="PyObject" /> (including its
+///     <c>Dispose</c>) must run under the GIL. Use <see cref="Run(Action)" /> / <see cref="Run{T}" />,
+///     which acquire it for you; never hand a <see cref="PyObject" /> back out of a <c>Run</c> body.
+///     </para>
+/// </summary>
+public static class PythonRuntime
+{
+    private static readonly object _gate = new();
+    private static int _initialized;
+
+    private static PyObject? _optuna, _optunahub, _builtins;
+
+    /// <summary><c>true</c> once <see cref="PythonEngine" /> is running (started by us or the host).</summary>
+    public static bool IsInitialized => PythonEngine.IsInitialized;
+
+    /// <summary>
+    ///     Ensure an embedded CPython engine is running, starting one if necessary. Idempotent and
+    ///     thread-safe. Honors <c>PYTHONNET_PYDLL</c> (pythonnet reads it directly); otherwise probes a
+    ///     <c>python</c>/<c>python3</c> (or <c>$PYTHON</c>) on PATH for its shared library. A host that
+    ///     has already called <see cref="PythonEngine.Initialize()" /> is respected as-is.
+    /// </summary>
+    /// <exception cref="OptunaHubInteropException">No usable libpython could be located/started.</exception>
+    public static void Initialize()
+    {
+        if (Volatile.Read(ref _initialized) == 1 && PythonEngine.IsInitialized)
+            return;
+
+        lock (_gate)
+        {
+            if (PythonEngine.IsInitialized)
+            {
+                Volatile.Write(ref _initialized, 1);
+                return;
+            }
+
+            try
+            {
+                ResolvePythonDll();
+                PythonEngine.Initialize();
+                PythonEngine.BeginAllowThreads();
+                EnsureQuiet();
+            }
+            catch (Exception ex) when (ex is not OptunaHubInteropException)
+            {
+                throw new OptunaHubInteropException(
+                    "Could not initialize an embedded CPython engine for the OptunaHub bridge. Install a " +
+                    "CPython with `pip install optuna optunahub`, and if it cannot be found automatically " +
+                    "set PYTHONNET_PYDLL to the libpython path (e.g. " +
+                    "/usr/lib/x86_64-linux-gnu/libpython3.12.so, or C:\\...\\python312.dll).", ex);
+            }
+
+            Volatile.Write(ref _initialized, 1);
+        }
+    }
+
+    /// <summary>
+    ///     Lower Optuna's log verbosity to WARNING (the idiomatic quieting shown in Optuna's own docs).
+    ///     The sampler bridge rebuilds an in-memory shadow study per trial, so INFO-level
+    ///     "A new study created in memory" lines would otherwise flood the console. Idempotent and
+    ///     best-effort; re-asserted right before each shadow study is created (Optuna re-configures its
+    ///     root logger lazily on first real use, which can undo an early call). Opt out with
+    ///     <c>OPTUNASHARP_OPTUNAHUB_QUIET=0</c>. Safe to call whether or not the GIL is already held
+    ///     (<see cref="Py.GIL" /> is reentrant).
+    /// </summary>
+    internal static void EnsureQuiet()
+    {
+        string? v = Environment.GetEnvironmentVariable("OPTUNASHARP_OPTUNAHUB_QUIET");
+        if (v is "0" or "false" or "FALSE" or "no" or "off")
+            return;
+        try
+        {
+            using (Py.GIL())
+                PythonEngine.Exec("import optuna\noptuna.logging.set_verbosity(optuna.logging.WARNING)\n");
+        }
+        catch
+        {
+            // quieting is a convenience, never a reason to fail an operation.
+        }
+    }
+
+    /// <summary>Run an action under the GIL (initializing the engine first if needed).</summary>
+    public static void Run(Action body)
+    {
+        Initialize();
+        using (Py.GIL())
+            body();
+    }
+
+    /// <summary>Run a function under the GIL (initializing the engine first if needed) and return its result.</summary>
+    public static T Run<T>(Func<T> body)
+    {
+        Initialize();
+        using (Py.GIL())
+            return body();
+    }
+
+    /// <summary>Cached <c>optuna</c> module (per process). Call under the GIL.</summary>
+    public static PyObject Optuna => GetModule(ref _optuna, "optuna");
+
+    /// <summary>Cached <c>optunahub</c> module (per process). Call under the GIL.</summary>
+    public static PyObject OptunaHubModuleRef => GetModule(ref _optunahub, "optunahub");
+
+    /// <summary>Cached <c>builtins</c> module (per process). Call under the GIL.</summary>
+    public static PyObject Builtins => GetModule(ref _builtins, "builtins");
+
+    /// <summary>The discovered <c>optuna.__version__</c> (or <c>null</c> before first use / on failure).</summary>
+    public static string? OptunaVersion { get; private set; }
+
+    /// <summary>The discovered <c>optunahub.__version__</c> (or <c>null</c> before first use / on failure).</summary>
+    public static string? OptunaHubVersion { get; private set; }
+
+    private static PyObject GetModule(ref PyObject? cache, string name)
+    {
+        var module = Volatile.Read(ref cache);
+        if (module is not null)
+            return module;
+
+        try
+        {
+            module = Py.Import(name);
+        }
+        catch (PythonException ex)
+        {
+            throw new OptunaHubInteropException(
+                $"Failed to `import {name}` in the embedded interpreter. Install it with " +
+                $"`pip install {name}` into the Python that hosts this process.", ex);
+        }
+
+        var winner = Interlocked.CompareExchange(ref cache, module, null);
+        if (winner is not null)
+        {
+            module.Dispose();
+            return winner;
+        }
+
+        // Record versions opportunistically (cheap, under the GIL the caller already holds).
+        try
+        {
+            if (name == "optuna")
+                OptunaVersion = module.GetAttr("__version__").As<string>();
+            else if (name == "optunahub")
+                OptunaHubVersion = module.GetAttr("__version__").As<string>();
+        }
+        catch
+        {
+            // version is diagnostic only.
+        }
+
+        return module;
+    }
+
+    /// <summary>
+    ///     Point pythonnet at a libpython. Honors <c>PYTHONNET_PYDLL</c> (pythonnet reads it itself),
+    ///     otherwise probes a python executable for its shared-library path and sets it explicitly.
+    ///     Mirrors the interop test suite's <c>PythonSession.ResolvePythonDll</c>.
+    /// </summary>
+    private static void ResolvePythonDll()
+    {
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PYTHONNET_PYDLL")))
+            return; // pythonnet honors this itself.
+
+        foreach (string? exe in new[] { Environment.GetEnvironmentVariable("PYTHON"), "python3", "python" })
+        {
+            if (string.IsNullOrEmpty(exe))
+                continue;
+
+            string? dll = ProbeSharedLibrary(exe!);
+            if (dll is not null && File.Exists(dll))
+            {
+                Runtime.PythonDLL = dll;
+                return;
+            }
+        }
+        // Fall through: let PythonEngine.Initialize() try its own resolution.
+    }
+
+    private static string? ProbeSharedLibrary(string exe)
+    {
+        const string script =
+            "import sys,sysconfig,os\n" +
+            "if os.name=='nt':\n" +
+            "    p=os.path.join(sys.base_prefix,'python%d%d.dll'%sys.version_info[:2])\n" +
+            "else:\n" +
+            "    d=sysconfig.get_config_var('LIBDIR') or ''\n" +
+            "    n=sysconfig.get_config_var('INSTSONAME') or sysconfig.get_config_var('LDLIBRARY') or ''\n" +
+            "    p=os.path.join(d,n)\n" +
+            "print(p)";
+
+        try
+        {
+            var psi = new ProcessStartInfo(exe, "-c \"" + script.Replace("\"", "\\\"") + "\"")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            using Process? p = Process.Start(psi);
+            if (p is null)
+                return null;
+            string outp = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(15_000);
+            return outp.Trim() is { Length: > 0 } s ? s : null;
+        }
+        catch
+        {
+            return null; // exe not found / not runnable — try the next candidate.
+        }
+    }
+}
+
+/// <summary>Raised when the embedded Python / OptunaHub bridge cannot be initialized or a Python call fails.</summary>
+public sealed class OptunaHubInteropException : Exception
+{
+    public OptunaHubInteropException(string message) : base(message) { }
+    public OptunaHubInteropException(string message, Exception inner) : base(message, inner) { }
+}

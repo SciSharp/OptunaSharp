@@ -1,0 +1,62 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <AssemblyName>OptunaSharp.Interop.pythonnet</AssemblyName>
+    <RootNamespace>OptunaSharp.Interop.PythonNet</RootNamespace>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/license/
+         version) is centralized in ../../Directory.Build.props. This is a Tier X satellite that ships
+         SEPARATELY because it takes a foreign-runtime dependency (an embedded CPython via pythonnet) —
+         Core stays pure managed (NumSharp only), the NumSharp.Interop.OpenBLAS / .pythonnet pattern.
+
+         Purpose: talk to the LIVE Python Optuna ecosystem in-process — most importantly OptunaHub
+         (https://hub.optuna.org/): OptunaHub.LoadModule("category/name") mirrors optunahub.load_module,
+         and the loaded samplers (SimpleBaseSampler) and benchmarks (BaseProblem) are bridged to
+         OptunaSharp's own BaseSampler / Study.Optimize so a C# study can drive real OptunaHub packages.
+         This is the .NET analog of NumSharp.Interop.pythonnet (which bridges NDArray <-> NumPy). -->
+    <PackageId>OptunaSharp.Interop.pythonnet</PackageId>
+    <Description>OptunaSharp's bridge to the live Python Optuna ecosystem via Python.NET (pythonnet), most importantly OptunaHub (https://hub.optuna.org/). OptunaHub.LoadModule("samplers/auto_sampler") / ("benchmarks/bbob") mirrors optunahub.load_module, and the loaded contributor packages are wrapped so an OptunaSharp Study can drive them directly: a hub SimpleBaseSampler becomes an OptunaSharp BaseSampler (over a synchronized shadow study), and a hub BaseProblem becomes an OptunaSharp objective (search space + directions + evaluate). The .NET analog of NumSharp.Interop.pythonnet. Requires a discoverable CPython with `pip install optuna optunahub`. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;OptunaHub;pythonnet;Python.NET;interop;sampler;benchmark;BlackBoxOptimization;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
+
+    <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on doc-comment nits. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <!-- Emit the .pdb inside the .nupkg (the release pipeline pushes only *.nupkg). -->
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+
+    <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- Reuse the shared OptunaSharp package icon. -->
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The ONLY external dependency: pythonnet. The version is a RANGE and both ends matter:
+
+         FLOOR 3.0.5 — (a) it is what we compile against, and pythonnet bumps its strong-name
+         AssemblyVersion every patch, so a lower runtime is a hard FileNotFoundException while a higher
+         one rolls forward fine; (b) NuGet resolves the LOWEST applicable version, so the floor IS the
+         out-of-box experience. 3.0.5 drives Python 3.7-3.13 (a strict superset of 3.0.0-3.0.4); a
+         Python 3.14 host needs 3.1.0 (opt in with your own PackageReference).
+         CAP <4.0.0 — keep a future pythonnet 4.x (possible API break) from being auto-resolved. -->
+    <PackageReference Include="pythonnet" Version="[3.0.5,4.0.0)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core is in-repo, referenced by project; packing records a clean "OptunaSharp" dependency.
+         The bridge uses only Core's PUBLIC surface (Optuna.CreateStudy, Study/Trial/FrozenTrial, the
+         distributions, CategoricalChoice), so this assembly is NOT a Core friend. -->
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>
