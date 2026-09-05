@@ -1,0 +1,1089 @@
+using System;
+using System.Collections.Generic;
+using System.Data.Common;
+using System.Linq;
+using System.Text;
+using Microsoft.EntityFrameworkCore;
+using MySqlConnector;
+using Npgsql;
+using Npgsql.NameTranslation;
+using NumSharp;
+using OptunaSharp.Collections;
+using OptunaSharp.Distributions;
+using OptunaSharp.Internal;
+using OptunaSharp.Logging;
+using OptunaSharp.Storages;
+
+namespace OptunaSharp.Storages.EFCore;
+
+/// <summary>
+///     RDB storage on PostgreSQL and MySQL, over Entity Framework Core. Port of
+///     <c>optuna/storages/_rdb/storage.py: RDBStorage</c> for server databases — the EF Core sibling
+///     of <c>OptunaSharp.Storage.Sqlite</c>'s hand-SQL <c>RDBStorage</c>. It maps Optuna's SQLAlchemy
+///     models one-to-one (see <see cref="OptunaRdbContext" />) against the exact schema SQLAlchemy
+///     generates (created by <see cref="RdbSchema" />), with the <c>alembic_version</c> =
+///     <c>v3.2.0.a</c> + <c>schema_version</c> = 12 pins, so Python Optuna and OptunaSharp can share
+///     the same PostgreSQL/MySQL database.
+///
+///     <para>Like Optuna, this backend is meant to be wrapped in a <see cref="CachedStorage" />: it
+///     implements <see cref="ICachedStorageBackend" /> and
+///     <see cref="StorageFunctions.GetStorage(BaseStorage?)" /> wraps it automatically (Python's
+///     <c>get_storage</c> returns <c>_CachedStorage(RDBStorage(...))</c>).</para>
+///
+///     <para><b>Concurrency.</b> A short-lived <see cref="OptunaRdbContext" /> is created per operation
+///     (EF Core contexts are not thread-safe); the read-modify-write paths Optuna guards with
+///     <c>SELECT … FOR UPDATE</c> take the same row lock (PostgreSQL/MySQL support it, unlike SQLite),
+///     and duplicate-key races are ignored exactly as Optuna's <c>ignore_integrity_error</c> does.</para>
+/// </summary>
+/// <example>
+///     <code>
+///     using var storage = new RDBStorage("postgresql://user:pass@localhost:5432/optuna");
+///     var study = Optuna.CreateStudy(storage: storage);
+///     study.Optimize(t => Math.Pow(t.SuggestFloat("x", -100, 100), 2), nTrials: 10);
+///     </code>
+/// </example>
+public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
+{
+    private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.storages._rdb.storage");
+
+    private readonly RdbProvider _provider;
+    private readonly DbContextOptions<OptunaRdbContext> _ctxOptions;
+    private readonly NpgsqlDataSource? _dataSource;
+
+    private readonly int? _heartbeatInterval;
+    private readonly int? _gracePeriod;
+    private readonly Action<Study, FrozenTrial>? _heartbeatStaleTrialCallback;
+
+    /// <summary>The storage URL/connection string this storage was opened with.</summary>
+    public string Url { get; }
+
+    /// <summary>The RDB provider (PostgreSQL or MySQL) resolved from the URL.</summary>
+    public RdbProvider Provider => _provider;
+
+    /// <summary>
+    ///     Create an RDB storage from a SQLAlchemy-style URL — the Optuna-faithful constructor
+    ///     (<c>optuna.storages.RDBStorage(url, …)</c>). The scheme selects the provider:
+    ///     <c>postgresql[+driver]://…</c> → PostgreSQL (Npgsql), <c>mysql[+driver]://…</c> → MySQL
+    ///     (Pomelo). SQLite URLs are rejected (use <c>OptunaSharp.Storage.Sqlite</c>).
+    /// </summary>
+    public RDBStorage(
+        string url,
+        bool skipCompatibilityCheck = false,
+        bool skipTableCreation = false,
+        int? heartbeatInterval = null,
+        int? gracePeriod = null,
+        Action<Study, FrozenTrial>? heartbeatStaleTrialCallback = null)
+        : this(url, new EFCoreRdbOptions
+        {
+            SkipCompatibilityCheck = skipCompatibilityCheck,
+            SkipTableCreation = skipTableCreation,
+            HeartbeatInterval = heartbeatInterval,
+            GracePeriod = gracePeriod,
+            HeartbeatStaleTrialCallback = heartbeatStaleTrialCallback,
+        })
+    {
+    }
+
+    /// <summary>Create an RDB storage from a URL with the full <see cref="EFCoreRdbOptions" /> surface.</summary>
+    public RDBStorage(string url, EFCoreRdbOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        ArgumentNullException.ThrowIfNull(options);
+        ValidateOptions(options);
+
+        var (provider, builder) = RdbUrl.Parse(FillStorageUrlTemplate(url));
+        options.ConfigureConnectionString?.Invoke(builder);
+
+        _provider = provider;
+        Url = url;
+        _heartbeatInterval = options.HeartbeatInterval;
+        _gracePeriod = options.GracePeriod;
+        _heartbeatStaleTrialCallback = options.HeartbeatStaleTrialCallback;
+
+        (_ctxOptions, _dataSource) = BuildContextOptions(provider, builder.ConnectionString);
+
+        Initialize(options);
+    }
+
+    /// <summary>
+    ///     Create an RDB storage from an explicit provider + native ADO.NET connection string (BYO
+    ///     connection string — e.g. an <c>NpgsqlConnectionStringBuilder</c> / <c>MySqlConnectionStringBuilder</c>
+    ///     you built yourself). The "feel like the client, not Optuna" form.
+    /// </summary>
+    public RDBStorage(RdbProvider provider, string connectionString, EFCoreRdbOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(connectionString);
+        options ??= new EFCoreRdbOptions();
+        ValidateOptions(options);
+
+        _provider = provider;
+        Url = connectionString;
+        _heartbeatInterval = options.HeartbeatInterval;
+        _gracePeriod = options.GracePeriod;
+        _heartbeatStaleTrialCallback = options.HeartbeatStaleTrialCallback;
+
+        (_ctxOptions, _dataSource) = BuildContextOptions(provider, connectionString);
+
+        Initialize(options);
+    }
+
+    // ------------------------------------------------------------------ bootstrap
+
+    private static void ValidateOptions(EFCoreRdbOptions options)
+    {
+        if (options.HeartbeatInterval is not null and <= 0)
+            throw new ValueError("The value of `heartbeat_interval` should be a positive integer.");
+        if (options.GracePeriod is not null and <= 0)
+            throw new ValueError("The value of `grace_period` should be a positive integer.");
+    }
+
+    private static string FillStorageUrlTemplate(string template)
+        => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(RdbModels.Inv));
+
+    private static (DbContextOptions<OptunaRdbContext>, NpgsqlDataSource?) BuildContextOptions(
+        RdbProvider provider, string connectionString)
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<OptunaRdbContext>();
+        if (provider == RdbProvider.PostgreSql)
+        {
+            var dsb = new NpgsqlDataSourceBuilder(connectionString);
+            MapPostgresEnums(dsb);
+            var dataSource = dsb.Build();
+            optionsBuilder.UseNpgsql(dataSource, npg => MapPostgresEnums(npg));
+            return (optionsBuilder.Options, dataSource);
+        }
+
+        // MySQL / MariaDB. AllowUserVariables + UseAffectedRows are Pomelo's recommended flags so
+        // SaveChanges sees the rows it matched, not just the rows it changed.
+        var myBuilder = new MySqlConnectionStringBuilder(connectionString)
+        {
+            AllowUserVariables = true,
+            UseAffectedRows = false,
+        };
+        string mysqlCs = myBuilder.ConnectionString;
+        optionsBuilder.UseMySql(mysqlCs, ServerVersion.AutoDetect(mysqlCs));
+        return (optionsBuilder.Options, null);
+    }
+
+    private static readonly NpgsqlNullNameTranslator _verbatim = new();
+
+    private static void MapPostgresEnums(NpgsqlDataSourceBuilder b)
+    {
+        b.MapEnum<DbStudyDirection>("studydirection", _verbatim);
+        b.MapEnum<DbTrialState>("trialstate", _verbatim);
+        b.MapEnum<DbTrialValueType>("trialvaluetype", _verbatim);
+        b.MapEnum<DbTrialIntermediateValueType>("trialintermediatevaluetype", _verbatim);
+    }
+
+    private static void MapPostgresEnums(Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure.NpgsqlDbContextOptionsBuilder b)
+    {
+        b.MapEnum<DbStudyDirection>("studydirection", nameTranslator: _verbatim);
+        b.MapEnum<DbTrialState>("trialstate", nameTranslator: _verbatim);
+        b.MapEnum<DbTrialValueType>("trialvaluetype", nameTranslator: _verbatim);
+        b.MapEnum<DbTrialIntermediateValueType>("trialintermediatevaluetype", nameTranslator: _verbatim);
+    }
+
+    private OptunaRdbContext NewContext() => new(_ctxOptions);
+
+    private void Initialize(EFCoreRdbOptions options)
+    {
+        using var ctx = NewContext();
+        if (!options.SkipTableCreation)
+            RdbSchema.EnsureCreated(ctx, _provider);
+
+        // Npgsql resolves the native ENUM type OIDs (studydirection, …) from the catalog on first
+        // connection and caches them per data source. When this storage just created the types (or they
+        // were created after the data source connected), that cache is stale — reload it so the enum
+        // columns map, instead of failing with "the data type name 'studydirection' isn't present".
+        _dataSource?.ReloadTypes();
+
+        InitVersionInfo(ctx);
+        InitAlembic(ctx);
+        if (!options.SkipCompatibilityCheck)
+            CheckTableSchemaCompatibility(ctx);
+    }
+
+    private void InitVersionInfo(OptunaRdbContext ctx)
+    {
+        if (ctx.VersionInfos.Any())
+            return;
+        ctx.VersionInfos.Add(new VersionInfoEntity
+        {
+            VersionInfoId = 1,
+            SchemaVersion = RdbModels.SchemaVersion,
+            LibraryVersion = RdbModels.LibraryVersion,
+        });
+        try
+        {
+            ctx.SaveChanges();
+        }
+        catch (DbUpdateException) when (ctx.VersionInfos.AsNoTracking().Any())
+        {
+            // Another writer inserted the singleton row first (the version_info_id=1 CHECK/PK).
+            ctx.ChangeTracker.Clear();
+        }
+    }
+
+    private void InitAlembic(OptunaRdbContext ctx)
+    {
+        if (ctx.AlembicVersions.Any())
+            return;
+        ctx.AlembicVersions.Add(new AlembicVersionEntity { VersionNum = RdbModels.HeadVersion });
+        try
+        {
+            ctx.SaveChanges();
+        }
+        catch (DbUpdateException) when (ctx.AlembicVersions.AsNoTracking().Any())
+        {
+            ctx.ChangeTracker.Clear();
+        }
+    }
+
+    private static void CheckTableSchemaCompatibility(OptunaRdbContext ctx)
+    {
+        string? libraryVersion = ctx.VersionInfos.AsNoTracking().Select(v => v.LibraryVersion).FirstOrDefault();
+        string current = ctx.AlembicVersions.AsNoTracking().Select(a => a.VersionNum).FirstOrDefault()
+            ?? throw new RuntimeError("The alembic_version table is empty.");
+        if (current == RdbModels.HeadVersion)
+            return;
+
+        var message = new StringBuilder(
+            $"The runtime optuna version {OptunaSharpVersion.OptunaCompatibilityTarget} is no longer " +
+            "compatible with the table schema " +
+            $"(set up by optuna {libraryVersion}). ");
+        message.Append(RdbModels.KnownVersions.Contains(current)
+            ? "Please execute `$ optuna storage upgrade --storage $STORAGE_URL` for upgrading the storage."
+            : "Please try updating optuna to the latest version by `$ pip install -U optuna`.");
+        throw new RuntimeError(message.ToString());
+    }
+
+    // ------------------------------------------------------------------ study manipulation
+
+    public override int CreateNewStudy(IReadOnlyList<StudyDirection> directions, string? studyName = null)
+    {
+        using var ctx = NewContext();
+        studyName ??= CreateUniqueStudyName(ctx);
+
+        using var tx = ctx.Database.BeginTransaction();
+        var study = new StudyEntity { StudyName = studyName };
+        ctx.Studies.Add(study);
+        try
+        {
+            ctx.SaveChanges();
+            for (int objective = 0; objective < directions.Count; objective++)
+            {
+                ctx.StudyDirections.Add(new StudyDirectionEntity
+                {
+                    StudyId = study.StudyId,
+                    Objective = objective,
+                    Direction = RdbModels.DirectionToDb(directions[objective]),
+                });
+            }
+            ctx.SaveChanges();
+            tx.Commit();
+        }
+        catch (DbUpdateException e) when (IsUniqueViolation(e))
+        {
+            tx.Rollback();
+            throw new DuplicatedStudyError();
+        }
+
+        _logger.Info($"A new study created in RDB with name: {studyName}");
+        return study.StudyId;
+    }
+
+    private static string CreateUniqueStudyName(OptunaRdbContext ctx)
+    {
+        while (true)
+        {
+            string studyName = DefaultStudyNamePrefix + Guid.NewGuid();
+            if (!ctx.Studies.Any(s => s.StudyName == studyName))
+                return studyName;
+        }
+    }
+
+    public override void DeleteStudy(int studyId)
+    {
+        using var ctx = NewContext();
+        using var tx = ctx.Database.BeginTransaction();
+        EnsureStudyExists(ctx, studyId);
+
+        // Foreign keys are enforced by these servers, so children are deleted deepest-first (Optuna
+        // cascades in the ORM layer). Executed as set-based deletes over the trial scope.
+        ctx.Database.ExecuteSqlRaw(
+            "DELETE FROM trial_params WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = {0})", studyId);
+        ctx.Database.ExecuteSqlRaw(
+            "DELETE FROM trial_values WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = {0})", studyId);
+        ctx.Database.ExecuteSqlRaw(
+            "DELETE FROM trial_intermediate_values WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = {0})", studyId);
+        ctx.Database.ExecuteSqlRaw(
+            "DELETE FROM trial_user_attributes WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = {0})", studyId);
+        ctx.Database.ExecuteSqlRaw(
+            "DELETE FROM trial_system_attributes WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = {0})", studyId);
+        ctx.Database.ExecuteSqlRaw(
+            "DELETE FROM trial_heartbeats WHERE trial_id IN (SELECT trial_id FROM trials WHERE study_id = {0})", studyId);
+        ctx.Database.ExecuteSqlRaw("DELETE FROM trials WHERE study_id = {0}", studyId);
+        ctx.Database.ExecuteSqlRaw("DELETE FROM study_directions WHERE study_id = {0}", studyId);
+        ctx.Database.ExecuteSqlRaw("DELETE FROM study_user_attributes WHERE study_id = {0}", studyId);
+        ctx.Database.ExecuteSqlRaw("DELETE FROM study_system_attributes WHERE study_id = {0}", studyId);
+        ctx.Database.ExecuteSqlRaw("DELETE FROM studies WHERE study_id = {0}", studyId);
+        tx.Commit();
+    }
+
+    public override void SetStudyUserAttr(int studyId, string key, object? value)
+        => SetStudyAttr(isUser: true, studyId, key, value);
+
+    public override void SetStudySystemAttr(int studyId, string key, object? value)
+        => SetStudyAttr(isUser: false, studyId, key, value);
+
+    private void SetStudyAttr(bool isUser, int studyId, string key, object? value)
+    {
+        using var ctx = NewContext();
+        using var tx = ctx.Database.BeginTransaction();
+        EnsureStudyExists(ctx, studyId);
+        string json = PyJson.Dumps(value);
+
+        if (isUser)
+        {
+            var row = ctx.StudyUserAttributes.FirstOrDefault(a => a.StudyId == studyId && a.Key == key);
+            if (row is null)
+                ctx.StudyUserAttributes.Add(new StudyUserAttributeEntity { StudyId = studyId, Key = key, ValueJson = json });
+            else
+                row.ValueJson = json;
+        }
+        else
+        {
+            var row = ctx.StudySystemAttributes.FirstOrDefault(a => a.StudyId == studyId && a.Key == key);
+            if (row is null)
+                ctx.StudySystemAttributes.Add(new StudySystemAttributeEntity { StudyId = studyId, Key = key, ValueJson = json });
+            else
+                row.ValueJson = json;
+        }
+        ctx.SaveChanges();
+        tx.Commit();
+    }
+
+    public override int GetStudyIdFromName(string studyName)
+    {
+        using var ctx = NewContext();
+        var id = ctx.Studies.AsNoTracking()
+            .Where(s => s.StudyName == studyName).Select(s => (int?)s.StudyId).FirstOrDefault();
+        if (id is null)
+            throw new KeyError(RdbModels.NotFoundMsg);
+        return id.Value;
+    }
+
+    public override string GetStudyNameFromId(int studyId)
+    {
+        using var ctx = NewContext();
+        var name = ctx.Studies.AsNoTracking()
+            .Where(s => s.StudyId == studyId).Select(s => s.StudyName).FirstOrDefault();
+        if (name is null)
+            throw new KeyError(RdbModels.NotFoundMsg);
+        return name;
+    }
+
+    public override List<StudyDirection> GetStudyDirections(int studyId)
+    {
+        using var ctx = NewContext();
+        EnsureStudyExists(ctx, studyId);
+        return ctx.StudyDirections.AsNoTracking()
+            .Where(d => d.StudyId == studyId).OrderBy(d => d.Objective)
+            .Select(d => d.Direction).AsEnumerable()
+            .Select(RdbModels.DirectionFromDb).ToList();
+    }
+
+    public override OrderedDict<string, object?> GetStudyUserAttrs(int studyId)
+    {
+        using var ctx = NewContext();
+        EnsureStudyExists(ctx, studyId);
+        var attrs = new OrderedDict<string, object?>();
+        foreach (var row in ctx.StudyUserAttributes.AsNoTracking()
+                     .Where(a => a.StudyId == studyId).OrderBy(a => a.StudyUserAttributeId))
+            attrs[row.Key!] = PyJson.Loads(row.ValueJson!);
+        return attrs;
+    }
+
+    public override OrderedDict<string, object?> GetStudySystemAttrs(int studyId)
+    {
+        using var ctx = NewContext();
+        EnsureStudyExists(ctx, studyId);
+        var attrs = new OrderedDict<string, object?>();
+        foreach (var row in ctx.StudySystemAttributes.AsNoTracking()
+                     .Where(a => a.StudyId == studyId).OrderBy(a => a.StudySystemAttributeId))
+            attrs[row.Key!] = PyJson.Loads(row.ValueJson!);
+        return attrs;
+    }
+
+    public override List<FrozenStudy> GetAllStudies()
+    {
+        using var ctx = NewContext();
+        var studyRows = ctx.Studies.AsNoTracking().OrderBy(s => s.StudyId)
+            .Select(s => new { s.StudyId, s.StudyName }).ToList();
+
+        var directions = new Dictionary<int, List<StudyDirection>>();
+        foreach (var d in ctx.StudyDirections.AsNoTracking().OrderBy(x => x.StudyId).ThenBy(x => x.Objective)
+                     .Select(x => new { x.StudyId, x.Direction }).AsEnumerable())
+        {
+            if (!directions.TryGetValue(d.StudyId, out var list))
+                directions[d.StudyId] = list = new List<StudyDirection>();
+            list.Add(RdbModels.DirectionFromDb(d.Direction));
+        }
+
+        var userAttrs = LoadAllStudyAttrs(ctx, isUser: true);
+        var systemAttrs = LoadAllStudyAttrs(ctx, isUser: false);
+
+        var result = new List<FrozenStudy>(studyRows.Count);
+        foreach (var s in studyRows)
+        {
+            result.Add(new FrozenStudy(
+                studyName: s.StudyName,
+                direction: null,
+                directions: directions.TryGetValue(s.StudyId, out var dd) ? dd : new List<StudyDirection>(),
+                userAttrs: userAttrs.TryGetValue(s.StudyId, out var u) ? u : new OrderedDict<string, object?>(),
+                systemAttrs: systemAttrs.TryGetValue(s.StudyId, out var sy) ? sy : new OrderedDict<string, object?>(),
+                studyId: s.StudyId));
+        }
+        return result;
+    }
+
+    private static Dictionary<int, OrderedDict<string, object?>> LoadAllStudyAttrs(OptunaRdbContext ctx, bool isUser)
+    {
+        var byStudy = new Dictionary<int, OrderedDict<string, object?>>();
+        IEnumerable<(int? StudyId, string? Key, string? Json)> rows = isUser
+            ? ctx.StudyUserAttributes.AsNoTracking().OrderBy(a => a.StudyUserAttributeId)
+                .Select(a => new ValueTuple<int?, string?, string?>(a.StudyId, a.Key, a.ValueJson)).AsEnumerable()
+            : ctx.StudySystemAttributes.AsNoTracking().OrderBy(a => a.StudySystemAttributeId)
+                .Select(a => new ValueTuple<int?, string?, string?>(a.StudyId, a.Key, a.ValueJson)).AsEnumerable();
+        foreach (var (studyId, key, json) in rows)
+        {
+            int sid = studyId!.Value;
+            if (!byStudy.TryGetValue(sid, out var dict))
+                byStudy[sid] = dict = new OrderedDict<string, object?>();
+            dict[key!] = PyJson.Loads(json!);
+        }
+        return byStudy;
+    }
+
+    // ------------------------------------------------------------------ trial creation
+
+    public override int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null)
+        => CreateNewTrialFull(studyId, templateTrial).TrialId;
+
+    public FrozenTrial CreateNewTrialFull(int studyId, FrozenTrial? templateTrial = null)
+    {
+        using var ctx = NewContext();
+        using var tx = ctx.Database.BeginTransaction();
+        EnsureStudyExists(ctx, studyId);
+
+        var trial = new TrialEntity { StudyId = studyId, State = RdbModels.StateToDb(TrialState.Running) };
+        if (templateTrial is null)
+            trial.DatetimeStart = RdbModels.ToDbUtc(DateTime.Now);
+        else
+        {
+            trial.DatetimeStart = templateTrial.DatetimeStart is { } s ? RdbModels.ToDbUtc(s) : null;
+            trial.DatetimeComplete = templateTrial.DatetimeComplete is { } c ? RdbModels.ToDbUtc(c) : null;
+        }
+        ctx.Trials.Add(trial);
+        ctx.SaveChanges();
+        int trialId = trial.TrialId;
+
+        if (templateTrial is not null)
+        {
+            var values = templateTrial.Values;
+            if (values is { Count: > 1 })
+            {
+                for (int objective = 0; objective < values.Count; objective++)
+                    AddTrialValue(ctx, trialId, objective, values[objective]);
+            }
+            else if (templateTrial.Value is not null)
+            {
+                AddTrialValue(ctx, trialId, 0, templateTrial.Value.Value);
+            }
+
+            foreach (var (paramName, paramValue) in templateTrial.Params)
+            {
+                var distribution = templateTrial.Distributions[paramName];
+                double internalRepr = distribution.ToInternalRepr(paramValue);
+                ctx.TrialParams.Add(new TrialParamEntity
+                {
+                    TrialId = trialId,
+                    ParamName = paramName,
+                    ParamValue = internalRepr,
+                    DistributionJson = Distribution.ToJson(distribution),
+                });
+            }
+
+            foreach (var (key, value) in templateTrial.UserAttrs)
+                ctx.TrialUserAttributes.Add(new TrialUserAttributeEntity { TrialId = trialId, Key = key, ValueJson = PyJson.Dumps(value) });
+            foreach (var (key, value) in templateTrial.SystemAttrs)
+                ctx.TrialSystemAttributes.Add(new TrialSystemAttributeEntity { TrialId = trialId, Key = key, ValueJson = PyJson.Dumps(value) });
+            foreach (var (step, intermediateValue) in templateTrial.IntermediateValues)
+                AddTrialIntermediateValue(ctx, trialId, step, intermediateValue);
+
+            trial.State = RdbModels.StateToDb(templateTrial.State);
+            ctx.SaveChanges();
+        }
+
+        // number = count of the study's trials created before this one (Python `count_past_trials`).
+        int number = ctx.Trials.Count(t => t.StudyId == studyId && t.TrialId < trialId);
+        trial.Number = number;
+        ctx.SaveChanges();
+
+        DateTime? datetimeStart = RdbModels.FromDbUtc(trial.DatetimeStart);
+        tx.Commit();
+
+        if (templateTrial is not null)
+        {
+            var frozen = templateTrial.DeepCopy();
+            frozen.SetNumber(number);
+            frozen.SetDatetimeStart(datetimeStart);
+            frozen.TrialId = trialId;
+            return frozen;
+        }
+
+        return new FrozenTrial(
+            number: number,
+            state: TrialState.Running,
+            value: null,
+            datetimeStart: datetimeStart,
+            datetimeComplete: null,
+            @params: new OrderedDict<string, object?>(),
+            distributions: new OrderedDict<string, BaseDistribution>(),
+            userAttrs: new OrderedDict<string, object?>(),
+            systemAttrs: new OrderedDict<string, object?>(),
+            intermediateValues: new OrderedDict<int, double>(),
+            trialId: trialId);
+    }
+
+    // ------------------------------------------------------------------ trial params
+
+    public override void SetTrialParam(
+        int trialId, string paramName, double paramValueInternal, BaseDistribution distribution)
+        => SetTrialParamWithCachedDistribution(trialId, paramName, paramValueInternal, distribution, null);
+
+    public void SetTrialParamWithCachedDistribution(
+        int trialId,
+        string paramName,
+        double paramValueInternal,
+        BaseDistribution distribution,
+        BaseDistribution? cachedDistribution)
+    {
+        using var ctx = NewContext();
+        using var tx = ctx.Database.BeginTransaction();
+        var trial = FindTrialForUpdate(ctx, trialId);
+        CheckTrialIsUpdatableOrRaise(trial);
+
+        BaseDistribution? previousDistribution = cachedDistribution;
+        if (previousDistribution is null)
+        {
+            string? previousJson = (
+                from tp in ctx.TrialParams
+                join t in ctx.Trials on tp.TrialId equals t.TrialId
+                where t.StudyId == trial.StudyId && tp.ParamName == paramName
+                select tp.DistributionJson).FirstOrDefault();
+            if (previousJson is not null)
+                previousDistribution = Distribution.FromJson(previousJson);
+        }
+
+        if (previousDistribution is not null)
+            Distribution.CheckDistributionCompatibility(previousDistribution, distribution);
+
+        // Optuna inserts (not upserts) under ignore_integrity_error=True: a duplicate
+        // (trial_id, param_name) is silently ignored, so the first write for a parameter wins.
+        ctx.TrialParams.Add(new TrialParamEntity
+        {
+            TrialId = trialId,
+            ParamName = paramName,
+            ParamValue = paramValueInternal,
+            DistributionJson = Distribution.ToJson(distribution),
+        });
+        try
+        {
+            ctx.SaveChanges();
+            tx.Commit();
+        }
+        catch (DbUpdateException e) when (IsUniqueViolation(e))
+        {
+            tx.Rollback();
+        }
+    }
+
+    public override double GetTrialParam(int trialId, string paramName)
+    {
+        using var ctx = NewContext();
+        EnsureTrialExists(ctx, trialId);
+        var value = ctx.TrialParams.AsNoTracking()
+            .Where(p => p.TrialId == trialId && p.ParamName == paramName)
+            .Select(p => p.ParamValue).FirstOrDefault();
+        if (value is null)
+            throw new KeyError(RdbModels.NotFoundMsg);
+        return value.Value;
+    }
+
+    // ------------------------------------------------------------------ trial state / values
+
+    public override bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null)
+    {
+        using var ctx = NewContext();
+        using var tx = ctx.Database.BeginTransaction();
+        try
+        {
+            var trial = FindTrialForUpdate(ctx, trialId);
+            CheckTrialIsUpdatableOrRaise(trial);
+
+            if (values is not null)
+            {
+                for (int objective = 0; objective < values.Count; objective++)
+                    SetTrialValueUpsert(ctx, trialId, objective, values[objective]);
+            }
+
+            if (state == TrialState.Running && RdbModels.StateFromDb(trial.State) != TrialState.Waiting)
+            {
+                tx.Rollback();
+                return false;
+            }
+
+            trial.State = RdbModels.StateToDb(state);
+            if (state == TrialState.Running)
+                trial.DatetimeStart = RdbModels.ToDbUtc(DateTime.Now);
+            if (state.IsFinished())
+                trial.DatetimeComplete = RdbModels.ToDbUtc(DateTime.Now);
+
+            ctx.SaveChanges();
+            tx.Commit();
+        }
+        catch (DbUpdateException e) when (IsUniqueViolation(e))
+        {
+            tx.Rollback();
+            return false;
+        }
+        return true;
+    }
+
+    private static void AddTrialValue(OptunaRdbContext ctx, int trialId, int objective, double value)
+    {
+        var (stored, type) = RdbModels.ValueToStoredRepr(value);
+        ctx.TrialValues.Add(new TrialValueEntity
+        {
+            TrialId = trialId,
+            Objective = objective,
+            Value = stored,
+            ValueType = type,
+        });
+    }
+
+    private static void SetTrialValueUpsert(OptunaRdbContext ctx, int trialId, int objective, double value)
+    {
+        var (stored, type) = RdbModels.ValueToStoredRepr(value);
+        var row = ctx.TrialValues.FirstOrDefault(v => v.TrialId == trialId && v.Objective == objective);
+        if (row is null)
+            ctx.TrialValues.Add(new TrialValueEntity { TrialId = trialId, Objective = objective, Value = stored, ValueType = type });
+        else
+        {
+            row.Value = stored;
+            row.ValueType = type;
+        }
+    }
+
+    public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
+    {
+        using var ctx = NewContext();
+        using var tx = ctx.Database.BeginTransaction();
+        var trial = FindTrialForUpdate(ctx, trialId);
+        CheckTrialIsUpdatableOrRaise(trial);
+
+        var (stored, type) = RdbModels.IntermediateValueToStoredRepr(intermediateValue);
+        var row = ctx.TrialIntermediateValues.FirstOrDefault(v => v.TrialId == trialId && v.Step == step);
+        if (row is null)
+            ctx.TrialIntermediateValues.Add(new TrialIntermediateValueEntity
+            {
+                TrialId = trialId, Step = step, IntermediateValue = stored, IntermediateValueType = type,
+            });
+        else
+        {
+            row.IntermediateValue = stored;
+            row.IntermediateValueType = type;
+        }
+        ctx.SaveChanges();
+        tx.Commit();
+    }
+
+    private static void AddTrialIntermediateValue(OptunaRdbContext ctx, int trialId, int step, double intermediateValue)
+    {
+        var (stored, type) = RdbModels.IntermediateValueToStoredRepr(intermediateValue);
+        ctx.TrialIntermediateValues.Add(new TrialIntermediateValueEntity
+        {
+            TrialId = trialId, Step = step, IntermediateValue = stored, IntermediateValueType = type,
+        });
+    }
+
+    public override void SetTrialUserAttr(int trialId, string key, object? value)
+        => SetTrialAttr(isUser: true, trialId, key, value);
+
+    public override void SetTrialSystemAttr(int trialId, string key, object? value)
+        => SetTrialAttr(isUser: false, trialId, key, value);
+
+    private void SetTrialAttr(bool isUser, int trialId, string key, object? value)
+    {
+        using var ctx = NewContext();
+        using var tx = ctx.Database.BeginTransaction();
+        var trial = FindTrialForUpdate(ctx, trialId);
+        CheckTrialIsUpdatableOrRaise(trial);
+        string json = PyJson.Dumps(value);
+
+        if (isUser)
+        {
+            var row = ctx.TrialUserAttributes.FirstOrDefault(a => a.TrialId == trialId && a.Key == key);
+            if (row is null)
+                ctx.TrialUserAttributes.Add(new TrialUserAttributeEntity { TrialId = trialId, Key = key, ValueJson = json });
+            else
+                row.ValueJson = json;
+        }
+        else
+        {
+            var row = ctx.TrialSystemAttributes.FirstOrDefault(a => a.TrialId == trialId && a.Key == key);
+            if (row is null)
+                ctx.TrialSystemAttributes.Add(new TrialSystemAttributeEntity { TrialId = trialId, Key = key, ValueJson = json });
+            else
+                row.ValueJson = json;
+        }
+        ctx.SaveChanges();
+        tx.Commit();
+    }
+
+    // ------------------------------------------------------------------ trial access
+
+    public override int GetTrialIdFromStudyIdTrialNumber(int studyId, int trialNumber)
+    {
+        using var ctx = NewContext();
+        var trialId = ctx.Trials.AsNoTracking()
+            .Where(t => t.Number == trialNumber && t.StudyId == studyId)
+            .Select(t => (int?)t.TrialId).FirstOrDefault();
+        if (trialId is null)
+            throw new KeyError(
+                $"No trial with trial number {trialNumber} exists in study with study_id {studyId}.");
+        return trialId.Value;
+    }
+
+    public override FrozenTrial GetTrial(int trialId)
+    {
+        using var ctx = NewContext();
+        EnsureTrialExists(ctx, trialId);
+        var trials = GetTrialsInternal(ctx, studyId: null, singleTrialId: trialId, states: null,
+            includedTrialIds: null, trialIdGreaterThan: -1);
+        return trials[0];
+    }
+
+    public override List<FrozenTrial> GetAllTrials(
+        int studyId, bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
+    {
+        using var ctx = NewContext();
+        EnsureStudyExists(ctx, studyId);
+        return GetTrialsInternal(ctx, studyId, singleTrialId: null, states, includedTrialIds: null, trialIdGreaterThan: -1);
+    }
+
+    public List<FrozenTrial> GetTrialsPartial(
+        int studyId,
+        IReadOnlyCollection<TrialState>? states,
+        IReadOnlyCollection<int> includedTrialIds,
+        int trialIdGreaterThan)
+    {
+        using var ctx = NewContext();
+        EnsureStudyExists(ctx, studyId);
+        return GetTrialsInternal(ctx, studyId, singleTrialId: null, states, includedTrialIds, trialIdGreaterThan);
+    }
+
+    private static List<FrozenTrial> GetTrialsInternal(
+        OptunaRdbContext ctx,
+        int? studyId,
+        int? singleTrialId,
+        IReadOnlyCollection<TrialState>? states,
+        IReadOnlyCollection<int>? includedTrialIds,
+        int trialIdGreaterThan)
+    {
+        // Python `_get_trials`: keep only tracked ids at or below the watermark; the rest are already
+        // covered by the `trial_id > trial_id_greater_than` clause.
+        var included = includedTrialIds is null
+            ? new List<int>()
+            : includedTrialIds.Where(id => id <= trialIdGreaterThan).ToList();
+
+        IQueryable<TrialEntity> q = ctx.Trials.AsNoTracking();
+        if (singleTrialId is not null)
+        {
+            q = q.Where(t => t.TrialId == singleTrialId.Value);
+        }
+        else
+        {
+            int sid = studyId!.Value;
+            q = q.Where(t => t.StudyId == sid);
+
+            if (states is not null)
+            {
+                if (states.Count == 0)
+                    return new List<FrozenTrial>();
+                var dbStates = states.Select(RdbModels.StateToDb).ToList();
+                q = q.Where(t => dbStates.Contains(t.State));
+            }
+
+            if (included.Count > 0 && trialIdGreaterThan > -1)
+                q = q.Where(t => t.TrialId > trialIdGreaterThan || included.Contains(t.TrialId));
+            else if (trialIdGreaterThan > -1)
+                q = q.Where(t => t.TrialId > trialIdGreaterThan);
+        }
+
+        var trialRows = q.OrderBy(t => t.TrialId)
+            .Select(t => new TrialRow(t.TrialId, t.Number, t.State, t.DatetimeStart, t.DatetimeComplete))
+            .ToList();
+
+        if (trialRows.Count == 0)
+            return new List<FrozenTrial>();
+
+        var trialIds = trialRows.Select(t => t.TrialId).ToList();
+        var idSet = trialIds.ToHashSet();
+
+        var paramsByTrial = ctx.TrialParams.AsNoTracking()
+            .Where(p => idSet.Contains(p.TrialId!.Value)).OrderBy(p => p.ParamId)
+            .Select(p => new { p.TrialId, p.ParamName, p.ParamValue, p.DistributionJson })
+            .AsEnumerable().GroupBy(p => p.TrialId!.Value)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var valuesByTrial = ctx.TrialValues.AsNoTracking()
+            .Where(v => idSet.Contains(v.TrialId))
+            .Select(v => new { v.TrialId, v.Objective, v.Value, v.ValueType })
+            .AsEnumerable().GroupBy(v => v.TrialId).ToDictionary(g => g.Key, g => g.ToList());
+
+        var intermediateByTrial = ctx.TrialIntermediateValues.AsNoTracking()
+            .Where(v => idSet.Contains(v.TrialId))
+            .Select(v => new { v.TrialId, v.Step, v.IntermediateValue, v.IntermediateValueType })
+            .AsEnumerable().GroupBy(v => v.TrialId).ToDictionary(g => g.Key, g => g.ToList());
+
+        var userByTrial = ctx.TrialUserAttributes.AsNoTracking()
+            .Where(a => idSet.Contains(a.TrialId!.Value)).OrderBy(a => a.TrialUserAttributeId)
+            .Select(a => new { a.TrialId, a.Key, a.ValueJson })
+            .AsEnumerable().GroupBy(a => a.TrialId!.Value).ToDictionary(g => g.Key, g => g.ToList());
+
+        var systemByTrial = ctx.TrialSystemAttributes.AsNoTracking()
+            .Where(a => idSet.Contains(a.TrialId!.Value)).OrderBy(a => a.TrialSystemAttributeId)
+            .Select(a => new { a.TrialId, a.Key, a.ValueJson })
+            .AsEnumerable().GroupBy(a => a.TrialId!.Value).ToDictionary(g => g.Key, g => g.ToList());
+
+        var result = new List<FrozenTrial>(trialRows.Count);
+        foreach (var row in trialRows)
+        {
+            List<double>? values = null;
+            if (valuesByTrial.TryGetValue(row.TrialId, out var valueRows) && valueRows.Count > 0)
+            {
+                values = new List<double>(new double[valueRows.Count]);
+                foreach (var v in valueRows)
+                    values[v.Objective] = RdbModels.StoredReprToValue(v.Value, v.ValueType);
+            }
+
+            var @params = new OrderedDict<string, object?>();
+            var distributions = new OrderedDict<string, BaseDistribution>();
+            if (paramsByTrial.TryGetValue(row.TrialId, out var paramRows))
+            {
+                foreach (var p in paramRows)
+                {
+                    var distribution = Distribution.FromJson(p.DistributionJson!);
+                    @params[p.ParamName!] = distribution.ToExternalRepr(p.ParamValue!.Value);
+                    distributions[p.ParamName!] = distribution;
+                }
+            }
+
+            var userAttrs = new OrderedDict<string, object?>();
+            if (userByTrial.TryGetValue(row.TrialId, out var userRows))
+                foreach (var a in userRows)
+                    userAttrs[a.Key!] = PyJson.Loads(a.ValueJson!);
+
+            var systemAttrs = new OrderedDict<string, object?>();
+            if (systemByTrial.TryGetValue(row.TrialId, out var systemRows))
+                foreach (var a in systemRows)
+                    systemAttrs[a.Key!] = PyJson.Loads(a.ValueJson!);
+
+            var intermediateValues = new OrderedDict<int, double>();
+            if (intermediateByTrial.TryGetValue(row.TrialId, out var intermediateRows))
+                foreach (var v in intermediateRows)
+                    intermediateValues[v.Step] = RdbModels.StoredReprToIntermediateValue(v.IntermediateValue, v.IntermediateValueType);
+
+            result.Add(new FrozenTrial(
+                number: row.Number ?? -1,
+                state: RdbModels.StateFromDb(row.State),
+                value: null,
+                values: values,
+                datetimeStart: RdbModels.FromDbUtc(row.DatetimeStart),
+                datetimeComplete: RdbModels.FromDbUtc(row.DatetimeComplete),
+                @params: @params,
+                distributions: distributions,
+                userAttrs: userAttrs,
+                systemAttrs: systemAttrs,
+                intermediateValues: intermediateValues,
+                trialId: row.TrialId));
+        }
+        return result;
+    }
+
+    private readonly record struct TrialRow(
+        int TrialId, int? Number, DbTrialState State, DateTime? DatetimeStart, DateTime? DatetimeComplete);
+
+    // ------------------------------------------------------------------ best trial
+
+    public override FrozenTrial GetBestTrial(int studyId)
+    {
+        var directions = GetStudyDirections(studyId);
+        if (directions.Count > 1)
+            throw new RuntimeError("Best trial can be obtained only for single-objective optimization.");
+        int trialId = GetBestTrialId(studyId, directions[0]);
+        return GetTrial(trialId);
+    }
+
+    public int GetBestTrialId(int studyId, StudyDirection direction)
+    {
+        using var ctx = NewContext();
+        var complete = RdbModels.StateToDb(TrialState.Complete);
+        var candidates = (
+            from t in ctx.Trials.AsNoTracking()
+            join v in ctx.TrialValues.AsNoTracking() on t.TrialId equals v.TrialId
+            where t.StudyId == studyId && t.State == complete && v.Objective == 0
+            select new { t.TrialId, v.Value, v.ValueType })
+            .AsEnumerable()
+            .Select(r => new { r.TrialId, Eff = EffectiveValue(r.Value, r.ValueType) })
+            .ToList();
+
+        if (candidates.Count == 0)
+            throw new ValueError(RdbModels.NotFoundMsg);
+
+        // -inf < finite < +inf via the value_type tag folded into ±inf, then by the stored value
+        // (Python find_max_value_trial_id / find_min_value_trial_id). LIMIT 1 keeps the first best.
+        var best = candidates[0];
+        foreach (var c in candidates.Skip(1))
+        {
+            bool better = direction == StudyDirection.Maximize ? c.Eff > best.Eff : c.Eff < best.Eff;
+            if (better)
+                best = c;
+        }
+        return best.TrialId;
+    }
+
+    private static double EffectiveValue(double? value, DbTrialValueType type) => type switch
+    {
+        DbTrialValueType.INF_POS => double.PositiveInfinity,
+        DbTrialValueType.INF_NEG => double.NegativeInfinity,
+        _ => value!.Value,
+    };
+
+    // ------------------------------------------------------------------ heartbeat
+
+    public void RecordHeartbeat(int trialId)
+    {
+        using var ctx = NewContext();
+        string sql = _provider == RdbProvider.PostgreSql
+            ? "INSERT INTO trial_heartbeats (trial_id, heartbeat) VALUES ({0}, CURRENT_TIMESTAMP) " +
+              "ON CONFLICT (trial_id) DO UPDATE SET heartbeat = CURRENT_TIMESTAMP"
+            : "INSERT INTO trial_heartbeats (trial_id, heartbeat) VALUES ({0}, CURRENT_TIMESTAMP) " +
+              "ON DUPLICATE KEY UPDATE heartbeat = CURRENT_TIMESTAMP";
+        ctx.Database.ExecuteSqlRaw(sql, trialId);
+    }
+
+    public List<int> GetStaleTrialIds(int studyId)
+    {
+        int gracePeriod = _gracePeriod ?? 2 * _heartbeatInterval!.Value;
+        using var ctx = NewContext();
+        var running = RdbModels.StateToDb(TrialState.Running);
+
+        // Everything on the DB clock (Optuna uses func.now()) — the elapsed-seconds expression differs
+        // per dialect. Returns the trials whose most recent heartbeat is older than the grace period.
+        string elapsed = _provider == RdbProvider.PostgreSql
+            ? "EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - h.heartbeat))"
+            : "TIMESTAMPDIFF(SECOND, h.heartbeat, CURRENT_TIMESTAMP)";
+        string stateName = running.ToString();
+        string sql =
+            "SELECT t.trial_id FROM trials t JOIN trial_heartbeats h ON h.trial_id = t.trial_id " +
+            $"WHERE t.study_id = {{0}} AND t.state = '{stateName}' AND {elapsed} > {{1}}";
+
+        var ids = new List<int>();
+        var conn = ctx.Database.GetDbConnection();
+        bool opened = conn.State != System.Data.ConnectionState.Open;
+        if (opened)
+            conn.Open();
+        try
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql.Replace("{0}", "@p0").Replace("{1}", "@p1");
+            AddParam(cmd, "@p0", studyId);
+            AddParam(cmd, "@p1", gracePeriod);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                ids.Add(Convert.ToInt32(reader.GetValue(0), RdbModels.Inv));
+        }
+        finally
+        {
+            if (opened)
+                conn.Close();
+        }
+        return ids;
+    }
+
+    private static void AddParam(DbCommand cmd, string name, object value)
+    {
+        var p = cmd.CreateParameter();
+        p.ParameterName = name;
+        p.Value = value;
+        cmd.Parameters.Add(p);
+    }
+
+    public int? GetHeartbeatInterval() => _heartbeatInterval;
+
+    public Action<Study, FrozenTrial>? GetHeartbeatStaleTrialCallback() => _heartbeatStaleTrialCallback;
+
+    // ------------------------------------------------------------------ helpers
+
+    private static void EnsureStudyExists(OptunaRdbContext ctx, int studyId)
+    {
+        if (!ctx.Studies.AsNoTracking().Any(s => s.StudyId == studyId))
+            throw new KeyError(RdbModels.NotFoundMsg);
+    }
+
+    private static void EnsureTrialExists(OptunaRdbContext ctx, int trialId)
+    {
+        if (!ctx.Trials.AsNoTracking().Any(t => t.TrialId == trialId))
+            throw new KeyError(RdbModels.NotFoundMsg);
+    }
+
+    // SELECT * ... FOR UPDATE row lock (PostgreSQL/MySQL) — Optuna's TrialModel.find_or_raise_by_id(
+    // for_update=True). AsEnumerable() keeps the SQL unwrapped so the FOR UPDATE actually locks.
+    private static TrialEntity FindTrialForUpdate(OptunaRdbContext ctx, int trialId)
+    {
+        var trial = ctx.Trials
+            .FromSqlRaw("SELECT * FROM trials WHERE trial_id = {0} FOR UPDATE", trialId)
+            .AsEnumerable().FirstOrDefault();
+        if (trial is null)
+            throw new KeyError(RdbModels.NotFoundMsg);
+        return trial;
+    }
+
+    private static void CheckTrialIsUpdatableOrRaise(TrialEntity trial)
+    {
+        if (RdbModels.StateFromDb(trial.State).IsFinished())
+            throw new UpdateFinishedTrialError(
+                $"Trial#{trial.Number} has already finished and can not be updated.");
+    }
+
+    private static bool IsUniqueViolation(DbUpdateException e)
+    {
+        for (Exception? inner = e; inner is not null; inner = inner.InnerException)
+        {
+            if (inner is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation)
+                return true;
+            if (inner is MySqlException my && my.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    ///     Disposes the PostgreSQL data source (the pooled connections). MySQL keeps no per-storage
+    ///     resource (MySqlConnector pools by connection string).
+    /// </summary>
+    public void Dispose() => _dataSource?.Dispose();
+}

@@ -37,6 +37,14 @@ using System.Runtime.CompilerServices;
 // stored names via the internal PythonName() helpers.
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.Sqlite, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The EF Core RDB storage (satellite package OptunaSharp.Storage.EFCore, Phase 4.2) is the second
+// external implementer of the ICachedStorageBackend seam — the same RDBStorage as SQLite's but over
+// Entity Framework Core against PostgreSQL (Npgsql) and MySQL (Pomelo). It reuses the identical Core
+// internals: constructing FrozenTrial/FrozenStudy with their internal identity fields
+// (FrozenTrial.TrialId / SetValues, FrozenStudy.StudyId), the internal PyJson for attr value_json,
+// Distribution JSON round-trip + compatibility check, and the trial/direction PythonName() enum names.
+[assembly: InternalsVisibleTo("OptunaSharp.Storage.EFCore, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 // The gRPC storage proxy (satellite package OptunaSharp.Storage.Grpc, Phase 4.4) is a network client +
 // server for any BaseStorage. Both sides serialize/deserialize FrozenTrial through the same internal
 // helpers so the on-wire proto strings stay byte-compatible with Python Optuna: PyJson (attr json.dumps),

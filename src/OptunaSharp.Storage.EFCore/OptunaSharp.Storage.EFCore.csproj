@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp</RootNamespace>
+    <AssemblyName>OptunaSharp.Storage.EFCore</AssemblyName>
+    <Nullable>enable</Nullable>
+
+    <PackageId>OptunaSharp.Storage.EFCore</PackageId>
+    <Description>PostgreSQL and MySQL RDB storage for OptunaSharp — the Entity Framework Core port of optuna.storages.RDBStorage for server databases. Persists a study with Optuna's exact SQLAlchemy schema (alembic v3.2.0.a, schema_version 12) over Npgsql (PostgreSQL) and Pomelo (MySQL), so Python Optuna and OptunaSharp can share the same PostgreSQL/MySQL database. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;EFCore;EntityFrameworkCore;PostgreSQL;MySQL;RDB;Storage;Database;Npgsql;Pomelo;HyperparameterOptimization;HPO;SciSharp</PackageTags>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The two EF Core providers this package targets. Both pin to the EF Core 9 line (Pomelo's
+         latest stable), which runs on net8.0 and net10.0 alike. Npgsql brings native-enum support
+         (studydirection/trialstate/...); Pomelo brings MySqlConnector. -->
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+    <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -19,6 +19,11 @@
     <!-- Code-coverage collector: the "XPlat Code Coverage" data collector emits cobertura so the
          full-API-coverage of all three backends + the shared parser is measurable. -->
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <!-- Testcontainers for the EF Core RDB conformance suite (Phase 4.2): a throwaway PostgreSQL and
+         MySQL server per test run. Self-skips (Inconclusive) when Docker is unavailable, like the
+         Redis suite's docker-compose gating. -->
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.14.0" />
+    <PackageReference Include="Testcontainers.MySql" Version="4.14.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -32,6 +37,9 @@
     <!-- The SQLite RDB storage (Phase 4.1). Needs no external service (native e_sqlite3 is bundled),
          so its tests run in the normal unit-test lane. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Storage.Sqlite\OptunaSharp.Storage.Sqlite.csproj" />
+    <!-- The EF Core RDB storage (Phase 4.2, PostgreSQL + MySQL). Its conformance tests need a live
+         server (provided by Testcontainers) and self-skip without Docker. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Storage.EFCore\OptunaSharp.Storage.EFCore.csproj" />
     <!-- The gRPC storage proxy (Phase 4.4). Its client↔server round-trip + proto conversions run fully
          in-process (Kestrel on a loopback port), needing no external service or Python, so they run in
          the normal unit-test lane. Brings ASP.NET Core (server host) + Grpc.Net.Client transitively. -->

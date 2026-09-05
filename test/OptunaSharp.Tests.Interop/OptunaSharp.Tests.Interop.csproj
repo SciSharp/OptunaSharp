@@ -17,6 +17,10 @@
          assert OptunaSharp matches it. 3.0.5 is pythonnet's practical floor (drives Python 3.7-3.13);
          a Python 3.14 host needs 3.1.0. Tests self-skip (Inconclusive) when no engine is found. -->
     <PackageReference Include="pythonnet" Version="3.0.5" />
+    <!-- Live PostgreSQL/MySQL for the Phase 4.2 cross-language gate (Python Optuna ↔ OptunaSharp EF Core
+         storage share the same server database). Self-skips without Docker (or the Python DB drivers). -->
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.14.0" />
+    <PackageReference Include="Testcontainers.MySql" Version="4.14.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -31,6 +35,10 @@
          .db from Python Optuna and vice versa. Needs no external service (native e_sqlite3 bundled);
          self-skips when Python/optuna is absent, like the other RequiresPython tests. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Storage.Sqlite\OptunaSharp.Storage.Sqlite.csproj" />
+    <!-- The EF Core RDB storage (Phase 4.2), so the cross-language gate opens the same PostgreSQL/MySQL
+         database from Python Optuna and OptunaSharp. Needs a live server (Testcontainers) + the Python
+         DB drivers (psycopg2, pymysql); self-skips otherwise. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Storage.EFCore\OptunaSharp.Storage.EFCore.csproj" />
     <!-- The gRPC storage proxy (Phase 4.4), so the wire-compat gate (GrpcStorageProxyInteropTests) can
          round-trip a study between an OptunaSharp client/server and a Python Optuna gRPC proxy server in
          both directions. Self-skips when Python/optuna or grpcio is absent, like the other RequiresPython
