@@ -42,10 +42,12 @@ rem clear any stale PYTHONNET_PYDLL so the bridge discovers %PYTHON% (where we j
 rem prerequisites), not a previously-pinned interpreter. scoped to this window by setlocal.
 set "PYTHONNET_PYDLL="
 
+rem -v q + -p:WarningLevel=0 silence the build's warning noise globally (both flags `dotnet run` honors;
+rem it rejects -clp/--tl). errors still surface; the example's own colored stdout is unaffected.
 for %%E in (OptunaHubCode1 OptunaHubBenchmark OptunaHubSamplerShootout OptunaHubMultiObjective OptunaHubPruning OptunaHubLocalRegistry OptunaHubDashboard) do (
   echo.
   echo ============ %%E ============
-  dotnet run examples/optunahub/%%E.cs
+  dotnet run -v q -p:WarningLevel=0 examples/optunahub/%%E.cs
   if errorlevel 1 echo   ^(%%E exited with an error - see the output above^)
 )
 

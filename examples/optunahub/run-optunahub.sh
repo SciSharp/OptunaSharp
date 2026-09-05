@@ -35,7 +35,9 @@ fi
 export FORCE_COLOR="${FORCE_COLOR:-1}"                              # force ANSI colors on
 export OPTUNASHARP_OPTUNAHUB_QUIET="${OPTUNASHARP_OPTUNAHUB_QUIET:-1}"
 
-run() { echo; echo "════════════ $1 ════════════"; dotnet run "examples/optunahub/$2.cs"; }
+# -v q + -p:WarningLevel=0: silence the build's warning noise globally (both flags `dotnet run` honors;
+# it rejects -clp/--tl). errors still surface. the example's own colored stdout is unaffected.
+run() { echo; echo "════════════ $1 ════════════"; dotnet run -v q -p:WarningLevel=0 "examples/optunahub/$2.cs"; }
 run "Code 1 — a hub sampler + a hub benchmark, together" OptunaHubCode1
 run "Benchmark — BBOB Sphere, live"                       OptunaHubBenchmark
 run "Sampler shootout — hub samplers vs native TPE"       OptunaHubSamplerShootout

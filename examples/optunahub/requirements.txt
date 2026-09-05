@@ -17,5 +17,13 @@ optuna-dashboard    # https://github.com/optuna/optuna-dashboard — reads the S
 coco-experiment
 
 # OptunaHubSamplerShootout.cs — the hub samplers' own backends (any missing one is skipped, not fatal)
-cmaes               # samplers/cmaes
+cmaes               # samplers/cmaes  (also needed by samplers/auto_sampler, below)
 pandas              # samplers/nelder_mead
+scipy               # samplers/auto_sampler  (its AutoSampler imports cmaes + scipy + torch at load)
+
+# OptunaHubCode1.cs / OptunaHubDashboard.cs use samplers/auto_sampler, which hard-imports PyTorch. torch
+# is large and platform-specific, so it is NOT auto-installed here. Install the CPU build if you want the
+# AutoSampler examples to run the real hub sampler:
+#     pip install torch --index-url https://download.pytorch.org/whl/cpu
+# Without it, OptunaHubCode1 prints guidance and OptunaHubDashboard falls back to OptunaSharp's native TPE
+# (so the study is still persisted and the dashboard still opens).
