@@ -28,9 +28,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The satellite under test (transitively brings Core). Core is also referenced explicitly for
-         Optuna.CreateStudy / distributions / samplers the OptunaSearchCV tests use. -->
-    <ProjectReference Include="..\..\src\OptunaSharp.Integration.Sklearn\OptunaSharp.Integration.Sklearn.csproj" />
+    <!-- The scikit-learn port is pure-managed and lives IN Core (namespace OptunaSharp.Integration.Sklearn,
+         alongside OptunaSearchCV — the SHAP precedent: pure-managed integration members live in Core, not a
+         separate NuGet). These tests reach Core's internal kernels (Metrics.R2Score / MeanSquaredError,
+         CrossValidation.CrossValidate, RandomForestRegressor.Trees) via the friend grant in Core's
+         Assembly/Properties.cs. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
   </ItemGroup>
 

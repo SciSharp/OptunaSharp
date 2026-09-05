@@ -80,14 +80,12 @@ using System.Runtime.CompilerServices;
 // Its test project mirrors the forests test project (backend-parameterised invariants).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Integration.LightGbm, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
-// The scikit-learn integration (satellite package OptunaSharp.Integration.Sklearn — the .NET analogue of
-// optuna_integration.sklearn) is a pure-managed, byte-exact port with NO foreign runtime: its
-// RandomForestRegressor reuses Core's bit-exact CART (DepthFirstTreeBuilder / BestSplitter /
-// SklearnLikeTree / SklearnRandom — the same forest MDI/SHAP use) and its KFold / cross_validate seed
-// draws ride LazyRandomState (NumSharp MT19937) + MathUtil.PairwiseSum, so SklearnEstimator makes the
-// Core OptunaSearchCV end-to-end byte-exact vs Python's optuna_integration.OptunaSearchCV.
-[assembly: InternalsVisibleTo("OptunaSharp.Integration.Sklearn, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
-// Its test project asserts byte-exact parity against those internal kernels (vs scikit-learn 1.8.0).
+// The scikit-learn integration (namespace OptunaSharp.Integration.Sklearn, in Core alongside
+// OptunaSearchCV — the .NET analogue of optuna_integration.sklearn) is a pure-managed, byte-exact port
+// with NO foreign runtime, so it lives in Core (the SHAP precedent: pure-managed integration members go
+// in Core, not a separate NuGet). Its RandomForestRegressor reuses Core's bit-exact CART; its test
+// project asserts byte-exact parity against the internal kernels (Metrics.R2Score / MeanSquaredError,
+// CrossValidation.CrossValidate, RandomForestRegressor.Trees) vs scikit-learn 1.8.0.
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Integration.Sklearn, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
 // The Redis backends' shared test project asserts that experimental warning fired via the internal
