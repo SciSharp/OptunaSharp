@@ -4,6 +4,7 @@ using System.Data.Common;
 using System.Globalization;
 using System.Linq;
 using AwesomeAssertions;
+using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Npgsql;
 using NumSharp;
@@ -34,10 +35,23 @@ public abstract class EFCoreRdbStorageTestsBase
 
     private RDBStorage NewStorage() => EFCoreDbSession.NewStorage(Provider);
 
+    // Build a storage over a freshly-reset schema with custom options (the golden-standard API tests).
+    private RDBStorage NewStorage(EFCoreRdbOptions options)
+    {
+        EFCoreDbSession.Reset(Provider);
+        return new RDBStorage(Provider, EFCoreDbSession.ConnectionString(Provider), options);
+    }
+
     // A second storage over the same database WITHOUT resetting the schema (reopen/persistence tests).
     private RDBStorage ReopenStorage() => new(Provider, EFCoreDbSession.ConnectionString(Provider));
 
-    private DbConnection RawConn()
+    /// <summary>The connection string for the running container (for native-config-object ctor tests).</summary>
+    protected string ConnectionString => EFCoreDbSession.ConnectionString(Provider);
+
+    /// <summary>Options that enable EF Core's retry-on-failure for this provider (see the retry test).</summary>
+    protected abstract EFCoreRdbOptions RetryOptions();
+
+    protected DbConnection RawConn()
     {
         DbConnection conn = Provider == RdbProvider.PostgreSql
             ? new NpgsqlConnection(EFCoreDbSession.ConnectionString(Provider))
@@ -472,6 +486,237 @@ public abstract class EFCoreRdbStorageTestsBase
         study.BestValue.Should().BeLessThanOrEqualTo(study.Trials.Min(t => t.Value!.Value) + 1e-12);
     }
 
+    // ------------------------------------------------------------------ contract coverage
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void GetNTrials_CountsByState()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int c0 = storage.CreateNewTrial(studyId);
+        storage.SetTrialStateValues(c0, TrialState.Complete, new[] { 1.0 });
+        storage.CreateNewTrial(studyId); // running
+
+        storage.GetNTrials(studyId).Should().Be(2);
+        storage.GetNTrials(studyId, new[] { TrialState.Complete }).Should().Be(1);
+        storage.GetNTrials(studyId, new[] { TrialState.Running }).Should().Be(1);
+        storage.GetNTrials(studyId, new[] { TrialState.Pruned }).Should().Be(0);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void GetTrialNumberFromId_And_ReadHelpers()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int t = storage.CreateNewTrial(studyId);
+        storage.SetTrialParam(t, "x", 1.5, new FloatDistribution(-10, 10));
+        storage.SetTrialUserAttr(t, "u", "uv");
+        storage.SetTrialSystemAttr(t, "s", 9L);
+
+        storage.GetTrialNumberFromId(t).Should().Be(0);
+        storage.GetTrialParams(t)["x"].Should().Be(1.5);
+        storage.GetTrialUserAttrs(t)["u"].Should().Be("uv");
+        storage.GetTrialSystemAttrs(t)["s"].Should().Be(9L);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void SetTrialStateValues_RunningToRunning_ReturnsFalse()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int t = storage.CreateNewTrial(studyId);
+        storage.SetTrialStateValues(t, TrialState.Running).Should().BeFalse();
+        storage.GetTrial(t).State.Should().Be(TrialState.Running);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void GetBestTrial_NoCompletedTrials_ThrowsValueError()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        storage.CreateNewTrial(studyId); // running only
+        Action act = () => storage.GetBestTrial(studyId);
+        act.Should().Throw<ValueError>();
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void GetBestTrial_MultiObjective_ThrowsRuntimeError()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize, StudyDirection.Minimize }, "s");
+        int t = storage.CreateNewTrial(studyId);
+        storage.SetTrialStateValues(t, TrialState.Complete, new[] { 1.0, 2.0 });
+        Action act = () => storage.GetBestTrial(studyId);
+        act.Should().Throw<RuntimeError>();
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void MissingRecords_Throw_KeyError()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int t = storage.CreateNewTrial(studyId);
+
+        ((Action)(() => storage.GetTrial(999999))).Should().Throw<KeyError>();
+        ((Action)(() => storage.GetTrialParam(t, "nope"))).Should().Throw<KeyError>();
+        ((Action)(() => storage.GetTrialIdFromStudyIdTrialNumber(studyId, 42))).Should().Throw<KeyError>();
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Distributions_AllTypes_RoundTrip()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int t = storage.CreateNewTrial(studyId);
+
+        var fPlain = new FloatDistribution(-10, 10);
+        var fLog = new FloatDistribution(1e-3, 1e3, log: true);
+        var fStep = new FloatDistribution(0, 10, step: 0.5);
+        var iPlain = new IntDistribution(0, 100);
+        var iLog = new IntDistribution(1, 100, log: true);
+        var iStep = new IntDistribution(0, 10, step: 2);
+        var cat = new CategoricalDistribution(new CategoricalChoice[] { "a", "b", (long)3, true, CategoricalChoice.None });
+
+        storage.SetTrialParam(t, "fPlain", 1.5, fPlain);
+        storage.SetTrialParam(t, "fLog", 10.0, fLog);
+        storage.SetTrialParam(t, "fStep", 2.5, fStep);
+        storage.SetTrialParam(t, "iPlain", 42.0, iPlain);
+        storage.SetTrialParam(t, "iLog", 4.0, iLog);
+        storage.SetTrialParam(t, "iStep", 4.0, iStep);
+        storage.SetTrialParam(t, "cat", 3.0, cat); // index 3 -> true
+
+        var trial = storage.GetTrial(t);
+        trial.Distributions["fPlain"].Should().Be(fPlain);
+        trial.Distributions["fLog"].Should().Be(fLog);
+        trial.Distributions["fStep"].Should().Be(fStep);
+        trial.Distributions["iPlain"].Should().Be(iPlain);
+        trial.Distributions["iLog"].Should().Be(iLog);
+        trial.Distributions["iStep"].Should().Be(iStep);
+        trial.Distributions["cat"].Should().Be(cat);
+        trial.Params["fPlain"].Should().Be(1.5);
+        trial.Params["iLog"].Should().Be(4L);
+        trial.Params["cat"].Should().Be(true);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void AttrJson_ValueTypes_RoundTrip()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        storage.SetStudySystemAttr(studyId, "str", "hello");
+        storage.SetStudySystemAttr(studyId, "int", 42L);
+        storage.SetStudySystemAttr(studyId, "float", 3.25);
+        storage.SetStudySystemAttr(studyId, "bool", true);
+        storage.SetStudySystemAttr(studyId, "null", null);
+        storage.SetStudySystemAttr(studyId, "list", new List<object?> { 1L, "two", true });
+        storage.SetStudySystemAttr(studyId, "dict", new OrderedDict<string, object?> { ["k"] = 1L, ["v"] = "x" });
+
+        var a = storage.GetStudySystemAttrs(studyId);
+        a["str"].Should().Be("hello");
+        a["int"].Should().Be(42L);
+        a["float"].Should().Be(3.25);
+        a["bool"].Should().Be(true);
+        a["null"].Should().BeNull();
+        ((System.Collections.IEnumerable)a["list"]!).Cast<object?>().Should().Equal(1L, "two", true);
+        ((OrderedDict<string, object?>)a["dict"]!)["v"].Should().Be("x");
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Datetime_StartAndComplete_RoundTrip()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int t = storage.CreateNewTrial(studyId);
+        storage.GetTrial(t).DatetimeStart.Should().NotBeNull();
+        storage.SetTrialStateValues(t, TrialState.Complete, new[] { 1.0 });
+
+        var trial = storage.GetTrial(t);
+        trial.DatetimeStart.Should().NotBeNull();
+        trial.DatetimeComplete.Should().NotBeNull();
+        trial.DatetimeComplete.Should().BeOnOrAfter(trial.DatetimeStart!.Value);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void ManyTrials_RoundTrip_Stable()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        const int n = 120;
+        for (int i = 0; i < n; i++)
+        {
+            int t = storage.CreateNewTrial(studyId);
+            storage.SetTrialParam(t, "x", i, new IntDistribution(0, n));
+            storage.SetTrialStateValues(t, TrialState.Complete, new[] { (double)i });
+        }
+
+        var trials = storage.GetAllTrials(studyId);
+        trials.Should().HaveCount(n);
+        trials[0].Number.Should().Be(0);
+        trials[^1].Number.Should().Be(n - 1);
+        trials[^1].Value.Should().Be(n - 1);
+        storage.GetBestTrial(studyId).Value.Should().Be(0.0);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_RecordInterval_AndStaleDetection()
+    {
+        using var storage = NewStorage(new EFCoreRdbOptions { HeartbeatInterval = 2 });
+        storage.GetHeartbeatInterval().Should().Be(2);
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int t = storage.CreateNewTrial(studyId);
+
+        storage.RecordHeartbeat(t);
+        storage.GetStaleTrialIds(studyId).Should().BeEmpty("a fresh heartbeat is not stale");
+
+        // Backdate the heartbeat well past the grace period (2 * interval = 4s) to exercise the
+        // elapsed-seconds SQL, then it must be reported stale.
+        using (var conn = RawConn())
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = Provider == RdbProvider.PostgreSql
+                ? "UPDATE trial_heartbeats SET heartbeat = CURRENT_TIMESTAMP - INTERVAL '1 hour'"
+                : "UPDATE trial_heartbeats SET heartbeat = CURRENT_TIMESTAMP - INTERVAL 1 HOUR";
+            cmd.ExecuteNonQuery();
+        }
+        storage.GetStaleTrialIds(studyId).Should().Contain(t);
+    }
+
+    // ------------------------------------------------------------------ golden-standard API (shared)
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void ConfigureDbContext_LogTo_CapturesSql()
+    {
+        var log = new System.Collections.Concurrent.ConcurrentBag<string>();
+        using var storage = NewStorage(new EFCoreRdbOptions { ConfigureDbContext = b => b.LogTo(log.Add) });
+        storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "logged");
+        log.Should().NotBeEmpty("the EF Core logger hook must receive events");
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void RetryOnFailure_TransactionsStillWork()
+    {
+        // EnableRetryOnFailure installs a retrying execution strategy, which forbids user-initiated
+        // transactions unless they run inside the strategy — this storage wraps them, so create + tell
+        // (both transactional) must still succeed.
+        using var storage = NewStorage(RetryOptions());
+        var study = Optuna.CreateStudy(storage: storage, studyName: "retry", sampler: new RandomSampler(seed: 0));
+        study.Optimize(t => { double x = t.SuggestFloat("x", -10, 10); return x * x; }, nTrials: 5);
+        study.Trials.Should().HaveCount(5);
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private static string? Scalar(DbConnection conn, string sql)
@@ -535,6 +780,60 @@ public abstract class EFCoreRdbStorageTestsBase
 public sealed class PostgreSqlRdbStorageTests : EFCoreRdbStorageTestsBase
 {
     protected override RdbProvider Provider => RdbProvider.PostgreSql;
+
+    protected override EFCoreRdbOptions RetryOptions() =>
+        new() { ConfigureNpgsql = o => o.EnableRetryOnFailure() };
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void NativeConnectionStringBuilder_Ctor_Works()
+    {
+        EFCoreDbSession.Reset(RdbProvider.PostgreSql);
+        var builder = new NpgsqlConnectionStringBuilder(ConnectionString);
+        using var storage = new RDBStorage(builder);
+        int id = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "npgb");
+        storage.GetStudyNameFromId(id).Should().Be("npgb");
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void ByoDataSource_WithMapOptunaEnums_Works_AndRespectsOwnership()
+    {
+        EFCoreDbSession.Reset(RdbProvider.PostgreSql);
+        var dsb = new NpgsqlDataSourceBuilder(ConnectionString);
+        RDBStorage.MapOptunaEnums(dsb);   // the golden-standard "build your own data source" path
+        var dataSource = dsb.Build();
+        using (var storage = new RDBStorage(dataSource, ownsDataSource: false))
+        {
+            var study = Optuna.CreateStudy(storage: storage, studyName: "byods", sampler: new RandomSampler(seed: 0));
+            study.Optimize(t => { double x = t.SuggestFloat("x", -5, 5); return x * x; }, nTrials: 4);
+            study.Trials.Should().HaveCount(4);
+        }
+
+        // ownsDataSource:false ⇒ Dispose left the data source usable.
+        using var conn = dataSource.CreateConnection();
+        conn.Open();
+        conn.State.Should().Be(System.Data.ConnectionState.Open);
+        dataSource.Dispose();
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void ConfigureConnectionString_ApplicationName_ReachesTheServer()
+    {
+        EFCoreDbSession.Reset(RdbProvider.PostgreSql);
+        using var storage = new RDBStorage(RdbProvider.PostgreSql, ConnectionString, new EFCoreRdbOptions
+        {
+            ConfigureConnectionString = b => ((NpgsqlConnectionStringBuilder)b).ApplicationName = "optunasharp-golden",
+        });
+        storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "app"); // opens a pooled connection
+
+        // The pooled connection stays open with our application_name; a separate raw connection sees it.
+        using var conn = RawConn();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM pg_stat_activity WHERE application_name = 'optunasharp-golden'";
+        Convert.ToInt64(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture).Should().BeGreaterThan(0);
+    }
 }
 
 /// <summary>The conformance suite against a live MySQL server (Testcontainers).</summary>
@@ -542,4 +841,30 @@ public sealed class PostgreSqlRdbStorageTests : EFCoreRdbStorageTestsBase
 public sealed class MySqlRdbStorageTests : EFCoreRdbStorageTestsBase
 {
     protected override RdbProvider Provider => RdbProvider.MySql;
+
+    protected override EFCoreRdbOptions RetryOptions() =>
+        new() { ConfigureMySql = o => o.EnableRetryOnFailure() };
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void NativeConnectionStringBuilder_Ctor_Works()
+    {
+        EFCoreDbSession.Reset(RdbProvider.MySql);
+        var builder = new MySqlConnectionStringBuilder(ConnectionString);
+        using var storage = new RDBStorage(builder);
+        int id = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "myb");
+        storage.GetStudyNameFromId(id).Should().Be("myb");
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void ExplicitServerVersion_SkipsAutoDetectProbe()
+    {
+        EFCoreDbSession.Reset(RdbProvider.MySql);
+        ServerVersion version = ServerVersion.AutoDetect(ConnectionString); // detect once, then pin it
+        using var storage = new RDBStorage(RdbProvider.MySql, ConnectionString,
+            new EFCoreRdbOptions { MySqlServerVersion = version });
+        int id = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "ver");
+        storage.GetStudyNameFromId(id).Should().Be("ver");
+    }
 }

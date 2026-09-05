@@ -4,6 +4,7 @@ using System.Data.Common;
 using System.Linq;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using MySqlConnector;
 using Npgsql;
 using Npgsql.NameTranslation;
@@ -46,16 +47,17 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 {
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.storages._rdb.storage");
 
-    private readonly RdbProvider _provider;
-    private readonly DbContextOptions<OptunaRdbContext> _ctxOptions;
-    private readonly NpgsqlDataSource? _dataSource;
+    private RdbProvider _provider;
+    private DbContextOptions<OptunaRdbContext> _ctxOptions = null!;
+    private NpgsqlDataSource? _dataSource;
+    private bool _ownsDataSource;
 
-    private readonly int? _heartbeatInterval;
-    private readonly int? _gracePeriod;
-    private readonly Action<Study, FrozenTrial>? _heartbeatStaleTrialCallback;
+    private int? _heartbeatInterval;
+    private int? _gracePeriod;
+    private Action<Study, FrozenTrial>? _heartbeatStaleTrialCallback;
 
     /// <summary>The storage URL/connection string this storage was opened with.</summary>
-    public string Url { get; }
+    public string Url { get; private set; } = "";
 
     /// <summary>The RDB provider (PostgreSQL or MySQL) resolved from the URL.</summary>
     public RdbProvider Provider => _provider;
@@ -90,44 +92,142 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         ArgumentNullException.ThrowIfNull(url);
         ArgumentNullException.ThrowIfNull(options);
         ValidateOptions(options);
-
         var (provider, builder) = RdbUrl.Parse(FillStorageUrlTemplate(url));
-        options.ConfigureConnectionString?.Invoke(builder);
-
-        _provider = provider;
-        Url = url;
-        _heartbeatInterval = options.HeartbeatInterval;
-        _gracePeriod = options.GracePeriod;
-        _heartbeatStaleTrialCallback = options.HeartbeatStaleTrialCallback;
-
-        (_ctxOptions, _dataSource) = BuildContextOptions(provider, builder.ConnectionString);
-
-        Initialize(options);
+        // ConfigureConnectionString is applied once, in InitFromConnectionString, for every path.
+        InitFromConnectionString(provider, builder.ConnectionString, options, url);
     }
 
     /// <summary>
     ///     Create an RDB storage from an explicit provider + native ADO.NET connection string (BYO
-    ///     connection string — e.g. an <c>NpgsqlConnectionStringBuilder</c> / <c>MySqlConnectionStringBuilder</c>
-    ///     you built yourself). The "feel like the client, not Optuna" form.
+    ///     connection string). The "feel like the client, not Optuna" form.
     /// </summary>
     public RDBStorage(RdbProvider provider, string connectionString, EFCoreRdbOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(connectionString);
         options ??= new EFCoreRdbOptions();
         ValidateOptions(options);
+        InitFromConnectionString(provider, connectionString, options, connectionString);
+    }
 
-        _provider = provider;
-        Url = connectionString;
-        _heartbeatInterval = options.HeartbeatInterval;
-        _gracePeriod = options.GracePeriod;
-        _heartbeatStaleTrialCallback = options.HeartbeatStaleTrialCallback;
+    /// <summary>
+    ///     Create a PostgreSQL RDB storage from a native <see cref="NpgsqlConnectionStringBuilder" /> —
+    ///     the golden-standard "feel like Npgsql" form. Every Npgsql connection-string knob (pooling,
+    ///     SSL, timeouts, …) is yours to set on the builder.
+    /// </summary>
+    public RDBStorage(NpgsqlConnectionStringBuilder connectionStringBuilder, EFCoreRdbOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(connectionStringBuilder);
+        options ??= new EFCoreRdbOptions();
+        ValidateOptions(options);
+        string cs = connectionStringBuilder.ConnectionString;
+        InitFromConnectionString(RdbProvider.PostgreSql, cs, options, cs);
+    }
 
-        (_ctxOptions, _dataSource) = BuildContextOptions(provider, connectionString);
+    /// <summary>
+    ///     Create a MySQL RDB storage from a native <see cref="MySqlConnectionStringBuilder" /> — the
+    ///     golden-standard "feel like MySqlConnector" form.
+    /// </summary>
+    public RDBStorage(MySqlConnectionStringBuilder connectionStringBuilder, EFCoreRdbOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(connectionStringBuilder);
+        options ??= new EFCoreRdbOptions();
+        ValidateOptions(options);
+        string cs = connectionStringBuilder.ConnectionString;
+        InitFromConnectionString(RdbProvider.MySql, cs, options, cs);
+    }
 
+    /// <summary>
+    ///     Create a PostgreSQL RDB storage over a <see cref="NpgsqlDataSource" /> you built and own —
+    ///     the fullest "feel like Npgsql" form (your own pooling, logging, type mappings, …). The data
+    ///     source <b>must have Optuna's enum types mapped</b>; build it with
+    ///     <see cref="MapOptunaEnums(NpgsqlDataSourceBuilder)" />:
+    ///     <code>
+    ///     var dsb = new NpgsqlDataSourceBuilder(connString);
+    ///     RDBStorage.MapOptunaEnums(dsb);
+    ///     dsb.UseLoggerFactory(myLoggerFactory);      // …any Npgsql configuration you like
+    ///     using var storage = new RDBStorage(dsb.Build(), ownsDataSource: true);
+    ///     </code>
+    /// </summary>
+    /// <param name="ownsDataSource">
+    ///     When <c>true</c>, <see cref="Dispose" /> disposes the data source; when <c>false</c>
+    ///     (default), the caller retains ownership.
+    /// </param>
+    public RDBStorage(NpgsqlDataSource dataSource, EFCoreRdbOptions? options = null, bool ownsDataSource = false)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        options ??= new EFCoreRdbOptions();
+        ValidateOptions(options);
+
+        _provider = RdbProvider.PostgreSql;
+        Url = dataSource.ConnectionString;
+        SetHeartbeat(options);
+        _dataSource = dataSource;
+        _ownsDataSource = ownsDataSource;
+        _ctxOptions = BuildPostgresOptions(dataSource, options);
         Initialize(options);
     }
 
     // ------------------------------------------------------------------ bootstrap
+
+    private void SetHeartbeat(EFCoreRdbOptions o)
+    {
+        _heartbeatInterval = o.HeartbeatInterval;
+        _gracePeriod = o.GracePeriod;
+        _heartbeatStaleTrialCallback = o.HeartbeatStaleTrialCallback;
+    }
+
+    private void InitFromConnectionString(RdbProvider provider, string connString, EFCoreRdbOptions options, string url)
+    {
+        _provider = provider;
+        Url = url;
+        SetHeartbeat(options);
+
+        if (provider == RdbProvider.PostgreSql)
+        {
+            var csb = new NpgsqlConnectionStringBuilder(connString);
+            options.ConfigureConnectionString?.Invoke(csb);
+            var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
+            MapOptunaEnums(dsb);
+            _dataSource = dsb.Build();
+            _ownsDataSource = true;
+            _ctxOptions = BuildPostgresOptions(_dataSource, options);
+        }
+        else
+        {
+            // MySQL / MariaDB. AllowUserVariables + UseAffectedRows are Pomelo's recommended flags so
+            // SaveChanges sees the rows it matched, not just the rows it changed.
+            var csb = new MySqlConnectionStringBuilder(connString)
+            {
+                AllowUserVariables = true,
+                UseAffectedRows = false,
+            };
+            options.ConfigureConnectionString?.Invoke(csb);
+            _ctxOptions = BuildMySqlOptions(csb.ConnectionString, options);
+        }
+
+        Initialize(options);
+    }
+
+    private static DbContextOptions<OptunaRdbContext> BuildPostgresOptions(NpgsqlDataSource dataSource, EFCoreRdbOptions options)
+    {
+        var ob = new DbContextOptionsBuilder<OptunaRdbContext>();
+        ob.UseNpgsql(dataSource, npg =>
+        {
+            MapPostgresEnums(npg);
+            options.ConfigureNpgsql?.Invoke(npg);
+        });
+        options.ConfigureDbContext?.Invoke(ob);
+        return ob.Options;
+    }
+
+    private static DbContextOptions<OptunaRdbContext> BuildMySqlOptions(string connString, EFCoreRdbOptions options)
+    {
+        var ob = new DbContextOptionsBuilder<OptunaRdbContext>();
+        ServerVersion version = options.MySqlServerVersion ?? ServerVersion.AutoDetect(connString);
+        ob.UseMySql(connString, version, my => options.ConfigureMySql?.Invoke(my));
+        options.ConfigureDbContext?.Invoke(ob);
+        return ob.Options;
+    }
 
     private static void ValidateOptions(EFCoreRdbOptions options)
     {
@@ -140,35 +240,17 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     private static string FillStorageUrlTemplate(string template)
         => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(RdbModels.Inv));
 
-    private static (DbContextOptions<OptunaRdbContext>, NpgsqlDataSource?) BuildContextOptions(
-        RdbProvider provider, string connectionString)
-    {
-        var optionsBuilder = new DbContextOptionsBuilder<OptunaRdbContext>();
-        if (provider == RdbProvider.PostgreSql)
-        {
-            var dsb = new NpgsqlDataSourceBuilder(connectionString);
-            MapPostgresEnums(dsb);
-            var dataSource = dsb.Build();
-            optionsBuilder.UseNpgsql(dataSource, npg => MapPostgresEnums(npg));
-            return (optionsBuilder.Options, dataSource);
-        }
-
-        // MySQL / MariaDB. AllowUserVariables + UseAffectedRows are Pomelo's recommended flags so
-        // SaveChanges sees the rows it matched, not just the rows it changed.
-        var myBuilder = new MySqlConnectionStringBuilder(connectionString)
-        {
-            AllowUserVariables = true,
-            UseAffectedRows = false,
-        };
-        string mysqlCs = myBuilder.ConnectionString;
-        optionsBuilder.UseMySql(mysqlCs, ServerVersion.AutoDetect(mysqlCs));
-        return (optionsBuilder.Options, null);
-    }
-
     private static readonly NpgsqlNullNameTranslator _verbatim = new();
 
-    private static void MapPostgresEnums(NpgsqlDataSourceBuilder b)
+    /// <summary>
+    ///     Map Optuna's four native PostgreSQL enum types (<c>studydirection</c>, <c>trialstate</c>,
+    ///     <c>trialvaluetype</c>, <c>trialintermediatevaluetype</c>) onto an
+    ///     <see cref="NpgsqlDataSourceBuilder" />, using the enum labels' verbatim names. Call this when
+    ///     building a data source to pass to <see cref="RDBStorage(NpgsqlDataSource, EFCoreRdbOptions?, bool)" />.
+    /// </summary>
+    public static void MapOptunaEnums(NpgsqlDataSourceBuilder b)
     {
+        ArgumentNullException.ThrowIfNull(b);
         b.MapEnum<DbStudyDirection>("studydirection", _verbatim);
         b.MapEnum<DbTrialState>("trialstate", _verbatim);
         b.MapEnum<DbTrialValueType>("trialvaluetype", _verbatim);
@@ -184,6 +266,30 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     }
 
     private OptunaRdbContext NewContext() => new(_ctxOptions);
+
+    /// <summary>
+    ///     Run a mutating operation on a fresh short-lived context under EF Core's configured
+    ///     <see cref="IExecutionStrategy" />. The body opens and commits its own transaction; wrapping
+    ///     it in the strategy is what lets a caller enable <c>EnableRetryOnFailure()</c> without hitting
+    ///     "the configured execution strategy does not support user-initiated transactions" — and the
+    ///     change tracker is cleared before each attempt so a retry starts clean. With the default
+    ///     (non-retrying) strategy this runs the body exactly once.
+    /// </summary>
+    private T Mutate<T>(Func<OptunaRdbContext, T> body)
+    {
+        using var ctx = NewContext();
+        return ctx.Database.CreateExecutionStrategy().Execute(() =>
+        {
+            ctx.ChangeTracker.Clear();
+            return body(ctx);
+        });
+    }
+
+    private void Mutate(Action<OptunaRdbContext> body) => Mutate<object?>(ctx =>
+    {
+        body(ctx);
+        return null;
+    });
 
     private void Initialize(EFCoreRdbOptions options)
     {
@@ -261,35 +367,38 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     public override int CreateNewStudy(IReadOnlyList<StudyDirection> directions, string? studyName = null)
     {
-        using var ctx = NewContext();
-        studyName ??= CreateUniqueStudyName(ctx);
-
-        using var tx = ctx.Database.BeginTransaction();
-        var study = new StudyEntity { StudyName = studyName };
-        ctx.Studies.Add(study);
-        try
+        string? name = studyName;
+        int studyId = Mutate(ctx =>
         {
-            ctx.SaveChanges();
-            for (int objective = 0; objective < directions.Count; objective++)
+            name ??= CreateUniqueStudyName(ctx);
+            using var tx = ctx.Database.BeginTransaction();
+            var study = new StudyEntity { StudyName = name };
+            ctx.Studies.Add(study);
+            try
             {
-                ctx.StudyDirections.Add(new StudyDirectionEntity
+                ctx.SaveChanges();
+                for (int objective = 0; objective < directions.Count; objective++)
                 {
-                    StudyId = study.StudyId,
-                    Objective = objective,
-                    Direction = RdbModels.DirectionToDb(directions[objective]),
-                });
+                    ctx.StudyDirections.Add(new StudyDirectionEntity
+                    {
+                        StudyId = study.StudyId,
+                        Objective = objective,
+                        Direction = RdbModels.DirectionToDb(directions[objective]),
+                    });
+                }
+                ctx.SaveChanges();
+                tx.Commit();
             }
-            ctx.SaveChanges();
-            tx.Commit();
-        }
-        catch (DbUpdateException e) when (IsUniqueViolation(e))
-        {
-            tx.Rollback();
-            throw new DuplicatedStudyError();
-        }
+            catch (DbUpdateException e) when (IsUniqueViolation(e))
+            {
+                tx.Rollback();
+                throw new DuplicatedStudyError();
+            }
+            return study.StudyId;
+        });
 
-        _logger.Info($"A new study created in RDB with name: {studyName}");
-        return study.StudyId;
+        _logger.Info($"A new study created in RDB with name: {name}");
+        return studyId;
     }
 
     private static string CreateUniqueStudyName(OptunaRdbContext ctx)
@@ -302,9 +411,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         }
     }
 
-    public override void DeleteStudy(int studyId)
+    public override void DeleteStudy(int studyId) => Mutate(ctx =>
     {
-        using var ctx = NewContext();
         using var tx = ctx.Database.BeginTransaction();
         EnsureStudyExists(ctx, studyId);
 
@@ -328,7 +436,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         ctx.Database.ExecuteSqlRaw("DELETE FROM study_system_attributes WHERE study_id = {0}", studyId);
         ctx.Database.ExecuteSqlRaw("DELETE FROM studies WHERE study_id = {0}", studyId);
         tx.Commit();
-    }
+    });
 
     public override void SetStudyUserAttr(int studyId, string key, object? value)
         => SetStudyAttr(isUser: true, studyId, key, value);
@@ -336,9 +444,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     public override void SetStudySystemAttr(int studyId, string key, object? value)
         => SetStudyAttr(isUser: false, studyId, key, value);
 
-    private void SetStudyAttr(bool isUser, int studyId, string key, object? value)
+    private void SetStudyAttr(bool isUser, int studyId, string key, object? value) => Mutate(ctx =>
     {
-        using var ctx = NewContext();
         using var tx = ctx.Database.BeginTransaction();
         EnsureStudyExists(ctx, studyId);
         string json = PyJson.Dumps(value);
@@ -361,7 +468,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         }
         ctx.SaveChanges();
         tx.Commit();
-    }
+    });
 
     public override int GetStudyIdFromName(string studyName)
     {
@@ -470,9 +577,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     public override int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null)
         => CreateNewTrialFull(studyId, templateTrial).TrialId;
 
-    public FrozenTrial CreateNewTrialFull(int studyId, FrozenTrial? templateTrial = null)
+    public FrozenTrial CreateNewTrialFull(int studyId, FrozenTrial? templateTrial = null) => Mutate(ctx =>
     {
-        using var ctx = NewContext();
         using var tx = ctx.Database.BeginTransaction();
         EnsureStudyExists(ctx, studyId);
 
@@ -554,7 +660,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             systemAttrs: new OrderedDict<string, object?>(),
             intermediateValues: new OrderedDict<int, double>(),
             trialId: trialId);
-    }
+    });
 
     // ------------------------------------------------------------------ trial params
 
@@ -567,9 +673,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         string paramName,
         double paramValueInternal,
         BaseDistribution distribution,
-        BaseDistribution? cachedDistribution)
+        BaseDistribution? cachedDistribution) => Mutate(ctx =>
     {
-        using var ctx = NewContext();
         using var tx = ctx.Database.BeginTransaction();
         var trial = FindTrialForUpdate(ctx, trialId);
         CheckTrialIsUpdatableOrRaise(trial);
@@ -607,7 +712,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         {
             tx.Rollback();
         }
-    }
+    });
 
     public override double GetTrialParam(int trialId, string paramName)
     {
@@ -623,9 +728,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     // ------------------------------------------------------------------ trial state / values
 
-    public override bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null)
+    public override bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null) => Mutate(ctx =>
     {
-        using var ctx = NewContext();
         using var tx = ctx.Database.BeginTransaction();
         try
         {
@@ -659,7 +763,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             return false;
         }
         return true;
-    }
+    });
 
     private static void AddTrialValue(OptunaRdbContext ctx, int trialId, int objective, double value)
     {
@@ -686,9 +790,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         }
     }
 
-    public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
+    public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue) => Mutate(ctx =>
     {
-        using var ctx = NewContext();
         using var tx = ctx.Database.BeginTransaction();
         var trial = FindTrialForUpdate(ctx, trialId);
         CheckTrialIsUpdatableOrRaise(trial);
@@ -707,7 +810,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         }
         ctx.SaveChanges();
         tx.Commit();
-    }
+    });
 
     private static void AddTrialIntermediateValue(OptunaRdbContext ctx, int trialId, int step, double intermediateValue)
     {
@@ -724,9 +827,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     public override void SetTrialSystemAttr(int trialId, string key, object? value)
         => SetTrialAttr(isUser: false, trialId, key, value);
 
-    private void SetTrialAttr(bool isUser, int trialId, string key, object? value)
+    private void SetTrialAttr(bool isUser, int trialId, string key, object? value) => Mutate(ctx =>
     {
-        using var ctx = NewContext();
         using var tx = ctx.Database.BeginTransaction();
         var trial = FindTrialForUpdate(ctx, trialId);
         CheckTrialIsUpdatableOrRaise(trial);
@@ -750,7 +852,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         }
         ctx.SaveChanges();
         tx.Commit();
-    }
+    });
 
     // ------------------------------------------------------------------ trial access
 
@@ -1082,8 +1184,13 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     }
 
     /// <summary>
-    ///     Disposes the PostgreSQL data source (the pooled connections). MySQL keeps no per-storage
-    ///     resource (MySqlConnector pools by connection string).
+    ///     Disposes the PostgreSQL data source (and its pooled connections) — unless it was injected
+    ///     with <c>ownsDataSource: false</c>, in which case the caller retains ownership and it is left
+    ///     open. MySQL keeps no per-storage resource (MySqlConnector pools by connection string).
     /// </summary>
-    public void Dispose() => _dataSource?.Dispose();
+    public void Dispose()
+    {
+        if (_ownsDataSource)
+            _dataSource?.Dispose();
+    }
 }

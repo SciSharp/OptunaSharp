@@ -54,28 +54,55 @@ MySQL) — the same SQLAlchemy-style URL Python Optuna takes. `Optuna.CreateStud
 
 SQLite URLs (`sqlite:///…`) are rejected — use the `OptunaSharp.Storage.Sqlite` package for those.
 
-## Configuration
+## Configuration — Optuna's API *and* the native EF Core / Npgsql / Pomelo surface
 
-`EFCoreRdbOptions` carries Optuna's `RDBStorage` knobs plus a connection-string escape hatch. Every
-property is opt-in.
+`EFCoreRdbOptions` carries Optuna's `RDBStorage` knobs *and* the full EF Core surface, so the storage
+feels like the client you already know — not just like Optuna. Every property is opt-in.
 
 ```csharp
 using var storage = new RDBStorage("postgresql://user:pass@localhost:5432/optuna", new EFCoreRdbOptions
 {
+    // Optuna's RDBStorage knobs
     SkipCompatibilityCheck = false,
     SkipTableCreation      = false,
     HeartbeatInterval      = 60,          // experimental
     GracePeriod            = 120,
-    // any provider keyword the URL doesn't carry (SSL, pooling, timeouts, …):
-    ConfigureConnectionString = b => b["SSL Mode"] = "Require",
+
+    // any provider connection-string keyword the URL doesn't carry (SSL, pooling, timeouts, …):
+    ConfigureConnectionString = b => ((NpgsqlConnectionStringBuilder)b).SslMode = SslMode.Require,
+
+    // the native EF Core provider surface — resilient connections, command timeout, …:
+    ConfigureNpgsql = o => o.EnableRetryOnFailure().CommandTimeout(30),
+    ConfigureMySql  = o => o.EnableRetryOnFailure(),   // ignored on PostgreSQL
+    MySqlServerVersion = new MySqlServerVersion(new Version(8, 0, 36)), // skip the auto-detect probe
+
+    // the general EF Core surface — logging, interceptors, …:
+    ConfigureDbContext = b => b.LogTo(Console.WriteLine).EnableSensitiveDataLogging(),
 });
 ```
 
-Or bring your own native connection string — the "feel like the client, not Optuna" form:
+`EnableRetryOnFailure()` is safe: the storage runs its transactions inside EF Core's execution
+strategy, so a retrying strategy never trips the "does not support user-initiated transactions" guard.
+
+### Ways to construct — pick the one that feels most like your stack
 
 ```csharp
-new RDBStorage(RdbProvider.PostgreSql,
-    "Host=localhost;Port=5432;Username=u;Password=p;Database=optuna;Pooling=true;Maximum Pool Size=50");
+// 1) Optuna-faithful URL
+new RDBStorage("postgresql://user:pass@host:5432/optuna");
+new RDBStorage("mysql://user:pass@host:3306/optuna");
+
+// 2) explicit provider + native ADO.NET connection string
+new RDBStorage(RdbProvider.PostgreSql, "Host=host;Port=5432;Username=u;Password=p;Database=optuna;Maximum Pool Size=50");
+
+// 3) a native connection-string builder — every Npgsql / MySqlConnector knob is yours
+new RDBStorage(new NpgsqlConnectionStringBuilder { Host = "host", Database = "optuna", Pooling = true });
+new RDBStorage(new MySqlConnectionStringBuilder { Server = "host", Database = "optuna" });
+
+// 4) your own NpgsqlDataSource — full control of pooling, logging, type mappings, …
+var dsb = new NpgsqlDataSourceBuilder(connString);
+RDBStorage.MapOptunaEnums(dsb);         // required: maps Optuna's four native enum types
+dsb.UseLoggerFactory(myLoggerFactory);
+using var storage = new RDBStorage(dsb.Build(), ownsDataSource: true);
 ```
 
 ## Cross-language interoperability

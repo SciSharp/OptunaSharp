@@ -1,4 +1,5 @@
 using System;
+using AwesomeAssertions;
 using MySqlConnector;
 using Npgsql;
 using OptunaSharp.Collections;
@@ -242,6 +243,67 @@ public abstract class EFCoreRdbInteropParityTestsBase : OptunaInteropTestBase
         PyExec($"mo = optuna.load_study(study_name='mo', storage=r'{PyUrl}')");
         StudySnapshot.AssertParity(PyStudyState("single"), csSingle, DatetimeComparison.NullnessOnly);
         StudySnapshot.AssertParity(PyStudyState("mo"), csMo, DatetimeComparison.NullnessOnly);
+    }
+
+    // A dynamic (conditional) search space + intermediate reports + deterministic pruning — exercises
+    // trial states (COMPLETE/PRUNED), dynamic distributions, and intermediate_values in one study.
+    private static double DynamicPruningObjective(Trial t)
+    {
+        string kind = (string)t.SuggestCategorical("kind", new CategoricalChoice[] { "linear", "quad" }).Value!;
+        double x = t.SuggestFloat("x", -5, 5);
+        double value = kind == "quad" ? x * x : Math.Abs(x);
+        for (int step = 0; step < 3; step++)
+            t.Report(value + step, step);
+        if (t.Number % 2 == 1)
+            throw new TrialPruned();
+        return value;
+    }
+
+    private const string PyDynamicPruningObjective =
+        "def _obj(t):\n" +
+        "    kind = t.suggest_categorical('kind', ['linear', 'quad'])\n" +
+        "    x = t.suggest_float('x', -5, 5)\n" +
+        "    value = x * x if kind == 'quad' else abs(x)\n" +
+        "    for step in range(3):\n" +
+        "        t.report(value + step, step)\n" +
+        "    if t.number % 2 == 1:\n" +
+        "        raise optuna.TrialPruned()\n" +
+        "    return value\n";
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void DynamicSpace_Pruning_Intermediates_CSharp_To_Python()
+    {
+        using var rdb = new RDBStorage(Provider, CsConn);
+        var study = Optuna.CreateStudy(storage: rdb, studyName: "dyn", sampler: new RandomSampler(seed: 0));
+        study.Optimize(DynamicPruningObjective, nTrials: 8);
+        var csState = StudySnapshot.Capture(study);
+
+        PyExec($"study = optuna.load_study(study_name='dyn', storage=r'{PyUrl}')");
+        StudySnapshot.AssertParity(PyStudyState("study"), csState, DatetimeComparison.NullnessOnly);
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void MultipleStudies_AndDeleteStudy_CSharp_To_Python()
+    {
+        using var rdb = new RDBStorage(Provider, CsConn);
+        var keep = Optuna.CreateStudy(storage: rdb, studyName: "keep", sampler: new RandomSampler(seed: 0));
+        keep.Optimize(t => { double x = t.SuggestFloat("x", -5, 5); return x * x; }, nTrials: 3);
+
+        var drop = Optuna.CreateStudy(storage: rdb, studyName: "drop");
+        drop.AddTrial(FrozenTrial.CreateTrial(
+            state: TrialState.Complete, value: 1.0,
+            @params: new OrderedDict<string, object?> { ["y"] = 2.0 },
+            distributions: new OrderedDict<string, BaseDistribution> { ["y"] = new FloatDistribution(0, 10) }));
+        rdb.DeleteStudy(rdb.GetStudyIdFromName("drop"));
+        var keepState = StudySnapshot.Capture(keep);
+
+        // Python sees exactly the surviving study, and reads it back identically.
+        PyExec($"names = sorted(s.study_name for s in optuna.get_all_study_summaries(storage=r'{PyUrl}'))");
+        PyStr("names").Should().Be("['keep']");
+        PyExec($"study = optuna.load_study(study_name='keep', storage=r'{PyUrl}')");
+        StudySnapshot.AssertParity(PyStudyState("study"), keepState, DatetimeComparison.NullnessOnly);
     }
 }
 

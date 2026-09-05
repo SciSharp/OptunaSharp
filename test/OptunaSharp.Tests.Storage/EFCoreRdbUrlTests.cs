@@ -109,4 +109,42 @@ public class EFCoreRdbUrlTests
         Action act = () => RdbUrl.Parse("just-a-path.db");
         act.Should().Throw<ValueError>();
     }
+
+    [TestMethod]
+    public void MariaDb_Dialect_MapsToMySql()
+        => My("mariadb://u:p@localhost:3306/db").Database.Should().Be("db");
+
+    [TestMethod]
+    public void NoDatabase_LeavesDatabaseUnset()
+    {
+        var b = Pg("postgresql://u:p@localhost:5432");
+        b.Host.Should().Be("localhost");
+        b.Database.Should().BeNullOrEmpty();
+    }
+
+    [TestMethod]
+    public void MultipleQueryParams_AllApplied()
+    {
+        var b = Pg("postgresql://u:p@localhost/db?SSL%20Mode=Require&Pooling=false");
+        b.SslMode.Should().Be(SslMode.Require);
+        b.Pooling.Should().BeFalse();
+    }
+
+    // ------------------------------------------------------------------ options validation (no Docker)
+
+    [TestMethod]
+    public void HeartbeatInterval_NonPositive_ThrowsBeforeConnecting()
+    {
+        Action act = () => new RDBStorage(
+            "postgresql://u:p@localhost:5432/db", new EFCoreRdbOptions { HeartbeatInterval = 0 });
+        act.Should().Throw<ValueError>().WithMessage("*heartbeat_interval*");
+    }
+
+    [TestMethod]
+    public void GracePeriod_NonPositive_ThrowsBeforeConnecting()
+    {
+        Action act = () => new RDBStorage(
+            "mysql://u:p@localhost:3306/db", new EFCoreRdbOptions { GracePeriod = -5 });
+        act.Should().Throw<ValueError>().WithMessage("*grace_period*");
+    }
 }
