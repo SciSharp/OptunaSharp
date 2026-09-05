@@ -68,6 +68,49 @@ await app.StartAsync();
 // ... app.StopAsync() when done ...
 ```
 
+## Configuring the connection (full Grpc.Net.Client / Grpc.AspNetCore surface)
+
+Beyond Optuna's host/port, the proxy lets you drive Grpc.Net.Client and Grpc.AspNetCore on their own
+terms — the on-wire protobuf is fixed by `api.proto`, so cross-language byte-compatibility holds however
+you connect.
+
+**Client** — four constructors, from "just host/port" to "here is the channel I already built":
+
+```csharp
+new GrpcStorageProxy("localhost", 13000);                       // 1. Optuna-identical (insecure h2c)
+new GrpcStorageProxy("localhost", 13000, o => o.MaxSendMessageSize = null);  // 2. tweak the derived options
+new GrpcStorageProxy("https://host:443", new GrpcChannelOptions // 3. any address + full options (TLS, ...)
+{
+    Credentials = new SslCredentials(),
+    ServiceConfig = new ServiceConfig { /* retry policy */ },
+});
+var channel = GrpcChannel.ForAddress("http://host:13000");      // 4. inject a channel you own
+new GrpcStorageProxy(channel);                                   //    (the proxy never disposes it)
+```
+
+**Server** — `MakeServer` / `RunGrpcProxyServer` take optional `configureGrpc` (the
+`GrpcServiceOptions`: interceptors, `EnableDetailedErrors`, compression, message sizes) and
+`configureBuilder` (full `WebApplicationBuilder` access: TLS endpoints, authentication, your own
+services and logging):
+
+```csharp
+GrpcProxyServer.RunGrpcProxyServer(storage, "0.0.0.0", 13000,
+    configureGrpc: o => o.Interceptors.Add<MyInterceptor>(),
+    configureBuilder: b => b.WebHost.ConfigureKestrel(k => { /* add a TLS endpoint */ }));
+```
+
+**Bring your own host** — already run an ASP.NET Core app? Register the proxy into it instead of the
+self-contained host, and it inherits your Kestrel, TLS, authentication, interceptors, and other
+endpoints:
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddOptunaStorageProxy(StorageFunctions.GetStorage(myBackend));
+var app = builder.Build();
+app.MapOptunaStorageProxy();       // chain .RequireAuthorization(), etc.
+app.Run();
+```
+
 ## Cross-language (Python ↔ C#)
 
 Both directions work because the wire contract is Optuna's own `api.proto`:

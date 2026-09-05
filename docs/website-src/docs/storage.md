@@ -178,6 +178,19 @@ Many clients can point at one server and optimize the same study concurrently â€
 pattern the proxy exists for. Each client keeps an incremental trial cache (it re-fetches only new or
 still-unfinished trials), so re-reading a growing study stays cheap.
 
+### Configuring the connection
+
+Beyond Optuna's host/port, the proxy exposes the full Grpc.Net.Client and Grpc.AspNetCore surface â€” the
+on-wire protobuf is fixed by `api.proto`, so byte-compatibility holds however you connect. The **client**
+has four constructors: `(host, port)`; `(host, port, Action<GrpcChannelOptions>)` to tweak the derived
+options; `(address, GrpcChannelOptions)` for any address plus full options (e.g. an `https://` address
+with TLS credentials); and `(GrpcChannel)` to inject a channel you built and own (the proxy never
+disposes it). The **server**'s `MakeServer` / `RunGrpcProxyServer` take optional `configureGrpc`
+(`GrpcServiceOptions`: interceptors, compression, message sizes) and `configureBuilder` (full
+`WebApplicationBuilder` access: TLS, authentication, extra services). To add the proxy to an ASP.NET Core
+app you already run, use the `services.AddOptunaStorageProxy(storage)` and `endpoints.MapOptunaStorageProxy()`
+extensions instead of the self-contained host.
+
 ### Cross-language
 
 The proxy speaks Optuna's own `api.proto`, so the two runtimes interoperate on the wire in **both

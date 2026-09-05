@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -41,7 +42,15 @@ public static class GrpcProxyServer
     /// <param name="storage">The storage to proxy.</param>
     /// <param name="host">Hostname to listen on (<c>localhost</c>, <c>0.0.0.0</c>, an IP, or a DNS name).</param>
     /// <param name="port">Port to listen on.</param>
-    public static WebApplication MakeServer(BaseStorage storage, string host = "localhost", int port = 13000)
+    /// <param name="configureGrpc">Optional: tweak the server's <see cref="GrpcServiceOptions" /> after the
+    ///   defaults (interceptors, <c>EnableDetailedErrors</c>, compression, max message sizes, ...).</param>
+    /// <param name="configureBuilder">Optional: full access to the <see cref="WebApplicationBuilder" />
+    ///   before <c>Build()</c> — add TLS endpoints / authentication / your own services / logging, etc. For
+    ///   embedding the proxy in an app you already host, prefer <see cref="GrpcProxyServiceExtensions" />.</param>
+    public static WebApplication MakeServer(
+        BaseStorage storage, string host = "localhost", int port = 13000,
+        Action<GrpcServiceOptions>? configureGrpc = null,
+        Action<WebApplicationBuilder>? configureBuilder = null)
     {
         var builder = WebApplication.CreateSlimBuilder();
         // Kestrel and gRPC log to the ASP.NET logging pipeline; keep it silent so the only output is the
@@ -60,8 +69,13 @@ public static class GrpcProxyServer
             // server so a large GetTrials reply (a big study) is never truncated in either direction.
             options.MaxReceiveMessageSize = null;
             options.MaxSendMessageSize = null;
+            configureGrpc?.Invoke(options);
         });
         builder.Services.AddSingleton(storage);
+
+        // Full escape hatch: let the caller shape the host (TLS, auth, extra endpoints/services, logging)
+        // on top of the default insecure-h2c server before it is built.
+        configureBuilder?.Invoke(builder);
 
         var app = builder.Build();
         app.MapGrpcService<OptunaStorageProxyService>();
@@ -79,13 +93,16 @@ public static class GrpcProxyServer
     ///     Like Optuna, the gRPC storage proxy does not support <c>JournalStorage</c>; use the SQLite
     ///     <c>RDBStorage</c> (wrapped via <c>StorageFunctions.GetStorage</c>) instead.
     /// </remarks>
-    public static void RunGrpcProxyServer(BaseStorage storage, string host = "localhost", int port = 13000)
+    public static void RunGrpcProxyServer(
+        BaseStorage storage, string host = "localhost", int port = 13000,
+        Action<GrpcServiceOptions>? configureGrpc = null,
+        Action<WebApplicationBuilder>? configureBuilder = null)
     {
         OptunaWarnings.Warn(
             GrpcProto.ExperimentalMessage(nameof(RunGrpcProxyServer), "4.2.0"),
             WarningCategory.ExperimentalWarning);
 
-        var app = MakeServer(storage, host, port);
+        var app = MakeServer(storage, host, port, configureGrpc, configureBuilder);
         app.Start();
         _logger.Info($"Server started at {host}:{port}");
         _logger.Info("Listening...");

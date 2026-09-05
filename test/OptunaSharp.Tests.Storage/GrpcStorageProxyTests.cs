@@ -2,9 +2,18 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading;
+using System.Threading.Tasks;
 using AwesomeAssertions;
+using Grpc.Core;
+using Grpc.Core.Interceptors;
+using Grpc.Net.Client;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using NumSharp;
 using OptunaSharp;
 using OptunaSharp.Collections;
@@ -231,5 +240,117 @@ public class GrpcStorageProxyTests
         _proxy.GetStudySystemAttrs(sid)["n"].Should().Be(7L);
         _proxy.GetStudyIdFromName("study-a").Should().Be(sid);
         _proxy.GetStudyDirections(sid).Should().Equal(StudyDirection.Maximize);
+    }
+
+    // ---- the full Grpc.Net.Client / Grpc.AspNetCore configuration surface (the "feel like the client") ----
+
+    [TestMethod]
+    public void Client_ConfiguredOptions_RoundTrips()
+    {
+        // host + port + a tweak of the derived GrpcChannelOptions.
+        using var client = new GrpcStorageProxy("localhost", _port, o => o.MaxReceiveMessageSize = 32 * 1024 * 1024);
+        client.WaitServerReady(TimeSpan.FromSeconds(15));
+        int sid = client.CreateNewStudy(new[] { StudyDirection.Minimize }, "cfg");
+        client.GetStudyNameFromId(sid).Should().Be("cfg");
+    }
+
+    [TestMethod]
+    public void Client_AddressAndOptions_RoundTrips()
+    {
+        // An arbitrary address + fully-specified GrpcChannelOptions.
+        using var client = new GrpcStorageProxy(
+            $"http://localhost:{_port}",
+            new GrpcChannelOptions { Credentials = ChannelCredentials.Insecure, MaxReceiveMessageSize = null });
+        client.WaitServerReady(TimeSpan.FromSeconds(15));
+        int sid = client.CreateNewStudy(new[] { StudyDirection.Minimize }, "addr");
+        client.GetStudyNameFromId(sid).Should().Be("addr");
+    }
+
+    [TestMethod]
+    public void Client_InjectedChannel_IsNotDisposedByProxy()
+    {
+        // A channel we build and own: the proxy must never dispose it (matching the Redis "injected
+        // client" escape hatch).
+        using var channel = GrpcChannel.ForAddress(
+            $"http://localhost:{_port}",
+            new GrpcChannelOptions { Credentials = ChannelCredentials.Insecure });
+
+        using (var proxy1 = new GrpcStorageProxy(channel))
+        {
+            proxy1.WaitServerReady(TimeSpan.FromSeconds(15));
+            proxy1.CreateNewStudy(new[] { StudyDirection.Minimize }, "inj");
+        } // proxy1.Dispose() must NOT dispose the injected channel.
+
+        // The same channel still serves a second proxy — proof it survived proxy1's disposal.
+        var proxy2 = new GrpcStorageProxy(channel);
+        int sid = proxy2.GetStudyIdFromName("inj");
+        proxy2.GetStudyNameFromId(sid).Should().Be("inj");
+    }
+
+    [TestMethod]
+    public void Server_ConfigureGrpc_InterceptorRuns()
+    {
+        int port = FreePort();
+        var backend = new InMemoryStorage();
+        CountingServerInterceptor.Calls = 0;
+
+        var app = GrpcProxyServer.MakeServer(
+            backend, "localhost", port,
+            configureGrpc: o => o.Interceptors.Add<CountingServerInterceptor>());
+        app.StartAsync().GetAwaiter().GetResult();
+        try
+        {
+            using var client = new GrpcStorageProxy("localhost", port);
+            client.WaitServerReady(TimeSpan.FromSeconds(15));
+            client.CreateNewStudy(new[] { StudyDirection.Minimize }, "x");
+            CountingServerInterceptor.Calls.Should().BeGreaterThan(0);
+        }
+        finally
+        {
+            app.StopAsync().GetAwaiter().GetResult();
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
+
+    [TestMethod]
+    public void Server_IntoExistingHost_RoundTrips()
+    {
+        // The "bring your own host" path: register the proxy into an ASP.NET Core app you build yourself.
+        int port = FreePort();
+        var backend = new InMemoryStorage();
+
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.ConfigureKestrel(o =>
+            o.Listen(IPAddress.Loopback, port, l => l.Protocols = HttpProtocols.Http2));
+        builder.Services.AddOptunaStorageProxy(backend);
+        var app = builder.Build();
+        app.MapOptunaStorageProxy();
+        app.StartAsync().GetAwaiter().GetResult();
+        try
+        {
+            using var client = new GrpcStorageProxy("localhost", port);
+            client.WaitServerReady(TimeSpan.FromSeconds(15));
+            int sid = client.CreateNewStudy(new[] { StudyDirection.Minimize }, "host");
+            client.GetStudyNameFromId(sid).Should().Be("host");
+        }
+        finally
+        {
+            app.StopAsync().GetAwaiter().GetResult();
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
+}
+
+/// <summary>A trivial server interceptor used to prove <c>configureGrpc</c> is honored.</summary>
+internal sealed class CountingServerInterceptor : Interceptor
+{
+    public static int Calls;
+
+    public override Task<TResponse> UnaryServerHandler<TRequest, TResponse>(
+        TRequest request, ServerCallContext context, UnaryServerMethod<TRequest, TResponse> continuation)
+    {
+        Interlocked.Increment(ref Calls);
+        return continuation(request, context);
     }
 }

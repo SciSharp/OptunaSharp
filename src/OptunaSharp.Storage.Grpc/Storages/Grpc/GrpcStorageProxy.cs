@@ -37,38 +37,95 @@ namespace OptunaSharp.Storages.Grpc;
 /// </example>
 public sealed class GrpcStorageProxy : BaseStorage, IDisposable
 {
-    private readonly string _host;
-    private readonly int _port;
-    private GrpcChannel _channel = null!;
-    private ProtoApi.StorageService.StorageServiceClient _stub = null!;
-    private GrpcClientCache _cache = null!;
+    private readonly GrpcChannel _channel;
+    private readonly bool _ownsChannel;
+    private readonly ProtoApi.StorageService.StorageServiceClient _stub;
+    private readonly GrpcClientCache _cache;
 
+    // Four ways in, from "just give it host+port" (Optuna-identical) to "here is the channel I already
+    // built". The richer overloads expose the whole Grpc.Net.Client surface (TLS credentials, a custom
+    // HttpHandler, timeouts/retry via GrpcChannelOptions.ServiceConfig, max message sizes, compression,
+    // a LoggerFactory, ...); the on-wire protobuf is fixed by api.proto regardless of how you connect,
+    // so cross-language byte-compatibility holds however you configure the channel.
+
+    /// <summary>Connect over insecure cleartext HTTP/2 (h2c) to <paramref name="host" />:<paramref name="port" /> — the Optuna-identical entry point.</summary>
     /// <param name="host">The hostname of the gRPC server.</param>
     /// <param name="port">The port of the gRPC server.</param>
     public GrpcStorageProxy(string host = "localhost", int port = 13000)
+        : this(CreateInsecureChannel($"http://{host}:{port}", configure: null), ownsChannel: true)
+    {
+    }
+
+    /// <summary>
+    ///     Connect over insecure h2c to <paramref name="host" />:<paramref name="port" />, then hands you
+    ///     the derived <see cref="GrpcChannelOptions" /> to adjust before the channel opens — the easy way
+    ///     to keep the familiar host/port yet set Grpc.Net.Client knobs (interceptors via a custom
+    ///     <c>HttpHandler</c>, <c>MaxSendMessageSize</c>, a retry <c>ServiceConfig</c>, a
+    ///     <c>LoggerFactory</c>, ...).
+    /// </summary>
+    /// <param name="host">The hostname of the gRPC server.</param>
+    /// <param name="port">The port of the gRPC server.</param>
+    /// <param name="configureChannel">Invoked on the insecure-h2c <see cref="GrpcChannelOptions" /> just
+    ///   before the channel is created; mutate it in place.</param>
+    public GrpcStorageProxy(string host, int port, Action<GrpcChannelOptions> configureChannel)
+        : this(CreateInsecureChannel($"http://{host}:{port}",
+                configureChannel ?? throw new ArgumentNullException(nameof(configureChannel))),
+               ownsChannel: true)
+    {
+    }
+
+    /// <summary>
+    ///     Connect to an arbitrary <paramref name="address" /> with fully-specified
+    ///     <see cref="GrpcChannelOptions" /> — use an <c>https://</c> address with TLS
+    ///     <see cref="GrpcChannelOptions.Credentials" /> for a secure channel, or any Grpc.Net.Client
+    ///     configuration you like.
+    /// </summary>
+    /// <param name="address">The server address, e.g. <c>https://host:443</c> or <c>http://host:13000</c>.</param>
+    /// <param name="channelOptions">The channel options; passed straight to <see cref="GrpcChannel.ForAddress(string, GrpcChannelOptions)" />.</param>
+    public GrpcStorageProxy(string address, GrpcChannelOptions channelOptions)
+        : this(GrpcChannel.ForAddress(
+                address ?? throw new ArgumentNullException(nameof(address)),
+                channelOptions ?? throw new ArgumentNullException(nameof(channelOptions))),
+               ownsChannel: true)
+    {
+    }
+
+    /// <summary>
+    ///     Bind to a <see cref="GrpcChannel" /> you already built and own — the full escape hatch
+    ///     (connection pooling, TLS, interceptors, a channel shared across your app or managed by DI).
+    ///     <b>You own the channel's lifetime</b> — the proxy never disposes a channel it did not create.
+    /// </summary>
+    /// <param name="channel">A configured <see cref="GrpcChannel" />.</param>
+    public GrpcStorageProxy(GrpcChannel channel)
+        : this(channel ?? throw new ArgumentNullException(nameof(channel)), ownsChannel: false)
+    {
+    }
+
+    /// <summary>Shared core: every public constructor funnels here (so all raise the experimental warning).</summary>
+    private GrpcStorageProxy(GrpcChannel channel, bool ownsChannel)
     {
         OptunaWarnings.Warn(
             GrpcProto.ExperimentalMessage(nameof(GrpcStorageProxy), "4.2.0"),
             WarningCategory.ExperimentalWarning);
-        _host = host;
-        _port = port;
-        Setup();
+        _channel = channel;
+        _ownsChannel = ownsChannel;
+        _stub = new ProtoApi.StorageService.StorageServiceClient(_channel);
+        _cache = new GrpcClientCache(_stub);
     }
 
-    /// <summary>Optuna's <c>create_insecure_channel</c>: an HTTP/2 cleartext (h2c) channel, unlimited receive.</summary>
-    private static GrpcChannel CreateInsecureChannel(string host, int port)
-        => GrpcChannel.ForAddress($"http://{host}:{port}", new GrpcChannelOptions
+    /// <summary>
+    ///     Optuna's <c>create_insecure_channel</c>: an HTTP/2 cleartext (h2c) channel with unlimited
+    ///     receive. <paramref name="configure" />, when non-null, tweaks the derived options first.
+    /// </summary>
+    private static GrpcChannel CreateInsecureChannel(string address, Action<GrpcChannelOptions>? configure)
+    {
+        var options = new GrpcChannelOptions
         {
             Credentials = ChannelCredentials.Insecure,
             MaxReceiveMessageSize = null,   // Optuna: grpc.max_receive_message_length = -1 (unlimited)
-        });
-
-    /// <summary>Set up the gRPC channel and stub (Optuna's <c>_setup</c>).</summary>
-    private void Setup()
-    {
-        _channel = CreateInsecureChannel(_host, _port);
-        _stub = new ProtoApi.StorageService.StorageServiceClient(_channel);
-        _cache = new GrpcClientCache(_stub);
+        };
+        configure?.Invoke(options);
+        return GrpcChannel.ForAddress(address, options);
     }
 
     /// <summary>
@@ -78,11 +135,10 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
     /// <exception cref="TimeoutException">If the server is not ready within <paramref name="timeout" />.</exception>
     public void WaitServerReady(TimeSpan? timeout = null)
     {
-        using var channel = CreateInsecureChannel(_host, _port);
         try
         {
-            bool completed = channel.ConnectAsync().Wait(timeout ?? Timeout.InfiniteTimeSpan);
-            if (!completed || channel.State != ConnectivityState.Ready)
+            bool completed = _channel.ConnectAsync().Wait(timeout ?? Timeout.InfiniteTimeSpan);
+            if (!completed || _channel.State != ConnectivityState.Ready)
                 throw new TimeoutException("GRPC connection timeout");
         }
         catch (AggregateException e)
@@ -91,8 +147,12 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
-    /// <summary>Close the gRPC channel (Optuna's <c>close</c>).</summary>
-    public void Close() => _channel.Dispose();
+    /// <summary>Close the gRPC channel (Optuna's <c>close</c>) — unless it was injected, in which case the caller owns it.</summary>
+    public void Close()
+    {
+        if (_ownsChannel)
+            _channel.Dispose();
+    }
 
     public void Dispose() => Close();
 
