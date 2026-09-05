@@ -465,12 +465,22 @@ jobs:
       with:
         dotnet-version: '8.0.x'
 
+    # Soft-skip when NUGETAPIKEY is not configured: the rest of the release pipeline (validate → pack →
+    # strong-name gate → GitHub Release) still runs and is asserted, but the irreversible nuget.org push
+    # only happens once a key is set. So a v* tag on a mirror without the secret goes green (publish
+    # skipped with a warning) instead of hard-failing on an empty --api-key.
     - name: Push to NuGet
+      env:
+        NUGET_KEY: ${{ secrets.NUGETAPIKEY }}
       run: |
+        if [ -z "$NUGET_KEY" ]; then
+          echo "::warning::NUGETAPIKEY is not configured — skipping the nuget.org publish (soft skip). Set the repo secret to enable publishing."
+          exit 0
+        fi
         for package in artifacts/*.nupkg; do
           echo "Pushing $package..."
           dotnet nuget push "$package" \
-            --api-key ${{ secrets.NUGETAPIKEY }} \
+            --api-key "$NUGET_KEY" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
         done
