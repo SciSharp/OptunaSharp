@@ -80,10 +80,10 @@ its implicit resolver would reinterpret); YAML byte-parity is not a goal.
 
 ## Notes / divergences
 
-- **`storage upgrade`** validates the RDB URL and reports whether the schema is at the version
-  OptunaSharp supports. OptunaSharp's `RDBStorage` implements only the head alembic revision and does
-  **not** port Optuna's migration chain, so it will not migrate an older schema — migrate such a
-  database with Python's `optuna storage upgrade`, then reopen it with OptunaSharp.
+- **`storage upgrade`** replays Optuna's alembic migration chain to migrate an older SQLite database
+  to the head schema — the same behavior as Python's `optuna storage upgrade`, producing a
+  byte-for-byte identical file. (SQLite backend; the EF Core PostgreSQL/MySQL backend is still
+  head-only.)
 - **Redis** is wired to the `StackExchange.Redis` backend (the SciSharp-canonical .NET Redis client).
 - Help text and validation-error wording are System.CommandLine's, not argparse's; command **output**
   (stdout) is what matches Optuna.

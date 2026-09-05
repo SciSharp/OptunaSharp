@@ -47,6 +47,35 @@ internal static class RdbModels
     internal static readonly string LibraryVersion = "OptunaSharp " + OptunaSharpVersion.Version;
 
     /// <summary>
+    ///     DDL for <c>version_info</c> — the schema-version bookkeeping table. Named so it is the single
+    ///     source of truth for both <see cref="SchemaStatements" /> and the <c>InitVersionInfo</c> guard
+    ///     that materializes it under <c>skip_table_creation</c> (mirroring Python's ORM insert).
+    /// </summary>
+    internal const string VersionInfoTableDdl =
+        """
+        CREATE TABLE IF NOT EXISTS version_info (
+            version_info_id INTEGER NOT NULL,
+            schema_version INTEGER,
+            library_version VARCHAR(256),
+            PRIMARY KEY (version_info_id),
+            CHECK (version_info_id=1)
+        )
+        """;
+
+    /// <summary>
+    ///     DDL for <c>alembic_version</c> — the migration-revision marker table. Single source of truth
+    ///     for both <see cref="SchemaStatements" /> and the <c>InitAlembic</c> guard that materializes it
+    ///     (mirroring alembic's <c>stamp</c>, which creates the table when absent).
+    /// </summary>
+    internal const string AlembicVersionTableDdl =
+        """
+        CREATE TABLE IF NOT EXISTS alembic_version (
+            version_num VARCHAR(32) NOT NULL,
+            CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+        )
+        """;
+
+    /// <summary>
     ///     The full schema, as the ordered list of statements SQLAlchemy's <c>create_all</c> emits
     ///     for the SQLite dialect. Executed once per connection with <c>IF NOT EXISTS</c> semantics.
     /// </summary>
@@ -63,15 +92,7 @@ internal static class RdbModels
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_studies_study_name ON studies (study_name)",
 
         // version_info
-        """
-        CREATE TABLE IF NOT EXISTS version_info (
-            version_info_id INTEGER NOT NULL,
-            schema_version INTEGER,
-            library_version VARCHAR(256),
-            PRIMARY KEY (version_info_id),
-            CHECK (version_info_id=1)
-        )
-        """,
+        VersionInfoTableDdl,
 
         // study_directions
         """
@@ -102,12 +123,7 @@ internal static class RdbModels
         "CREATE INDEX IF NOT EXISTS ix_trials_study_id ON trials (study_id)",
 
         // alembic_version
-        """
-        CREATE TABLE IF NOT EXISTS alembic_version (
-            version_num VARCHAR(32) NOT NULL,
-            CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
-        )
-        """,
+        AlembicVersionTableDdl,
 
         // trial_heartbeats
         """

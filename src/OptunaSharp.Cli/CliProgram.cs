@@ -365,30 +365,44 @@ public static class CliProgram
         var upgrade = new Command("upgrade", "Upgrade the schema of an RDB storage.");
         upgrade.SetAction(pr => RunAction(pr, upgrade, () =>
         {
+            // Port of optuna/cli.py `_StorageUpgrade.take_action`. Open with the compatibility check and
+            // table creation skipped — so an out-of-date schema opens without raising and without the
+            // head tables being created underneath the migration — then replay the alembic chain from
+            // the storage's current revision to head.
             string url = StorageResolver.CheckStorageUrl(pr.GetValue(StorageOpt), Log);
+            RDBStorage storage;
             try
             {
-                // OptunaSharp's RDBStorage implements only the head alembic revision and does not port
-                // Optuna's migration chain (PORTING_PLAN 4.1). Opening with the compatibility check both
-                // validates the URL and detects a non-head schema (a RuntimeError), which we cannot
-                // migrate — so we say so honestly rather than faking an upgrade.
-                using var storage = new RDBStorage(url);
-                Log.Info("This storage is up-to-date.");
-                return 0;
-            }
-            catch (NumSharp.RuntimeError)
-            {
-                Log.Warning(
-                    "This storage's schema is not the version OptunaSharp supports, and OptunaSharp does not"
-                    + " implement Optuna's schema-migration chain. Migrate it with Python's"
-                    + " `optuna storage upgrade`, then reopen it with OptunaSharp.");
-                return 0;
+                storage = new RDBStorage(url, skipCompatibilityCheck: true, skipTableCreation: true);
             }
             catch (Exception e) when (e is SqliteException or ArgumentException)
             {
                 Log.Error("Invalid RDBStorage URL.");
                 return 1;
             }
+
+            using (storage)
+            {
+                string currentVersion = storage.GetCurrentVersion();
+                string headVersion = storage.GetHeadVersion();
+                if (currentVersion == headVersion)
+                {
+                    Log.Info("This storage is up-to-date.");
+                }
+                else if (storage.GetAllVersions().Contains(currentVersion))
+                {
+                    Log.Info("Upgrading the storage schema to the latest version.");
+                    storage.Upgrade();
+                    Log.Info("Completed to upgrade the storage.");
+                }
+                else
+                {
+                    Log.Warning(
+                        "Your optuna version seems outdated against the storage version. "
+                        + "Please try updating optuna to the latest version by `$ pip install -U optuna`.");
+                }
+            }
+            return 0;
         }));
 
         var storage = new Command("storage", "Storage-related commands.");

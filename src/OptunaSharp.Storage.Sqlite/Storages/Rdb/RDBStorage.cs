@@ -37,7 +37,7 @@ namespace OptunaSharp.Storages;
 ///     study.Optimize(t => Math.Pow(t.SuggestFloat("x", -100, 100), 2), nTrials: 10);
 ///     </code>
 /// </example>
-public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
+public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 {
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.storages._rdb.storage");
 
@@ -293,8 +293,13 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     private void ExecPragma(string body) => Exec("PRAGMA " + body, null);
 
+    // Port of `_VersionManager._init_version_info_model`. The version tables are created here (not only
+    // in CreateSchema) so the two version-tracking tables exist even under `skip_table_creation` — the
+    // mode the CLI's `storage upgrade` opens with — mirroring Python, where the ORM insert / alembic
+    // stamp materialize them regardless. Both are IF NOT EXISTS no-ops on the normal fresh-DB path.
     private void InitVersionInfo()
     {
+        Exec(RdbModels.VersionInfoTableDdl, null);
         long count = ScalarLong("SELECT COUNT(*) FROM version_info", null);
         if (count > 0)
             return;
@@ -305,19 +310,28 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             RdbModels.LibraryVersion);
     }
 
+    // Port of `_VersionManager._init_alembic`. On an empty `alembic_version`, Python stamps the head
+    // revision when alembic is "supported" (a freshly-created DB, or one already at the current
+    // schema_version) and the base revision otherwise — the marker that says "this is a pre-alembic
+    // database that must be migrated forward". The current OptunaSharp code always stamped head, which
+    // silently mislabelled an old database as up-to-date; stamping the base is what lets the
+    // compatibility check (and `storage upgrade`) see it needs migrating.
     private void InitAlembic()
     {
+        Exec(RdbModels.AlembicVersionTableDdl, null);
         long count = ScalarLong("SELECT COUNT(*) FROM alembic_version", null);
         if (count > 0)
             return;
-        Exec("INSERT INTO alembic_version (version_num) VALUES ($p0)", null, RdbModels.HeadVersion);
+        string revision = IsAlembicSupported() ? RdbModels.HeadVersion : RdbMigrations.BaseVersion;
+        Exec("INSERT INTO alembic_version (version_num) VALUES ($p0)", null, revision);
     }
 
-    private static readonly string[] KnownVersions =
-    {
-        "v0.9.0.a", "v1.2.0.a", "v1.3.0.a", "v2.4.0.a", "v2.6.0.a",
-        "v3.0.0.a", "v3.0.0.b", "v3.0.0.c", "v3.0.0.d", "v3.2.0.a",
-    };
+    // Port of `_VersionManager._is_alembic_supported`: `version_info` is guaranteed to exist by the
+    // preceding InitVersionInfo, so this is true when the stored schema_version equals the current one
+    // (a new or already-current DB) and false for a pre-alembic database (an older schema_version).
+    private bool IsAlembicSupported()
+        => ScalarNullableLong("SELECT schema_version FROM version_info WHERE version_info_id = 1", null)
+            == RdbModels.SchemaVersion;
 
     private void CheckTableSchemaCompatibility()
     {
@@ -331,7 +345,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             $"The runtime optuna version {OptunaSharpVersion.OptunaCompatibilityTarget} is no longer " +
             "compatible with the table schema " +
             $"(set up by optuna {libraryVersion}). ");
-        message.Append(KnownVersions.Contains(current)
+        message.Append(RdbMigrations.RevisionsBaseToHead.Contains(current)
             ? "Please execute `$ optuna storage upgrade --storage $STORAGE_URL` for upgrading the storage."
             : "Please try updating optuna to the latest version by `$ pip install -U optuna`.");
         throw new RuntimeError(message.ToString());

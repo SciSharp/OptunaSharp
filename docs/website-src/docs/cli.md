@@ -49,7 +49,7 @@ studies                 list studies (name, direction, n_trials, datetime_start,
 trials                  list a study's trials                     (experimental)
 best-trial              show the best trial                        (experimental)
 best-trials             show the Pareto-front trials               (experimental)
-storage upgrade         report an RDB storage's schema state
+storage upgrade         migrate an RDB storage's schema to the latest version
 ask                     create a trial and suggest parameters      (experimental)
 tell                    finish a trial created by ask              (experimental)
 ```
@@ -114,9 +114,11 @@ scalars its implicit resolver would otherwise reinterpret) — YAML byte-parity 
 
 ## Notes and divergences
 
-- **`storage upgrade`** validates the RDB URL and reports whether the schema is the version OptunaSharp
-  supports. OptunaSharp's `RDBStorage` implements only the head alembic revision and does not port
-  Optuna's migration chain, so it cannot migrate an older schema — do that with Python's
-  `optuna storage upgrade`, then reopen the database with OptunaSharp.
+- **`storage upgrade`** replays Optuna's alembic migration chain to bring an older SQLite database up
+  to the head schema, exactly as Python's `optuna storage upgrade` does — the migrated file is
+  byte-for-byte identical to Python's result. It reports `This storage is up-to-date.` when already at
+  head, and `Upgrading the storage schema to the latest version.` / `Completed to upgrade the storage.`
+  when it migrates. (The migration chain is implemented in the `OptunaSharp.Storage.Sqlite` backend;
+  the EF Core PostgreSQL/MySQL backends are still head-only.)
 - Help text and validation-error wording come from System.CommandLine, not argparse; it is the command
   **output** (stdout) that matches Optuna byte-for-byte.
