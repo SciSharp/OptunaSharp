@@ -200,7 +200,10 @@ internal static class OutputFormat
 
     private static bool NestedNonEmpty(object nested) => !(nested is string s && s.Length == 0);
     private static string NestedToStr(object nested) => Convert.ToString(nested, CultureInfo.InvariantCulture)!;
-    private static bool IsListOrTuple(object? v) => v is PyTuple || (v is IEnumerable && v is not string);
+
+    // Python's `isinstance(v, (list, tuple))` — a dict is neither, so it must NOT be expanded by index
+    // (a nested="" dict column such as `user_attrs` stays a dict in the flatten path).
+    private static bool IsListOrTuple(object? v) => v is PyTuple || (v is IEnumerable && v is not string && v is not IDictionary);
     private static int SeqLen(object? v) => ((IEnumerable)v!).Cast<object?>().Count();
 
     // ------------------------------------------------------------------ _dump_value

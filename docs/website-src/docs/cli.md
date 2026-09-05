@@ -77,6 +77,30 @@ The `ask` above draws from the same MT19937 stream NumPy uses, so with a fixed s
 parameters are **bit-identical** to what the `optuna` command would produce — the same
 [RNG discipline](samplers.md) that underpins OptunaSharp's differential parity everywhere.
 
+## Sample output
+
+`studies` and the trial-listing commands default to a box-drawn table, rendered exactly as Optuna
+renders it — numeric columns right-aligned, the directions shown as a Python tuple, `None` cells left
+blank:
+
+```text
+$ optunasharp studies --storage sqlite:///study.db
++----------+---------------+----------+---------------------+
+| name     | direction     | n_trials | datetime_start      |
++----------+---------------+----------+---------------------+
+| quadratic| ('MINIMIZE',) |        1 | 2026-09-05 15:10:05 |
++----------+---------------+----------+---------------------+
+
+$ optunasharp trials --study-name quadratic --storage sqlite:///study.db -f json
+[{"number": 0, "value": 4.0, "datetime_start": "2026-09-05 15:10:05",
+  "datetime_complete": "2026-09-05 15:10:05", "duration": "0:00:00.246189",
+  "params": {"x": 3.99...}, "state": "COMPLETE"}]
+```
+
+The `value`/`json`/`table` bytes above are what the `optuna` command emits for the same database —
+verified in CI by a differential suite that runs both CLIs and diffs stdout (single- and
+multi-objective, plain and `--flatten`).
+
 ## Output formats
 
 `-f value|json|table|yaml` selects the format (the defaults follow Optuna: `value` for `study-names`,

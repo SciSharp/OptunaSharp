@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using AwesomeAssertions;
+using OptunaSharp;
 using OptunaSharp.Cli;
 
 namespace OptunaSharp.Tests.Cli;
@@ -173,6 +174,172 @@ public class CliOutputFormatTests
     [DataRow(2 * TimeSpan.TicksPerDay, "2 days, 0:00:00")]
     [DataRow(TimeSpan.TicksPerHour + 2 * TimeSpan.TicksPerMinute + 3 * TimeSpan.TicksPerSecond, "1:02:03")]
     [DataRow(2461890L, "0:00:00.246189")]
+    [DataRow(25 * TimeSpan.TicksPerHour, "1 day, 1:00:00")]
+    [DataRow(TimeSpan.TicksPerDay + TimeSpan.TicksPerHour + 61 * TimeSpan.TicksPerSecond, "1 day, 1:01:01")]
     public void PyTimedelta_MatchesPythonStr(long ticks, string expected)
         => PyTimedelta.Str(TimeSpan.FromTicks(ticks)).Should().Be(expected);
+
+    // ------------------------------------------------------------------ FormatSingle (ask output)
+
+    [TestMethod]
+    public void FormatSingle_Json_EmitsBareObject_NotArray()
+    {
+        var columns = new List<Column> { new("number", ""), new("params", "x") };
+        var record = Record(("number", "", 0L), ("params", "x", 0.25));
+        OutputFormat.FormatSingle(record, columns, "json", flatten: false)
+            .Should().Be("{\"number\": 0, \"params\": {\"x\": 0.25}}");
+    }
+
+    [TestMethod]
+    public void FormatSingle_Json_Flatten_EmitsFlatKeys()
+    {
+        var columns = new List<Column> { new("number", ""), new("params", "x") };
+        var record = Record(("number", "", 0L), ("params", "x", 0.25));
+        OutputFormat.FormatSingle(record, columns, "json", flatten: true)
+            .Should().Be("{\"number\": 0, \"params_x\": 0.25}");
+    }
+
+    [TestMethod]
+    public void FormatSingle_Value_JoinsCells()
+    {
+        var columns = new List<Column> { new("number", ""), new("params", "x") };
+        var record = Record(("number", "", 0L), ("params", "x", 0.25));
+        OutputFormat.FormatSingle(record, columns, "value", flatten: true).Should().Be("0 0.25");
+    }
+
+    [TestMethod]
+    public void Ask_EmptyParams_NonFlatten_ShowsEmptyDict()
+    {
+        // Optuna's `ask` puts an empty params dict when the trial has no params and not --flatten.
+        var columns = new List<Column> { new("number", ""), new("params", "") };
+        var record = Record(("number", "", 0L), ("params", "", new System.Collections.Specialized.OrderedDictionary()));
+        OutputFormat.FormatSingle(record, columns, "json", flatten: false).Should().Be("{\"number\": 0, \"params\": {}}");
+    }
+
+    // ------------------------------------------------------------------ float edge cases
+
+    [TestMethod]
+    public void Json_NonFiniteFloats_UsePythonLiterals()
+    {
+        var columns = new List<Column> { new("a", ""), new("b", ""), new("c", "") };
+        var records = new List<Dictionary<Column, object?>>
+        {
+            Record(("a", "", double.PositiveInfinity), ("b", "", double.NegativeInfinity), ("c", "", double.NaN)),
+        };
+        OutputFormat.FormatList(records, columns, "json", flatten: false)
+            .Should().Be("[{\"a\": Infinity, \"b\": -Infinity, \"c\": NaN}]");
+    }
+
+    [TestMethod]
+    public void Value_NonFiniteFloats_UsePythonRepr()
+    {
+        var columns = new List<Column> { new("a", ""), new("b", ""), new("c", "") };
+        var records = new List<Dictionary<Column, object?>>
+        {
+            Record(("a", "", double.PositiveInfinity), ("b", "", double.NegativeInfinity), ("c", "", double.NaN)),
+        };
+        OutputFormat.FormatList(records, columns, "value", flatten: false).Should().Be("inf -inf nan");
+    }
+
+    [DataTestMethod]
+    [DataRow(1e-05, "1e-05")]
+    [DataRow(-0.5, "-0.5")]
+    [DataRow(1234567890123456.0, "1234567890123456.0")]
+    [DataRow(1e16, "1e+16")]
+    public void Value_FloatFormatting_MatchesPythonRepr(double value, string expected)
+    {
+        var columns = new List<Column> { new("v", "") };
+        var records = new List<Dictionary<Column, object?>> { Record(("v", "", value)) };
+        OutputFormat.FormatList(records, columns, "value", flatten: false).Should().Be(expected);
+    }
+
+    // ------------------------------------------------------------------ bool / string / nested dict
+
+    [TestMethod]
+    public void Json_Bool_IsJsonBool_Table_IsPythonStr()
+    {
+        // Python: bool is an int subclass, so _format_value passes it through unchanged.
+        var columns = new List<Column> { new("flag", "") };
+        var records = new List<Dictionary<Column, object?>> { Record(("flag", "", true)) };
+        OutputFormat.FormatList(records, columns, "json", flatten: false).Should().Be("[{\"flag\": true}]");
+
+        string table = OutputFormat.FormatList(records, columns, "table", flatten: false);
+        table.Should().Contain("| True |");
+    }
+
+    [TestMethod]
+    public void Json_StringValue_IsEscapedLikePython()
+    {
+        var columns = new List<Column> { new("note", "") };
+        var records = new List<Dictionary<Column, object?>> { Record(("note", "", "a\"b\\c")) };
+        OutputFormat.FormatList(records, columns, "json", flatten: false)
+            .Should().Be("[{\"note\": \"a\\\"b\\\\c\"}]");
+    }
+
+    [TestMethod]
+    public void Json_NestedUserAttrsDict_IsObject_Table_IsPythonDictRepr()
+    {
+        var attrs = new System.Collections.Specialized.OrderedDictionary { ["k"] = "v", ["n"] = 3L };
+        var columns = new List<Column> { new("user_attrs", "") };
+        var records = new List<Dictionary<Column, object?>> { Record(("user_attrs", "", attrs)) };
+
+        OutputFormat.FormatList(records, columns, "json", flatten: false)
+            .Should().Be("[{\"user_attrs\": {\"k\": \"v\", \"n\": 3}}]");
+        OutputFormat.FormatList(records, columns, "table", flatten: false)
+            .Should().Contain("{'k': 'v', 'n': 3}");
+    }
+
+    [TestMethod]
+    public void Json_NullValue_IsJsonNull()
+    {
+        var columns = new List<Column> { new("value", "") };
+        var records = new List<Dictionary<Column, object?>> { Record(("value", "", null)) };
+        OutputFormat.FormatList(records, columns, "json", flatten: false).Should().Be("[{\"value\": null}]");
+    }
+
+    [TestMethod]
+    public void Table_MixedTypeColumn_LeftAligns()
+    {
+        // A column with any string cell renders the whole column as string (left-aligned).
+        var columns = new List<Column> { new("v", "") };
+        var records = new List<Dictionary<Column, object?>>
+        {
+            Record(("v", "", 1L)),
+            Record(("v", "", "text")),
+        };
+        string expected = string.Join("\n",
+            "+------+",
+            "| v    |",
+            "+------+",
+            "| 1    |",
+            "| text |",
+            "+------+");
+        OutputFormat.FormatList(records, columns, "table", flatten: false).Should().Be(expected);
+    }
+
+    // ------------------------------------------------------------------ PyTuple repr
+
+    [TestMethod]
+    public void Value_SingleElementTuple_HasTrailingComma()
+        => FormatTupleValue(new object?[] { "A" }).Should().Be("('A',)");
+
+    [TestMethod]
+    public void Value_TwoElementTuple_NoTrailingComma()
+        => FormatTupleValue(new object?[] { "A", "B" }).Should().Be("('A', 'B')");
+
+    private static string FormatTupleValue(object?[] items)
+    {
+        var columns = new List<Column> { new("d", "") };
+        var records = new List<Dictionary<Column, object?>> { Record(("d", "", new PyTuple(items))) };
+        return OutputFormat.FormatList(records, columns, "value", flatten: false);
+    }
+
+    [TestMethod]
+    public void UnsupportedFormat_Throws()
+    {
+        var columns = new List<Column> { new("name", "") };
+        var records = new List<Dictionary<Column, object?>> { Record(("name", "", "x")) };
+        Action bad = () => OutputFormat.FormatList(records, columns, "xml", flatten: false);
+        bad.Should().Throw<CLIUsageError>();
+    }
 }
