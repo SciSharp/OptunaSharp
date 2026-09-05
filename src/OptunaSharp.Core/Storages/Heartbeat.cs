@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Storages;
 
@@ -25,6 +26,25 @@ public interface IBaseHeartbeat
 
     /// <summary>Get the heartbeat-stale trial callback function if it is set, otherwise <c>null</c>.</summary>
     Action<Study, FrozenTrial>? GetHeartbeatStaleTrialCallback();
+
+    /// <summary>
+    ///     Deprecated. Get the failed-trial callback function — returns the same value as
+    ///     <see cref="GetHeartbeatStaleTrialCallback" />. Port of the concrete, deprecated
+    ///     <c>BaseHeartbeat.get_failed_trial_callback</c> (deprecated in v4.9.0, removed in v6.0.0);
+    ///     a default interface method so every heartbeat backend inherits it, exactly as the Python
+    ///     base class does.
+    /// </summary>
+    [Obsolete("Deprecated in v4.9.0. This feature will be removed in v6.0.0. " +
+              "Use GetHeartbeatStaleTrialCallback instead.")]
+    Action<Study, FrozenTrial>? GetFailedTrialCallback()
+    {
+        OptunaWarnings.Warn(
+            "get_failed_trial_callback has been deprecated in v4.9.0. This feature will be removed in " +
+            "v6.0.0. See https://github.com/optuna/optuna/releases/tag/v4.9.0. " +
+            "Use `get_heartbeat_stale_trial_callback` instead.",
+            WarningCategory.FutureWarning);
+        return GetHeartbeatStaleTrialCallback();
+    }
 }
 
 /// <summary>Python <c>BaseHeartbeatThread</c> (context manager → <see cref="IDisposable" />).</summary>

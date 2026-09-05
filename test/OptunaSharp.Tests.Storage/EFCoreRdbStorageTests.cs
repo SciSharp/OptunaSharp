@@ -11,6 +11,7 @@ using NumSharp;
 using OptunaSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
+using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
 using OptunaSharp.Storages;
 using OptunaSharp.Storages.EFCore;
@@ -669,7 +670,115 @@ public abstract class EFCoreRdbStorageTestsBase
 
     [TestMethod]
     [TestCategory("Integration")]
-    public void Heartbeat_RecordInterval_AndStaleDetection()
+    public void Heartbeat_Interval_And_IsHeartbeatEnabled()
+    {
+        using var enabled = NewStorage(new EFCoreRdbOptions { HeartbeatInterval = 3 });
+        enabled.GetHeartbeatInterval().Should().Be(3);
+        HeartbeatHelpers.IsHeartbeatEnabled(enabled).Should().BeTrue();
+
+        using var disabled = NewStorage();
+        disabled.GetHeartbeatInterval().Should().BeNull();
+        HeartbeatHelpers.IsHeartbeatEnabled(disabled).Should().BeFalse();
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    [DataRow(0)]
+    [DataRow(-1)]
+    public void Heartbeat_Interval_MustBePositive(int interval)
+    {
+        Action act = () => _ = new RDBStorage(Provider, ConnectionString, new EFCoreRdbOptions { HeartbeatInterval = interval });
+        act.Should().Throw<ValueError>()
+            .WithMessage("The value of `heartbeat_interval` should be a positive integer.");
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    [DataRow(0)]
+    [DataRow(-5)]
+    public void Heartbeat_GracePeriod_MustBePositive(int grace)
+    {
+        Action act = () => _ = new RDBStorage(
+            Provider, ConnectionString, new EFCoreRdbOptions { HeartbeatInterval = 1, GracePeriod = grace });
+        act.Should().Throw<ValueError>()
+            .WithMessage("The value of `grace_period` should be a positive integer.");
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_SpecifyingBothCallbacks_Throws()
+    {
+        Action<Study, FrozenTrial> stale = (s, t) => { };
+        Action<Study, FrozenTrial> failed = (s, t) => { };
+        Action act = () => _ = new RDBStorage(Provider, ConnectionString, new EFCoreRdbOptions
+        {
+            HeartbeatInterval = 1,
+            HeartbeatStaleTrialCallback = stale,
+            FailedTrialCallback = failed,
+        });
+        act.Should().Throw<ValueError>()
+            .WithMessage("Specify only one of `heartbeat_stale_trial_callback` and `failed_trial_callback`.");
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_Interval_EmitsExperimentalWarning()
+    {
+        var warnings = CaptureWarnings(() =>
+        {
+            using var _ = new RDBStorage(Provider, ConnectionString, new EFCoreRdbOptions { HeartbeatInterval = 2 });
+        });
+
+        warnings.Should().Contain(w =>
+            w.Category == WarningCategory.ExperimentalWarning &&
+            w.Message.Contains("heartbeat_interval") && w.Message.Contains("experimental feature"));
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_FailedTrialCallback_IsDeprecatedAlias_And_Warns()
+    {
+        Action<Study, FrozenTrial> cb = (s, t) => { };
+
+        RDBStorage storage = null!;
+        var warnings = CaptureWarnings(() =>
+        {
+            storage = new RDBStorage(Provider, ConnectionString, new EFCoreRdbOptions
+            {
+                HeartbeatInterval = 1,
+                FailedTrialCallback = cb,
+            });
+        });
+
+        using (storage)
+        {
+            storage.GetHeartbeatStaleTrialCallback().Should().BeSameAs(cb);
+            warnings.Should().Contain(w =>
+                w.Category == WarningCategory.FutureWarning &&
+                w.Message.Contains("`failed_trial_callback`") && w.Message.Contains("deprecated in v4.9.0"));
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_RecordHeartbeat_Upserts_SingleRow()
+    {
+        using var storage = NewStorage(new EFCoreRdbOptions { HeartbeatInterval = 1 });
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int t = storage.CreateNewTrial(studyId);
+
+        HeartbeatRowCount().Should().Be(0);
+        storage.RecordHeartbeat(t);
+        HeartbeatRowCount().Should().Be(1);
+
+        // A second beat updates the one row (UNIQUE(trial_id) upsert) — no duplicate.
+        storage.RecordHeartbeat(t);
+        HeartbeatRowCount().Should().Be(1);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_GetStaleTrialIds_FreshNotStale_BackdatedStale()
     {
         using var storage = NewStorage(new EFCoreRdbOptions { HeartbeatInterval = 2 });
         storage.GetHeartbeatInterval().Should().Be(2);
@@ -679,17 +788,121 @@ public abstract class EFCoreRdbStorageTestsBase
         storage.RecordHeartbeat(t);
         storage.GetStaleTrialIds(studyId).Should().BeEmpty("a fresh heartbeat is not stale");
 
-        // Backdate the heartbeat well past the grace period (2 * interval = 4s) to exercise the
-        // elapsed-seconds SQL, then it must be reported stale.
-        using (var conn = RawConn())
-        {
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = Provider == RdbProvider.PostgreSql
-                ? "UPDATE trial_heartbeats SET heartbeat = CURRENT_TIMESTAMP - INTERVAL '1 hour'"
-                : "UPDATE trial_heartbeats SET heartbeat = CURRENT_TIMESTAMP - INTERVAL 1 HOUR";
-            cmd.ExecuteNonQuery();
-        }
+        // Backdate well past the grace period (2 * interval = 4s) to exercise the elapsed-seconds SQL.
+        BackdateHeartbeat(t, 3600);
         storage.GetStaleTrialIds(studyId).Should().Contain(t);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_GetStaleTrialIds_Ignores_NonRunning_And_TrialsWithoutHeartbeat()
+    {
+        using var storage = NewStorage(new EFCoreRdbOptions { HeartbeatInterval = 1 });
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+
+        int running = storage.CreateNewTrial(studyId);
+        storage.RecordHeartbeat(running);
+        BackdateHeartbeat(running, 3600);
+
+        int finished = storage.CreateNewTrial(studyId);
+        storage.RecordHeartbeat(finished);
+        BackdateHeartbeat(finished, 3600);
+        storage.SetTrialStateValues(finished, TrialState.Complete, new[] { 1.0 });
+
+        int noBeat = storage.CreateNewTrial(studyId);
+
+        storage.GetStaleTrialIds(studyId).Should().Equal(running);
+        _ = noBeat;
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_GetStaleTrialIds_DefaultGracePeriod_Is_TwiceInterval()
+    {
+        using var storage = NewStorage(new EFCoreRdbOptions { HeartbeatInterval = 5 });
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int t = storage.CreateNewTrial(studyId);
+        storage.RecordHeartbeat(t);
+
+        // Within 2*interval (=10s): not stale.
+        BackdateHeartbeat(t, 6);
+        storage.GetStaleTrialIds(studyId).Should().BeEmpty("6s < the 10s default grace period");
+
+        // Beyond 2*interval: stale.
+        BackdateHeartbeat(t, 15);
+        storage.GetStaleTrialIds(studyId).Should().Contain(t);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_GetStaleTrialIds_ScopedToStudy()
+    {
+        using var storage = NewStorage(new EFCoreRdbOptions { HeartbeatInterval = 1 });
+        int studyA = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "a");
+        int studyB = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "b");
+        int tA = storage.CreateNewTrial(studyA);
+        int tB = storage.CreateNewTrial(studyB);
+        storage.RecordHeartbeat(tA);
+        storage.RecordHeartbeat(tB);
+        BackdateHeartbeat(tA, 3600);
+        BackdateHeartbeat(tB, 3600);
+
+        storage.GetStaleTrialIds(studyA).Should().Equal(tA);
+        storage.GetStaleTrialIds(studyB).Should().Equal(tB);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_FailStaleTrials_EndToEnd_FailsStale_And_InvokesCallback()
+    {
+        var callbackTrials = new List<FrozenTrial>();
+        using var storage = NewStorage(new EFCoreRdbOptions
+        {
+            HeartbeatInterval = 1,
+            HeartbeatStaleTrialCallback = (s, t) => callbackTrials.Add(t),
+        });
+        var study = Optuna.CreateStudy(storage: storage, studyName: "s", sampler: new RandomSampler(0));
+
+        int staleId = study.Storage.CreateNewTrial(study.StudyId);
+        int healthyId = study.Storage.CreateNewTrial(study.StudyId);
+        storage.RecordHeartbeat(staleId);
+        storage.RecordHeartbeat(healthyId);
+        BackdateHeartbeat(staleId, 3600);
+
+        HeartbeatHelpers.FailStaleTrials(study);
+
+        storage.GetTrial(staleId).State.Should().Be(TrialState.Fail);
+        storage.GetTrial(healthyId).State.Should().Be(TrialState.Running);
+        callbackTrials.Should().ContainSingle(t => t.TrialId == staleId);
+
+        // Already-failed stale ids are tolerated on a second pass (UpdateFinishedTrialError swallowed).
+        HeartbeatHelpers.FailStaleTrials(study);
+        storage.GetTrial(staleId).State.Should().Be(TrialState.Fail);
+    }
+
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void Heartbeat_RetryCallback_EndToEnd_Requeues_Waiting_Trial()
+    {
+        using var storage = NewStorage(new EFCoreRdbOptions
+        {
+            HeartbeatInterval = 1,
+            HeartbeatStaleTrialCallback = new RetryHeartbeatStaleTrialCallback(maxRetry: 3),
+        });
+        var study = Optuna.CreateStudy(storage: storage, studyName: "s", sampler: new RandomSampler(0));
+
+        int staleId = study.Storage.CreateNewTrial(study.StudyId);
+        study.Storage.SetTrialParam(staleId, "x", 1.5, new FloatDistribution(-10, 10));
+        storage.RecordHeartbeat(staleId);
+        BackdateHeartbeat(staleId, 3600);
+
+        HeartbeatHelpers.FailStaleTrials(study);
+
+        storage.GetTrial(staleId).State.Should().Be(TrialState.Fail);
+        var requeued = study.GetTrials(deepcopy: false).Single(t => t.State == TrialState.Waiting);
+        requeued.Params["x"].Should().Be(1.5);
+        RetryHeartbeatStaleTrialCallback.RetriedTrialNumber(requeued).Should().Be(storage.GetTrial(staleId).Number);
+        RetryHeartbeatStaleTrialCallback.RetryHistory(requeued).Should().Equal(storage.GetTrial(staleId).Number);
     }
 
     // ------------------------------------------------------------------ golden-standard API (shared)
@@ -725,6 +938,50 @@ public abstract class EFCoreRdbStorageTestsBase
         cmd.CommandText = sql;
         object? value = cmd.ExecuteScalar();
         return value is null or DBNull ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>Rows currently in <c>trial_heartbeats</c>.</summary>
+    private int HeartbeatRowCount()
+    {
+        using var conn = RawConn();
+        return int.Parse(Scalar(conn, "SELECT COUNT(*) FROM trial_heartbeats")!, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    ///     Push a trial's heartbeat <paramref name="seconds" /> into the past (on the DB clock) so it is
+    ///     older than the grace period, exercising the provider-specific elapsed-seconds SQL in
+    ///     <see cref="RDBStorage.GetStaleTrialIds" />.
+    /// </summary>
+    private void BackdateHeartbeat(int trialId, int seconds)
+    {
+        using var conn = RawConn();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = Provider == RdbProvider.PostgreSql
+            ? $"UPDATE trial_heartbeats SET heartbeat = CURRENT_TIMESTAMP - INTERVAL '{seconds} seconds' WHERE trial_id = {trialId}"
+            : $"UPDATE trial_heartbeats SET heartbeat = CURRENT_TIMESTAMP - INTERVAL {seconds} SECOND WHERE trial_id = {trialId}";
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Capture every <see cref="OptunaWarnings" /> raised while <paramref name="action" /> runs.</summary>
+    private static List<(string Message, WarningCategory Category)> CaptureWarnings(Action action)
+    {
+        var captured = new List<(string, WarningCategory)>();
+        void Handler(string message, WarningCategory category)
+        {
+            lock (captured)
+                captured.Add((message, category));
+        }
+
+        OptunaWarnings.WarningRaised += Handler;
+        try
+        {
+            action();
+        }
+        finally
+        {
+            OptunaWarnings.WarningRaised -= Handler;
+        }
+        return captured;
     }
 
     private bool TableExists(DbConnection conn, string table)

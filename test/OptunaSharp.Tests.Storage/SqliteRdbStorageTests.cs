@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using AwesomeAssertions;
 using Microsoft.Data.Sqlite;
 using NumSharp;
 using OptunaSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
+using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
 using OptunaSharp.Storages;
 
@@ -449,7 +451,372 @@ public class SqliteRdbStorageTests
         study.BestValue.Should().BeLessThanOrEqualTo(study.Trials.Min(t => t.Value!.Value) + 1e-12);
     }
 
+    // ------------------------------------------------------------------ heartbeat (plan 1.3 over RDB)
+
+    [TestMethod]
+    public void Heartbeat_Interval_And_IsHeartbeatEnabled()
+    {
+        using var enabled = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 3 });
+        enabled.GetHeartbeatInterval().Should().Be(3);
+        HeartbeatHelpers.IsHeartbeatEnabled(enabled).Should().BeTrue();
+
+        using var disabled = NewMemoryStorage();
+        disabled.GetHeartbeatInterval().Should().BeNull();
+        HeartbeatHelpers.IsHeartbeatEnabled(disabled).Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(-1)]
+    public void Heartbeat_Interval_MustBePositive(int interval)
+    {
+        Action act = () => _ = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = interval });
+        act.Should().Throw<ValueError>()
+            .WithMessage("The value of `heartbeat_interval` should be a positive integer.");
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(-5)]
+    public void Heartbeat_GracePeriod_MustBePositive(int grace)
+    {
+        Action act = () => _ = new RDBStorage(
+            "sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 1, GracePeriod = grace });
+        act.Should().Throw<ValueError>()
+            .WithMessage("The value of `grace_period` should be a positive integer.");
+    }
+
+    [TestMethod]
+    public void Heartbeat_Interval_EmitsExperimentalWarning()
+    {
+        var warnings = CaptureWarnings(() =>
+        {
+            using var _ = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 2 });
+        });
+
+        warnings.Should().Contain(w =>
+            w.Category == WarningCategory.ExperimentalWarning &&
+            w.Message.Contains("heartbeat_interval") && w.Message.Contains("experimental feature"));
+    }
+
+    [TestMethod]
+    public void Heartbeat_NoInterval_DoesNotWarnExperimental()
+    {
+        var warnings = CaptureWarnings(() =>
+        {
+            using var _ = NewMemoryStorage();
+        });
+
+        warnings.Should().NotContain(w => w.Category == WarningCategory.ExperimentalWarning);
+    }
+
+    [TestMethod]
+    public void Heartbeat_SpecifyingBothCallbacks_Throws()
+    {
+        Action<Study, FrozenTrial> stale = (s, t) => { };
+        Action<Study, FrozenTrial> failed = (s, t) => { };
+        Action act = () => _ = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions
+        {
+            HeartbeatInterval = 1,
+            HeartbeatStaleTrialCallback = stale,
+            FailedTrialCallback = failed,
+        });
+        act.Should().Throw<ValueError>()
+            .WithMessage("Specify only one of `heartbeat_stale_trial_callback` and `failed_trial_callback`.");
+    }
+
+    [TestMethod]
+    public void Heartbeat_FailedTrialCallback_IsDeprecatedAlias_And_Warns()
+    {
+        Action<Study, FrozenTrial> cb = (s, t) => { };
+
+        RDBStorage storage = null!;
+        var warnings = CaptureWarnings(() =>
+        {
+            storage = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions
+            {
+                HeartbeatInterval = 1,
+                FailedTrialCallback = cb,
+            });
+        });
+
+        using (storage)
+        {
+            // The deprecated alias becomes the effective heartbeat-stale callback...
+            storage.GetHeartbeatStaleTrialCallback().Should().BeSameAs(cb);
+            // ...and its use raised the FutureWarning deprecation.
+            warnings.Should().Contain(w =>
+                w.Category == WarningCategory.FutureWarning &&
+                w.Message.Contains("`failed_trial_callback`") && w.Message.Contains("deprecated in v4.9.0"));
+        }
+    }
+
+    [TestMethod]
+    public void Heartbeat_HeartbeatStaleTrialCallback_TakesPrecedence_NoDeprecationWarning()
+    {
+        Action<Study, FrozenTrial> primary = (s, t) => { };
+
+        RDBStorage storage = null!;
+        var warnings = CaptureWarnings(() =>
+        {
+            storage = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions
+            {
+                HeartbeatInterval = 1,
+                HeartbeatStaleTrialCallback = primary,
+            });
+        });
+
+        using (storage)
+        {
+            storage.GetHeartbeatStaleTrialCallback().Should().BeSameAs(primary);
+            warnings.Should().NotContain(w => w.Category == WarningCategory.FutureWarning);
+        }
+    }
+
+    [TestMethod]
+    public void Heartbeat_GetFailedTrialCallback_Deprecated_ReturnsEffective_And_Warns()
+    {
+        Action<Study, FrozenTrial> cb = (s, t) => { };
+        using var storage = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions
+        {
+            HeartbeatInterval = 1,
+            HeartbeatStaleTrialCallback = cb,
+        });
+
+        Action<Study, FrozenTrial>? returned = null;
+        var warnings = CaptureWarnings(() =>
+        {
+#pragma warning disable CS0618 // deliberately exercising the deprecated shim
+            returned = ((IBaseHeartbeat)storage).GetFailedTrialCallback();
+#pragma warning restore CS0618
+        });
+
+        returned.Should().BeSameAs(cb);
+        warnings.Should().Contain(w =>
+            w.Category == WarningCategory.FutureWarning && w.Message.Contains("get_failed_trial_callback"));
+    }
+
+    [TestMethod]
+    public void Heartbeat_RecordHeartbeat_Upserts_SingleRow()
+    {
+        using var storage = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 1 });
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int trialId = storage.CreateNewTrial(studyId);
+
+        HeartbeatRowCount(storage).Should().Be(0);
+        storage.RecordHeartbeat(trialId);
+        HeartbeatRowCount(storage).Should().Be(1);
+
+        // A second beat for the same trial updates the one row (UNIQUE(trial_id)) — no duplicate.
+        storage.RecordHeartbeat(trialId);
+        HeartbeatRowCount(storage).Should().Be(1);
+        Scalar(storage.Connection, $"SELECT COUNT(*) FROM trial_heartbeats WHERE trial_id = {trialId}").Should().Be("1");
+    }
+
+    [TestMethod]
+    public void Heartbeat_GetStaleTrialIds_FreshNotStale_BackdatedStale()
+    {
+        using var storage = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 1 });
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int trialId = storage.CreateNewTrial(studyId);
+
+        storage.RecordHeartbeat(trialId);
+        storage.GetStaleTrialIds(studyId).Should().BeEmpty("a fresh heartbeat is within the grace period");
+
+        // Grace period defaults to 2 * interval = 2s; push the beat 60s into the past.
+        BackdateHeartbeat(storage, trialId, 60);
+        storage.GetStaleTrialIds(studyId).Should().Equal(trialId);
+    }
+
+    [TestMethod]
+    public void Heartbeat_GetStaleTrialIds_Ignores_NonRunning_And_TrialsWithoutHeartbeat()
+    {
+        using var storage = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 1 });
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+
+        // (a) running + stale heartbeat -> reported.
+        int running = storage.CreateNewTrial(studyId);
+        storage.RecordHeartbeat(running);
+        BackdateHeartbeat(storage, running, 60);
+
+        // (b) finished trial with an old heartbeat -> NOT reported (only RUNNING trials go stale).
+        int finished = storage.CreateNewTrial(studyId);
+        storage.RecordHeartbeat(finished);
+        BackdateHeartbeat(storage, finished, 60);
+        storage.SetTrialStateValues(finished, TrialState.Complete, new[] { 1.0 });
+
+        // (c) running trial that never recorded a heartbeat -> NOT reported (INNER JOIN / Python `continue`).
+        int noBeat = storage.CreateNewTrial(studyId);
+
+        storage.GetStaleTrialIds(studyId).Should().Equal(running);
+        _ = noBeat;
+    }
+
+    [TestMethod]
+    public void Heartbeat_GetStaleTrialIds_DefaultGracePeriod_Is_TwiceInterval()
+    {
+        using var storage = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 5 });
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int trialId = storage.CreateNewTrial(studyId);
+        storage.RecordHeartbeat(trialId);
+
+        // Within 2*interval (=10s): not stale.
+        BackdateHeartbeat(storage, trialId, 6);
+        storage.GetStaleTrialIds(studyId).Should().BeEmpty("6s < the 10s default grace period");
+
+        // Beyond 2*interval: stale.
+        BackdateHeartbeat(storage, trialId, 15);
+        storage.GetStaleTrialIds(studyId).Should().Equal(trialId);
+    }
+
+    [TestMethod]
+    public void Heartbeat_GetStaleTrialIds_ExplicitGracePeriod_Overrides_Default()
+    {
+        using var storage = new RDBStorage(
+            "sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 1, GracePeriod = 30 });
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int trialId = storage.CreateNewTrial(studyId);
+        storage.RecordHeartbeat(trialId);
+
+        // 20s would be stale under the default (2*1=2s) but is within the explicit 30s grace.
+        BackdateHeartbeat(storage, trialId, 20);
+        storage.GetStaleTrialIds(studyId).Should().BeEmpty("20s < the explicit 30s grace period");
+
+        BackdateHeartbeat(storage, trialId, 40);
+        storage.GetStaleTrialIds(studyId).Should().Equal(trialId);
+    }
+
+    [TestMethod]
+    public void Heartbeat_GetStaleTrialIds_ScopedToStudy()
+    {
+        using var storage = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 1 });
+        int studyA = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "a");
+        int studyB = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "b");
+        int tA = storage.CreateNewTrial(studyA);
+        int tB = storage.CreateNewTrial(studyB);
+        storage.RecordHeartbeat(tA);
+        storage.RecordHeartbeat(tB);
+        BackdateHeartbeat(storage, tA, 60);
+        BackdateHeartbeat(storage, tB, 60);
+
+        // Each study reports only its own stale trial.
+        storage.GetStaleTrialIds(studyA).Should().Equal(tA);
+        storage.GetStaleTrialIds(studyB).Should().Equal(tB);
+    }
+
+    [TestMethod]
+    public void Heartbeat_FailStaleTrials_EndToEnd_FailsStale_And_InvokesCallback()
+    {
+        var callbackTrials = new List<FrozenTrial>();
+        using var rdb = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions
+        {
+            HeartbeatInterval = 1,
+            HeartbeatStaleTrialCallback = (s, t) => callbackTrials.Add(t),
+        });
+        var study = Optuna.CreateStudy(storage: rdb, studyName: "s", sampler: new RandomSampler(0));
+
+        int staleId = study.Storage.CreateNewTrial(study.StudyId);
+        int healthyId = study.Storage.CreateNewTrial(study.StudyId);
+        rdb.RecordHeartbeat(staleId);
+        rdb.RecordHeartbeat(healthyId);
+        BackdateHeartbeat(rdb, staleId, 60);  // only the stale one is past the grace period
+
+        HeartbeatHelpers.FailStaleTrials(study);
+
+        rdb.GetTrial(staleId).State.Should().Be(TrialState.Fail);
+        rdb.GetTrial(healthyId).State.Should().Be(TrialState.Running);
+        callbackTrials.Should().ContainSingle(t => t.TrialId == staleId);
+
+        // Already-failed stale ids are tolerated on a second pass (UpdateFinishedTrialError swallowed).
+        HeartbeatHelpers.FailStaleTrials(study);
+        rdb.GetTrial(staleId).State.Should().Be(TrialState.Fail);
+    }
+
+    [TestMethod]
+    public void Heartbeat_RetryCallback_EndToEnd_Requeues_Waiting_Trial()
+    {
+        using var rdb = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions
+        {
+            HeartbeatInterval = 1,
+            HeartbeatStaleTrialCallback = new RetryHeartbeatStaleTrialCallback(maxRetry: 3),
+        });
+        var study = Optuna.CreateStudy(storage: rdb, studyName: "s", sampler: new RandomSampler(0));
+
+        int staleId = study.Storage.CreateNewTrial(study.StudyId);
+        study.Storage.SetTrialParam(staleId, "x", 1.5, new FloatDistribution(-10, 10));
+        rdb.RecordHeartbeat(staleId);
+        BackdateHeartbeat(rdb, staleId, 60);
+
+        HeartbeatHelpers.FailStaleTrials(study);
+
+        rdb.GetTrial(staleId).State.Should().Be(TrialState.Fail);
+        var requeued = study.GetTrials(deepcopy: false).Single(t => t.State == TrialState.Waiting);
+        requeued.Params["x"].Should().Be(1.5);
+        RetryHeartbeatStaleTrialCallback.RetriedTrialNumber(requeued).Should().Be(rdb.GetTrial(staleId).Number);
+        RetryHeartbeatStaleTrialCallback.RetryHistory(requeued).Should().Equal(rdb.GetTrial(staleId).Number);
+    }
+
+    [TestMethod]
+    public void Heartbeat_Optimize_RecordsHeartbeats_For_Each_Trial()
+    {
+        using var rdb = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 1 });
+        var study = Optuna.CreateStudy(storage: rdb, studyName: "s", sampler: new RandomSampler(0));
+        study.Optimize(t =>
+        {
+            Thread.Sleep(20);  // give the heartbeat thread at least one beat during the trial
+            double x = t.SuggestFloat("x", -10, 10);
+            return x * x;
+        }, nTrials: 3);
+
+        // Every trial has exactly one heartbeat row (UNIQUE(trial_id)); the thread beat during each.
+        HeartbeatRowCount(rdb).Should().Be(3);
+    }
+
     // ------------------------------------------------------------------ helpers
+
+    /// <summary>Capture every <see cref="OptunaWarnings" /> raised while <paramref name="action" /> runs.</summary>
+    private static List<(string Message, WarningCategory Category)> CaptureWarnings(Action action)
+    {
+        var captured = new List<(string, WarningCategory)>();
+        void Handler(string message, WarningCategory category)
+        {
+            lock (captured)
+                captured.Add((message, category));
+        }
+
+        OptunaWarnings.WarningRaised += Handler;
+        try
+        {
+            action();
+        }
+        finally
+        {
+            OptunaWarnings.WarningRaised -= Handler;
+        }
+        return captured;
+    }
+
+    /// <summary>Rows currently in <c>trial_heartbeats</c> (read on the storage's own connection).</summary>
+    private static int HeartbeatRowCount(RDBStorage storage)
+        => int.Parse(Scalar(storage.Connection, "SELECT COUNT(*) FROM trial_heartbeats")!, System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    ///     Push a trial's heartbeat <paramref name="seconds" /> into the past (via the storage's own
+    ///     connection) so it is older than the grace period. SQLite <c>CURRENT_TIMESTAMP</c> is naive
+    ///     UTC in <c>yyyy-MM-dd HH:mm:ss</c> — the exact form <see cref="RDBStorage.GetStaleTrialIds" />
+    ///     parses.
+    /// </summary>
+    private static void BackdateHeartbeat(RDBStorage storage, int trialId, int seconds)
+    {
+        using var cmd = storage.Connection.CreateCommand();
+        cmd.CommandText =
+            $"UPDATE trial_heartbeats SET heartbeat = datetime(CURRENT_TIMESTAMP, '-{seconds} seconds') WHERE trial_id = $id";
+        var p = cmd.CreateParameter();
+        p.ParameterName = "$id";
+        p.Value = trialId;
+        cmd.Parameters.Add(p);
+        cmd.ExecuteNonQuery();
+    }
 
     private static string? Scalar(SqliteConnection conn, string sql)
     {

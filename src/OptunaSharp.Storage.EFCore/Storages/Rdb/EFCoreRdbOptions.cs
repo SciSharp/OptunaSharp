@@ -33,6 +33,15 @@ public sealed class EFCoreRdbOptions
     /// <summary>Callback invoked after each heartbeat-stale trial is failed.</summary>
     public Action<Study, FrozenTrial>? HeartbeatStaleTrialCallback { get; set; }
 
+    /// <summary>
+    ///     Deprecated alias of <see cref="HeartbeatStaleTrialCallback" /> (Python
+    ///     <c>failed_trial_callback</c>, deprecated in v4.9.0, removed in v6.0.0). Specifying both this
+    ///     and <see cref="HeartbeatStaleTrialCallback" /> is an error; specifying this alone is used as
+    ///     the effective callback and emits a deprecation warning. Use
+    ///     <see cref="HeartbeatStaleTrialCallback" /> instead.
+    /// </summary>
+    public Action<Study, FrozenTrial>? FailedTrialCallback { get; set; }
+
     // ------------------------------------------------------------------ connection-string escape hatch
 
     /// <summary>

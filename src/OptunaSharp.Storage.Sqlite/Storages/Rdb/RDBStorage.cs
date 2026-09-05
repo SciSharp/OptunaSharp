@@ -75,13 +75,19 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     <c>2 * heartbeatInterval</c>.
     /// </param>
     /// <param name="heartbeatStaleTrialCallback">Callback invoked after each heartbeat-stale trial is failed.</param>
+    /// <param name="failedTrialCallback">
+    ///     Deprecated alias of <paramref name="heartbeatStaleTrialCallback" /> (Python
+    ///     <c>failed_trial_callback</c>, deprecated in v4.9.0, removed in v6.0.0). Specify only one of
+    ///     the two.
+    /// </param>
     public RDBStorage(
         string url,
         bool skipCompatibilityCheck = false,
         bool skipTableCreation = false,
         int? heartbeatInterval = null,
         int? gracePeriod = null,
-        Action<Study, FrozenTrial>? heartbeatStaleTrialCallback = null)
+        Action<Study, FrozenTrial>? heartbeatStaleTrialCallback = null,
+        Action<Study, FrozenTrial>? failedTrialCallback = null)
         : this(url, new SqliteRdbOptions
         {
             SkipCompatibilityCheck = skipCompatibilityCheck,
@@ -89,6 +95,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             HeartbeatInterval = heartbeatInterval,
             GracePeriod = gracePeriod,
             HeartbeatStaleTrialCallback = heartbeatStaleTrialCallback,
+            FailedTrialCallback = failedTrialCallback,
         })
     {
     }
@@ -158,7 +165,9 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         Url = url;
         _heartbeatInterval = options.HeartbeatInterval;
         _gracePeriod = options.GracePeriod;
-        _heartbeatStaleTrialCallback = options.HeartbeatStaleTrialCallback;
+        // Python: `heartbeat_stale_trial_callback or failed_trial_callback` — the deprecated alias is
+        // used only when the primary is unset (ValidateOptions rejects specifying both).
+        _heartbeatStaleTrialCallback = options.HeartbeatStaleTrialCallback ?? options.FailedTrialCallback;
         _conn = connection;
         _ownsConnection = ownsConnection;
 
@@ -176,13 +185,35 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             CheckTableSchemaCompatibility();
     }
 
+    // Port of the heartbeat validation + warnings block of `RDBStorage.__init__`
+    // (optuna/storages/_rdb/storage.py) — the exact order matters (the experimental warning fires
+    // before the grace-period check; the deprecation warning fires after the "specify only one" check).
     private static void ValidateOptions(SqliteRdbOptions options)
     {
-        if (options.HeartbeatInterval is not null and <= 0)
-            throw new ValueError("The value of `heartbeat_interval` should be a positive integer.");
+        if (options.HeartbeatInterval is not null)
+        {
+            if (options.HeartbeatInterval <= 0)
+                throw new ValueError("The value of `heartbeat_interval` should be a positive integer.");
+            WarnExperimentalArgument("heartbeat_interval");
+        }
         if (options.GracePeriod is not null and <= 0)
             throw new ValueError("The value of `grace_period` should be a positive integer.");
+        if (options.HeartbeatStaleTrialCallback is not null && options.FailedTrialCallback is not null)
+            throw new ValueError(
+                "Specify only one of `heartbeat_stale_trial_callback` and `failed_trial_callback`.");
+        if (options.FailedTrialCallback is not null)
+            OptunaWarnings.Warn(
+                "`failed_trial_callback` has been deprecated in v4.9.0. This feature will be removed in " +
+                "v6.0.0. See https://github.com/optuna/optuna/releases/tag/v4.9.0. " +
+                "Use `heartbeat_stale_trial_callback` instead.",
+                WarningCategory.FutureWarning);
     }
+
+    /// <summary>Python <c>optuna._experimental.warn_experimental_argument</c>.</summary>
+    private static void WarnExperimentalArgument(string name)
+        => OptunaWarnings.Warn(
+            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
+            WarningCategory.ExperimentalWarning);
 
     private static string FillStorageUrlTemplate(string template)
         => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(CultureInfo.InvariantCulture));

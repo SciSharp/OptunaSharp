@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using AwesomeAssertions;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -156,5 +157,95 @@ public class SqliteRdbInteropParityTests : OptunaInteropTestBase
         PyExec($"mo = optuna.load_study(study_name='mo', storage=r'{Url}')");
         StudySnapshot.AssertParity(PyStudyState("single"), csSingle, DatetimeComparison.NullnessOnly);
         StudySnapshot.AssertParity(PyStudyState("mo"), csMo, DatetimeComparison.NullnessOnly);
+    }
+
+    // ------------------------------------------------------------------ heartbeat parity (plan 1.3)
+    //
+    // The heartbeat table + stale-detection logic must agree byte-for-byte across the two runtimes over
+    // the SAME SQLite file: Optuna records the heartbeat as naive-UTC `yyyy-MM-dd HH:mm:ss` TEXT (via
+    // `func.now()` == `CURRENT_TIMESTAMP`, no microseconds), which is exactly the form OptunaSharp writes
+    // and parses. Both use `heartbeat_interval=1, grace_period=3600` so the few seconds of cross-process
+    // latency never flips the fresh trial; the stale trial is backdated 7200s, well past the grace period.
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void Heartbeat_StaleDetection_Python_Writes_CSharp_Reads()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // Python creates a study with one stale (backdated) and one fresh running trial, and computes
+        // its own stale set.
+        PyExec(
+            "import sqlalchemy\n" +
+            $"hb = optuna.storages.RDBStorage(r'{Url}', heartbeat_interval=1, grace_period=3600)\n" +
+            "hb_study = optuna.create_study(storage=hb, study_name='hb')\n" +
+            "hb_sid = hb_study._study_id\n" +
+            "hb_stale_tid = hb.create_new_trial(hb_sid)\n" +
+            "hb_healthy_tid = hb.create_new_trial(hb_sid)\n" +
+            "hb.record_heartbeat(hb_stale_tid)\n" +
+            "hb.record_heartbeat(hb_healthy_tid)\n" +
+            "with hb.engine.begin() as c:\n" +
+            "    c.execute(sqlalchemy.text(\"UPDATE trial_heartbeats SET heartbeat = datetime('now','-7200 seconds') WHERE trial_id = :t\"), {'t': hb_stale_tid})\n" +
+            "hb_stale_number = hb.get_trial(hb_stale_tid).number\n" +
+            "hb_healthy_number = hb.get_trial(hb_healthy_tid).number\n" +
+            "hb_py_stale_numbers = sorted(hb.get_trial(t).number for t in hb._get_stale_trial_ids(hb_sid))\n" +
+            "hb.remove_session()\n" +
+            "hb.engine.dispose()\n");
+
+        int staleNumber = (int)PyLong("hb_stale_number");
+        int healthyNumber = (int)PyLong("hb_healthy_number");
+
+        // OptunaSharp opens the same file and computes its own stale set from Optuna's heartbeat rows.
+        using var rdb = new RDBStorage(Url, heartbeatInterval: 1, gracePeriod: 3600);
+        int sid = rdb.GetStudyIdFromName("hb");
+        var csStaleNumbers = rdb.GetStaleTrialIds(sid).Select(t => rdb.GetTrial(t).Number).OrderBy(n => n).ToList();
+
+        // OptunaSharp flags exactly the backdated trial.
+        csStaleNumbers.Should().Equal(staleNumber);
+        csStaleNumbers.Should().NotContain(healthyNumber);
+        // ...and it agrees, trial-for-trial, with Optuna's own `_get_stale_trial_ids` on the same DB.
+        PyLong("len(hb_py_stale_numbers)").Should().Be(1);
+        ((int)PyLong("hb_py_stale_numbers[0]")).Should().Be(staleNumber);
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void Heartbeat_StaleDetection_CSharp_Writes_Python_Reads()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        int staleNumber;
+        int healthyNumber;
+        using (var rdb = new RDBStorage(Url, heartbeatInterval: 1, gracePeriod: 3600))
+        {
+            int sid = rdb.CreateNewStudy(new[] { StudyDirection.Minimize }, "hb");
+            int staleId = rdb.CreateNewTrial(sid);
+            int healthyId = rdb.CreateNewTrial(sid);
+            rdb.RecordHeartbeat(staleId);
+            rdb.RecordHeartbeat(healthyId);
+            staleNumber = rdb.GetTrial(staleId).Number;
+            healthyNumber = rdb.GetTrial(healthyId).Number;
+        } // dispose releases the file for Python
+
+        // Optuna opens the same DB and reads OptunaSharp's heartbeat rows: both fresh -> nothing stale.
+        PyExec(
+            "import sqlalchemy\n" +
+            $"hb = optuna.storages.RDBStorage(r'{Url}', heartbeat_interval=1, grace_period=3600)\n" +
+            "hb_sid = hb.get_study_id_from_name('hb')\n");
+        PyLong("len(hb._get_stale_trial_ids(hb_sid))")
+            .Should().Be(0, "OptunaSharp's fresh heartbeats are not stale to Optuna");
+
+        // Backdate the OptunaSharp-written heartbeat; Optuna must now flag exactly that trial.
+        PyExec(
+            $"hb_stale_tid = hb.get_trial_id_from_study_id_trial_number(hb_sid, {staleNumber})\n" +
+            "with hb.engine.begin() as c:\n" +
+            "    c.execute(sqlalchemy.text(\"UPDATE trial_heartbeats SET heartbeat = datetime('now','-7200 seconds') WHERE trial_id = :t\"), {'t': hb_stale_tid})\n" +
+            "hb_py_stale_numbers = sorted(hb.get_trial(t).number for t in hb._get_stale_trial_ids(hb_sid))\n" +
+            "hb.remove_session()\n" +
+            "hb.engine.dispose()\n");
+
+        PyLong("len(hb_py_stale_numbers)").Should().Be(1, "Optuna read OptunaSharp's heartbeat row and flags the backdated trial");
+        ((int)PyLong("hb_py_stale_numbers[0]")).Should().Be(staleNumber);
+        healthyNumber.Should().NotBe(staleNumber);
     }
 }
