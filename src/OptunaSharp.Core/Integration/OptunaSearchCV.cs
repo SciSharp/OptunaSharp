@@ -14,8 +14,7 @@ namespace OptunaSharp.Integration;
 /// <summary>
 ///     Hyperparameter search with cross-validation. A .NET port of
 ///     <c>optuna_integration.sklearn.OptunaSearchCV</c> — the Optuna-driven, scikit-learn-<c>GridSearchCV</c>-style
-///     meta-estimator, here adapted over the <see cref="ICrossValidationEstimator" /> seam (default
-///     backend: <see cref="MLNetEstimator" />, ML.NET).
+///     meta-estimator, here driven over the <see cref="ICrossValidationEstimator" /> seam.
 ///
 ///     <para>
 ///     Each trial samples one value per entry of <see cref="ParamDistributions" /> from the study's
@@ -27,21 +26,27 @@ namespace OptunaSharp.Integration;
 ///     </para>
 ///
 ///     <para>
-///     <b>This is a Phase-6 adapter, not a behavior-parity port</b> (there is no Python oracle for the
-///     ML.NET stack). The genuinely portable essence — the Optuna search, the attribute bookkeeping, the
-///     terminator reporting, and the refit-timing surface — is reproduced faithfully. Concerns that are
-///     scikit-learn-estimator specifics live on the estimator seam instead: the fold strategy
-///     (<c>cv</c> — KFold vs. StratifiedKFold, the sampling-key column) and the per-fold error policy
-///     (<c>error_score</c>) are configured on <see cref="MLNetEstimator" />. The <c>partial_fit</c>-based
-///     pruning path (<c>enable_pruning</c> / <c>max_iter</c>) and <c>subsample</c> from the Python class
-///     are <b>not</b> ported in this first cut (ML.NET has no universal online-learning surface); prune an
-///     iterative estimator with <see cref="PruningCallback" /> inside its own training loop instead.
+///     The genuinely portable essence — the Optuna search, the attribute bookkeeping, the terminator
+///     reporting, and the refit-timing surface — is reproduced faithfully and is Optuna-behavior-exact.
+///     How byte-exact the <b>end-to-end</b> result is against Python then depends on the estimator seam:
+///     with the <b>native scikit-learn backend</b> (<c>OptunaSharp.Integration.Sklearn.SklearnEstimator</c>
+///     — a byte-exact port of <c>RandomForestRegressor</c> + <c>KFold</c> + <c>cross_validate</c> + the
+///     <c>r2</c> scorer) the whole search matches <c>optuna_integration.OptunaSearchCV</c> byte-for-byte;
+///     with the <b>ML.NET backend</b> (<c>OptunaSharp.Integration.MLNetEstimator</c>) it is an adapter
+///     (validated by usage, not bit-parity, since ML.NET is not scikit-learn). Concerns that are
+///     scikit-learn-estimator specifics live on the estimator seam: the fold strategy (<c>cv</c> — KFold vs.
+///     StratifiedKFold) and the per-fold error policy (<c>error_score</c>) are configured there. The
+///     <c>partial_fit</c>-based pruning path (<c>enable_pruning</c> / <c>max_iter</c>) and <c>subsample</c>
+///     from the Python class are <b>not</b> ported in this first cut; prune an iterative estimator with
+///     <see cref="PruningCallback" /> inside its own training loop instead.
 ///     </para>
 ///
 ///     <para>
 ///     Prediction is done through the refit estimator: after <see cref="Fit" /> with <c>refit = true</c>,
-///     downcast <see cref="Estimator" /> to <see cref="MLNetEstimator" /> and call its
-///     <c>Predict</c> / <c>Transform</c> / <c>Score</c>.
+///     downcast <see cref="Estimator" /> to the concrete backend
+///     (<c>OptunaSharp.Integration.Sklearn.SklearnEstimator</c> or
+///     <c>OptunaSharp.Integration.MLNetEstimator</c>) and call its <c>Predict</c> / <c>Transform</c> /
+///     <c>Score</c>.
 ///     </para>
 /// </summary>
 public class OptunaSearchCV
@@ -62,8 +67,9 @@ public class OptunaSearchCV
     private bool _isFitted;
 
     /// <param name="estimator">
-    ///     The estimator + cross-validation + scorer bundle to search over (default:
-    ///     <see cref="MLNetEstimator" />).
+    ///     The estimator + cross-validation + scorer bundle to search over (e.g.
+    ///     <c>OptunaSharp.Integration.Sklearn.SklearnEstimator</c> for byte-exact parity, or
+    ///     <c>OptunaSharp.Integration.MLNetEstimator</c> for the ML.NET adapter).
     /// </param>
     /// <param name="paramDistributions">
     ///     Optuna parameter name → <see cref="BaseDistribution" /> to sample that parameter from.
@@ -131,7 +137,7 @@ public class OptunaSearchCV
     /// <summary>The parameter-name → distribution map searched over.</summary>
     public IReadOnlyDictionary<string, BaseDistribution> ParamDistributions => _paramDistributions;
 
-    /// <summary>The estimator being searched. After a refit, downcast to <see cref="MLNetEstimator" /> to predict.</summary>
+    /// <summary>The estimator being searched. After a refit, downcast to the concrete backend to predict.</summary>
     public ICrossValidationEstimator Estimator => _estimator;
 
     /// <summary>The actual study driving the search. Available after <see cref="Fit" />.</summary>

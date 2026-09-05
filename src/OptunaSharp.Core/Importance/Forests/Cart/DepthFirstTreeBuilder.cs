@@ -79,11 +79,11 @@ internal static class DepthFirstTreeBuilder
     internal static SklearnLikeTree Build(
         float[,] x, double[] y, double[] sampleWeight, int nFeatures,
         int maxDepth, int minSamplesSplit, int minSamplesLeaf, double minWeightLeaf, double minImpurityDecrease,
-        uint randRSeed)
+        uint randRSeed, int maxFeatures = -1)
     {
         var tree = new CartNodeTree(nFeatures);
         var splitter = new BestSplitter(minSamplesLeaf, minWeightLeaf);
-        splitter.Init(x, y, sampleWeight, nFeatures, randRSeed);
+        splitter.Init(x, y, sampleWeight, nFeatures, randRSeed, maxFeatures);
 
         int nNodeSamples = splitter.NSamples;
         bool first = true;

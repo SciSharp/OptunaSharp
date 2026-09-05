@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp</RootNamespace>
+    <AssemblyName>OptunaSharp.Integration.Sklearn</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+
+    <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/
+         license/version) is centralized in ../../Directory.Build.props.
+
+         THE scikit-learn INTEGRATION — the .NET analogue of optuna_integration.sklearn. Unlike the
+         other OptunaSharp.Integration.* satellites, this one pulls NO foreign runtime: it is a
+         pure-managed, byte-exact port of the scikit-learn pieces OptunaSearchCV drives —
+         RandomForestRegressor (fit + predict), KFold / check_cv, cross_validate, and the r2 scorer —
+         over Core's already-bit-exact CART. Its SklearnEstimator makes the Core OptunaSearchCV
+         end-to-end byte-exact against Python's optuna_integration.OptunaSearchCV (whereas the ML.NET
+         backend, OptunaSharp.Integration.MLNetEstimator, is a usage-validated adapter). Because it is
+         pure managed (NumSharp only, same as Core), it could have lived in Core; it ships as a
+         satellite so Core's public surface stays 1-to-1 with optuna (scikit-learn is not part of
+         optuna's own package), mirroring how optuna_integration.sklearn is a separate module. -->
+    <PackageId>OptunaSharp.Integration.Sklearn</PackageId>
+    <Description>The scikit-learn integration for OptunaSharp (a .NET port of Optuna): a pure-managed, byte-exact port of the scikit-learn pieces that OptunaSearchCV drives — RandomForestRegressor (fit + predict), KFold / check_cv, cross_validate, and the r2 scorer — reusing Core's bit-exact scikit-learn CART. SklearnEstimator implements the ICrossValidationEstimator seam so the Core OptunaSearchCV runs end-to-end byte-exact against Python's optuna_integration.OptunaSearchCV (RandomForestRegressor + KFold + cross_validate + r2). Unlike the ML.NET adapter (OptunaSharp.Integration.MLNetEstimator), this backend carries NO foreign runtime — it depends only on OptunaSharp Core (NumSharp). Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;Integration;scikit-learn;sklearn;OptunaSearchCV;GridSearchCV;RandomizedSearchCV;CrossValidation;KFold;RandomForest;RandomForestRegressor;r2;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
+
+    <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on missing/malformed
+         doc comments — the surface is ported to match scikit-learn/Optuna, not curated per-member. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <!-- Emit the .pdb inside the .nupkg (the release pipeline pushes only *.nupkg). -->
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+
+    <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- Reuse the shared OptunaSharp package icon. -->
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core is in-repo, so reference it by project. Packing records a clean "OptunaSharp" package
+         dependency. Core transitively provides NumSharp + the internal CART (DepthFirstTreeBuilder /
+         BestSplitter / SklearnLikeTree / SklearnRandom), LazyRandomState, MathUtil.PairwiseSum, the
+         ICrossValidationEstimator / OptunaSearchCV seam, and the ValueError type — all granted via
+         InternalsVisibleTo in Core's Assembly/Properties.cs. -->
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

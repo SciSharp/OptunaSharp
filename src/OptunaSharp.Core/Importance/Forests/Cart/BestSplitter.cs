@@ -35,7 +35,15 @@ internal sealed class BestSplitter
     }
 
     /// <summary><c>Splitter.init</c> — seed <c>our_rand_r</c>, gather positively-weighted samples.</summary>
-    internal void Init(float[,] x, double[] y, double[] sampleWeight, int nFeatures, uint randRSeed)
+    /// <param name="maxFeatures">
+    ///     The number of features to consider per split — scikit-learn's resolved <c>max_features</c>.
+    ///     Pass <c>&lt; 0</c> (or <c>nFeatures</c>) to consider all features, the fANOVA/MDI configuration
+    ///     (<c>max_features=1.0</c>); a smaller value reproduces a general
+    ///     <c>RandomForestRegressor</c>'s per-node feature subsampling (the Fisher–Yates draw over
+    ///     <see cref="SklearnRandom.RandInt" /> is consumed identically either way, so the RNG stays in
+    ///     lock-step with scikit-learn).
+    /// </param>
+    internal void Init(float[,] x, double[] y, double[] sampleWeight, int nFeatures, uint randRSeed, int maxFeatures = -1)
     {
         _randRState = randRSeed;
         int nTotal = y.Length;
@@ -56,7 +64,9 @@ internal sealed class BestSplitter
         _weightedNSamples = weightedNSamples;
 
         _nFeatures = nFeatures;
-        _maxFeatures = nFeatures;  // Optuna leaves RandomForestRegressor's default max_features=1.0 -> all
+        // Optuna's fANOVA/MDI leaves RandomForestRegressor's default max_features=1.0 -> all features;
+        // a general forest passes its resolved max_features (see the Init doc).
+        _maxFeatures = maxFeatures < 0 ? nFeatures : maxFeatures;
         _features = new int[nFeatures];
         for (int i = 0; i < nFeatures; i++)
             _features[i] = i;

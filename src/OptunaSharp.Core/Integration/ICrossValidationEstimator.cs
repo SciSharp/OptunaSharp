@@ -30,9 +30,17 @@ public readonly record struct CrossValidationFoldResult(
 ///     <see cref="OptunaSearchCV" /> owns the Optuna search: it samples a parameter set per trial, calls
 ///     <see cref="CrossValidate" /> to score it, records the per-fold / mean / std user attributes, reports
 ///     the cross-validation scores to the terminator, and maximizes the mean validation score — exactly as
-///     the Python <c>_Objective</c> does. The default ML.NET implementation is
-///     <see cref="MLNetEstimator" />; a custom / in-memory implementation (e.g. for tests) only needs to
-///     produce fold scores.
+///     the Python <c>_Objective</c> does.
+///     </para>
+///
+///     <para>
+///     Two backends ship with OptunaSharp. The <b>native scikit-learn port</b> —
+///     <c>OptunaSharp.Integration.Sklearn.SklearnEstimator</c> (a pure-managed, byte-exact port of
+///     <c>RandomForestRegressor</c> + <c>KFold</c> + <c>cross_validate</c> + the <c>r2</c> scorer) — makes
+///     the whole search <b>end-to-end byte-exact</b> against Python's <c>optuna_integration.OptunaSearchCV</c>.
+///     The <b>ML.NET adapter</b> — <c>OptunaSharp.Integration.MLNetEstimator</c> — drives an arbitrary
+///     ML.NET pipeline (validated by usage, not bit-parity, since ML.NET is not scikit-learn). A custom /
+///     in-memory implementation (e.g. for tests) only needs to produce fold scores.
 ///     </para>
 /// </summary>
 public interface ICrossValidationEstimator
