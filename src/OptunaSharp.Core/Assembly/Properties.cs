@@ -80,6 +80,15 @@ using System.Runtime.CompilerServices;
 // OptunaWarnings.WarningRaised event (same reason the interop suite is a friend).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The CLI (satellite package OptunaSharp.Cli, Phase 5.3 — the port of optuna/cli.py) reproduces the
+// exact stdout of the `optuna` command, so it renders through the same two internal Python-fidelity
+// helpers Optuna's output goes through: PyJson (json.dumps — the value/json formats) and PythonRepr
+// (str()/repr() of floats/tuples/dicts — the value/table formats). Everything else the CLI needs
+// (records/columns, enum names, multi-objective, distribution JSON) it builds over Core's public API.
+[assembly: InternalsVisibleTo("OptunaSharp.Cli, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// Its test project asserts stdout parity against the same internals (and against live optuna's CLI).
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Cli, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 /// <summary>
 ///     The public half of the strong-name key OptunaSharp is signed with, as the hex literal
 ///     <see cref="InternalsVisibleToAttribute" /> expects.

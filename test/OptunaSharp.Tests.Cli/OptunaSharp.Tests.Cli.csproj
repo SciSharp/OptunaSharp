@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>OptunaSharp.Tests.Cli</RootNamespace>
+    <!-- AssemblyName matches the friend granted in OptunaSharp.Cli's and Core's Assembly/Properties.cs,
+         so these tests reach the internal OutputFormat / Records / PyTimedelta and Core's PyJson/PythonRepr.
+         Strong-naming is repo-wide in ../../Directory.Build.props. -->
+    <AssemblyName>OptunaSharp.Tests.Cli</AssemblyName>
+    <!-- The CLI constructs samplers by reflection (the `ask` command); keep metadata. -->
+    <PublishAot>false</PublishAot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MSTest" Version="3.8.3" />
+    <PackageReference Include="AwesomeAssertions" Version="9.3.0" />
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The CLI under test (brings Core + the SQLite/StackExchange.Redis storage satellites it wires). -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Cli\OptunaSharp.Cli.csproj" />
+    <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

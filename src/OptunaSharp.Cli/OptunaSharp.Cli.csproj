@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>OptunaSharp</RootNamespace>
+    <AssemblyName>OptunaSharp.Cli</AssemblyName>
+    <Nullable>enable</Nullable>
+
+    <!-- The `ask` command constructs optuna.samplers.<Name>(**kwargs) by reflection, so the assembly
+         must keep its metadata: no AOT, no trimming. -->
+    <PublishAot>false</PublishAot>
+    <IsTrimmable>false</IsTrimmable>
+
+    <!-- Ships as a .NET global tool: `dotnet tool install -g OptunaSharp.Cli` exposes `optunasharp`
+         (NOT `optuna` — that name belongs to the Python package; this is the drop-in .NET port). -->
+    <PackageId>OptunaSharp.Cli</PackageId>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>optunasharp</ToolCommandName>
+    <Description>The OptunaSharp command-line tool — the port of the `optuna` CLI (optuna/cli.py) on System.CommandLine + YamlDotNet. Create/inspect studies and ask/tell trials against journal-file, SQLite (RDBStorage) and Redis storages from the shell, with byte-identical value/json/table output. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;CLI;Tool;dotnet-tool;HyperparameterOptimization;HPO;SciSharp</PackageTags>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <!-- A clean, stable version string (System.CommandLine's built-in version option prints the
+         assembly informational version; drop the git-hash suffix). -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- System.CommandLine: the argparse replacement (2.0.11 GA). YamlDotNet: the `-f yaml` output
+         (Python's yaml.safe_dump). -->
+    <PackageReference Include="System.CommandLine" Version="2.0.11" />
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core (journal-file storage + the study/trial API) plus the two storage satellites the drop-in
+         `optuna` CLI resolves by URL: SQLite (sqlite:/// -> RDBStorage) and StackExchange.Redis
+         (redis:// -> JournalRedisBackend). Optuna's CLI can reach every storage class; these two cover
+         the shipped ones (EF-Core RDB is Phase 4.2). -->
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+    <ProjectReference Include="..\OptunaSharp.Storage.Sqlite\OptunaSharp.Storage.Sqlite.csproj" />
+    <ProjectReference Include="..\OptunaSharp.Storage.StackExchange.Redis\OptunaSharp.Storage.StackExchange.Redis.csproj" />
+  </ItemGroup>
+
+</Project>

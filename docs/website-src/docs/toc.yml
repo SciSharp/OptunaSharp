@@ -32,3 +32,5 @@
       href: visualization.md
     - name: Logging
       href: logging.md
+    - name: Command-Line Interface
+      href: cli.md
