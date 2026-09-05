@@ -21,7 +21,11 @@ bld/
 
 # The NuGet packages this repo produces (src/*/PackageOutputPath -> ../../packages)
 /packages/
-artifacts/
+# Root-anchored: this is the build-output dir the CI pack steps write to (artifacts/nuget,
+# artifacts/signing-check). It MUST stay anchored with a leading slash — an unanchored `artifacts/`
+# also matches src/OptunaSharp.Core/Artifacts/ (case-insensitively on Windows) and silently un-tracks
+# that shipping source, breaking a clean checkout / CI build (CS0234).
+/artifacts/
 
 # Visual Studio / Rider / VS Code
 .vs/
