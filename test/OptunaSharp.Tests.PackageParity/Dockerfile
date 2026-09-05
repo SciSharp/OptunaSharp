@@ -12,10 +12,18 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0
 
 # libgomp1 is xgboost/lightgbm's OpenMP runtime; python3 + pip drive the real-package oracles.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-pip libgomp1 \
+ && apt-get install -y --no-install-recommends python3 python3-pip libgomp1 git \
  && rm -rf /var/lib/apt/lists/*
-RUN pip3 install --no-cache-dir --break-system-packages \
-      optuna xgboost lightgbm scikit-learn numpy
+# Install the VENDORED optuna — the EXACT submodule commit (5.0.0.dev @ f6898da) OptunaSharp's samplers
+# were ported from. PyPI optuna is a different TPE implementation and its trajectory diverges wildly
+# (the SvmSklearn_Tpe oracle went 0.034 -> 4.73). numpy is pinned to 2.4.2 (the port's byte-exact
+# target; the erf-tolerant TPE parity then holds at 1e-9, exactly as the live interop suite does).
+# The container has no access to src/ (isolation), so it fetches the commit from GitHub instead.
+RUN pip3 install --no-cache-dir --break-system-packages "numpy==2.4.2" \
+ && pip3 install --no-cache-dir --break-system-packages \
+      "optuna @ git+https://github.com/optuna/optuna.git@f6898dab5bba804dd2bdb6ce7cc06b41b51506e4" \
+      xgboost lightgbm scikit-learn \
+ && pip3 install --no-cache-dir --break-system-packages "numpy==2.4.2"
 
 WORKDIR /work
 ARG OPTUNASHARP_VERSION=0.1.0

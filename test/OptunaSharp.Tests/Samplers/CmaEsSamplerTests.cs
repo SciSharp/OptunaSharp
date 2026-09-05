@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using AwesomeAssertions;
 using OptunaSharp.Internal;
@@ -23,22 +22,18 @@ public class CmaEsSamplerTests
 {
     private static double FromHex(string h) => BitConverter.ToDouble(Convert.FromHexString(h));
 
-    // The pinned trajectories below are the literal x86-64 output of live Optuna (numpy's win-amd64 /
-    // manylinux OpenBLAS). On x64 OptunaSharp reproduces them BIT-FOR-BIT; on arm64 (e.g. the
-    // macOS-latest runner) a few late-generation coordinates in the SepCMA / margin variants drift by
-    // ~1 ULP — a different hardware FMA/rounding in the non-BLAS update arithmetic — so the pin is
-    // asserted bit-exact where it was captured and to a tight tolerance elsewhere. The test still RUNS
-    // and validates the whole trajectory on every architecture (nothing is skipped).
-    private static readonly bool PinnedArch =
-        RuntimeInformation.ProcessArchitecture is Architecture.X64 or Architecture.X86;
-
+    // The pinned trajectories below are the literal output of live Optuna captured on one x86-64 CPU.
+    // They are NOT bit-reproducible across machines: the CMA `eigh` runs through OpenBLAS' DYNAMIC_ARCH
+    // dispatch (a different micro-kernel per CPU — so even two x64 CI runners disagree in the last ULP
+    // on the SepCMA / margin variants), and arm64 additionally uses a different libm. So the pin is
+    // asserted to a tight relative tolerance rather than bit-for-bit: it validates the whole trajectory
+    // on every runner/architecture (nothing is skipped), and a real regression is orders of magnitude
+    // larger than the ~1-ULP hardware drift this absorbs. Byte-exact reproduction is a per-CPU property
+    // verified in the live interop suite, not a portable unit gate.
     private static void ShouldMatchPin(double actual, string hex, string because)
     {
         double expected = FromHex(hex);
-        if (PinnedArch)
-            actual.Should().Be(expected, because);
-        else
-            actual.Should().BeApproximately(expected, Math.Abs(expected) * 1e-9 + 1e-12, because);
+        actual.Should().BeApproximately(expected, Math.Abs(expected) * 1e-9 + 1e-12, because);
     }
 
     // seed=42, dim2 sphere shift (0.7,-1.3), 10 trials, from live Optuna 5.0.0.dev + cmaes 0.13.0.
