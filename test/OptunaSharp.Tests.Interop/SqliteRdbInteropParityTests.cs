@@ -248,4 +248,50 @@ public class SqliteRdbInteropParityTests : OptunaInteropTestBase
         ((int)PyLong("hb_py_stale_numbers[0]")).Should().Be(staleNumber);
         healthyNumber.Should().NotBe(staleNumber);
     }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void Heartbeat_RetryStaleTrialCallback_Parity_With_Live_Optuna()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        // Optuna: fail a trial, then RetryHeartbeatStaleTrialCallback(max_retry=3,
+        // inherit_intermediate_values=True) recreates it as WAITING; read back the requeue.
+        PyExec(
+            "from optuna.storages import RetryHeartbeatStaleTrialCallback as _R\n" +
+            "rstudy = optuna.create_study()\n" +
+            "rstudy.add_trial(optuna.create_trial(\n" +
+            "    state=optuna.trial.TrialState.FAIL,\n" +
+            "    params={'x': 1.5},\n" +
+            "    distributions={'x': optuna.distributions.FloatDistribution(-10, 10)},\n" +
+            "    user_attrs={'owner': 'eli'},\n" +
+            "    system_attrs={'custom': 42},\n" +
+            "    intermediate_values={0: 0.5}))\n" +
+            "_R(max_retry=3, inherit_intermediate_values=True)(rstudy, rstudy.trials[0])\n" +
+            "rwait = [t for t in rstudy.trials if t.state == optuna.trial.TrialState.WAITING][0]\n");
+
+        // OptunaSharp: the identical sequence over an in-memory study.
+        var study = Optuna.CreateStudy();
+        study.AddTrial(FrozenTrial.CreateTrial(
+            state: TrialState.Fail,
+            @params: new OrderedDict<string, object?> { ["x"] = 1.5 },
+            distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(-10, 10) },
+            userAttrs: new OrderedDict<string, object?> { ["owner"] = "eli" },
+            systemAttrs: new OrderedDict<string, object?> { ["custom"] = 42L },
+            intermediateValues: new OrderedDict<int, double> { [0] = 0.5 }));
+        var failed = study.GetTrials(deepcopy: false).Single();
+        new RetryHeartbeatStaleTrialCallback(maxRetry: 3, inheritIntermediateValues: true).Invoke(study, failed);
+        var wait = study.GetTrials(deepcopy: false).Single(t => t.State == TrialState.Waiting);
+
+        // Retry bookkeeping matches Optuna exactly (failed_trial + retry_history semantics).
+        RetryHeartbeatStaleTrialCallback.RetriedTrialNumber(wait).Should().Be((int)PyLong("_R.retried_trial_number(rwait)"));
+        RetryHeartbeatStaleTrialCallback.RetryHistory(wait).Should().Equal((int)PyLong("_R.retry_history(rwait)[0]"));
+        PyLong("len(_R.retry_history(rwait))").Should().Be(RetryHeartbeatStaleTrialCallback.RetryHistory(wait).Count);
+
+        // Inherited fields match Optuna.
+        wait.Params["x"].Should().Be(PyFloat("rwait.params['x']"));
+        wait.IntermediateValues[0].Should().Be(PyFloat("rwait.intermediate_values[0]"));
+        wait.UserAttrs["owner"].Should().Be(PyStr("rwait.user_attrs['owner']"));
+        ((long)wait.SystemAttrs["custom"]!).Should().Be(PyLong("rwait.system_attrs['custom']"));
+    }
 }

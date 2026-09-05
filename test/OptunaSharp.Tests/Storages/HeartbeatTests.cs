@@ -4,6 +4,8 @@ using System.Linq;
 using System.Threading;
 using AwesomeAssertions;
 using OptunaSharp.Collections;
+using OptunaSharp.Distributions;
+using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
 using OptunaSharp.Storages;
 
@@ -131,5 +133,287 @@ public class HeartbeatTests
         secondRetry.DatetimeComplete = DateTime.Now;
         callback.Invoke(study, secondRetry);
         study.GetTrials(deepcopy: false).Should().HaveCount(before, "maxRetry=2 exhausted -> no new trial");
+    }
+
+    // ------------------------------------------------------------------ heartbeat threads
+
+    /// <summary>An <see cref="IBaseHeartbeat" /> that only counts beats — for the thread-loop tests.</summary>
+    private sealed class CountingHeartbeat : IBaseHeartbeat
+    {
+        private readonly int _intervalSeconds;
+        private int _count;
+        private readonly ManualResetEventSlim _twoBeats = new(false);
+
+        public CountingHeartbeat(int intervalSeconds) => _intervalSeconds = intervalSeconds;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public bool WaitForTwoBeats(TimeSpan timeout) => _twoBeats.Wait(timeout);
+
+        public void RecordHeartbeat(int trialId)
+        {
+            if (Interlocked.Increment(ref _count) >= 2)
+                _twoBeats.Set();
+        }
+
+        public List<int> GetStaleTrialIds(int studyId) => new();
+        public int? GetHeartbeatInterval() => _intervalSeconds;
+        public Action<Study, FrozenTrial>? GetHeartbeatStaleTrialCallback() => null;
+    }
+
+    [TestMethod]
+    public void GetHeartbeatThread_Enabled_Returns_HeartbeatThread_Otherwise_Null()
+    {
+        HeartbeatHelpers.GetHeartbeatThread(1, new HeartbeatStorage())
+            .Should().BeOfType<HeartbeatThread>();
+        HeartbeatHelpers.GetHeartbeatThread(1, new InMemoryStorage())
+            .Should().BeOfType<NullHeartbeatThread>("a non-heartbeat storage gets the no-op thread");
+        HeartbeatHelpers.GetHeartbeatThread(1, new HeartbeatStorage { Interval = null })
+            .Should().BeOfType<NullHeartbeatThread>("a heartbeat storage with no interval is disabled");
+    }
+
+    [TestMethod]
+    public void NullHeartbeatThread_Start_Join_Dispose_AreNoops()
+    {
+        var thread = new NullHeartbeatThread();
+        Action act = () =>
+        {
+            thread.Start();
+            thread.Join();
+            thread.Dispose();
+        };
+        act.Should().NotThrow();
+    }
+
+    [TestMethod]
+    public void HeartbeatThread_Beats_Repeatedly_Then_Stops_On_Dispose()
+    {
+        var hb = new CountingHeartbeat(1);
+        var thread = new HeartbeatThread(7, hb);
+        thread.Start();
+
+        // The loop beats immediately, then again after each interval — proving the while-loop repeats.
+        hb.WaitForTwoBeats(TimeSpan.FromSeconds(5)).Should().BeTrue("the thread beats again after the interval");
+
+        thread.Dispose();  // Python __exit__ -> Join: sets the stop event and joins the thread.
+        int afterStop = hb.Count;
+
+        Thread.Sleep(1300);  // longer than the 1s interval
+        hb.Count.Should().Be(afterStop, "no beats occur after Join/Dispose");
+    }
+
+    // ------------------------------------------------------------------ fail_stale_trials edge cases
+
+    [TestMethod]
+    public void FailStaleTrials_Noop_For_NonHeartbeat_Storage()
+    {
+        var storage = new InMemoryStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+        int trialId = storage.CreateNewTrial(study.StudyId);
+
+        Action act = () => HeartbeatHelpers.FailStaleTrials(study);  // storage is not IBaseHeartbeat
+        act.Should().NotThrow();
+        storage.GetTrial(trialId).State.Should().Be(TrialState.Running);
+    }
+
+    [TestMethod]
+    public void FailStaleTrials_Noop_When_Heartbeat_Disabled()
+    {
+        var storage = new HeartbeatStorage { Interval = null };  // heartbeat disabled
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+        int staleId = storage.CreateNewTrial(study.StudyId);
+        storage.StaleTrialIds.Add(staleId);
+
+        HeartbeatHelpers.FailStaleTrials(study);
+
+        storage.GetTrial(staleId).State.Should().Be(TrialState.Running, "a disabled heartbeat fails nothing");
+    }
+
+    [TestMethod]
+    public void FailStaleTrials_Fails_Every_Stale_Trial_With_Null_Callback()
+    {
+        var storage = new HeartbeatStorage();  // Interval = 1, StaleCallback = null
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+        int s1 = storage.CreateNewTrial(study.StudyId);
+        int s2 = storage.CreateNewTrial(study.StudyId);
+        int healthy = storage.CreateNewTrial(study.StudyId);
+        storage.StaleTrialIds.Add(s1);
+        storage.StaleTrialIds.Add(s2);
+
+        HeartbeatHelpers.FailStaleTrials(study);  // callback is null -> trials fail, no callback
+
+        storage.GetTrial(s1).State.Should().Be(TrialState.Fail);
+        storage.GetTrial(s2).State.Should().Be(TrialState.Fail);
+        storage.GetTrial(healthy).State.Should().Be(TrialState.Running);
+    }
+
+    // ------------------------------------------------------------------ RetryHeartbeatStaleTrialCallback surface
+
+    [TestMethod]
+    public void RetriedTrialNumber_And_RetryHistory_Are_Null_And_Empty_For_A_Fresh_Trial()
+    {
+        var fresh = FrozenTrial.CreateTrial(state: TrialState.Complete, value: 1.0);
+        RetryHeartbeatStaleTrialCallback.RetriedTrialNumber(fresh).Should().BeNull();
+        RetryHeartbeatStaleTrialCallback.RetryHistory(fresh).Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void RetryCallback_Does_Not_Inherit_IntermediateValues_By_Default()
+    {
+        var storage = new HeartbeatStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+        var callback = new RetryHeartbeatStaleTrialCallback();  // inheritIntermediateValues defaults to false
+
+        study.AddTrial(FrozenTrial.CreateTrial(
+            state: TrialState.Fail,
+            @params: new OrderedDict<string, object?> { ["x"] = 1.0 },
+            distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(0, 10) },
+            intermediateValues: new OrderedDict<int, double> { [0] = 0.5 }));
+        var stored = study.Trials.Single();
+
+        callback.Invoke(study, stored);
+
+        var requeued = study.GetTrials(deepcopy: false).Single(t => t.State == TrialState.Waiting);
+        requeued.IntermediateValues.Should().BeEmpty("intermediate values are not inherited unless requested");
+        requeued.Params["x"].Should().Be(1.0, "params are still inherited");
+    }
+
+    [TestMethod]
+    public void RetryCallback_MaxRetryNull_Retries_Indefinitely()
+    {
+        var storage = new HeartbeatStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+        var callback = new RetryHeartbeatStaleTrialCallback();  // maxRetry null -> no ceiling
+
+        study.AddTrial(FrozenTrial.CreateTrial(
+            state: TrialState.Fail,
+            @params: new OrderedDict<string, object?> { ["x"] = 1.0 },
+            distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(0, 10) }));
+
+        // Chain five failures; every one must be requeued (the retry_history keeps growing).
+        for (int i = 0; i < 5; i++)
+        {
+            var failed = study.GetTrials(deepcopy: false).Last();
+            failed.State = TrialState.Fail;
+            failed.DatetimeComplete = DateTime.Now;
+            callback.Invoke(study, failed);
+            study.GetTrials(deepcopy: false).Count(t => t.State == TrialState.Waiting)
+                .Should().Be(1, "each stale trial is requeued regardless of history length");
+            // Promote the just-created WAITING retry to the tail for the next round.
+            var requeued = study.GetTrials(deepcopy: false).Single(t => t.State == TrialState.Waiting);
+            RetryHeartbeatStaleTrialCallback.RetryHistory(requeued).Should().HaveCount(i + 1);
+            requeued.State = TrialState.Fail;
+            requeued.DatetimeComplete = DateTime.Now;
+        }
+    }
+
+    [TestMethod]
+    public void RetryCallback_Inherits_Distributions_UserAttrs_And_Existing_SystemAttrs()
+    {
+        var storage = new HeartbeatStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+        var dist = new FloatDistribution(0, 10);
+
+        study.AddTrial(FrozenTrial.CreateTrial(
+            state: TrialState.Fail,
+            @params: new OrderedDict<string, object?> { ["x"] = 1.0 },
+            distributions: new OrderedDict<string, BaseDistribution> { ["x"] = dist },
+            userAttrs: new OrderedDict<string, object?> { ["owner"] = "eli" },
+            systemAttrs: new OrderedDict<string, object?> { ["custom"] = 42L }));
+        var stored = study.Trials.Single();
+
+        new RetryHeartbeatStaleTrialCallback().Invoke(study, stored);
+
+        var requeued = study.GetTrials(deepcopy: false).Single(t => t.State == TrialState.Waiting);
+        requeued.Distributions["x"].Should().Be(dist);
+        requeued.UserAttrs["owner"].Should().Be("eli");
+        requeued.SystemAttrs["custom"].Should().Be(42L, "unrelated system attrs survive the requeue");
+        RetryHeartbeatStaleTrialCallback.RetriedTrialNumber(requeued).Should().Be(stored.Number);
+        RetryHeartbeatStaleTrialCallback.RetryHistory(requeued).Should().Equal(stored.Number);
+    }
+
+    [TestMethod]
+    public void RetryFailedTrialCallback_DeprecatedAlias_Requeues_Like_The_New_Name()
+    {
+        var storage = new HeartbeatStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+#pragma warning disable CS0618 // deliberately exercising the deprecated alias
+        var callback = new RetryFailedTrialCallback(maxRetry: 2, inheritIntermediateValues: true);
+#pragma warning restore CS0618
+
+        study.AddTrial(FrozenTrial.CreateTrial(
+            state: TrialState.Fail,
+            @params: new OrderedDict<string, object?> { ["x"] = 1.0 },
+            distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(0, 10) },
+            intermediateValues: new OrderedDict<int, double> { [0] = 0.5 }));
+        var stored = study.Trials.Single();
+
+        callback.Invoke(study, stored);
+
+        var requeued = study.GetTrials(deepcopy: false).Single(t => t.State == TrialState.Waiting);
+        requeued.Params["x"].Should().Be(1.0);
+        requeued.IntermediateValues[0].Should().Be(0.5, "the deprecated alias honors inheritIntermediateValues");
+        RetryHeartbeatStaleTrialCallback.RetriedTrialNumber(requeued).Should().Be(stored.Number);
+    }
+
+    // ------------------------------------------------------------------ Study.Ask heartbeat warning
+
+    [TestMethod]
+    public void Ask_OutsideOptimize_With_Heartbeat_Warns()
+    {
+        var storage = new HeartbeatStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+
+        var warnings = CaptureWarnings(() => study.Ask());
+
+        warnings.Should().Contain(w => w.Message.Contains("Heartbeat of storage is supposed to be used with Study.optimize"));
+    }
+
+    [TestMethod]
+    public void Ask_OutsideOptimize_Without_Heartbeat_DoesNotWarn()
+    {
+        var storage = new HeartbeatStorage { Interval = null };  // heartbeat disabled
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+
+        var warnings = CaptureWarnings(() => study.Ask());
+
+        warnings.Should().NotContain(w => w.Message.Contains("supposed to be used with Study.optimize"));
+    }
+
+    [TestMethod]
+    public void Optimize_With_Heartbeat_DoesNotWarn_AboutAskUsage()
+    {
+        var storage = new HeartbeatStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+
+        var warnings = CaptureWarnings(() =>
+            study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 2));
+
+        warnings.Should().NotContain(w => w.Message.Contains("supposed to be used with Study.optimize"),
+            "inside the optimize loop the ask-usage warning must not fire");
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    /// <summary>Capture every <see cref="OptunaWarnings" /> raised while <paramref name="action" /> runs.</summary>
+    private static List<(string Message, WarningCategory Category)> CaptureWarnings(Action action)
+    {
+        var captured = new List<(string, WarningCategory)>();
+        void Handler(string message, WarningCategory category)
+        {
+            lock (captured)
+                captured.Add((message, category));
+        }
+
+        OptunaWarnings.WarningRaised += Handler;
+        try
+        {
+            action();
+        }
+        finally
+        {
+            OptunaWarnings.WarningRaised -= Handler;
+        }
+        return captured;
     }
 }

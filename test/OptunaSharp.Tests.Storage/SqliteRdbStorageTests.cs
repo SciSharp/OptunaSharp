@@ -772,6 +772,38 @@ public class SqliteRdbStorageTests
         HeartbeatRowCount(rdb).Should().Be(3);
     }
 
+    [TestMethod]
+    public void Heartbeat_CachedStorage_Forwards_Every_Method_To_Backend()
+    {
+        Action<Study, FrozenTrial> cb = (s, t) => { };
+        using var rdb = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions
+        {
+            HeartbeatInterval = 7,
+            HeartbeatStaleTrialCallback = cb,
+        });
+        // Optuna's _CachedStorage is BaseStorage + BaseHeartbeat and forwards heartbeat to the backend.
+        var cached = new CachedStorage(rdb);
+
+        cached.GetHeartbeatInterval().Should().Be(7);
+        cached.GetHeartbeatStaleTrialCallback().Should().BeSameAs(cb);
+        HeartbeatHelpers.IsHeartbeatEnabled(cached).Should().BeTrue();
+
+        int studyId = cached.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        int trialId = cached.CreateNewTrial(studyId);
+
+        cached.RecordHeartbeat(trialId);  // -> backend
+        Scalar(rdb.Connection, "SELECT COUNT(*) FROM trial_heartbeats").Should().Be("1");
+
+        cached.GetStaleTrialIds(studyId).Should().BeEmpty();  // -> backend, fresh
+        BackdateHeartbeat(rdb, trialId, 60);
+        cached.GetStaleTrialIds(studyId).Should().Equal(trialId);
+
+        // The deprecated default-interface getter routes through GetHeartbeatStaleTrialCallback -> backend.
+#pragma warning disable CS0618
+        ((IBaseHeartbeat)cached).GetFailedTrialCallback().Should().BeSameAs(cb);
+#pragma warning restore CS0618
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /// <summary>Capture every <see cref="OptunaWarnings" /> raised while <paramref name="action" /> runs.</summary>
