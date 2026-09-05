@@ -1,4 +1,4 @@
-#:project ../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
+#:project ../../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
 #:property PublishAot=false
 #:property SkipNDScopeWeave=true
 #:property GeneratePackageOnBuild=false
@@ -15,9 +15,9 @@
 // needs a Python with `pip install optuna optunahub coco-experiment` (BBOB wraps the COCO suite). the
 // launcher installs these for you; this probes first and prints friendly guidance if anything is missing.
 //
-//   Run:  examples/run-optunahub.sh        (Linux/macOS)   — installs deps + runs
-//         examples\run-optunahub.bat       (Windows)
-//   or:   dotnet run examples/OptunaHubBenchmark.cs
+//   Run:  examples/optunahub/run-optunahub.sh     (Linux/macOS)   — installs deps + runs
+//         examples\optunahub\run-optunahub.bat    (Windows)
+//   or:   dotnet run examples/optunahub/OptunaHubBenchmark.cs
 //
 //   colors: honors NO_COLOR / FORCE_COLOR.
 
@@ -45,7 +45,7 @@ if (!TryProbe(out string why))
     Console.WriteLine("  install and re-run:");
     Console.WriteLine(C("    pip install optuna optunahub coco-experiment", "36"));
     Console.WriteLine("  or just use the launcher:");
-    Console.WriteLine(C("    examples/run-optunahub.sh   (examples\\run-optunahub.bat on Windows)", "36"));
+    Console.WriteLine(C("    examples/optunahub/run-optunahub.sh   (examples\\optunahub\\run-optunahub.bat on Windows)", "36"));
     Console.WriteLine("  point pythonnet at a specific interpreter with  PYTHONNET_PYDLL=<libpython>.");
     return;
 }
@@ -160,7 +160,7 @@ static bool TryProbe(out string reason)
 }
 
 static string RepoRoot([System.Runtime.CompilerServices.CallerFilePath] string? thisFile = null)
-    => System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(thisFile)!, ".."));
+    => System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(thisFile)!, "..", ".."));
 
 // enable ANSI escape processing on Windows consoles (no-op elsewhere / on already-capable terminals).
 static class Native

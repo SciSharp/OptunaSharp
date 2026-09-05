@@ -1,4 +1,4 @@
-#:project ../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
+#:project ../../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
 #:property PublishAot=false
 #:property SkipNDScopeWeave=true
 #:property GeneratePackageOnBuild=false
@@ -17,9 +17,9 @@
 // needs a Python with `pip install optuna optunahub`; the NelderMead/CMA-ES hub samplers add `pandas` /
 // `cmaes` — any hub sampler whose deps are missing is simply skipped, so the shootout always runs.
 //
-//   Run:  examples/run-optunahub.sh        (Linux/macOS — installs deps + runs)
-//         examples\run-optunahub.bat       (Windows)
-//   or:   dotnet run examples/OptunaHubSamplerShootout.cs
+//   Run:  examples/optunahub/run-optunahub.sh     (Linux/macOS — installs deps + runs)
+//         examples\optunahub\run-optunahub.bat    (Windows)
+//   or:   dotnet run examples/optunahub/OptunaHubSamplerShootout.cs
 //
 //   colors: honors NO_COLOR / FORCE_COLOR.
 
@@ -48,7 +48,7 @@ if (!TryProbe(out string why))
     Console.WriteLine(C("OptunaHub sampler shootout — prerequisites missing", "1;33"));
     Console.WriteLine($"  {why}");
     Console.WriteLine(C("  pip install optuna optunahub pandas cmaes", "36"));
-    Console.WriteLine(C("  or:  examples/run-optunahub.sh   (examples\\run-optunahub.bat on Windows)", "36"));
+    Console.WriteLine(C("  or:  examples/optunahub/run-optunahub.sh   (examples\\optunahub\\run-optunahub.bat on Windows)", "36"));
     return;
 }
 
@@ -197,7 +197,7 @@ static bool TryProbe(out string reason)
 }
 
 static string RepoRoot([System.Runtime.CompilerServices.CallerFilePath] string? thisFile = null)
-    => System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(thisFile)!, ".."));
+    => System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(thisFile)!, "..", ".."));
 
 static class Native
 {

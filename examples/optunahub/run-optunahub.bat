@@ -6,13 +6,13 @@ rem then runs both examples with `dotnet run`:
 rem   examples\OptunaHubBenchmark.cs        - the paper's Code 1: load benchmarks/bbob, optimize live
 rem   examples\OptunaHubSamplerShootout.cs  - race real hub samplers vs OptunaSharp's native TPE
 rem
-rem Usage:   examples\run-optunahub.bat
-rem   set PYTHON=C:\path\to\python.exe  &  examples\run-optunahub.bat   (choose the interpreter)
-rem   set NO_COLOR=1                    &  examples\run-optunahub.bat   (disable colors)
+rem Usage:   examples\optunahub\run-optunahub.bat
+rem   set PYTHON=C:\path\to\python.exe  &  examples\optunahub\run-optunahub.bat   (choose the interpreter)
+rem   set NO_COLOR=1                    &  examples\optunahub\run-optunahub.bat   (disable colors)
 setlocal
 
-rem repo root = the parent of this script's directory
-cd /d "%~dp0.."
+rem repo root = two levels up from this script (examples\optunahub\)
+cd /d "%~dp0..\.."
 
 rem pick the Python interpreter (honored by the bridge via %PYTHON% when discovering libpython)
 if not defined PYTHON set "PYTHON=python"
@@ -36,10 +36,10 @@ if not defined OPTUNASHARP_OPTUNAHUB_QUIET set "OPTUNASHARP_OPTUNAHUB_QUIET=1"
 
 echo.
 echo ============ OptunaHub benchmark (BBOB Sphere) ============
-dotnet run examples/OptunaHubBenchmark.cs
+dotnet run examples/optunahub/OptunaHubBenchmark.cs
 
 echo.
 echo ============ OptunaHub sampler shootout ============
-dotnet run examples/OptunaHubSamplerShootout.cs
+dotnet run examples/optunahub/OptunaHubSamplerShootout.cs
 
 endlocal

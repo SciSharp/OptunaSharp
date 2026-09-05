@@ -62,17 +62,17 @@ is missing, so they never crash. The `source:` is the OptunaHub paper
 
 | Example | First shows |
 |---|---|
-| [`OptunaHubBenchmark.cs`](OptunaHubBenchmark.cs) | the paper's **Code 1** in .NET — `LoadModule("benchmarks/bbob")` (BBOB Sphere) optimized live by OptunaSharp's native TPE, with a colored convergence bar per trial |
-| [`OptunaHubSamplerShootout.cs`](OptunaHubSamplerShootout.cs) | the **sampler bridge** — race real hub samplers (`nelder_mead`, `cmaes`, `random_search`) against OptunaSharp's native TPE on 2-D Rastrigin, with colored convergence sparklines + a leaderboard |
+| [`optunahub/OptunaHubBenchmark.cs`](optunahub/OptunaHubBenchmark.cs) | the paper's **Code 1** in .NET — `LoadModule("benchmarks/bbob")` (BBOB Sphere) optimized live by OptunaSharp's native TPE, with a colored convergence bar per trial |
+| [`optunahub/OptunaHubSamplerShootout.cs`](optunahub/OptunaHubSamplerShootout.cs) | the **sampler bridge** — race real hub samplers (`nelder_mead`, `cmaes`, `random_search`) against OptunaSharp's native TPE on 2-D Rastrigin, with colored convergence sparklines + a leaderboard |
 
 A **launcher** installs the Python prerequisites and runs both, in color:
 
 ```bash
-examples/run-optunahub.sh        # Linux/macOS — installs optuna optunahub coco-experiment cmaes pandas
-examples\run-optunahub.bat       # Windows
+examples/optunahub/run-optunahub.sh        # Linux/macOS — installs optuna optunahub coco-experiment cmaes pandas
+examples\optunahub\run-optunahub.bat       # Windows
 # or run one directly (install the deps yourself first):
-dotnet run examples/OptunaHubBenchmark.cs
-dotnet run examples/OptunaHubSamplerShootout.cs
+dotnet run examples/optunahub/OptunaHubBenchmark.cs
+dotnet run examples/optunahub/OptunaHubSamplerShootout.cs
 # choose the interpreter: PYTHON=/path/to/python   ·   disable colors: NO_COLOR=1
 ```
 

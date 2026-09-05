@@ -6,13 +6,13 @@
 #   examples/OptunaHubBenchmark.cs        — the paper's Code 1: load benchmarks/bbob, optimize live
 #   examples/OptunaHubSamplerShootout.cs  — race real hub samplers vs OptunaSharp's native TPE
 #
-# Usage:   examples/run-optunahub.sh
-#   PYTHON=/path/to/python  examples/run-optunahub.sh     # choose the interpreter
-#   NO_COLOR=1              examples/run-optunahub.sh      # disable colors
+# Usage:   examples/optunahub/run-optunahub.sh
+#   PYTHON=/path/to/python  examples/optunahub/run-optunahub.sh     # choose the interpreter
+#   NO_COLOR=1              examples/optunahub/run-optunahub.sh      # disable colors
 set -euo pipefail
 
-# repo root = the parent of this script's directory (so `dotnet run examples/..` resolves)
-cd "$(dirname "$0")/.."
+# repo root = two levels up from this script (examples/optunahub/) so `dotnet run examples/..` resolves
+cd "$(dirname "$0")/../.."
 
 # pick the Python interpreter (honored by the bridge via $PYTHON when discovering libpython)
 PY="${PYTHON:-}"
@@ -36,8 +36,8 @@ export OPTUNASHARP_OPTUNAHUB_QUIET="${OPTUNASHARP_OPTUNAHUB_QUIET:-1}"
 
 echo
 echo "════════════ OptunaHub benchmark (BBOB Sphere) ════════════"
-dotnet run examples/OptunaHubBenchmark.cs
+dotnet run examples/optunahub/OptunaHubBenchmark.cs
 
 echo
 echo "════════════ OptunaHub sampler shootout ════════════"
-dotnet run examples/OptunaHubSamplerShootout.cs
+dotnet run examples/optunahub/OptunaHubSamplerShootout.cs
