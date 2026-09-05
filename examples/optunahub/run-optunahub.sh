@@ -42,3 +42,16 @@ run "Sampler shootout — hub samplers vs native TPE"       OptunaHubSamplerShoo
 run "Multi-objective — bbob_biobj + native NSGA-II"       OptunaHubMultiObjective
 run "Pruner — a hub MedianPruner cutting laggards"        OptunaHubPruning
 run "Local registry + mixed Float/Int/Categorical space"  OptunaHubLocalRegistry
+run "Dashboard — persist a hub-sampled study to SQLite"   OptunaHubDashboard
+
+# ── optuna-dashboard: open the study OptunaHubDashboard.cs just persisted, live ─────────────────────
+# the .db was written by OptunaSharp.Storage.Sqlite in Optuna's exact schema, so the real Python
+# optuna-dashboard opens it directly. this BLOCKS (serves + opens your browser) until you Ctrl+C.
+DB="examples/optunahub/optunahub-dashboard.db"
+echo
+if [ -f "$DB" ]; then
+  echo "════════════ optuna-dashboard — the persisted study, live (Ctrl+C to stop) ════════════"
+  "$PY" examples/optunahub/dashboard.py || true          # || true: Ctrl+C returns non-zero under `set -e`
+else
+  echo "(no study database at $DB — skipping the dashboard; OptunaHubDashboard.cs did not persist one)"
+fi

@@ -67,15 +67,17 @@ bridge directions plus multi-objective, mixed search spaces, and offline loading
 | [`optunahub/OptunaHubMultiObjective.cs`](optunahub/OptunaHubMultiObjective.cs) | **multi-objective** — bi-objective `bbob_biobj` + native NSGA-II, the Pareto front |
 | [`optunahub/OptunaHubPruning.cs`](optunahub/OptunaHubPruning.cs) | the **pruner bridge** — a hub `MedianPruner` cutting laggards short |
 | [`optunahub/OptunaHubLocalRegistry.cs`](optunahub/OptunaHubLocalRegistry.cs) | **`LoadLocalModule`** (offline) + a mixed **Float/Int/Categorical** space, and the registry knobs |
+| [`optunahub/OptunaHubDashboard.cs`](optunahub/OptunaHubDashboard.cs) | **optuna-dashboard** — a hub-sampled study persisted by **`OptunaSharp.Storage.Sqlite`** (Optuna's exact schema), opened live in the real Python dashboard |
 
-They need a **Python** with `optuna optunahub coco-experiment cmaes pandas`; each probes first and guides
-you if a prerequisite is missing (nothing crashes). A **launcher** installs the deps and runs the whole
-suite in color — on Windows you can just double-click it:
+They need a **Python** with `optuna optunahub optuna-dashboard coco-experiment cmaes pandas`; each probes
+first and guides you if a prerequisite is missing (nothing crashes). A **launcher** installs the deps,
+runs the whole suite in color, **then opens the persisted study in [optuna-dashboard](https://github.com/optuna/optuna-dashboard)**
+— on Windows you can just double-click it:
 
 ```bash
-examples/optunahub/run-optunahub.sh        # Linux/macOS — pip install -r examples/optunahub/requirements.txt, then runs the suite
-examples\optunahub\run-optunahub.bat       # Windows (or double-click; the window stays open)
-# choose the interpreter: PYTHON=/path/to/python   ·   disable colors: NO_COLOR=1
+examples/optunahub/run-optunahub.sh        # Linux/macOS — pip install -r …/requirements.txt, runs the suite, then the dashboard
+examples\optunahub\run-optunahub.bat       # Windows (or double-click; the suite window stays open, the dashboard opens in its own)
+# choose the interpreter: PYTHON=/path/to/python   ·   disable colors: NO_COLOR=1   ·   skip the browser: OPTUNASHARP_NO_BROWSER=1
 ```
 
 The bridge (samplers, benchmarks **and** pruners) is covered by

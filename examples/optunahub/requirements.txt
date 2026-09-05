@@ -10,6 +10,9 @@
 optuna              # the optimization framework the bridge talks to
 optunahub           # the OptunaHub loader (optunahub.load_module / load_local_module)
 
+# OptunaHubDashboard.cs — view the persisted study in the real Python dashboard (the launcher opens it)
+optuna-dashboard    # https://github.com/optuna/optuna-dashboard — reads the SQLite study OptunaSharp writes
+
 # OptunaHubBenchmark.cs — BBOB (benchmarks/bbob) wraps the COCO experiment suite
 coco-experiment
 

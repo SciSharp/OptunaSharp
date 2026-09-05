@@ -42,11 +42,24 @@ rem clear any stale PYTHONNET_PYDLL so the bridge discovers %PYTHON% (where we j
 rem prerequisites), not a previously-pinned interpreter. scoped to this window by setlocal.
 set "PYTHONNET_PYDLL="
 
-for %%E in (OptunaHubCode1 OptunaHubBenchmark OptunaHubSamplerShootout OptunaHubMultiObjective OptunaHubPruning OptunaHubLocalRegistry) do (
+for %%E in (OptunaHubCode1 OptunaHubBenchmark OptunaHubSamplerShootout OptunaHubMultiObjective OptunaHubPruning OptunaHubLocalRegistry OptunaHubDashboard) do (
   echo.
   echo ============ %%E ============
   dotnet run examples/optunahub/%%E.cs
   if errorlevel 1 echo   ^(%%E exited with an error - see the output above^)
+)
+
+rem ── optuna-dashboard: open the study OptunaHubDashboard.cs just persisted, live ────────────────────
+rem the .db was written by OptunaSharp.Storage.Sqlite in Optuna's exact schema, so the real Python
+rem optuna-dashboard opens it directly. we launch it in its OWN window (+ your browser) so THIS window
+rem stays open with the suite output above.
+echo.
+if exist "examples\optunahub\optunahub-dashboard.db" (
+  echo ============ optuna-dashboard ============
+  echo   Opening the persisted study in optuna-dashboard ^(a new window^) and your browser ...
+  start "OptunaSharp dashboard" "%PYTHON%" examples/optunahub/dashboard.py
+) else (
+  echo   ^(no study database at examples\optunahub\optunahub-dashboard.db - skipping the dashboard^)
 )
 
 :done

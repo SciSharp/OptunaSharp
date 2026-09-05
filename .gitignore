@@ -75,6 +75,12 @@ venv/
 Thumbs.db
 *.stackdump
 
+# Example-generated SQLite studies (OptunaHubDashboard.cs writes one for optuna-dashboard)
+examples/**/*.db
+examples/**/*.db-wal
+examples/**/*.db-shm
+examples/**/*.db-journal
+
 # NuGet
 *.nupkg
 *.snupkg
