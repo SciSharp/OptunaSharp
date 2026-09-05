@@ -36,6 +36,51 @@ Console.WriteLine($"{study.BestValue} at {study.BestParams["x"]}");
 `Optuna.CreateStudy` wraps the `RDBStorage` in a read-through `CachedStorage` automatically — exactly
 as Python's `optuna.storages.get_storage` returns `_CachedStorage(RDBStorage(...))`.
 
+## Configuration — the full SQLite surface
+
+Beyond Optuna's `RDBStorage(url, …)` API, `SqliteRdbOptions` exposes the **entire** SQLite
+configuration surface — every `SqliteConnectionStringBuilder` option and the load-bearing runtime
+`PRAGMA`s — with two escape hatches for anything not modelled. Every property is opt-in; a `null`
+leaves SQLite's default in place (the exceptions are `BusyTimeoutMs`, which defaults to `30000`, and
+`ForeignKeys`, which defaults to `false` to match Optuna).
+
+```csharp
+using var storage = new RDBStorage("sqlite:///study.db", new SqliteRdbOptions
+{
+    // PRAGMAs
+    JournalMode  = SqliteJournalMode.Wal,      // better read/write concurrency
+    Synchronous  = SqliteSynchronous.Normal,
+    BusyTimeoutMs = 15_000,
+    CacheSize    = -16_000,                     // 16 MiB page cache
+    MmapSize     = 256L * 1024 * 1024,
+    TempStore    = SqliteTempStore.Memory,
+    ForeignKeys  = true,                        // safe with the explicit cascade in DeleteStudy
+    AdditionalPragmas = new[] { "wal_autocheckpoint=1000" },
+
+    // connection string
+    Cache   = SqliteCacheMode.Shared,
+    Pooling = true,
+
+    // escape hatches
+    ConfigureConnectionString = b => b.DefaultTimeout = 30,
+    ConfigureConnection       = c => { /* register a collation, run setup SQL, … */ },
+});
+```
+
+The five constructors cover every way to supply the connection:
+
+```csharp
+new RDBStorage("sqlite:///study.db");                              // Optuna-faithful
+new RDBStorage("sqlite:///study.db", b => b.Cache = SqliteCacheMode.Shared);  // URL + native tweak
+new RDBStorage("sqlite:///study.db", options);                     // URL + full options
+new RDBStorage(new SqliteConnectionStringBuilder { DataSource = "study.db" }, options);  // native builder
+new RDBStorage(myOpenSqliteConnection, options, ownsConnection: false);       // bring your own connection
+```
+
+With an injected `SqliteConnection` the storage feels like the client, not Optuna: its
+connection-string is used as-is, `ownsConnection: false` (the default) keeps the lifetime yours, and
+the `PRAGMA`/escape-hatch options still apply.
+
 ### URL forms
 
 | URL | Database |

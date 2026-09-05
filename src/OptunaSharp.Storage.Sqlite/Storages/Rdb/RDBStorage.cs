@@ -41,17 +41,28 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 {
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.storages._rdb.storage");
 
-    private readonly SqliteConnection _conn;
     private readonly object _lock = new();
 
-    private readonly int? _heartbeatInterval;
-    private readonly int? _gracePeriod;
-    private readonly Action<Study, FrozenTrial>? _heartbeatStaleTrialCallback;
+    private SqliteConnection _conn = null!;
+    private bool _ownsConnection;
+    private int? _heartbeatInterval;
+    private int? _gracePeriod;
+    private Action<Study, FrozenTrial>? _heartbeatStaleTrialCallback;
 
-    /// <summary>The storage URL, after <c>{SCHEMA_VERSION}</c> template substitution.</summary>
-    public string Url { get; }
+    /// <summary>The storage URL/connection string this storage was opened with.</summary>
+    public string Url { get; private set; } = "";
 
-    /// <summary>Create an RDB storage from a SQLAlchemy-style SQLite URL.</summary>
+    /// <summary>
+    ///     The underlying connection — exposed to the test project (friend) so the effect of every
+    ///     configured <c>PRAGMA</c>/connection-string option can be asserted on the exact connection
+    ///     the storage uses. Not part of the public API.
+    /// </summary>
+    internal SqliteConnection Connection => _conn;
+
+    /// <summary>
+    ///     Create an RDB storage from a SQLAlchemy-style SQLite URL — the Optuna-faithful constructor
+    ///     (<c>optuna.storages.RDBStorage(url, …)</c>).
+    /// </summary>
     /// <param name="url">
     ///     A SQLite URL: <c>sqlite:///relative.db</c>, <c>sqlite:////absolute.db</c>,
     ///     <c>sqlite:///C:/path.db</c> or <c>sqlite:///:memory:</c>.
@@ -71,56 +82,185 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         int? heartbeatInterval = null,
         int? gracePeriod = null,
         Action<Study, FrozenTrial>? heartbeatStaleTrialCallback = null)
-    {
-        if (heartbeatInterval is not null and <= 0)
-            throw new ValueError("The value of `heartbeat_interval` should be a positive integer.");
-        if (gracePeriod is not null and <= 0)
-            throw new ValueError("The value of `grace_period` should be a positive integer.");
-
-        Url = FillStorageUrlTemplate(url);
-        _heartbeatInterval = heartbeatInterval;
-        _gracePeriod = gracePeriod;
-        _heartbeatStaleTrialCallback = heartbeatStaleTrialCallback;
-
-        _conn = new SqliteConnection(ResolveConnectionString(Url));
-        _conn.Open();
-        Exec("PRAGMA busy_timeout=30000", null);
-
-        if (!skipTableCreation)
+        : this(url, new SqliteRdbOptions
         {
-            foreach (var stmt in RdbModels.SchemaStatements)
-                Exec(stmt, null);
-        }
+            SkipCompatibilityCheck = skipCompatibilityCheck,
+            SkipTableCreation = skipTableCreation,
+            HeartbeatInterval = heartbeatInterval,
+            GracePeriod = gracePeriod,
+            HeartbeatStaleTrialCallback = heartbeatStaleTrialCallback,
+        })
+    {
+    }
+
+    /// <summary>
+    ///     Create an RDB storage from a URL plus a native tweak of the
+    ///     <see cref="SqliteConnectionStringBuilder" /> — the convenience form of
+    ///     <see cref="SqliteRdbOptions.ConfigureConnectionString" />.
+    /// </summary>
+    public RDBStorage(string url, Action<SqliteConnectionStringBuilder> configureConnectionString)
+        : this(url, new SqliteRdbOptions { ConfigureConnectionString = configureConnectionString })
+    {
+    }
+
+    /// <summary>
+    ///     Create an RDB storage from a URL with the full <see cref="SqliteRdbOptions" /> surface —
+    ///     every connection-string option and load-bearing <c>PRAGMA</c>, beyond Optuna's own API.
+    /// </summary>
+    public RDBStorage(string url, SqliteRdbOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        ArgumentNullException.ThrowIfNull(options);
+        string filled = FillStorageUrlTemplate(url);
+        string connectionString = BuildConnectionStringFromUrl(filled, options);
+        Initialize(new SqliteConnection(connectionString), ownsConnection: true, options, filled);
+    }
+
+    /// <summary>
+    ///     Create an RDB storage from a fully-built <see cref="SqliteConnectionStringBuilder" /> (BYO
+    ///     connection string). Any typed connection-string options on <paramref name="options" /> are
+    ///     layered on top of the builder.
+    /// </summary>
+    public RDBStorage(SqliteConnectionStringBuilder connectionStringBuilder, SqliteRdbOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(connectionStringBuilder);
+        options ??= new SqliteRdbOptions();
+        var builder = new SqliteConnectionStringBuilder(connectionStringBuilder.ConnectionString);
+        ApplyConnectionStringOptions(builder, options);
+        Initialize(new SqliteConnection(builder.ConnectionString), ownsConnection: true, options, builder.ConnectionString);
+    }
+
+    /// <summary>
+    ///     Create an RDB storage over an existing <see cref="SqliteConnection" /> (BYO connection —
+    ///     the "feel like the client, not Optuna" form). The connection is opened if needed; its
+    ///     connection-string options are used as-is (the typed connection-string options on
+    ///     <paramref name="options" /> are ignored), while the <c>PRAGMA</c> options and
+    ///     <see cref="SqliteRdbOptions.ConfigureConnection" /> still apply.
+    /// </summary>
+    /// <param name="connection">The connection to use.</param>
+    /// <param name="options">Full configuration (PRAGMAs, heartbeat, schema knobs).</param>
+    /// <param name="ownsConnection">
+    ///     When <c>true</c>, <see cref="Dispose" /> disposes the connection; when <c>false</c>
+    ///     (default), the caller retains ownership.
+    /// </param>
+    public RDBStorage(SqliteConnection connection, SqliteRdbOptions? options = null, bool ownsConnection = false)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        Initialize(connection, ownsConnection, options ?? new SqliteRdbOptions(), connection.ConnectionString);
+    }
+
+    // ------------------------------------------------------------------ connection bootstrap
+
+    private void Initialize(SqliteConnection connection, bool ownsConnection, SqliteRdbOptions options, string url)
+    {
+        ValidateOptions(options);
+
+        Url = url;
+        _heartbeatInterval = options.HeartbeatInterval;
+        _gracePeriod = options.GracePeriod;
+        _heartbeatStaleTrialCallback = options.HeartbeatStaleTrialCallback;
+        _conn = connection;
+        _ownsConnection = ownsConnection;
+
+        if (_conn.State != System.Data.ConnectionState.Open)
+            _conn.Open();
+
+        ApplyPragmas(options);
+
+        if (!options.SkipTableCreation)
+            CreateSchema();
 
         InitVersionInfo();
         InitAlembic();
-        if (!skipCompatibilityCheck)
+        if (!options.SkipCompatibilityCheck)
             CheckTableSchemaCompatibility();
     }
 
-    // ------------------------------------------------------------------ URL + version bootstrap
+    private static void ValidateOptions(SqliteRdbOptions options)
+    {
+        if (options.HeartbeatInterval is not null and <= 0)
+            throw new ValueError("The value of `heartbeat_interval` should be a positive integer.");
+        if (options.GracePeriod is not null and <= 0)
+            throw new ValueError("The value of `grace_period` should be a positive integer.");
+    }
 
     private static string FillStorageUrlTemplate(string template)
         => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(CultureInfo.InvariantCulture));
 
-    private static string ResolveConnectionString(string url)
+    private static string ResolveDataSource(string url)
     {
         const string prefix = "sqlite:///";
-        string dataSource;
         if (url.StartsWith(prefix, StringComparison.Ordinal))
-            dataSource = url.Substring(prefix.Length);
-        else if (url.StartsWith("sqlite://", StringComparison.Ordinal))
-            dataSource = url.Substring("sqlite://".Length);
-        else
-            dataSource = url; // tolerate a bare file path
-
-        var builder = new SqliteConnectionStringBuilder
-        {
-            DataSource = dataSource,
-            Mode = dataSource == ":memory:" ? SqliteOpenMode.Memory : SqliteOpenMode.ReadWriteCreate,
-        };
-        return builder.ToString();
+            return url.Substring(prefix.Length);
+        if (url.StartsWith("sqlite://", StringComparison.Ordinal))
+            return url.Substring("sqlite://".Length);
+        return url; // tolerate a bare file path
     }
+
+    private static string BuildConnectionStringFromUrl(string filledUrl, SqliteRdbOptions options)
+    {
+        string dataSource = ResolveDataSource(filledUrl);
+        var builder = new SqliteConnectionStringBuilder { DataSource = dataSource };
+        // A :memory: data source needs Memory mode unless the caller overrode it explicitly.
+        if (options.Mode is null && dataSource == ":memory:")
+            builder.Mode = SqliteOpenMode.Memory;
+        ApplyConnectionStringOptions(builder, options);
+        return builder.ConnectionString;
+    }
+
+    private static void ApplyConnectionStringOptions(SqliteConnectionStringBuilder builder, SqliteRdbOptions o)
+    {
+        if (o.Mode is not null)
+            builder.Mode = o.Mode.Value;
+        if (o.Cache is not null)
+            builder.Cache = o.Cache.Value;
+        if (o.Pooling is not null)
+            builder.Pooling = o.Pooling.Value;
+        if (o.Password is not null)
+            builder.Password = o.Password;
+        if (o.RecursiveTriggers is not null)
+            builder.RecursiveTriggers = o.RecursiveTriggers.Value;
+        if (o.DefaultTimeoutSeconds is not null)
+            builder.DefaultTimeout = o.DefaultTimeoutSeconds.Value;
+        o.ConfigureConnectionString?.Invoke(builder);
+    }
+
+    private void CreateSchema()
+    {
+        foreach (var stmt in RdbModels.SchemaStatements)
+            Exec(stmt, null);
+    }
+
+    private void ApplyPragmas(SqliteRdbOptions o)
+    {
+        // page_size / auto_vacuum only take effect on a fresh database, so apply them before any table.
+        if (o.PageSize is not null)
+            ExecPragma($"page_size={o.PageSize.Value}");
+        if (o.AutoVacuum is not null)
+            ExecPragma($"auto_vacuum={o.AutoVacuum.Value.ToString().ToUpperInvariant()}");
+        if (o.JournalMode is not null)
+            ExecPragma($"journal_mode={o.JournalMode.Value.ToString().ToUpperInvariant()}");
+        if (o.Synchronous is not null)
+            ExecPragma($"synchronous={o.Synchronous.Value.ToString().ToUpperInvariant()}");
+        if (o.ForeignKeys is not null)
+            ExecPragma($"foreign_keys={(o.ForeignKeys.Value ? "ON" : "OFF")}");
+        if (o.BusyTimeoutMs is not null)
+            ExecPragma($"busy_timeout={o.BusyTimeoutMs.Value}");
+        if (o.CacheSize is not null)
+            ExecPragma($"cache_size={o.CacheSize.Value}");
+        if (o.MmapSize is not null)
+            ExecPragma($"mmap_size={o.MmapSize.Value}");
+        if (o.TempStore is not null)
+            ExecPragma($"temp_store={o.TempStore.Value.ToString().ToUpperInvariant()}");
+        if (o.SecureDelete is not null)
+            ExecPragma($"secure_delete={(o.SecureDelete.Value ? "ON" : "OFF")}");
+        if (o.AdditionalPragmas is not null)
+            foreach (var pragma in o.AdditionalPragmas)
+                ExecPragma(pragma);
+        o.ConfigureConnection?.Invoke(_conn);
+    }
+
+    private void ExecPragma(string body) => Exec("PRAGMA " + body, null);
 
     private void InitVersionInfo()
     {
@@ -1118,5 +1258,13 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return value is null or DBNull ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
     }
 
-    public void Dispose() => _conn.Dispose();
+    /// <summary>
+    ///     Disposes the underlying <see cref="SqliteConnection" /> — unless it was injected with
+    ///     <c>ownsConnection: false</c>, in which case the caller retains ownership and it is left open.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_ownsConnection)
+            _conn.Dispose();
+    }
 }
