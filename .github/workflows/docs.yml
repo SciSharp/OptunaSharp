@@ -27,6 +27,9 @@ concurrency:
 jobs:
   build-and-deploy:
     # PRs build the docs (a gate that DocFX metadata compiles), but only master deploys to Pages.
+    # Deploy is additionally gated on the `ENABLE_PAGES` repo variable: GitHub Pages requires a paid
+    # plan for PRIVATE repos, so on a private mirror the variable stays unset and this job runs
+    # build-only (the meaningful gate); set ENABLE_PAGES=true on the public repo to deploy.
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -67,16 +70,16 @@ jobs:
           ./scripts/generate-llms-txt.sh ../website
 
       - name: Setup Pages
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && vars.ENABLE_PAGES == 'true'
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && vars.ENABLE_PAGES == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: 'docs/website'
 
       - name: Deploy to GitHub Pages
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && vars.ENABLE_PAGES == 'true'
         id: deployment
         uses: actions/deploy-pages@v4

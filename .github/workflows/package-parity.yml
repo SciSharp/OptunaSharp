@@ -72,15 +72,24 @@ jobs:
             8.0.x
             10.0.x
           dotnet-quality: 'preview'
-      - name: Pack
+      - name: Pack (OptunaSharp + the journey3 NumSharp it was built against)
         id: pack
         run: |
           mkdir -p feed
+          # NumSharp.Interop.OpenBLAS is not on nuget.org, and nuget.org's NumSharp 0.60.0 is an OLDER
+          # build without np.linalg. So pack the journey3 submodule NumSharp (0.60.0) into the SAME
+          # feed; NuGet.config source-mapping then pins the container's restore to it — the packaged
+          # OptunaSharp resolves against the exact NumSharp it was built against, no nuget.org shadow.
+          dotnet pack src/NumSharp/src/NumSharp.Core/NumSharp.Core.csproj --configuration Release \
+            --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
+          dotnet pack src/NumSharp/src/NumSharp.Interop.OpenBLAS/NumSharp.Interop.OpenBLAS.csproj --configuration Release \
+            --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
           dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release \
             --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
           VER=$(ls feed/OptunaSharp.*.nupkg | sed -E 's#.*/OptunaSharp\.(.+)\.nupkg#\1#')
           echo "version=$VER" >> "$GITHUB_OUTPUT"
-          echo "packed OptunaSharp $VER"
+          echo "packed OptunaSharp $VER + journey3 NumSharp 0.60.0 into feed:"
+          ls -1 feed/*.nupkg
       - name: Strong-name gate on the packed assembly
         run: dotnet run .github/scripts/verify_strong_name.cs -- feed
       - uses: actions/upload-artifact@v4

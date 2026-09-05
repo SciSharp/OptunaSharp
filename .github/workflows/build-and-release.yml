@@ -175,12 +175,31 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Install Optuna
+    - name: Install vendored Optuna (5.0.0.dev) + live-oracle deps
       shell: bash
       run: |
+        # The C# port is validated against the VENDORED optuna (src/optuna submodule, 5.0.0.dev), NOT
+        # PyPI optuna — a version mismatch makes the differential oracle assert against the wrong impl.
+        git submodule update --init src/optuna
         python -m pip install --upgrade pip
-        python -m pip install optuna
-        python -c "import optuna; print('optuna', optuna.__version__)"
+        # Pin numpy to 2.4.2: its wheel bundles the exact scipy-openblas the NumSharp OpenBLAS natives
+        # mirror, so BLAS-backed oracles (np.linalg / CMA-ES eigh) stay byte-identical to C#.
+        python -m pip install "numpy==2.4.2"
+        python -m pip install -e src/optuna
+        # Backends the parity tests drive LIVE: torch (GPSampler), cmaes (CmaEsSampler), scikit-learn
+        # (fANOVA / importance). CPU-only torch on Linux keeps the download small. redis-py is
+        # deliberately NOT installed here so the JournalRedis interop test self-skips (no server in
+        # this job; Redis is covered by the docker-compose Storage suite instead).
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+        else
+          python -m pip install torch
+        fi
+        python -m pip install cmaes scikit-learn
+        # Re-pin numpy last: torch/optuna resolution can drag in a different numpy.
+        python -m pip install "numpy==2.4.2"
+        python -c "import numpy, optuna; print('optuna', optuna.__version__, '| numpy', numpy.__version__)"
+        python -c "import numpy; assert numpy.__version__ == '2.4.2', 'numpy must be 2.4.2 for byte-exact BLAS parity'"
 
     # Compute the libpython path and export it so pythonnet binds deterministically (PythonSession
     # honors PYTHONNET_PYDLL before its own probe). Works on all three OSes via the runner's python.
