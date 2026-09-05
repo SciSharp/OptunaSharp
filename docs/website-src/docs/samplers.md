@@ -102,7 +102,8 @@ conditional space.
 
 `RandomSampler` samples independently and uniformly — a strong baseline. `QMCSampler` fills the space
 with a low-discrepancy sequence (`qmcType: "sobol"` (default) or `"halton"`); `scramble: true` is
-supported for Sobol'. (Scrambled Halton is not yet available and throws with a clear message.)
+supported for both engines (scrambled Sobol' via the linear-matrix-scramble, scrambled Halton via
+Owen's digit permutations), each bit-identical to Optuna/scipy.
 
 ### PartialFixedSampler
 
@@ -133,6 +134,7 @@ public abstract object? SampleIndependent(Study study, FrozenTrial trial, string
 | `GPSampler(deterministic_objective=True)` | `new GPSampler(deterministicObjective: true)` |
 | `NSGAIISampler(population_size=64)` | `new NSGAIISampler(populationSize: 64)` |
 | `QMCSampler(qmc_type="sobol", scramble=True)` | `new QMCSampler(qmcType: "sobol", scramble: true)` |
+| `QMCSampler(qmc_type="halton", scramble=True)` | `new QMCSampler(qmcType: "halton", scramble: true)` |
 
 ## Divergences
 

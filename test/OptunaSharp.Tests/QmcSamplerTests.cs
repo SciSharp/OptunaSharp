@@ -66,6 +66,29 @@ public class QmcSamplerTests
     }
 
     [TestMethod]
+    public void ScrambledHalton_FirstPoints_MatchScipy()
+    {
+        // scipy.stats.qmc.Halton(3, seed=12345, scramble=True).fast_forward(n).random(1), n = 0..3.
+        var expected = new[]
+        {
+            new[] { 0.1533356327231844, 0.5925589076600479, 0.8245656388940836 },
+            new[] { 0.6533356327231844, 0.9258922409933812, 0.42456563889408355 },
+            new[] { 0.4033356327231844, 0.25922557432671445, 0.024565638894083558 },
+            new[] { 0.9033356327231844, 0.48144779654893666, 0.2245656388940835 },
+        };
+        for (ulong n = 0; n < (ulong)expected.Length; n++)
+            ScrambledHalton.Point(3, n, 12345).Should().Equal(expected[n]);
+    }
+
+    [TestMethod]
+    public void ScrambledHalton_HigherDimAndIndex_MatchScipy()
+    {
+        // scipy.stats.qmc.Halton(5, seed=12345, scramble=True).fast_forward(100).random(1).
+        ScrambledHalton.Point(5, 100, 12345).Should().Equal(
+            0.004898132723184401, 0.9917358623925582, 0.8325656388940836, 0.2329383215209358, 0.7500238228429962);
+    }
+
+    [TestMethod]
     public void Sobol_InvalidDimensionOrIndex_Throws()
     {
         ((Action)(() => QuasiMonteCarlo.SobolPoint(0, 0))).Should().Throw<ValueError>();
@@ -77,12 +100,12 @@ public class QmcSamplerTests
     // ---- sampler behavior ---------------------------------------------------------------------
 
     [TestMethod]
-    public void HaltonScramble_ThrowsNotImplemented()
+    public void HaltonScramble_Constructs()
     {
-        // Scrambled Halton is the one deferred combination (needs numpy's PCG64 shuffle); scrambled
-        // Sobol' (the default qmc_type) is fully supported.
+        // Scrambled Halton (Owen digit permutations) is now ported bit-exact (Internal/ScrambledHalton),
+        // closing the last Phase 2.12 combination — construction no longer throws.
         var act = () => new QMCSampler(qmcType: "halton", scramble: true, seed: 0);
-        act.Should().Throw<NotImplementedException>().WithMessage("*halton*");
+        act.Should().NotThrow();
     }
 
     [TestMethod]
@@ -138,6 +161,61 @@ public class QmcSamplerTests
         {
             var study = Optuna.CreateStudy(
                 sampler: new QMCSampler(qmcType: "sobol", scramble: scramble, seed: 5, warnIndependentSampling: false));
+            study.Optimize(t => t.SuggestFloat("x", -1, 1), nTrials: 8);
+            // Trial 0 is the (seed-shared) independent sampler for both; the QMC relative samples differ.
+            return study.Trials.Skip(1).Select(t => (double)t.Params["x"]).ToList();
+        }
+
+        Run(scramble: true).Should().NotEqual(Run(scramble: false));
+    }
+
+    [TestMethod]
+    public void ScrambledHalton_Trajectory_MatchesOptuna()
+    {
+        // Pinned to live optuna QMCSampler(qmc_type='halton', scramble=True, seed=42): trial 0 is the
+        // independent RandomSampler(42) draw (identical to the scrambled-Sobol trajectory, shared seed),
+        // trials 1..7 the scrambled Halton relative samples.
+        var study = Optuna.CreateStudy(
+            sampler: new QMCSampler(qmcType: "halton", scramble: true, seed: 42, warnIndependentSampling: false));
+        study.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -1, 1);
+            long y = t.SuggestInt("y", -1, 3);
+            t.SuggestCategorical("z", new CategoricalChoice[] { "a", "b", "c" });
+            return Math.Pow(x, 2.0) + y;
+        }, nTrials: 8);
+
+        study.Trials.Select(t => (double)t.Params["x"]).Should().Equal(
+            -0.250919762305275, 0.10261173898301967, -0.8973882610169803, 0.6026117389830197,
+            -0.3973882610169803, 0.3526117389830197, -0.6473882610169803, 0.8526117389830197);
+    }
+
+    [TestMethod]
+    public void ScrambledHalton_SameSeed_ProducesIdenticalTrials()
+    {
+        List<double> Run()
+        {
+            var study = Optuna.CreateStudy(
+                sampler: new QMCSampler(qmcType: "halton", scramble: true, seed: 11, warnIndependentSampling: false));
+            study.Optimize(t =>
+            {
+                double x = t.SuggestFloat("x", -1, 1);
+                long y = t.SuggestInt("y", -5, 5);
+                return Math.Pow(x, 2.0) + y;
+            }, nTrials: 16);
+            return study.Trials.Select(t => (double)t.Params["x"]).ToList();
+        }
+
+        Run().Should().Equal(Run());
+    }
+
+    [TestMethod]
+    public void ScrambledHalton_DiffersFromUnscrambled()
+    {
+        List<double> Run(bool scramble)
+        {
+            var study = Optuna.CreateStudy(
+                sampler: new QMCSampler(qmcType: "halton", scramble: scramble, seed: 5, warnIndependentSampling: false));
             study.Optimize(t => t.SuggestFloat("x", -1, 1), nTrials: 8);
             // Trial 0 is the (seed-shared) independent sampler for both; the QMC relative samples differ.
             return study.Trials.Skip(1).Select(t => (double)t.Params["x"]).ToList();

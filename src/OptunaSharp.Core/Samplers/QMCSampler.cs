@@ -21,13 +21,12 @@ namespace OptunaSharp.Samplers;
 ///     relative search space) is drawn by the <c>independent_sampler</c> (a <see cref="RandomSampler" />
 ///     by default, so those draws stay on MT19937).</para>
 ///
-///     <para><b>Scrambling (PORTING_PLAN Phase 2.12).</b> Scrambled Sobol' — <c>scramble=true</c> with
-///     the default <c>qmc_type="sobol"</c> — is ported bit-exact vs scipy through
-///     <see cref="Internal.ScrambledSobol" /> (the linear-matrix-scramble + digital shift seeded by
-///     <c>numpy.random.default_rng(seed)</c>). Scrambled Halton is the one deferred combination: it
-///     needs numpy's PCG64 <c>shuffle</c> (scipy's <c>_van_der_corput_permutations</c>), which NumSharp
-///     does not yet expose publicly, so <c>qmc_type="halton", scramble=true</c> throws at construction.
-///     Both engines' non-scrambled sequences remain fully supported.</para>
+///     <para><b>Scrambling (PORTING_PLAN Phase 2.12 — complete).</b> Both randomizations are ported
+///     bit-exact vs scipy, seeded by <c>numpy.random.default_rng(seed)</c>: scrambled Sobol' through
+///     <see cref="Internal.ScrambledSobol" /> (the linear-matrix-scramble + digital shift) and scrambled
+///     Halton through <see cref="Internal.ScrambledHalton" /> (Owen's digit permutations — scipy's
+///     <c>_van_der_corput_permutations</c> over NumSharp's <c>Generator.shuffle</c>). Every
+///     <c>(qmc_type, scramble)</c> combination is supported.</para>
 /// </summary>
 public class QMCSampler : BaseSampler
 {
@@ -41,8 +40,8 @@ public class QMCSampler : BaseSampler
     private readonly string _qmcType;
 
     /// <param name="qmcType">The QMC sequence: <c>"sobol"</c> (default) or <c>"halton"</c>.</param>
-    /// <param name="scramble">Apply scrambling — not ported (throws if <c>true</c>, Phase 2.12).</param>
-    /// <param name="seed">Seed for the independent sampler (and, once ported, scrambling).</param>
+    /// <param name="scramble">Apply scrambling (randomization) to the QMC sequence; seeded by <paramref name="seed" />.</param>
+    /// <param name="seed">Seed for the independent sampler and, when <paramref name="scramble" /> is set, the QMC scrambling.</param>
     /// <param name="independentSampler">Sampler for the first trial / non-relative params. Defaults to <see cref="RandomSampler" />.</param>
     /// <param name="warnAsynchronousSeeding">Warn when scrambling is on without a manual seed.</param>
     /// <param name="warnIndependentSampling">Warn when a parameter falls back to independent sampling.</param>
@@ -77,16 +76,6 @@ public class QMCSampler : BaseSampler
             _seed = 0;  // unused when scramble=False (both the hash and the engine ignore it).
         _independentSampler = independentSampler ?? new RandomSampler(seed);
         _warnIndependentSampling = warnIndependentSampling;
-
-        // Scrambled Sobol' is ported bit-exact (Internal/ScrambledSobol). Scrambled Halton needs numpy's
-        // PCG64 shuffle (scipy's `_van_der_corput_permutations`), which NumSharp does not yet expose
-        // publicly — that one combination stays a documented boundary (PORTING_PLAN Phase 2.12).
-        if (scramble && _qmcType == "halton")
-            throw new NotImplementedException(
-                "QMCSampler(qmc_type: \"halton\", scramble: true) — scrambled Halton — needs numpy's " +
-                "PCG64 shuffle (scipy's `_van_der_corput_permutations`), which NumSharp does not yet " +
-                "expose. Scrambled Sobol' (the default qmc_type) is fully supported; for Halton use " +
-                "scramble: false (PORTING_PLAN Phase 2.12).");
 
         if (seed is null && scramble && warnAsynchronousSeeding)
             LogAsynchronousSeeding();
@@ -210,8 +199,13 @@ public class QMCSampler : BaseSampler
                 row[j] = pts[sampleId, j];
             return row;
         }
-        // Halton (scramble=true rejected at construction).
-        return QuasiMonteCarlo.HaltonPoint(d, (ulong)sampleId);
+        // Halton.
+        if (!_scramble)
+            return QuasiMonteCarlo.HaltonPoint(d, (ulong)sampleId);
+        // Scrambled Halton: `Halton(d, seed, scramble=True).fast_forward(sample_id).random(1)` is the
+        // Owen-permuted point at index sample_id (verified bit-exact vs scipy). Like scrambled Sobol' the
+        // engine is stateless — rebuilt per call from (d, seed) — and permutation init is its only rng draw.
+        return ScrambledHalton.Point(d, (ulong)sampleId, (int)_seed);
     }
 
     /// <summary>Python <c>_find_sample_id</c>: a per-(engine, search space[, seed]) counter in the study attrs.</summary>

@@ -11,10 +11,14 @@ namespace OptunaSharp.Internal;
 ///     <c>scipy.stats.qmc</c> bit-for-bit for <c>scramble=False</c> (verified over many dimensions and
 ///     indices).
 ///
-///     <para><b>Scrambling is not ported.</b> scipy applies scrambling with its internal
-///     <c>numpy.random.default_rng</c> (PCG64) inside compiled Cython (<c>_cscramble</c> /
-///     <c>_cy_van_der_corput_scrambled</c>); reproducing that bit-for-bit is deferred
-///     (PORTING_PLAN Phase 2.12). <see cref="Samplers.QMCSampler" /> rejects <c>scramble=true</c>.</para>
+///     <para><b>Scrambling lives in the sibling engines.</b> scipy applies scrambling with its internal
+///     <c>numpy.random.default_rng</c> (PCG64); both randomizations are now ported bit-for-bit —
+///     <see cref="ScrambledSobol" /> (the linear-matrix-scramble + digital shift, scipy's <c>_cscramble</c>)
+///     and <see cref="ScrambledHalton" /> (the Owen digit permutations, scipy's
+///     <c>_van_der_corput_permutations</c> + <c>_cy_van_der_corput_scrambled</c>). Both reuse this class's
+///     shared tables (<see cref="SobolSv" />, <see cref="SobolBits" />, <see cref="HaltonPrimes" />), so
+///     <see cref="Samplers.QMCSampler" /> now supports every <c>(qmc_type, scramble)</c> combination
+///     (PORTING_PLAN Phase 2.12 complete).</para>
 /// </summary>
 internal static class QuasiMonteCarlo
 {
@@ -154,6 +158,18 @@ internal static class QuasiMonteCarlo
             point[d] = r;
         }
         return point;
+    }
+
+    /// <summary>
+    ///     A fresh copy of the first <paramref name="dim" /> Halton bases (primes 2, 3, 5, …) — the
+    ///     shared prime table behind the unscrambled <see cref="HaltonPoint" /> and the scrambled
+    ///     <see cref="ScrambledHalton" /> (the analogue of <see cref="SobolSv" /> for the Halton engine).
+    /// </summary>
+    internal static int[] HaltonPrimes(int dim)
+    {
+        if (dim < 1 || dim > SobolDirectionNumbers.MaxDim)
+            throw new ValueError($"Halton dimension must be in 1..={SobolDirectionNumbers.MaxDim}, got {dim}.");
+        return Primes()[..dim];
     }
 
     /// <summary>The first <see cref="SobolDirectionNumbers.MaxDim" /> primes (Halton bases 2, 3, 5, …).</summary>
