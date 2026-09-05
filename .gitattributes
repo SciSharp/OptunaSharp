@@ -21,6 +21,13 @@
 *.gitignore text eol=lf
 *.gitattributes text eol=lf
 
+# Windows batch files MUST be CRLF. Like the *.snk note below, these can't take the
+# repo-wide `eol=lf`: cmd.exe mis-parses an LF-only .bat/.cmd (it splits commands
+# mid-word, `%%vars` collapse to `%var`, `%ENV%` stops expanding). eol=crlf keeps the
+# repo blob LF but checks the working tree out as CRLF, so double-click works on Windows.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Binary files
 # NOTE: *.snk MUST be binary — with `* text=auto eol=lf` a strong-name key would be
 # rewritten as if it were text (CRLF->LF inside the key bytes) and corrupted, which
