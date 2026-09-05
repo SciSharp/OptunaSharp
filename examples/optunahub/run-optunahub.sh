@@ -35,10 +35,10 @@ fi
 export FORCE_COLOR="${FORCE_COLOR:-1}"                              # force ANSI colors on
 export OPTUNASHARP_OPTUNAHUB_QUIET="${OPTUNASHARP_OPTUNAHUB_QUIET:-1}"
 
-echo
-echo "════════════ OptunaHub benchmark (BBOB Sphere) ════════════"
-dotnet run examples/optunahub/OptunaHubBenchmark.cs
-
-echo
-echo "════════════ OptunaHub sampler shootout ════════════"
-dotnet run examples/optunahub/OptunaHubSamplerShootout.cs
+run() { echo; echo "════════════ $1 ════════════"; dotnet run "examples/optunahub/$2.cs"; }
+run "Code 1 — a hub sampler + a hub benchmark, together" OptunaHubCode1
+run "Benchmark — BBOB Sphere, live"                       OptunaHubBenchmark
+run "Sampler shootout — hub samplers vs native TPE"       OptunaHubSamplerShootout
+run "Multi-objective — bbob_biobj + native NSGA-II"       OptunaHubMultiObjective
+run "Pruner — a hub MedianPruner cutting laggards"        OptunaHubPruning
+run "Local registry + mixed Float/Int/Categorical space"  OptunaHubLocalRegistry

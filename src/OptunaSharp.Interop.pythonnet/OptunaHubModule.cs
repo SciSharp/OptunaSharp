@@ -73,6 +73,18 @@ public sealed class OptunaHubModule : IDisposable
         Dictionary<string, object?>? kwargs = null)
         => PythonRuntime.Run(() => new OptunaHubSampler($"{Package}:{className}", Instantiate(className, kwargs)));
 
+    /// <summary>
+    ///     Instantiate a pruner (<c>optuna.pruners.BasePruner</c> subclass) and wrap it as an OptunaSharp
+    ///     <see cref="Pruners.BasePruner" /> that drives the real Python pruner over a synchronized
+    ///     shadow study (single-objective).
+    /// </summary>
+    /// <param name="className">The pruner class name in the package (e.g. <c>"MedianPruner"</c>, <c>"HyperbandPruner"</c>).</param>
+    /// <param name="kwargs">Constructor keyword arguments (e.g. <c>{ ["n_warmup_steps"]=5 }</c>).</param>
+    public OptunaHubPruner CreatePruner(
+        string className,
+        Dictionary<string, object?>? kwargs = null)
+        => PythonRuntime.Run(() => new OptunaHubPruner($"{Package}:{className}", Instantiate(className, kwargs)));
+
     public void Dispose()
     {
         var module = _module;

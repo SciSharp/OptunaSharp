@@ -42,15 +42,12 @@ rem clear any stale PYTHONNET_PYDLL so the bridge discovers %PYTHON% (where we j
 rem prerequisites), not a previously-pinned interpreter. scoped to this window by setlocal.
 set "PYTHONNET_PYDLL="
 
-echo.
-echo ============ OptunaHub benchmark (BBOB Sphere) ============
-dotnet run examples/optunahub/OptunaHubBenchmark.cs
-if errorlevel 1 echo   ^(the benchmark exited with an error - see the output above^)
-
-echo.
-echo ============ OptunaHub sampler shootout ============
-dotnet run examples/optunahub/OptunaHubSamplerShootout.cs
-if errorlevel 1 echo   ^(the shootout exited with an error - see the output above^)
+for %%E in (OptunaHubCode1 OptunaHubBenchmark OptunaHubSamplerShootout OptunaHubMultiObjective OptunaHubPruning OptunaHubLocalRegistry) do (
+  echo.
+  echo ============ %%E ============
+  dotnet run examples/optunahub/%%E.cs
+  if errorlevel 1 echo   ^(%%E exited with an error - see the output above^)
+)
 
 :done
 echo.

@@ -52,31 +52,33 @@ referenced by the examples).
 
 ## OptunaHub (live Python bridge)
 
-Load and run **real [OptunaHub](https://hub.optuna.org/) packages** — the samplers and benchmarks the
-community publishes — from inside an OptunaSharp study, via
+Load and run **real [OptunaHub](https://hub.optuna.org/) packages** — the samplers, benchmarks **and
+pruners** the community publishes — from inside an OptunaSharp study, via
 [`OptunaSharp.Interop.pythonnet`](../src/OptunaSharp.Interop.pythonnet) (the .NET analog of
-`NumSharp.Interop.pythonnet`; `OptunaHub.LoadModule` mirrors `optunahub.load_module`). These need a
-**Python** with `optuna` + `optunahub`; each probes first and prints friendly guidance if a prerequisite
-is missing, so they never crash. The `source:` is the OptunaHub paper
-([arXiv:2510.02798](https://arxiv.org/abs/2510.02798)).
+`NumSharp.Interop.pythonnet`; `OptunaHub.LoadModule` mirrors `optunahub.load_module`). These live in
+their own folder — **[`examples/optunahub/`](optunahub/README.md)** — a colorful suite covering all three
+bridge directions plus multi-objective, mixed search spaces, and offline loading:
 
 | Example | First shows |
 |---|---|
-| [`optunahub/OptunaHubBenchmark.cs`](optunahub/OptunaHubBenchmark.cs) | the paper's **Code 1** in .NET — `LoadModule("benchmarks/bbob")` (BBOB Sphere) optimized live by OptunaSharp's native TPE, with a colored convergence bar per trial |
-| [`optunahub/OptunaHubSamplerShootout.cs`](optunahub/OptunaHubSamplerShootout.cs) | the **sampler bridge** — race real hub samplers (`nelder_mead`, `cmaes`, `random_search`) against OptunaSharp's native TPE on 2-D Rastrigin, with colored convergence sparklines + a leaderboard |
+| [`optunahub/OptunaHubCode1.cs`](optunahub/OptunaHubCode1.cs) | the paper's **Code 1** — a hub **sampler** (`auto_sampler`) *and* a hub **benchmark** (`bbob`) together |
+| [`optunahub/OptunaHubBenchmark.cs`](optunahub/OptunaHubBenchmark.cs) | the **benchmark bridge** alone — `bbob` Sphere optimized live by native TPE, colored convergence bar |
+| [`optunahub/OptunaHubSamplerShootout.cs`](optunahub/OptunaHubSamplerShootout.cs) | the **sampler bridge** — hub samplers (`nelder_mead`, `cmaes`, `random_search`) vs native TPE, sparklines + leaderboard |
+| [`optunahub/OptunaHubMultiObjective.cs`](optunahub/OptunaHubMultiObjective.cs) | **multi-objective** — bi-objective `bbob_biobj` + native NSGA-II, the Pareto front |
+| [`optunahub/OptunaHubPruning.cs`](optunahub/OptunaHubPruning.cs) | the **pruner bridge** — a hub `MedianPruner` cutting laggards short |
+| [`optunahub/OptunaHubLocalRegistry.cs`](optunahub/OptunaHubLocalRegistry.cs) | **`LoadLocalModule`** (offline) + a mixed **Float/Int/Categorical** space, and the registry knobs |
 
-A **launcher** installs the Python prerequisites and runs both, in color:
+They need a **Python** with `optuna optunahub coco-experiment cmaes pandas`; each probes first and guides
+you if a prerequisite is missing (nothing crashes). A **launcher** installs the deps and runs the whole
+suite in color — on Windows you can just double-click it:
 
 ```bash
-examples/optunahub/run-optunahub.sh        # Linux/macOS — pip install -r examples/optunahub/requirements.txt, then runs
-examples\optunahub\run-optunahub.bat       # Windows
-# or run one directly (install the deps yourself first):
-dotnet run examples/optunahub/OptunaHubBenchmark.cs
-dotnet run examples/optunahub/OptunaHubSamplerShootout.cs
+examples/optunahub/run-optunahub.sh        # Linux/macOS — pip install -r examples/optunahub/requirements.txt, then runs the suite
+examples\optunahub\run-optunahub.bat       # Windows (or double-click; the window stays open)
 # choose the interpreter: PYTHON=/path/to/python   ·   disable colors: NO_COLOR=1
 ```
 
-The bridge is covered by
+The bridge (samplers, benchmarks **and** pruners) is covered by
 [`OptunaHubBridgeParityTests`](../test/OptunaSharp.Tests.Interop/OptunaHubBridgeParityTests.cs).
 
 ## Run them

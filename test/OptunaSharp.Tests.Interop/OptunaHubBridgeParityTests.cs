@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using OptunaSharp;
 using OptunaSharp.Distributions;
+using OptunaSharp.Samplers;
 using OptunaSharp.Interop.PythonNet;
 using Python.Runtime;
 
@@ -76,6 +77,39 @@ public class OptunaHubBridgeParityTests
         // The suggestions came from the real Python sampler and stayed in-range.
         double best = Convert.ToDouble(study.BestParams["x"]);
         Assert.IsTrue(best is >= -10 and <= 10, $"x out of range: {best}");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void PrunerBridge_HubMedianPruner_PrunesLaggards()
+    {
+        RequireOptunaHubOrInconclusive();
+        string registry = SubmoduleRegistryOrInconclusive();
+
+        // pruners/median re-exports optuna.pruners.MedianPruner — bridged as an OptunaSharp BasePruner.
+        using var module = OptunaHub.LoadLocalModule("pruners/median", registry);
+        using var pruner = module.CreatePruner("MedianPruner", new() { ["n_startup_trials"] = 3, ["n_warmup_steps"] = 1 });
+
+        var study = Optuna.CreateStudy(sampler: new TPESampler(seed: 0), pruner: pruner, direction: StudyDirection.Minimize);
+        study.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -10, 10);
+            double target = (x - 2) * (x - 2);                       // laggards (large target) fall behind the median
+            double loss = 0;
+            for (int step = 0; step < 10; step++)
+            {
+                loss = target + (50 - target) * Math.Exp(-0.5 * (step + 1));
+                t.Report(loss, step);
+                if (t.ShouldPrune())                                // delegates to the real Python MedianPruner
+                    throw new TrialPruned();
+            }
+            return loss;
+        }, nTrials: 30);
+
+        Assert.AreEqual(30, study.Trials.Count);
+        int pruned = study.Trials.Count(t => t.State == TrialState.Pruned);
+        Assert.IsTrue(pruned > 0, $"expected the hub MedianPruner to prune at least one trial, got {pruned}");
+        Assert.IsTrue(study.BestValue >= 0.0, "the objective is a square, cannot be negative");
     }
 
     // ---- helpers --------------------------------------------------------------------------------
