@@ -1,17 +1,21 @@
 @echo off
 rem Launch the colorful OptunaHub x OptunaSharp examples on Windows.
 rem
-rem Installs the Python prerequisites (into the interpreter OptunaSharp.Interop.pythonnet will embed),
-rem then runs both examples with `dotnet run`:
-rem   examples\OptunaHubBenchmark.cs        - the paper's Code 1: load benchmarks/bbob, optimize live
-rem   examples\OptunaHubSamplerShootout.cs  - race real hub samplers vs OptunaSharp's native TPE
+rem You can DOUBLE-CLICK this file in Explorer, or run it from a terminal. It installs the Python
+rem prerequisites (into the interpreter OptunaSharp.Interop.pythonnet embeds), then runs both examples:
+rem   examples\optunahub\OptunaHubBenchmark.cs        - the paper's Code 1: load benchmarks/bbob live
+rem   examples\optunahub\OptunaHubSamplerShootout.cs  - race real hub samplers vs OptunaSharp's native TPE
 rem
-rem Usage:   examples\optunahub\run-optunahub.bat
+rem The window STAYS OPEN at the end (and on any error) so you can read the output.
+rem
+rem Usage:   double-click, or  examples\optunahub\run-optunahub.bat
 rem   set PYTHON=C:\path\to\python.exe  &  examples\optunahub\run-optunahub.bat   (choose the interpreter)
 rem   set NO_COLOR=1                    &  examples\optunahub\run-optunahub.bat   (disable colors)
 setlocal
+title OptunaHub x OptunaSharp examples
+chcp 65001 >nul 2>&1
 
-rem repo root = two levels up from this script (examples\optunahub\)
+rem repo root = two levels up from this script (examples\optunahub\), so `dotnet run examples\..` resolves
 cd /d "%~dp0..\.."
 
 rem pick the Python interpreter (honored by the bridge via %PYTHON% when discovering libpython)
@@ -19,16 +23,17 @@ if not defined PYTHON set "PYTHON=python"
 "%PYTHON%" --version >nul 2>&1
 if errorlevel 1 (
   echo No python found at "%PYTHON%". Install Python 3.9+ or set PYTHON to your interpreter, then re-run.
-  exit /b 1
+  goto :done
 )
 
 for /f "delims=" %%v in ('"%PYTHON%" --version 2^>^&1') do echo Python : %%v
 echo Installing prerequisites from examples/optunahub/requirements.txt ...
 "%PYTHON%" -m pip install --quiet -r examples/optunahub/requirements.txt
 if errorlevel 1 (
-  echo pip install failed. Install manually:
+  echo.
+  echo pip install failed. Install manually, then re-run:
   echo     "%PYTHON%" -m pip install -r examples/optunahub/requirements.txt
-  exit /b 1
+  goto :done
 )
 
 if not defined FORCE_COLOR set "FORCE_COLOR=1"
@@ -37,9 +42,17 @@ if not defined OPTUNASHARP_OPTUNAHUB_QUIET set "OPTUNASHARP_OPTUNAHUB_QUIET=1"
 echo.
 echo ============ OptunaHub benchmark (BBOB Sphere) ============
 dotnet run examples/optunahub/OptunaHubBenchmark.cs
+if errorlevel 1 echo   ^(the benchmark exited with an error - see the output above^)
 
 echo.
 echo ============ OptunaHub sampler shootout ============
 dotnet run examples/optunahub/OptunaHubSamplerShootout.cs
+if errorlevel 1 echo   ^(the shootout exited with an error - see the output above^)
 
+:done
+echo.
+echo ============================================================
+echo   Done. This window stays open so you can read the output above.
+echo   ^(Close it, or press a key.^)
+pause >nul
 endlocal
