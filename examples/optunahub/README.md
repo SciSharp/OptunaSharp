@@ -12,6 +12,7 @@ own folder.
 | [`OptunaHubBenchmark.cs`](OptunaHubBenchmark.cs) | the paper's **Code 1** in .NET — `LoadModule("benchmarks/bbob")` (BBOB Sphere) optimized live by OptunaSharp's native TPE, with a colored convergence bar per trial |
 | [`OptunaHubSamplerShootout.cs`](OptunaHubSamplerShootout.cs) | the **sampler bridge** — race real hub samplers (`nelder_mead`, `cmaes`, `random_search`) against OptunaSharp's native TPE on 2-D Rastrigin, with colored sparklines + a leaderboard |
 | [`run-optunahub.sh`](run-optunahub.sh) / [`run-optunahub.bat`](run-optunahub.bat) | launchers: install the Python prerequisites, then run both in color |
+| [`requirements.txt`](requirements.txt) | the Python packages these examples need (the launchers `pip install -r` it) |
 
 ## Prerequisites
 
@@ -20,7 +21,7 @@ A Python with `optuna` + `optunahub` (the benchmark adds `coco-experiment` for B
 launcher installs them for you; otherwise:
 
 ```bash
-pip install optuna optunahub coco-experiment cmaes pandas
+pip install -r examples/optunahub/requirements.txt
 ```
 
 ## Run

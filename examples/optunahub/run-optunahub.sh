@@ -24,10 +24,10 @@ fi
 export PYTHON="$PY"
 
 echo "Python : $("$PY" --version 2>&1)"
-echo "Installing prerequisites (optuna optunahub coco-experiment cmaes pandas) …"
-if ! "$PY" -m pip install --quiet optuna optunahub coco-experiment cmaes pandas; then
+echo "Installing prerequisites from examples/optunahub/requirements.txt …"
+if ! "$PY" -m pip install --quiet -r examples/optunahub/requirements.txt; then
   echo "pip install failed. Install manually:"
-  echo "    $PY -m pip install optuna optunahub coco-experiment cmaes pandas"
+  echo "    $PY -m pip install -r examples/optunahub/requirements.txt"
   exit 1
 fi
 

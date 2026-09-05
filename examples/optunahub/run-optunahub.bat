@@ -23,11 +23,11 @@ if errorlevel 1 (
 )
 
 for /f "delims=" %%v in ('"%PYTHON%" --version 2^>^&1') do echo Python : %%v
-echo Installing prerequisites (optuna optunahub coco-experiment cmaes pandas) ...
-"%PYTHON%" -m pip install --quiet optuna optunahub coco-experiment cmaes pandas
+echo Installing prerequisites from examples/optunahub/requirements.txt ...
+"%PYTHON%" -m pip install --quiet -r examples/optunahub/requirements.txt
 if errorlevel 1 (
   echo pip install failed. Install manually:
-  echo     "%PYTHON%" -m pip install optuna optunahub coco-experiment cmaes pandas
+  echo     "%PYTHON%" -m pip install -r examples/optunahub/requirements.txt
   exit /b 1
 )
 

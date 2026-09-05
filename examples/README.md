@@ -68,7 +68,7 @@ is missing, so they never crash. The `source:` is the OptunaHub paper
 A **launcher** installs the Python prerequisites and runs both, in color:
 
 ```bash
-examples/optunahub/run-optunahub.sh        # Linux/macOS — installs optuna optunahub coco-experiment cmaes pandas
+examples/optunahub/run-optunahub.sh        # Linux/macOS — pip install -r examples/optunahub/requirements.txt, then runs
 examples\optunahub\run-optunahub.bat       # Windows
 # or run one directly (install the deps yourself first):
 dotnet run examples/optunahub/OptunaHubBenchmark.cs

@@ -1,0 +1,18 @@
+# Python prerequisites for the OptunaHub examples in this folder.
+#
+# The bridge (OptunaSharp.Interop.pythonnet) embeds CPython and loads real OptunaHub packages, so it
+# needs these in the interpreter it hosts. Install with:
+#
+#     pip install -r examples/optunahub/requirements.txt
+#
+# (the run-optunahub.sh / run-optunahub.bat launchers do this for you.)
+
+optuna              # the optimization framework the bridge talks to
+optunahub           # the OptunaHub loader (optunahub.load_module / load_local_module)
+
+# OptunaHubBenchmark.cs — BBOB (benchmarks/bbob) wraps the COCO experiment suite
+coco-experiment
+
+# OptunaHubSamplerShootout.cs — the hub samplers' own backends (any missing one is skipped, not fatal)
+cmaes               # samplers/cmaes
+pandas              # samplers/nelder_mead
