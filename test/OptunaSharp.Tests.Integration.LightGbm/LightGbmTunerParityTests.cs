@@ -19,16 +19,21 @@ namespace OptunaSharp.Tests.Integration.LightGbm;
 ///     <para>Parity is asserted at two grades, the project's usual "bit-exact vs erf-tolerance" split.
 ///     <b>Bit-exact</b>: the trial count (7+20+10+6+20+5), every step name, every parameter key set, and
 ///     the grid- and integer-valued parameters (<c>feature_fraction</c>, <c>num_leaves</c>,
-///     <c>bagging_freq</c>, <c>min_child_samples</c>). <b>Tolerance</b> (~1e-9; observed ≈1e-16): the
-///     TPE-sampled continuous parameters (<c>bagging_fraction</c>, <c>lambda_l1</c>, <c>lambda_l2</c>) and
-///     the objective values, which ride TPE's truncated-normal sampling through the managed erf/ndtri (the
-///     documented erf/ucrt boundary). The 1-ULP differences never flip a decision — the whole sequence,
-///     the best trial, and the best params all track.</para>
+///     <c>bagging_freq</c>, <c>min_child_samples</c>). <b>Tolerance</b> (~1e-9): the TPE-sampled continuous
+///     parameters (<c>bagging_fraction</c>, <c>lambda_l1</c>, <c>lambda_l2</c>) and the objective values,
+///     which ride TPE's truncated-normal sampling through the managed erf/ndtri (the documented erf/ucrt
+///     boundary). Measured deviation vs the oracle: ~1 ULP for <c>bagging_fraction</c> (linear scale) but
+///     up to ~64 ULP for <c>lambda_l1</c>/<c>lambda_l2</c> (the erf error amplified by their
+///     <c>log=True</c> transform through <c>exp</c>) and ~6 ULP for the objective values — absolute
+///     deviation ~1e-19, never flipping a decision, so the whole sequence, the best trial, and the best
+///     params all track.</para>
 ///
 ///     <para>The oracle (<c>oracle/lightgbm_tuner_synth.json</c>) is captured from live Optuna 5.x +
 ///     optuna-integration 5.x by <c>oracle/gen_lightgbm_tuner_oracle.py</c> — the committed-oracle model
 ///     the porting plan describes (§4). This is the differential gate for the Phase 6 tuner's search
-///     subsystem; the ML.NET training adapter (which has no oracle) is covered separately.</para>
+///     subsystem; the ML.NET training adapter (which has no oracle) is covered separately. A LIVE
+///     counterpart that re-derives the sequence from real Optuna in-process every run (pythonnet) is
+///     <c>OptunaSharp.Tests.Interop.LightGbmTunerParityTests</c>.</para>
 /// </summary>
 [TestClass]
 public class LightGbmTunerParityTests
@@ -197,7 +202,8 @@ public class LightGbmTunerParityTests
             AssertClose(a, expected, ctx);
     }
 
-    // numpy-allclose style: |a-b| <= atol + rtol*|b|, atol=rtol=1e-9 (observed deviation is ~1e-16).
+    // numpy-allclose style: |a-b| <= atol + rtol*|b|, atol=rtol=1e-9 (observed absolute deviation ~1e-19;
+    // up to ~64 ULP on the log-scale lambda params, ~6 ULP on the objective values).
     private static void AssertClose(double actual, double expected, string ctx)
         => Math.Abs(actual - expected).Should()
             .BeLessThanOrEqualTo(1e-9 + 1e-9 * Math.Abs(expected), $"{ctx} (erf tolerance)");
