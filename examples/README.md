@@ -50,6 +50,35 @@ The repo's `test/OptunaSharp.Tests.Storage/docker-compose.yml` also starts one
 **commercial** ServiceStack.Redis exists with the same surface but is not shown here (it isn't
 referenced by the examples).
 
+## OptunaHub (live Python bridge)
+
+Load and run **real [OptunaHub](https://hub.optuna.org/) packages** — the samplers and benchmarks the
+community publishes — from inside an OptunaSharp study, via
+[`OptunaSharp.Interop.pythonnet`](../src/OptunaSharp.Interop.pythonnet) (the .NET analog of
+`NumSharp.Interop.pythonnet`; `OptunaHub.LoadModule` mirrors `optunahub.load_module`). These need a
+**Python** with `optuna` + `optunahub`; each probes first and prints friendly guidance if a prerequisite
+is missing, so they never crash. The `source:` is the OptunaHub paper
+([arXiv:2510.02798](https://arxiv.org/abs/2510.02798)).
+
+| Example | First shows |
+|---|---|
+| [`OptunaHubBenchmark.cs`](OptunaHubBenchmark.cs) | the paper's **Code 1** in .NET — `LoadModule("benchmarks/bbob")` (BBOB Sphere) optimized live by OptunaSharp's native TPE, with a colored convergence bar per trial |
+| [`OptunaHubSamplerShootout.cs`](OptunaHubSamplerShootout.cs) | the **sampler bridge** — race real hub samplers (`nelder_mead`, `cmaes`, `random_search`) against OptunaSharp's native TPE on 2-D Rastrigin, with colored convergence sparklines + a leaderboard |
+
+A **launcher** installs the Python prerequisites and runs both, in color:
+
+```bash
+examples/run-optunahub.sh        # Linux/macOS — installs optuna optunahub coco-experiment cmaes pandas
+examples\run-optunahub.bat       # Windows
+# or run one directly (install the deps yourself first):
+dotnet run examples/OptunaHubBenchmark.cs
+dotnet run examples/OptunaHubSamplerShootout.cs
+# choose the interpreter: PYTHON=/path/to/python   ·   disable colors: NO_COLOR=1
+```
+
+The bridge is covered by
+[`OptunaHubBridgeParityTests`](../test/OptunaSharp.Tests.Interop/OptunaHubBridgeParityTests.cs).
+
 ## Run them
 
 ```bash
@@ -68,9 +97,10 @@ clip, so it always runs a real encode.
 
 ## Real vs. surrogate objectives
 
-`FFmpegX264Tuning` (an actual encode), `ParamRepeatPruner` (a real repeat check), and the two Redis
-examples (real self-contained paraboloids — the point there is the storage, not the objective) run their
-**real** objectives. The rest use a **deterministic surrogate** for the objective body — OptunaSharp can't run
+`FFmpegX264Tuning` (an actual encode), `ParamRepeatPruner` (a real repeat check), the two Redis
+examples (real self-contained paraboloids — the point there is the storage, not the objective), and the
+two OptunaHub examples (real BBOB evaluated in Python / a genuine Rastrigin — the point there is the
+live hub bridge) run their **real** objectives. The rest use a **deterministic surrogate** for the objective body — OptunaSharp can't run
 XGBoost/train a net in-process, and a sampler's trajectory is fixed by `(seed, search space, value
 sequence)` alone, so the surrogate keeps the example self-contained while exercising the real feature.
 The **real ML** runs (XGBoost, LightGBM, sklearn) happen in `OptunaSharp.Tests.PackageParity`, where
