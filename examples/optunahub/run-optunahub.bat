@@ -38,6 +38,9 @@ if errorlevel 1 (
 
 if not defined FORCE_COLOR set "FORCE_COLOR=1"
 if not defined OPTUNASHARP_OPTUNAHUB_QUIET set "OPTUNASHARP_OPTUNAHUB_QUIET=1"
+rem clear any stale PYTHONNET_PYDLL so the bridge discovers %PYTHON% (where we just installed the
+rem prerequisites), not a previously-pinned interpreter. scoped to this window by setlocal.
+set "PYTHONNET_PYDLL="
 
 echo.
 echo ============ OptunaHub benchmark (BBOB Sphere) ============

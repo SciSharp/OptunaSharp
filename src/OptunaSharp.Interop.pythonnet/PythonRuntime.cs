@@ -25,6 +25,7 @@ public static class PythonRuntime
 {
     private static readonly object _gate = new();
     private static int _initialized;
+    private static string? _sitePackages;   // discovered by ResolvePythonDll, injected after Initialize
 
     private static PyObject? _optuna, _optunahub, _builtins;
 
@@ -56,6 +57,7 @@ public static class PythonRuntime
                 ResolvePythonDll();
                 PythonEngine.Initialize();
                 PythonEngine.BeginAllowThreads();
+                InjectSitePackages();   // add the probed interpreter's site-packages to sys.path
                 EnsureQuiet();
             }
             catch (Exception ex) when (ex is not OptunaHubInteropException)
@@ -168,41 +170,104 @@ public static class PythonRuntime
     }
 
     /// <summary>
-    ///     Point pythonnet at a libpython. Honors <c>PYTHONNET_PYDLL</c> (pythonnet reads it itself),
-    ///     otherwise probes a python executable for its shared-library path and sets it explicitly.
-    ///     Mirrors the interop test suite's <c>PythonSession.ResolvePythonDll</c>.
+    ///     Point pythonnet at a libpython AND at the interpreter's site-packages. Honors
+    ///     <c>PYTHONNET_PYDLL</c> when set (the user pinned the interpreter); otherwise probes a
+    ///     <c>python</c> executable for its shared library and the directories it imports packages from,
+    ///     which are then inserted into the embedded <c>sys.path</c> right after startup (see
+    ///     <see cref="InjectSitePackages"/>) so it can import whatever that python can — venv /
+    ///     <c>--user</c> site / conda included. Without that step, pythonnet can start from the base DLL
+    ///     and miss where <c>pip install optuna</c> actually landed — the classic "Failed to import
+    ///     optuna in the embedded interpreter" despite a successful install. (Setting <c>PYTHONPATH</c>
+    ///     doesn't help: an embeddable-distribution base — a <c>python3xx._pth</c> — ignores it, so the
+    ///     paths must be pushed onto <c>sys.path</c> from inside the running interpreter.)
     /// </summary>
     private static void ResolvePythonDll()
     {
         if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PYTHONNET_PYDLL")))
-            return; // pythonnet honors this itself.
+            return; // the user pinned the interpreter with PYTHONNET_PYDLL; honor it as-is.
 
         foreach (string? exe in new[] { Environment.GetEnvironmentVariable("PYTHON"), "python3", "python" })
         {
             if (string.IsNullOrEmpty(exe))
                 continue;
 
-            string? dll = ProbeSharedLibrary(exe!);
-            if (dll is not null && File.Exists(dll))
-            {
-                Runtime.PythonDLL = dll;
-                return;
-            }
+            (string? dll, string? sitePackages) = ProbeEnvironment(exe!);
+            if (dll is null || !File.Exists(dll))
+                continue;
+
+            Runtime.PythonDLL = dll;
+            _sitePackages = sitePackages;   // pushed onto sys.path after Initialize (InjectSitePackages)
+            return;
         }
         // Fall through: let PythonEngine.Initialize() try its own resolution.
     }
 
-    private static string? ProbeSharedLibrary(string exe)
+    /// <summary>
+    ///     Push the probed interpreter's site-packages onto the LIVE <c>sys.path</c> (after
+    ///     <see cref="PythonEngine.Initialize()"/>). This is what makes venv / <c>--user</c> / conda
+    ///     packages importable when the loaded libpython is an embeddable base that ignores
+    ///     <c>PYTHONPATH</c>. Best-effort and idempotent (skips entries already present).
+    /// </summary>
+    private static void InjectSitePackages()
+    {
+        if (string.IsNullOrEmpty(_sitePackages))
+            return;
+        try
+        {
+            using (Py.GIL())
+            {
+                using var sys = Py.Import("sys");
+                using var sysPath = sys.GetAttr("path");
+                string[] dirs = _sitePackages!.Split(Path.PathSeparator);
+                // insert in reverse so the first probed dir ends up first (highest import priority)
+                for (int i = dirs.Length - 1; i >= 0; i--)
+                {
+                    string dir = dirs[i];
+                    if (string.IsNullOrEmpty(dir))
+                        continue;
+                    using var pyDir = new PyString(dir);
+                    using var contains = sysPath.InvokeMethod("__contains__", pyDir);
+                    if (contains.As<bool>())
+                        continue; // already on sys.path — don't duplicate
+                    using var zero = new PyInt(0);
+                    using var _ = sysPath.InvokeMethod("insert", zero, pyDir);
+                }
+            }
+        }
+        catch
+        {
+            // best-effort — if we can't tweak sys.path, imports may still resolve from the base env.
+        }
+    }
+
+    /// <summary>
+    ///     Run <paramref name="exe"/> once to report (line 1) its libpython path and (line 2) its
+    ///     site-packages directories joined by the platform path separator. Best-effort — a failure
+    ///     just moves on to the next candidate.
+    /// </summary>
+    private static (string? Dll, string? SitePackages) ProbeEnvironment(string exe)
     {
         const string script =
-            "import sys,sysconfig,os\n" +
+            "import sys,sysconfig,os,site\n" +
             "if os.name=='nt':\n" +
-            "    p=os.path.join(sys.base_prefix,'python%d%d.dll'%sys.version_info[:2])\n" +
+            "    dll=os.path.join(sys.base_prefix,'python%d%d.dll'%sys.version_info[:2])\n" +
             "else:\n" +
             "    d=sysconfig.get_config_var('LIBDIR') or ''\n" +
             "    n=sysconfig.get_config_var('INSTSONAME') or sysconfig.get_config_var('LDLIBRARY') or ''\n" +
-            "    p=os.path.join(d,n)\n" +
-            "print(p)";
+            "    dll=os.path.join(d,n)\n" +
+            "paths=[]\n" +
+            "try:\n" +
+            "    paths+=list(site.getsitepackages())\n" +
+            "except Exception:\n" +
+            "    pass\n" +
+            "try:\n" +
+            "    if site.ENABLE_USER_SITE:\n" +
+            "        paths.append(site.getusersitepackages())\n" +
+            "except Exception:\n" +
+            "    pass\n" +
+            "uniq=[p for p in dict.fromkeys(paths) if p and os.path.isdir(p)]\n" +
+            "print(dll)\n" +
+            "print(os.pathsep.join(uniq))\n";
 
         try
         {
@@ -215,14 +280,18 @@ public static class PythonRuntime
             };
             using Process? p = Process.Start(psi);
             if (p is null)
-                return null;
+                return (null, null);
             string outp = p.StandardOutput.ReadToEnd();
             p.WaitForExit(15_000);
-            return outp.Trim() is { Length: > 0 } s ? s : null;
+
+            string[] lines = outp.Replace("\r", "").Split('\n');
+            string? dll = lines.Length > 0 && lines[0].Trim().Length > 0 ? lines[0].Trim() : null;
+            string? sp = lines.Length > 1 && lines[1].Trim().Length > 0 ? lines[1].Trim() : null;
+            return (dll, sp);
         }
         catch
         {
-            return null; // exe not found / not runnable — try the next candidate.
+            return (null, null); // exe not found / not runnable — try the next candidate.
         }
     }
 }

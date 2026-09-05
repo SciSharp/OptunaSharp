@@ -22,6 +22,7 @@ if [ -z "$PY" ]; then
   else echo "No python found on PATH. Install Python 3.9+ and re-run."; exit 1; fi
 fi
 export PYTHON="$PY"
+unset PYTHONNET_PYDLL   # discover $PYTHON (where we install the deps), not a previously-pinned interpreter
 
 echo "Python : $("$PY" --version 2>&1)"
 echo "Installing prerequisites from examples/optunahub/requirements.txt …"
