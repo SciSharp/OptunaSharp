@@ -3,24 +3,39 @@ using System;
 namespace OptunaSharp.Integration;
 
 /// <summary>
-///     A framework-agnostic Optuna pruning callback for iterative / epoch-based .NET training loops.
+///     The framework-agnostic Optuna pruning callback for iterative / epoch-based .NET training loops —
+///     the canonical .NET pruning callback, and the base that framework-specific integration packages
+///     extend.
 ///
 ///     <para>
-///     This is the shared essence of Optuna's per-framework pruning callbacks
+///     It is the shared essence of Optuna's per-framework pruning callbacks
 ///     (<c>optuna_integration</c>'s <c>XGBoostPruningCallback</c> / <c>LightGBMPruningCallback</c> /
-///     <c>CatBoostPruningCallback</c>): once per boosting round or training epoch, report the current
-///     validation metric to the <see cref="Trial" /> and abort the trial when the study's pruner says it
-///     is unpromising.
+///     <c>CatBoostPruningCallback</c> / <c>KerasPruningCallback</c> / …): once per boosting round or
+///     training epoch, report the current validation metric to the <see cref="Trial" /> and abort the
+///     trial when the study's pruner says it is unpromising.
 ///     </para>
 ///
 ///     <para>
-///     <b>.NET note (this is a Phase-6 adapter, not a behavior-parity port).</b> In Python those
-///     callbacks are invoked <i>by the training framework</i> (XGBoost/LightGBM/CatBoost hand the
-///     callback their per-iteration evaluation log). ML.NET's gradient-boosting trainers
-///     (<c>Microsoft.ML.LightGbm</c> / <c>Microsoft.ML.FastTree</c>) expose <b>no managed per-iteration
-///     hook</b>, so — unlike the Python callbacks — you drive this yourself from whatever iterative loop
-///     you own: a TorchSharp epoch loop, an online / incremental ML.NET learner, or any hand-written
+///     <b>Why this is the .NET replacement for the named per-framework callbacks.</b> In Python each
+///     callback is invoked <i>by the training framework</i> — CatBoost/XGBoost/Keras/… hand it their
+///     per-iteration evaluation data — which is the callback's whole reason to exist. Those frameworks
+///     are Python-only: there is no .NET CatBoost/XGBoost/Ignite/Lightning/skorch/fastai to call a
+///     named callback, and .NET's own trainers (ML.NET's <c>Microsoft.ML.LightGbm</c> /
+///     <c>Microsoft.ML.FastTree</c>, TorchSharp) expose <b>no managed per-iteration hook</b>. So instead
+///     of hollow per-framework shells, you drive this one callback yourself from whatever iterative loop
+///     you own — a TorchSharp epoch loop, an online / incremental ML.NET learner, or any hand-written
 ///     training loop where a scalar validation metric becomes available each step.
+///     </para>
+///
+///     <para>
+///     <b>Extending it.</b> A framework that <i>does</i> expose a managed callback in .NET can ship a
+///     satellite package whose callback subclasses this one and implements that framework's callback
+///     interface — for example a real Keras callback over SciSharp's TensorFlow.NET would be
+///     <c>class KerasPruningCallback : PruningCallback, Tensorflow.Keras.Engine.ICallback</c>, reading
+///     the metric in <c>on_epoch_end(epoch, logs)</c> and calling the inherited <see cref="Report" />.
+///     Subclasses get the <see cref="Trial" /> via the protected <see cref="Trial" /> property and can
+///     override <see cref="FormatPrunedMessage" /> to word the pruning message their way (e.g. "epoch"
+///     rather than "iteration").
 ///     </para>
 ///
 ///     <para>
@@ -78,6 +93,20 @@ public class PruningCallback
     public bool Pruned => _pruned;
 
     /// <summary>
+    ///     The <see cref="OptunaSharp.Trial" /> this callback drives — exposed for subclasses (framework
+    ///     integration packages) that need to read the trial or its study directly.
+    /// </summary>
+    protected Trial Trial => _trial;
+
+    /// <summary>
+    ///     The message carried by the <see cref="TrialPruned" /> this callback raises. The default is
+    ///     <c>"Trial was pruned at iteration {step}."</c>; a subclass may override it to word the step
+    ///     differently (e.g. <c>"Trial was pruned at epoch {step}."</c>).
+    /// </summary>
+    /// <param name="step">The step at which pruning was decided.</param>
+    protected virtual string FormatPrunedMessage(int step) => $"Trial was pruned at iteration {step}.";
+
+    /// <summary>
     ///     Report an intermediate <paramref name="value" /> for the given <paramref name="step" /> and, if
     ///     the study's pruner decides the trial is unpromising, immediately raise
     ///     <see cref="TrialPruned" /> (the XGBoost / LightGBM convention).
@@ -93,7 +122,7 @@ public class PruningCallback
         _trial.Report(value, step);
         if (_trial.ShouldPrune())
         {
-            _message = $"Trial was pruned at iteration {step}.";
+            _message = FormatPrunedMessage(step);
             _pruned = true;
             throw new TrialPruned(_message);
         }
@@ -113,7 +142,7 @@ public class PruningCallback
         _trial.Report(value, step);
         if (_trial.ShouldPrune())
         {
-            _message = $"Trial was pruned at iteration {step}.";
+            _message = FormatPrunedMessage(step);
             _pruned = true;
             return false;
         }

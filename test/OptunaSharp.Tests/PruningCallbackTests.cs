@@ -5,7 +5,7 @@ using OptunaSharp.Integration;
 using OptunaSharp.Pruners;
 using OptunaSharp.Samplers;
 
-namespace OptunaSharp.Tests.Integration.MLNet;
+namespace OptunaSharp.Tests;
 
 /// <summary>
 ///     Tests for the framework-agnostic <see cref="PruningCallback" /> — the shared essence of Optuna's

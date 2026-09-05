@@ -7,9 +7,10 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <RootNamespace>OptunaSharp.Tests.Integration.MLNet</RootNamespace>
-    <!-- The Phase-6 ML.NET integration surface under test (OptunaSearchCV + PruningCallback) is public,
-         so these tests need no Core internals; the assembly name is not a declared friend. Strong-naming
-         is set repo-wide in ../../Directory.Build.props. -->
+    <!-- The Phase-6 ML.NET integration surface under test (OptunaSearchCV) is public, so these tests
+         need no Core internals; the assembly name is not a declared friend. (The framework-agnostic
+         PruningCallback moved to Core; its tests live in OptunaSharp.Tests.) Strong-naming is set
+         repo-wide in ../../Directory.Build.props. -->
     <AssemblyName>OptunaSharp.Tests.Integration.ML.NET</AssemblyName>
     <!-- ML.NET trainer Options are reflection-driven; keep AOT off (matches the ML.NET backends). -->
     <PublishAot>false</PublishAot>

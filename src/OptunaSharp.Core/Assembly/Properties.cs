@@ -80,18 +80,6 @@ using System.Runtime.CompilerServices;
 // Its test project mirrors the forests test project (backend-parameterised invariants).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Integration.LightGbm, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
-// The named framework pruning callbacks (satellite package OptunaSharp.Integration.Pruning, Phase 6.2 —
-// CatBoost / XGBoost / Keras / tf.keras / TensorFlow / PyTorch Ignite / PyTorch Lightning / skorch /
-// fastai v2) reach Core internals no public API exposes: the OptunaWarnings / WarningCategory seam (the
-// Keras/tf.keras/Lightning missing-metric UserWarning) and the storage surface the PyTorch Lightning DDP
-// path needs — Trial.Storage / Trial.TrialId / Study.Storage, plus CachedStorage / ICachedStorageBackend
-// (requiring RDB-style storage in DDP) and BaseStorage's system-attr getters. Pure managed otherwise (no
-// foreign ML runtime), so it does not fragment into one premature package per framework.
-[assembly: InternalsVisibleTo("OptunaSharp.Integration.Pruning, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
-// Its test project asserts the Keras/tf.keras/Lightning missing-metric UserWarning fired via the internal
-// OptunaWarnings.WarningRaised event (same reason the interop / storage suites are friends).
-[assembly: InternalsVisibleTo("OptunaSharp.Tests.Integration.Pruning, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
-
 // The Redis backends' shared test project asserts that experimental warning fired via the internal
 // OptunaWarnings.WarningRaised event (same reason the interop suite is a friend).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
