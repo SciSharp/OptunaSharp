@@ -32,6 +32,10 @@
     <!-- The SQLite RDB storage (Phase 4.1). Needs no external service (native e_sqlite3 is bundled),
          so its tests run in the normal unit-test lane. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Storage.Sqlite\OptunaSharp.Storage.Sqlite.csproj" />
+    <!-- The gRPC storage proxy (Phase 4.4). Its client↔server round-trip + proto conversions run fully
+         in-process (Kestrel on a loopback port), needing no external service or Python, so they run in
+         the normal unit-test lane. Brings ASP.NET Core (server host) + Grpc.Net.Client transitively. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Storage.Grpc\OptunaSharp.Storage.Grpc.csproj" />
     <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
   </ItemGroup>
 

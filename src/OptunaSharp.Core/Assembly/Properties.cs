@@ -37,6 +37,14 @@ using System.Runtime.CompilerServices;
 // stored names via the internal PythonName() helpers.
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.Sqlite, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The gRPC storage proxy (satellite package OptunaSharp.Storage.Grpc, Phase 4.4) is a network client +
+// server for any BaseStorage. Both sides serialize/deserialize FrozenTrial through the same internal
+// helpers so the on-wire proto strings stay byte-compatible with Python Optuna: PyJson (attr json.dumps),
+// Distribution JSON, FrozenTrial.TrialId (the proto trial_id + the client cache's finished/unfinished
+// bookkeeping), and the server's two info logs + the experimental-class/func warning via OptunaLogging /
+// OptunaWarnings / WarningCategory — all internal to Core.
+[assembly: InternalsVisibleTo("OptunaSharp.Storage.Grpc, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 // The ML.NET FastForest backend (satellite package OptunaSharp.Importance.Forests.ML.NET, Phase 5.1)
 // reuses Core's internal forest machinery: SklearnLikeTree / FanovaTree / Fanova / Mdi /
 // ForestImportance (the shared algorithm), plus SearchSpaceTransform, the optuna/importance/_base.py

@@ -51,6 +51,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Tests.Integrati
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Storage.Sqlite", "src\OptunaSharp.Storage.Sqlite\OptunaSharp.Storage.Sqlite.csproj", "{7E20B87B-0EB2-4E86-877F-15357C504ED3}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Storage.Grpc", "src\OptunaSharp.Storage.Grpc\OptunaSharp.Storage.Grpc.csproj", "{697837D0-7118-4F6B-9F21-254E1D6346ED}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -325,6 +327,18 @@ Global
 		{7E20B87B-0EB2-4E86-877F-15357C504ED3}.Release|x64.Build.0 = Release|Any CPU
 		{7E20B87B-0EB2-4E86-877F-15357C504ED3}.Release|x86.ActiveCfg = Release|Any CPU
 		{7E20B87B-0EB2-4E86-877F-15357C504ED3}.Release|x86.Build.0 = Release|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Debug|x64.Build.0 = Debug|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Debug|x86.Build.0 = Debug|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Release|Any CPU.Build.0 = Release|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Release|x64.ActiveCfg = Release|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Release|x64.Build.0 = Release|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Release|x86.ActiveCfg = Release|Any CPU
+		{697837D0-7118-4F6B-9F21-254E1D6346ED}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -352,5 +366,6 @@ Global
 		{8F366AAF-69D0-4DAC-B75B-1A1D2DBBEFCF} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{982B0AA1-2984-4DFB-B9C3-2690FFBD486D} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 		{7E20B87B-0EB2-4E86-877F-15357C504ED3} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{697837D0-7118-4F6B-9F21-254E1D6346ED} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

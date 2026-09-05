@@ -31,6 +31,11 @@
          .db from Python Optuna and vice versa. Needs no external service (native e_sqlite3 bundled);
          self-skips when Python/optuna is absent, like the other RequiresPython tests. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Storage.Sqlite\OptunaSharp.Storage.Sqlite.csproj" />
+    <!-- The gRPC storage proxy (Phase 4.4), so the wire-compat gate (GrpcStorageProxyInteropTests) can
+         round-trip a study between an OptunaSharp client/server and a Python Optuna gRPC proxy server in
+         both directions. Self-skips when Python/optuna or grpcio is absent, like the other RequiresPython
+         tests. Brings ASP.NET Core (server host) + Grpc.Net.Client transitively. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Storage.Grpc\OptunaSharp.Storage.Grpc.csproj" />
     <!-- The forest-based importance evaluators (fANOVA + MDI), so their live ranking-parity vs
          Optuna's scikit-learn-backed evaluators can run in-process. Transitively brings ML.NET.
          Those tests self-skip when scikit-learn is not importable in the Python env. -->

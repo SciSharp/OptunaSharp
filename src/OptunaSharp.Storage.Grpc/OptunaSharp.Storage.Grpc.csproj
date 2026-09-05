@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <RootNamespace>OptunaSharp</RootNamespace>
+    <AssemblyName>OptunaSharp.Storage.Grpc</AssemblyName>
+    <Nullable>enable</Nullable>
+
+    <PackageId>OptunaSharp.Storage.Grpc</PackageId>
+    <Description>gRPC storage proxy for OptunaSharp — the port of optuna.storages.GrpcStorageProxy (client) and optuna.storages.run_grpc_proxy_server (server). Reuses Optuna's api.proto verbatim, so an OptunaSharp client and a Python Optuna gRPC proxy server (and vice versa) are wire-compatible. Client on Grpc.Net.Client, server on Grpc.AspNetCore. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;gRPC;Grpc;Storage;Proxy;Distributed;HyperparameterOptimization;HPO;SciSharp</PackageTags>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <!-- The server (OptunaStorageProxyService / GrpcProxyServer) self-hosts on Kestrel, so it needs the
+       ASP.NET Core shared framework. This is a FrameworkReference, not a package: it resolves per-TFM
+       against the installed runtime and is recorded in the .nupkg. The client (GrpcStorageProxy) rides
+       Grpc.Net.Client alone, but the two ship in one package (mirroring optuna.storages._grpc). -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Google.Protobuf: the runtime for the generated message types. Grpc.AspNetCore: the server
+         (Kestrel HTTP/2 + gRPC service base). Grpc.Net.Client: the managed client channel/stub.
+         Grpc.Tools: the build-time protoc/gRPC C# codegen (dev-only; PrivateAssets=all). -->
+    <PackageReference Include="Google.Protobuf" Version="3.36.1" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.83.0" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.83.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!-- Optuna's api.proto, vendored VERBATIM from src/optuna/optuna/storages/_grpc/api.proto (identical
+       sha256). GrpcServices="Both" generates the client stub AND the server base from the one contract,
+       so both sides speak the exact wire format Python Optuna's grpcio-generated code does. The proto's
+       `package optuna;` lands the generated types in the C# namespace `Optuna` (aliased `Pb` in code). -->
+  <ItemGroup>
+    <Protobuf Include="Protos\api.proto" GrpcServices="Both" ProtoRoot="Protos" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>
