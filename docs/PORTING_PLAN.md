@@ -45,7 +45,7 @@ OptunaSharp can share a live journal file with no external package on either sid
 > byproducts) · ⬜ not started. Update this section as items land — it is the first thing the next
 > agent should read. Per-item detail is in the phase tables below (the same `#` ids).
 
-### ▶ CONTINUE HERE: **Phase 4 — external storage (Tier X)** — this begins the Tier X external-dependency work (RDB/Redis/gRPC storage, etc.); the `ICachedStorageBackend` seam for 4.1 was declared back in 1.2. **Phase 4.5 (cloud artifacts) is already DONE** — S3/GCS ports + Azure Blob / Cloudflare R2 extensions landed as 4 satellite packages (feat `3923fcd`); **4.3 Redis journal is also DONE** (feat `aa23800`); the remaining Phase 4 work is 4.1 SQLite RDB, 4.2 EF Core, 4.4 gRPC proxy. **TIER N IS COMPLETE — the entire native Optuna algorithm surface is ported (every sampler incl. TPE/NSGA/CMA-ES/GP, every pruner, MO machinery, PED-ANOVA, terminators incl. the GP evaluators, the visualization data layer, in-memory + journal-file persistence), pure managed on NumSharp(+OpenBLAS).** The 2.12 `QMCSampler` `scramble=true` wire-up is **DONE for Sobol'** (the default engine; full-state bit-identical vs live Optuna — see the 2.12 done-item). The one remaining native sliver is **scrambled Halton** (`qmc_type="halton", scramble=true`, throws with a clear message): it needs numpy's PCG64 `shuffle`/`random_interval` (scipy's `_van_der_corput_permutations`), which NumSharp does not yet expose publicly → a small NumSharp upstream primitive is the prerequisite. **Also landed (ahead of plan order, maintainer-directed): Phase 5.1 — fANOVA + MDI importance, NATIVE + bit-exact** (feat `47717b7` then `13dc596`): the canonical `FanovaImportanceEvaluator`/`MeanDecreaseImpurityImportanceEvaluator` are now a pure-managed **byte-for-byte port of scikit-learn's `RandomForestRegressor`** in Core (Tier N — value-parity vs live Optuna to ~1 ULP), with ML.NET FastForest kept as an optional 2nd backend (`OptunaSharp.Importance.Forests`, `FastForest*` evaluators, ranking-only). The plan's "exact managed-CART port = Tier N backlog" is DONE — see the Phase 5 table.
+### ▶ CONTINUE HERE: **Phase 4 — external storage (Tier X)** — this begins the Tier X external-dependency work (RDB/Redis/gRPC storage, etc.); the `ICachedStorageBackend` seam for 4.1 was declared back in 1.2. **Phase 4.5 (cloud artifacts) is already DONE** — S3/GCS ports + Azure Blob / Cloudflare R2 extensions landed as 4 satellite packages (feat `3923fcd`); **4.3 Redis journal is also DONE** (feat `aa23800`); **4.1 SQLite RDB is now DONE** (`OptunaSharp.Storage.Sqlite` — `RDBStorage` on Microsoft.Data.Sqlite, byte-exact Optuna schema, Python↔C# same-file round-trip green); the remaining Phase 4 work is 4.2 EF Core, 4.4 gRPC proxy. **TIER N IS COMPLETE — the entire native Optuna algorithm surface is ported (every sampler incl. TPE/NSGA/CMA-ES/GP, every pruner, MO machinery, PED-ANOVA, terminators incl. the GP evaluators, the visualization data layer, in-memory + journal-file persistence), pure managed on NumSharp(+OpenBLAS).** The 2.12 `QMCSampler` `scramble=true` wire-up is **DONE for Sobol'** (the default engine; full-state bit-identical vs live Optuna — see the 2.12 done-item). The one remaining native sliver is **scrambled Halton** (`qmc_type="halton", scramble=true`, throws with a clear message): it needs numpy's PCG64 `shuffle`/`random_interval` (scipy's `_van_der_corput_permutations`), which NumSharp does not yet expose publicly → a small NumSharp upstream primitive is the prerequisite. **Also landed (ahead of plan order, maintainer-directed): Phase 5.1 — fANOVA + MDI importance, NATIVE + bit-exact** (feat `47717b7` then `13dc596`): the canonical `FanovaImportanceEvaluator`/`MeanDecreaseImpurityImportanceEvaluator` are now a pure-managed **byte-for-byte port of scikit-learn's `RandomForestRegressor`** in Core (Tier N — value-parity vs live Optuna to ~1 ULP), with ML.NET FastForest kept as an optional 2nd backend (`OptunaSharp.Importance.Forests`, `FastForest*` evaluators, ranking-only). The plan's "exact managed-CART port = Tier N backlog" is DONE — see the Phase 5 table.
 
 > **Phase 3.3 is COMPLETE (2026-09-04).** The two GP improvement evaluators are ported and un-throw:
 > `RegretBoundEvaluator` (the default, `terminator/improvement/evaluator.py` — `_get_beta`,
@@ -404,8 +404,10 @@ moment OptunaSharp.Core loads. Keep it.
 | 1 — Native persistence (1.1–1.5) | ✅ | journal Python↔C# live interop green; **M2 reached** |
 | 2 — Native features | ✅ | **2.1–2.16 COMPLETE** (full TPE; MO hypervolume/HSSP; QMC — Sobol' both scrambled & unscrambled + Halton unscrambled; NSGA-II; NSGA-III; OpenBLAS linalg; **CMA-ES `CmaEsSampler` — full CMA + separable SepCMA + Warm-Starting + CMAwM `with_margin`**); box-decomp landed in 3.2; only scrambled **Halton** remains (needs a NumSharp PCG64 `shuffle`) |
 | 3 — Native heavy tail | ✅ | **COMPLETE (3.1 + 3.2 + 3.3).** 3.1 viz data layer; 3.2 §7 autodiff gate **GREEN & CLOSED** — the GP fit fully ported (hand-derived MLL gradient ~1e-13 vs autograd; managed L-BFGS-B port of scipy's `__lbfgsb.c`) and **the ENTIRE `GPSampler`** (every sequential 3a–3e-5 + running-trial q-batch 3e-6 path), no TorchSharp; **3.3 GP terminators** — `RegretBoundEvaluator` (default) + `EMMREvaluator` un-thrown (`UCB`/`LCB` acqfs + `OptimSample` + the deferred `_get_improvement_info` viz builder), tolerance parity vs live Optuna. **Tier N is COMPLETE.** Rendering `plot_*`→5.2 |
-| 4 — External storage (Tier X) | 🟩 | **4.3 Redis journal (feat `aa23800`) + 4.5 cloud artifacts (feat `3923fcd`) DONE**; 4.1 SQLite / 4.2 EF Core / 4.4 gRPC pending; `ICachedStorageBackend` seam for 4.1 declared in 1.2 |
-| 5 — External integrations (Tier X) | 🟩 | **5.1 fANOVA + MDI importance DONE** — native bit-exact scikit-learn CART in Core (Tier N, value-parity vs Optuna, feat `13dc596`) + 3 ML.NET satellite backends: faithful FastForest (`.Importance.Forests.ML.NET`, feat `47717b7`) and the experimental/off-label gradient boosters FastTree/FastTreeTweedie (`.Importance.Booster.ML.NET`, feat `599bf3f`) + LightGBM (`.Integration.LightGbm`, feat `c7d9af9`), all ranking-only; **5.7 will add the LightGBM tuner** (the Optuna-justified `optuna.integration.lightgbm`); 5.2–5.7 pending |
+| 4 — External storage (Tier X) | 🟩 | **4.1 SQLite RDB + 4.3 Redis journal (feat `aa23800`) + 4.5 cloud artifacts (feat `3923fcd`) DONE**; 4.2 EF Core / 4.4 gRPC pending; `ICachedStorageBackend` seam for 4.1 declared in 1.2, now implemented by `RDBStorage` (wrapped in `CachedStorage` via `get_storage`) |
+| 4.9 — Native convenience gaps (Tier N) | ✅ | **DONE** — `MaxTrialsCallback` ported now (feat `a224e5a`); `show_progress_bar` (`Internal/ProgressBar.cs`, tqdm analog) + `FixedTrial` already landed as Phase-0 byproducts, tests backfilled. Pure managed, no external deps |
+| 5 — External integrations (Tier X) | 🟩 | **5.1 fANOVA + MDI importance DONE** — native bit-exact scikit-learn CART in Core (Tier N, value-parity vs Optuna, feat `13dc596`) + 3 ML.NET satellite backends: faithful FastForest (`.Importance.Forests.ML.NET`, feat `47717b7`) and the experimental/off-label gradient boosters FastTree/FastTreeTweedie (`.Importance.Booster.ML.NET`, feat `599bf3f`) + LightGBM (`.Integration.LightGbm`, feat `c7d9af9`), all ranking-only; **the LightGBM tuner landed in Phase 6.1** (the Optuna-justified `optuna.integration.lightgbm` — see the Phase 6 row); 5.2–5.6 pending |
+| 6 — Framework integration adapters (Tier X) | 🟩 | **THE LAST PHASE**; the `optuna.integration` analog. **6.1 LightGBM tuner DONE** — `LightGBMTuner`/`LightGBMTunerCV`/`Train` in `.Integration.LightGbm`: the stepwise search is a faithful, committed-oracle-validated port over OptunaSharp's GridSampler/TPESampler (bit-exact for grid/int params, erf-tolerance for TPE floats), with training bridged to ML.NET's native LightGBM behind the `ILightGbmTrainer` seam (an adapter — no bit-parity). 6.2–6.6 (pruning callbacks + tracking + `OptunaSearchCV`) pending; **adapters, not behavior-parity ports**; source is the separate `optuna/optuna-integration` repo (cloned to `K:/source/optuna-integration`, not vendored); per-framework, post-v1 |
 
 ### Done work items (with the commit that landed them)
 
@@ -1051,8 +1053,9 @@ moment OptunaSharp.Core loads. Keep it.
 - NumSharp is the numeric backbone; plain C# where arrays add nothing.
 
 **Non-goals (explicit cuts)**
-- `optuna.integration.*` (LightGBM/PyTorch/Keras callbacks) — framework adapters, not ports; revisit
-  per-framework (ML.NET/TorchSharp) after v1.
+- `optuna.integration.*` (LightGBM/PyTorch/Keras callbacks) — framework adapters, **not behavior-parity
+  ports**. Out of v1 scope; **scheduled as Phase 6 (the last phase), post-v1** — revisited per-framework
+  (ML.NET/TorchSharp), built over the .NET ML ecosystem rather than translated 1-to-1 from Python.
 - Interactive visualization rendering in Core — the **data layer** (pure-numpy `_get_*_info`
   functions) is Tier N; rendering is a Tier X package.
 - OptunaHub, Dashboard, `optuna.testing` (we build our own test infra).
@@ -1099,6 +1102,7 @@ moment OptunaSharp.Core loads. Keep it.
 | X | `OptunaSharp.Visualization.Plotly` | rendering over the Core data layer | Plotly.NET |
 | X | `OptunaSharp.Cli` | `optuna` CLI | System.CommandLine, YamlDotNet |
 | X | `OptunaSharp.Extensions` | M.E.L logging adapter, Data.Analysis adapter, OpenBLAS byte-exactness switches | various |
+| X | `OptunaSharp.Integration.*` | framework adapters (Phase 6) — LightGBM tuner, pruning callbacks, experiment-tracking callbacks, `OptunaSearchCV`; the `optuna.integration` analog, **adapters not behavior-parity ports** | ML.NET / TorchSharp / TensorFlow.NET / tracking SDKs |
 
 ---
 
@@ -1203,7 +1207,7 @@ Exit gate = **Tier N complete**: the full Optuna algorithm surface, pure managed
 
 | # | Work item | Optuna source | py SLOC | est. C# | Package | Notes |
 |---|---|---|--:|--:|---|---|
-| 4.1 | **RDB storage on SQLite, Optuna-compatible schema** | `storages/_rdb/*` | 2,339 | 3,000 | `.Storage.Sqlite` | hand SQL on Microsoft.Data.Sqlite mirroring the SQLAlchemy models + `alembic_version` pin so Python opens our `.db`. Reference: `rustuna_storage/sqlite3.rs`. **Interop gate:** Python↔C# same-file round-trip. Reuses 1.2 cache + 0.6 conformance suite |
+| 4.1 | **RDB storage on SQLite, Optuna-compatible schema** | `storages/_rdb/*` | 2,339 | 3,000 | `.Storage.Sqlite` | ✅ **DONE.** `RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable` — hand SQL on **Microsoft.Data.Sqlite 10.0.11** (bundled native `e_sqlite3`) against the exact schema SQLAlchemy generates (`RdbModels` DDL, verified vs a real-Optuna `.db` + `rustuna_storage/sqlite3_schema.sql`), with the **`alembic_version` = `v3.2.0.a`** + `schema_version = 12` pins so Python opens our `.db`. Naive-UTC datetimes (`yyyy-MM-dd HH:mm:ss.ffffff`), finite/±inf/NaN type tags, `distribution_json`, and `json.dumps` attrs all byte-compatible. Single-connection + one lock (correct for SQLite; makes `:memory:` persist). Core got two surgical, Core-safe changes: friend the package (internal `FrozenTrial.TrialId`/`SetValues`, `FrozenStudy.StudyId`, `PyJson`, `PythonName`) and `StorageFunctions.GetStorage` now wraps any `ICachedStorageBackend` in `CachedStorage` (mirrors Python's `get_storage`). **Interop gate green:** Python↔C# same-file round-trip (5 `RequiresPython` parity tests via `StudySnapshot`, both directions, mixed params + ±inf/NaN + multi-objective) + 24 unit tests, both TFMs. Reuses 1.2 cache. **Deferred:** heartbeat is implemented but lightly tested; the `optuna storage upgrade`/alembic migration chain is not ported (we only stamp+require the head). CI: interop tests run in the existing interop job; the `Tests.Storage` unit lane + satellite-package packing are a pre-existing CI gap (shared with Redis/artifacts). |
 | 4.2 | EF Core providers (PostgreSQL/MySQL) | (schema from 4.1) | — | 1,500 | `.Storage.EFCore` | conformance suite + testcontainers |
 | 4.3 | Redis journal backend | `storages/journal/_redis.py` | ~200 | 450 | `.Storage.Redis` | ✅ **DONE** (feat `aa23800`) — `JournalRedisBackend` (+ deprecated `JournalRedisStorage`) on **StackExchange.Redis 3.1.31**, byte-compatible with Python (`json.dumps` DEFAULT spaced separators — not the file backend's compact form; shared `{prefix}:log:{n}` / `:log_number` / `:snapshot` keys); standalone atomic Lua-EVAL vs cluster incr+set; `@experimental_class("3.1.0")`; a `redis://` / `rediss://` / `unix://` → `ConfigurationOptions` adapter (the one bit redis-py's `from_url` gave Optuna). **Cross-language interop gate green** (Python↔Redis↔C#, best/params bit-identical). **13 unit + 25 integration tests** (docker-compose `redis:7-alpine`, `[TestCategory("Integration")]` self-skip — the 4.5 Artifacts emulator pattern) + 1 interop, both TFMs, **100% line + branch coverage** of the package (coverlet). thin: 1.1 already carries the journal semantics |
 | 4.4 | gRPC storage proxy (client + server) | `storages/_grpc/*` | 1,719 | 2,400 | `.Storage.Grpc` | reuse Optuna's `.proto` verbatim; wire-compat gate: C# client ↔ Python `run_grpc_proxy_server` |
@@ -1211,7 +1215,23 @@ Exit gate = **Tier N complete**: the full Optuna algorithm surface, pure managed
 
 **Phase 4 ≈ 4.4k py → ~7.65k C#. Estimate: 5–6 weeks.**
 
-## Phase 5 — External integrations & upgrades — 🟩 IN PROGRESS (Tier X) — 5.1 fANOVA + MDI DONE; 5.2–5.7 pending
+## Phase 4.9 — Native convenience gaps (Tier N) — ✅ DONE
+
+**Tier N (pure managed), tracked here after the earliest non-done phase (Phase 4)** at the maintainer's
+direction — the three supported-but-unplanned convenience/UX items that Phases 0–3 missed. No external
+deps; each could equally fold into Phase 0/1, but is tracked separately so "Tier N complete" stays honest.
+**Not** behavior-critical to the algorithm surface (Optuna's full sampler/pruner/storage surface does not
+depend on them).
+
+| # | Work item | Optuna source | py SLOC | est. C# | Notes |
+|---|---|---|--:|--:|---|
+| 4.9.1 | **`MaxTrialsCallback`** — `study.optimize(callbacks=[MaxTrialsCallback(n, states=…)])`; stops the study once N trials reach the given state(s) (default `(TrialState.COMPLETE,)`) | `_callbacks.py` (exposed as `optuna.study.MaxTrialsCallback`) | ~30 | 80 | ✅ **DONE** (feat `a224e5a`) — `Callbacks.cs`, namespace `OptunaSharp`; callable-object idiom (public `Invoke` + implicit `Action<Study, FrozenTrial>`), two ctors preserve the states default vs explicit-null=all. 🟢 trivial. **Distinct from the storages `_callbacks.py`** (`RetryFailedTrialCallback`, ported in 1.3) — a different file. Counts via `study.get_trials(states=…)`; calls `study.stop()` |
+| 4.9.2 | **Progress bar** (`study.optimize(show_progress_bar=True)`) | `progress_bar.py` (`_ProgressBar`, `_TqdmLoggingHandler`) | ~120 | 250 | ✅ **DONE** (Phase-0 byproduct — `Internal/ProgressBar.cs`, wired via `Study.Optimize(showProgressBar:)` incl. the `n_jobs≠1` timeout degrade + the "won't be displayed" `UserWarning` parity (fix `574bffb`); tests backfilled feat `a224e5a`). 🟡 no direct .NET tqdm — needs a small console-progress renderer (n_trials- and timeout-aware, cooperating with the logging seam) **or** an explicit non-goal. Cosmetic; gate it so headless/redirected output degrades cleanly |
+| 4.9.3 | **`FixedTrial`** — evaluate an objective against a fixed `params` dict with no study/storage | `trial/_fixed.py` (`optuna.trial.FixedTrial`) | ~130 | 300 | ✅ **DONE** (Phase-0 byproduct — `FixedTrial.cs`; unit + live-interop parity backfilled feat `a224e5a`). 🟢 the `BaseTrial` sibling of `Trial`/`FrozenTrial` (0.5 ported those + `create_trial`, but not this); pure in-memory `suggest_*`/`report`/`set_*_attr`. Common in tests/examples |
+
+**Phase 4.9 ≈ ~0.3k py → ~0.6k C#. Estimate: a few days.** Pure Tier N, no external deps.
+
+## Phase 5 — External integrations & upgrades — 🟩 IN PROGRESS (Tier X) — 5.1 fANOVA + MDI DONE; 5.2–5.6 pending
 
 | # | Work item | py SLOC | est. C# | Package | Notes |
 |---|---|--:|--:|---|---|
@@ -1221,9 +1241,45 @@ Exit gate = **Tier N complete**: the full Optuna algorithm surface, pure managed
 | 5.4 | Adapters: M.E.L logging, `Microsoft.Data.Analysis` `trials_dataframe` | — | 400 | `.Extensions` | thin bridges over Core seams |
 | 5.5 | **Byte-exactness upgrades via `NumSharp.Interop.OpenBLAS`**: CMA-ES `eigh` → LAPACK `syevd`, GP `cholesky` → `potrf` | — | 200 | `.Extensions` | flips the 2.15 primitives to the backend seam → CMA-ES/GP oracles upgrade from tolerance to byte-exact (NumSharp's linalg_parity model) |
 | 5.6 | `OptunaSharp.Gp.Torch` (contingency) | — | (2,000) | `.Gp.Torch` | ONLY if the §7 native gate failed — or as an alternative backend for large-trial GP perf |
-| 5.7 | Framework integrations: pruning-callback adapters (ML.NET, TorchSharp) + the **LightGBM tuner** (`optuna.integration.lightgbm` — `LightGBMTuner` / `LightGBMTunerCV`) | — | (backlog) | `.Integration.LightGbm` (tuner) | the `optuna.integration` analog; per-framework, post-v1. The LightGBM importance backend already shipped in 5.1 in `OptunaSharp.Integration.LightGbm`; the **tuner** — LightGBM's actual Optuna role (the Optuna-justified half) — lands here in the same package |
 
 **Phase 5 ≈ 1.7k py → ~7.4k C#. Estimate: 6–8 weeks.**
+(The old 5.7 — framework integrations / the LightGBM tuner — has been **promoted to its own final phase, Phase 6 below**.)
+
+---
+
+## Phase 6 — Framework integration adapters (`optuna.integration` analog) — 🟩 IN PROGRESS (6.1 LightGBM tuner DONE) · **THE LAST PHASE** (Tier X, post-v1)
+
+**The one phase that is deliberately NOT a behavior-parity port.** Phases 0–5 replicate Optuna's Python
+behavior (bit-exact, or documented tolerance). Phase 6 is different: it re-implements the *surface* of
+`optuna.integration` as **adapters over the .NET ML ecosystem** (ML.NET, TorchSharp, TensorFlow.NET, and
+tracking SDKs). Those .NET libraries are not the Python ones, so there is no oracle to diff against — the
+goal is an idiomatic, API-recognizable bridge, shipped per-framework only where a real .NET counterpart
+exists. Validated by usage/example tests, **not** bit-parity. This is the intended, documented departure
+from the rest of the plan.
+
+> **Source is a *different* repo.** In Optuna 5.x, `optuna.integration.*` inside the pinned `src/optuna`
+> submodule is only 20 deprecation shims (`FutureWarning`, removal targeted Optuna 6.0.0) that re-export
+> the separate **`optuna/optuna-integration`** distribution (`pip install optuna-integration`). That repo
+> is **not vendored** — Phase 6 requires cloning it as an additional reference (**cloned to
+> `K:/source/optuna-integration`** for 6.1; HEAD `5.1.0.dev`, matching optuna 5.x). Its one algorithmic
+> member with a native OptunaSharp equivalent, `cma.PyCmaSampler`, is already **superseded by the native
+> `CmaEsSampler` (2.16)** and drops out. The LightGBM **importance** backend already shipped early (in 5.1,
+> `OptunaSharp.Integration.LightGbm`); the LightGBM **tuner** — LightGBM's actual Optuna role — **landed
+> here in 6.1** (`LightGBMTuner`/`LightGBMTunerCV`/`Train`; see the 6.1 row).
+
+| # | Work item | Optuna modules | Package | Notes |
+|---|---|---|---|---|
+| 6.1 | **LightGBM tuner** (`optuna.integration.lightgbm`) — `LightGBMTuner` / `LightGBMTunerCV` / `train` stepwise tuner | `lightgbm` (tuner half) | `.Integration.LightGbm` | ✅ **DONE (first cut).** The **Optuna-justified** integration (a real tuning subsystem, not just a callback); same package as the 5.1 importance backend. The stepwise search (feature_fraction → num_leaves → bagging → feature_fraction stage 2 → regularization → min_child_samples) is a **faithful port** of `optuna_integration.lightgbm._lightgbm_tuner` and rides OptunaSharp's own `GridSampler`/`TPESampler`; validated by a committed synthetic-scorer oracle (`test/…/oracle/`) that replays live Optuna's tuner — bit-exact for grid/int params, erf-tolerance for TPE-sampled floats. Training + metric eval is an **adapter** over ML.NET's native LightGBM (regression + binary; a Phase-6 adapter, no bit-parity) behind the public `ILightGbmTrainer` seam (default `MlNetLightGbmTrainer`). **Deferred:** `model_dir` cross-process booster sharing (pickle-based upstream), ndcg/map ranking objectives in the default trainer, multiclass |
+| 6.2 | **Pruning callbacks** — training-loop hooks that call `trial.report()` + `should_prune()` | `catboost`, `xgboost`, `lightgbm`, `keras`, `tfkeras`, `tensorflow`, `pytorch_ignite`, `pytorch_lightning`, `skorch`, `fastaiv2` | `.Integration.{MLNet,TorchSharp,TensorFlow}` | analog, not port — hook the .NET trainer's iteration/epoch event; only for frameworks with a real .NET port |
+| 6.3 | **sklearn-style meta** — `OptunaSearchCV` | `sklearn` | `.Integration.MLNet` | a `GridSearchCV`-style estimator wrapper over ML.NET |
+| 6.4 | **Experiment-tracking callbacks** | `mlflow`, `wandb`, `tensorboard` | `.Integration.{MLflow,Wandb,TensorBoard}` | thin study-callback bridges over each tool's .NET/HTTP SDK |
+| 6.5 | **Alternative samplers / distributed / SHAP** | `botorch` (`BoTorchSampler`), `pytorch_distributed` (`TorchDistributedTrial`), `shap` (`ShapleyImportanceEvaluator`) | `.Integration.{TorchSharp,Shap}` | contingent on a .NET BoTorch / SHAP; `cma.PyCmaSampler` **N/A** (native `CmaEsSampler` supersedes) |
+| 6.6 | **Dask storage** | `dask` (`DaskStorage`) | — | **likely N/A** — no Dask on .NET; revisit if a distributed-scheduler analog appears |
+
+**Phase 6 ≈ open-ended (per-framework, post-v1).** ~4–6k C# if the full surface is built, but realistically
+shipped incrementally — the LightGBM tuner (6.1) + ML.NET pruning callbacks (6.2) the likely first cut.
+Frameworks with no .NET counterpart (Dask; BoTorch/SHAP until a port exists) stay on the backlog. **No
+behavior oracle** — validated by usage/example tests, not bit-parity.
 
 ---
 
@@ -1267,8 +1323,10 @@ log-marginal-likelihood trajectory vs Python. Green → GP stays native; red →
 | 3 | N | Native heavy tail (viz data, GP) | ~11.7k | 10–13 wk |
 | — | — | **Tier N complete — "pure managed full Optuna"** | **~45.3k** | **~7.5–9 mo** |
 | 4 | X | External storage (SQLite/EFCore/Redis/gRPC/cloud) | ~7.7k | 5–6 wk |
+| 4.9 | N | Native convenience gaps (MaxTrialsCallback / progress bar / FixedTrial) | ~0.6k | few days |
 | 5 | X | External integrations (forests, rendering, CLI, adapters, exactness) | ~7.4k | 6–8 wk |
-| **Total** | | | **~60.4k** | **~10–12.5 mo** |
+| **v1 Total (Phases 0–5, incl. 4.9)** | | | **~61.0k** | **~10–12.5 mo** |
+| 6 | X | Framework integration adapters (`optuna.integration` analog) — **post-v1** | ~(4–6k) | (open-ended, per-framework) |
 
 Tier X has no dependency on Tier N's *late* items (4.1 needs only Phase 0/1 contracts) — with a second
 contributor, Phase 4 can run concurrently with Phases 2–3 and the total compresses toward ~9 months.
@@ -1276,7 +1334,8 @@ contributor, Phase 4 can run concurrently with Phases 2–3 and the total compre
 Checkpoints: **M1** (end P0) walking skeleton bit-exact · **M2** (end P1) **cross-language journal
 persistence, zero external deps** · **M3** (after 2.11) default-experience parity — TPE + pruning,
 the announceable release · **M4** (end P3) Tier N complete: full algorithm surface pure-managed ·
-**M5** (end P4) Python-interoperable SQLite/gRPC · **M6** (end P5) near-full Optuna.
+**M5** (end P4) Python-interoperable SQLite/gRPC · **M6** (end P5) near-full Optuna · **M7** (end P6,
+post-v1) framework integration adapters — the `optuna.integration` analog.
 
 ---
 
