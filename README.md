@@ -112,17 +112,17 @@ docfx docs/website-src/docfx.json --serve   # http://localhost:8080
 It renders the conceptual docs (`docs/website-src/docs/`) plus an API reference generated from
 `OptunaSharp.Core`.
 
-## The NumSharp reference: "csproj for now, nuget in future"
+## The NumSharp reference
 
-`OptunaSharp.Core` depends on NumSharp. The reference is resolved conditionally:
+`OptunaSharp.Core` depends on **NumSharp** and its native LAPACK/CBLAS backend
+**NumSharp.Interop.OpenBLAS**, both consumed as **NuGet packages** from nuget.org (version pinned by
+the `NumSharpVersion` property in `Directory.Build.props`). Build and CI restore them from nuget.org;
+the OpenBLAS package ships the native LAPACK binaries (in `runtimes/<rid>/native/`), so `np.linalg`
+computes through LAPACK and is bit-identical to NumPy — no extra setup.
 
-- **Local dev** — when a sibling `NumSharp` checkout exists next to this repo
-  (`K:\source\NumSharp` beside `K:\source\OptunaSharp`), it is referenced by **project**, so changes
-  flow live.
-- **Standalone / CI** — otherwise it falls back to the published **NuGet** package (`NumSharp`).
-
-Both are mutually exclusive on `Exists(...)`, so exactly one applies and packaging always records a
-`NumSharp` package dependency.
+The matching NumSharp source is vendored **reference-only** as a pinned git submodule at `refs/NumSharp`
+(the same release tag), for browsing — it is not part of the build. Restore it, if you want it, with
+`git submodule update --init refs/NumSharp`.
 
 ## Build & test
 

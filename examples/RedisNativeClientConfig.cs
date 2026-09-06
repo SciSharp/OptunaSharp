@@ -1,8 +1,6 @@
 #:project ../src/OptunaSharp.Storage.StackExchange.Redis/OptunaSharp.Storage.StackExchange.Redis.csproj
 #:project ../src/OptunaSharp.Storage.NRedisStack/OptunaSharp.Storage.NRedisStack.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // Native Redis client configuration — the Redis backends are not limited to Optuna's URL string. each
 // exposes its client's own configuration surface, so you drive StackExchange.Redis / NRedisStack exactly

@@ -1,7 +1,5 @@
 #:project ../../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // OptunaHub pruner — drive an OptunaSharp report/should_prune loop with a real hub PRUNER. this is the
 // third bridge direction (after samplers and benchmarks): OptunaHub.LoadModule("pruners/median") is

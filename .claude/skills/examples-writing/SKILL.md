@@ -21,20 +21,17 @@ byte-for-byte checked against live Optuna. Two kinds:
 
 ## Prerequisites (what a build needs)
 
-Examples `#:project` the Core, so the [testing skill §0](../testing/SKILL.md) prereqs apply: the
-`src/NumSharp` submodule (or a sibling `../../../NumSharp`) plus `fetch_openblas.py`. Pure-managed
-examples still **compile** without the OpenBLAS natives, but any example that touches **np.linalg**
-(GPSampler, CmaEsSampler, the GP-backed Terminator, NSGA-III's hyperplane solve) throws
-`OpenBlasMissingBackendException` at runtime without them. No Python is needed to *run* an example
-(Python is only for the parity test that backs it).
+Examples `#:project` the Core, which pulls **NumSharp + NumSharp.Interop.OpenBLAS from NuGet** — nothing
+to set up. The OpenBLAS package ships the LAPACK natives (copied to the run output via `buildTransitive`),
+so even examples that touch **np.linalg** (GPSampler, CmaEsSampler, the GP-backed Terminator, NSGA-III's
+hyperplane solve) just work at runtime. No Python is needed to *run* an example (Python is only for the
+parity test that backs it).
 
 ## File skeleton
 
 ```csharp
 #:project ../src/OptunaSharp.Core/OptunaSharp.Core.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true          // don't run NumSharp's IL weaver
-#:property GeneratePackageOnBuild=false   // don't pack NumSharp on build
 
 // <Title> — one line on what this shows.
 //
@@ -164,8 +161,6 @@ message.
 ```csharp
 #:project ../src/OptunaSharp.Core/OptunaSharp.Core.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // <Title> — <one line>.
 //

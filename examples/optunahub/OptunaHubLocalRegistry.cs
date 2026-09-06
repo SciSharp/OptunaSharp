@@ -1,7 +1,5 @@
 #:project ../../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // OptunaHub local registry + mixed search space — two things at once:
 //   1. LoadLocalModule: load packages from a LOCAL registry checkout (no network) — both a tiny problem

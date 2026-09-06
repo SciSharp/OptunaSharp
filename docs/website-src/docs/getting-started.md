@@ -16,16 +16,15 @@ cd OptunaSharp
 dotnet build SciSharp.OptunaSharp.sln -c Release
 ```
 
-### The NumSharp reference — "csproj for now, nuget in future"
+### The NumSharp reference
 
-`OptunaSharp.Core` depends on NumSharp, resolved conditionally:
+`OptunaSharp.Core` depends on **NumSharp** and its native LAPACK/CBLAS backend
+**NumSharp.Interop.OpenBLAS**, both consumed as **NuGet packages** from nuget.org (version pinned by
+`NumSharpVersion` in `Directory.Build.props`). The OpenBLAS package ships the native LAPACK binaries,
+so `np.linalg` is bit-identical to NumPy with no extra setup — build and CI just restore from nuget.org.
 
-- **Local dev** — when a sibling `NumSharp` checkout exists next to this repo, NumSharp is
-  referenced by **project**, so changes flow live.
-- **Standalone / CI** — otherwise the published **NuGet** package is used.
-
-Both are mutually exclusive on `Exists(...)`, so exactly one applies and packaging always records a
-`NumSharp` package dependency.
+The matching NumSharp source is vendored reference-only at `refs/NumSharp` (a pinned submodule on the
+same release tag) for browsing; it is not part of the build.
 
 ## Test
 

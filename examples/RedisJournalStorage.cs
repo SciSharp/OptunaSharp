@@ -1,7 +1,5 @@
 #:project ../src/OptunaSharp.Storage.StackExchange.Redis/OptunaSharp.Storage.StackExchange.Redis.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // Redis journal storage — persist a study's operation log to a Redis server so it survives process
 // restarts and can be shared by many workers at once. wrap a StackExchangeJournalRedisBackend in a

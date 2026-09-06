@@ -1,7 +1,5 @@
 #:project ../src/OptunaSharp.Core/OptunaSharp.Core.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // Median-pruned training — the canonical Optuna pruning loop: train iteratively, report the metric
 // after each epoch, and let a MedianPruner stop trials tracking worse than the median so far.

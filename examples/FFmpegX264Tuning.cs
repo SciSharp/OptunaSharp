@@ -1,7 +1,5 @@
 #:project ../src/OptunaSharp.Core/OptunaSharp.Core.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // FFmpeg / x264 encoder-parameter tuning — an OptunaSharp port of the most-starred public Optuna
 // gist (25★), by Optuna maintainer `sile`:

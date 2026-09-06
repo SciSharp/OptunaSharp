@@ -1,7 +1,5 @@
 #:project ../../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // OptunaHub "Code 1" — a hub SAMPLER and a hub BENCHMARK together, the paper's headline example, in
 // .NET. LoadModule("samplers/auto_sampler") + LoadModule("benchmarks/bbob"), both bridged so an

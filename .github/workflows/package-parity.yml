@@ -6,8 +6,10 @@ name: Package Parity (isolated)
 # and replays real Optuna + real xgboost/lightgbm/sklearn oracles against it. See
 # test/OptunaSharp.Tests.PackageParity/README.md.
 #
-# NOTE: until NumSharp.Interop.OpenBLAS is published to nuget.org (or made optional), the build/package
-# stages fail restore with NU1101 — a real finding this pipeline surfaces, not a harness bug.
+# NumSharp + NumSharp.Interop.OpenBLAS are published to nuget.org, so the packaged OptunaSharp restores
+# its ENTIRE dependency graph from nuget.org exactly as a downstream consumer would. Only the freshly
+# built OptunaSharp.<version>.nupkg crosses the "deploy" boundary into the test container (local feed);
+# every declared dependency comes from nuget.org.
 
 on:
   push:
@@ -36,12 +38,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
-        shell: bash
-        run: |
-          git submodule update --init src/NumSharp
-          python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
-            || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
@@ -60,47 +56,25 @@ jobs:
       version: ${{ steps.pack.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
-        shell: bash
-        run: |
-          git submodule update --init src/NumSharp
-          python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
-            || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
             8.0.x
             10.0.x
           dotnet-quality: 'preview'
-      - name: Pack (OptunaSharp + the journey3 NumSharp it was built against)
+      - name: Pack OptunaSharp (its NumSharp deps come from nuget.org)
         id: pack
         run: |
           mkdir -p feed
-          # NumSharp.Interop.OpenBLAS is not on nuget.org, and nuget.org's NumSharp 0.60.0 is an OLDER
-          # build without np.linalg. So pack the journey3 submodule NumSharp (0.60.0) into the SAME
-          # feed; NuGet.config source-mapping then pins the container's restore to it — the packaged
-          # OptunaSharp resolves against the exact NumSharp it was built against, no nuget.org shadow.
-          #
-          # BUILD everything first, then pack --no-build: NumSharp.Core's pack target stages its
-          # analyzer via GetTargetPath (which resolves WITHOUT a rebuild), so a single-shot `dotnet
-          # pack` errors "NumSharp.Build.Analyzer.dll not found" — its own csproj documents build-then-
-          # pack-no-build as the supported flow. -t:Rebuild on Core so the woven+analyzer outputs are
-          # fresh; GeneratePackageOnBuild=false so the build step doesn't auto-pack to NumSharp/packages/.
-          dotnet build src/NumSharp/src/NumSharp.Core/NumSharp.Core.csproj --configuration Release \
-            -t:Rebuild -p:GeneratePackageOnBuild=false -p:NoWarn=${{ env.DOTNET_NOWARN }}
-          dotnet build src/NumSharp/src/NumSharp.Interop.OpenBLAS/NumSharp.Interop.OpenBLAS.csproj --configuration Release \
-            -p:GeneratePackageOnBuild=false -p:NoWarn=${{ env.DOTNET_NOWARN }}
-          dotnet build src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release \
-            -p:NoWarn=${{ env.DOTNET_NOWARN }}
-          dotnet pack src/NumSharp/src/NumSharp.Core/NumSharp.Core.csproj --configuration Release \
-            --no-build --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
-          dotnet pack src/NumSharp/src/NumSharp.Interop.OpenBLAS/NumSharp.Interop.OpenBLAS.csproj --configuration Release \
-            --no-build --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
+          # Pack ONLY OptunaSharp into the feed. NumSharp + NumSharp.Interop.OpenBLAS are on nuget.org
+          # (the same version Core references), so the test container restores them from there — the feed
+          # carries just the freshly built package under test, exactly the artifact a consumer installs.
+          # GeneratePackageOnBuild is not set on Core, so a plain `dotnet pack` uses restore -> build -> pack.
           dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release \
-            --no-build --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
+            --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
           VER=$(ls feed/OptunaSharp.*.nupkg | sed -E 's#.*/OptunaSharp\.(.+)\.nupkg#\1#')
           echo "version=$VER" >> "$GITHUB_OUTPUT"
-          echo "packed OptunaSharp $VER + journey3 NumSharp 0.60.0 into feed:"
+          echo "packed OptunaSharp $VER into feed:"
           ls -1 feed/*.nupkg
       - name: Strong-name gate on the packed assembly
         run: dotnet run .github/scripts/verify_strong_name.cs -- feed

@@ -24,8 +24,8 @@
 Done directly on `master` (not the worktree named at the top — the Phase 5.1 forest work had already
 merged), each work item green (build ×2 TFMs + tests + strong-named pack) before the next:
 
-- **WI-0** — prerequisite satisfied (NumSharp submodule + OpenBLAS natives staged; built by csproj path
-  with `-p:SkipNDScopeWeave=true -p:GeneratePackageOnBuild=false`).
+- **WI-0** — prerequisite satisfied (NumSharp + NumSharp.Interop.OpenBLAS restore from NuGet; plain
+  `dotnet build` by csproj path).
 - **WI-1** — `refactor(importance)` **`0403972`**: FastForest package rename was already committed
   (`647e2ec`); its evaluators moved to ns `OptunaSharp.Importance.Forests`; call sites + Core
   doc-comments + FastForest README updated.
@@ -134,12 +134,10 @@ shared source file feels wrong. **Do not** put it in Core (it references ML.NET;
 Order matters; each WI ends green (build ×2 TFMs + tests + pack) before the next.
 
 ### WI-0 — unblock the build (prerequisite)
-- NumSharp is now a **pinned submodule** at `src/NumSharp` (see the updated
-  `.claude/CLAUDE.md` §"The NumSharp reference"). Run `git submodule update --init src/NumSharp`.
-  (The sibling `K:/source/NumSharp` was mid-edit/broken during the previous session — the submodule is
-  the canonical, reproducible source.)
-- Build/test by **csproj path** with the weaver escape hatches:
-  `-p:SkipNDScopeWeave=true -p:GeneratePackageOnBuild=false`.
+- NumSharp + NumSharp.Interop.OpenBLAS are **NuGet packages** (`$(NumSharpVersion)` in
+  `Directory.Build.props`; see the updated `.claude/CLAUDE.md` §"The NumSharp reference"). A plain
+  restore pulls them from nuget.org — no submodule init, no native staging.
+- Build/test by **csproj path** — plain `dotnet build`/`dotnet test`, no weaver escape hatches needed.
 - **`OptunaSharp.Tests` will not build on a clean worktree** — the Core `Artifacts/` *source* is
   gitignored (`artifacts/` matches case-insensitively on Windows) and was never committed. Put all
   new tests in the **satellite test projects** (which are Core friends), never in `OptunaSharp.Tests`.
@@ -237,5 +235,5 @@ Order matters; each WI ends green (build ×2 TFMs + tests + pack) before the nex
 - **Concurrent sessions** advance `master` + shared files (`.sln`, `PORTING_PLAN.md`) mid-session —
   re-check git state before commit, stage by explicit path (never `git add -A`), edit shared files
   with surgical edits, build by csproj path.
-- Cross-repo P2P to the NumSharp submodule can hit a cold-build race (self-heals on retry) and runs
-  NumSharp's weaver/pack unless you pass `-p:SkipNDScopeWeave=true -p:GeneratePackageOnBuild=false`.
+- NumSharp + NumSharp.Interop.OpenBLAS come from NuGet (nuget.org), so builds are a plain restore —
+  no cross-repo P2P, weaver, or native staging.

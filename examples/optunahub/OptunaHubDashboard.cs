@@ -1,8 +1,6 @@
 #:project ../../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
 #:project ../../src/OptunaSharp.Storage.Sqlite/OptunaSharp.Storage.Sqlite.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // OptunaHub × optuna-dashboard — an OptunaSharp study driven by a REAL hub sampler, PERSISTED by
 // OptunaSharp's own SQLite storage, then explored live in the real Python optuna-dashboard. This ties

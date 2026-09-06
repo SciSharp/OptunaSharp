@@ -1,7 +1,5 @@
 #:project ../src/OptunaSharp.Core/OptunaSharp.Core.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // Multi-objective optimization — optimize two competing goals at once and recover the Pareto front
 // (the set of non-dominated trade-offs) instead of a single best trial. here we tune a model for both

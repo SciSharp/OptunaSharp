@@ -1,10 +1,10 @@
 [submodule "src/optuna"]
 	path = src/optuna
 	url = https://github.com/optuna/optuna.git
-[submodule "src/NumSharp"]
-	path = src/NumSharp
+[submodule "refs/NumSharp"]
+	path = refs/NumSharp
 	url = https://github.com/SciSharp/NumSharp.git
-	branch = journey3
+	branch = master
 [submodule "refs/optunahub"]
 	path = refs/optunahub
 	url = https://github.com/optuna/optunahub.git

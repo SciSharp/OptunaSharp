@@ -40,13 +40,6 @@ jobs:
         with:
           fetch-depth: 0   # full history so DocFX git-contribute links resolve
 
-      - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
-        shell: bash
-        run: |
-          git submodule update --init src/NumSharp
-          python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
-            || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
-
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -58,8 +51,8 @@ jobs:
       - name: Install DocFX
         run: dotnet tool install -g docfx
 
-      # DocFX's metadata step compiles OptunaSharp.Core to extract the API surface. On a CI runner
-      # (no sibling NumSharp checkout) that restores NumSharp from NuGet via the csproj fallback.
+      # DocFX's metadata step compiles OptunaSharp.Core to extract the API surface; it restores
+      # NumSharp + NumSharp.Interop.OpenBLAS from NuGet (nuget.org).
       - name: Build docs
         run: docfx docs/website-src/docfx.json
 

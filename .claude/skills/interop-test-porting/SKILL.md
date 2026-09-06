@@ -119,14 +119,13 @@ StudySnapshot.AssertParity(pyState, csState, DatetimeComparison.NullnessOnly);  
 
 ### 6 — Verify (build fast, then run the live gate)
 ```bash
-# compile only (escape-hatch flags avoid the sibling-NumSharp weaver/pack side-effects)
-dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj -c Release -f net10.0 \
-  -p:SkipNDScopeWeave=true -p:GeneratePackageOnBuild=false
+# compile only (NumSharp + OpenBLAS restore from NuGet)
+dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj -c Release -f net10.0
 
 # run just the new tests against live Optuna (REQUIRE_ENGINE=1 → discovery failure goes red, not skipped)
 PYTHONNET_PYDLL="C:/Users/ELI/.claude/python/python312.dll" OPTUNASHARP_PYTHONNET_REQUIRE_ENGINE=1 \
   dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj -c Release -f net10.0 \
-  --filter "FullyQualifiedName~<YourClass>" -p:SkipNDScopeWeave=true -p:GeneratePackageOnBuild=false
+  --filter "FullyQualifiedName~<YourClass>"
 ```
 Green → the real-world usage ports byte-for-byte. **Red is a finding**, not necessarily a bug in the
 test: triage whether OptunaSharp genuinely diverges (then fix Core, or document with `[Misaligned]` +

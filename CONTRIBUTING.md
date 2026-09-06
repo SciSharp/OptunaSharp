@@ -24,8 +24,9 @@ This mirrors how [NumSharp](https://github.com/SciSharp/NumSharp) treats NumPy a
 
 - .NET SDK **8.0** and **10.0** (the repo multi-targets both).
 - For interop tests: a Python with `pip install optuna` (optional — those tests self-skip otherwise).
-- A sibling `NumSharp` checkout is **optional**: with it, NumSharp is referenced by project; without
-  it, the published NuGet package is used (see the README, "csproj for now, nuget in future").
+- NumSharp + NumSharp.Interop.OpenBLAS come from **NuGet** (restored automatically); nothing extra to
+  set up. The NumSharp source is vendored reference-only at `refs/NumSharp` — see the README,
+  "The NumSharp reference".
 
 ## Build & test
 

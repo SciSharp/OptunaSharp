@@ -17,8 +17,9 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------------------------
-  # Build + unit tests across the three OSes. On a CI runner there is no sibling NumSharp checkout,
-  # so OptunaSharp.Core resolves NumSharp from NuGet (the csproj's Exists(...) fallback).
+  # Build + unit tests across the three OSes. OptunaSharp.Core resolves NumSharp +
+  # NumSharp.Interop.OpenBLAS from NuGet (nuget.org); the OpenBLAS package carries the native
+  # LAPACK/CBLAS binaries in runtimes/<rid>/native, so there is no submodule init or native staging.
   # ---------------------------------------------------------------------------------------------
   test:
     strategy:
@@ -30,13 +31,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-
-    - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
-      shell: bash
-      run: |
-        git submodule update --init src/NumSharp
-        python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
-          || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -97,13 +91,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
-      shell: bash
-      run: |
-        git submodule update --init src/NumSharp
-        python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
-          || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
-
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
@@ -153,13 +140,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-
-    - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
-      shell: bash
-      run: |
-        git submodule update --init src/NumSharp
-        python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
-          || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -315,13 +295,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-
-    - name: Init NumSharp submodule + stage OpenBLAS natives (src/NumSharp @ journey3)
-      shell: bash
-      run: |
-        git submodule update --init src/NumSharp
-        python3 src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py \
-          || python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4

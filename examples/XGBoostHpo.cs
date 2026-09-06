@@ -1,7 +1,5 @@
 #:project ../src/OptunaSharp.Core/OptunaSharp.Core.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // XGBoost hyperparameter optimization — an OptunaSharp port of a widely-starred public Optuna gist
 // (16 stars, 5 forks), by `bexgboost`:

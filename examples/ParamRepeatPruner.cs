@@ -1,7 +1,5 @@
 #:project ../src/OptunaSharp.Core/OptunaSharp.Core.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // ParamRepeatPruner — an OptunaSharp port of aisu-wata0's community gist (6★):
 //   https://gist.github.com/aisu-wata0/24045ab5e8ad007b4a09f708adfe359f

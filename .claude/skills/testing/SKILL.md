@@ -1,8 +1,8 @@
 ---
 name: testing
-description: How OptunaSharp is tested end-to-end — the six suites (unit, live-Optuna interop, isolated package-parity, Redis + cloud-artifact integration, benchmark), how to run each, the byte-exact parity framework (StudySnapshot / ParityScenario / Ask-Tell replay, bit-exact vs erf-tolerance), the RNG discipline that makes parity possible, test categories and the "green ≠ exercised" self-skip semantics, docker-compose external services, the 3-OS CI matrix, and the hard prerequisites (NumSharp submodule + fetch_openblas.py, Python+optuna, Docker). Use when running, adding, or debugging any OptunaSharp test, deciding where a test belongs, understanding why a suite skipped, or wiring CI.
+description: How OptunaSharp is tested end-to-end — the six suites (unit, live-Optuna interop, isolated package-parity, Redis + cloud-artifact integration, benchmark), how to run each, the byte-exact parity framework (StudySnapshot / ParityScenario / Ask-Tell replay, bit-exact vs erf-tolerance), the RNG discipline that makes parity possible, test categories and the "green ≠ exercised" self-skip semantics, docker-compose external services, the 3-OS CI matrix, and the prerequisites (NumSharp+OpenBLAS from NuGet, Python+optuna, Docker). Use when running, adding, or debugging any OptunaSharp test, deciding where a test belongs, understanding why a suite skipped, or wiring CI.
 keywords: testing, run tests, dotnet test, parity, byte-exact, interop, pythonnet, docker-compose, integration test, test categories, self-skip, Inconclusive, RequiresPython, package parity, oracle replay, StudySnapshot, ParityScenario
-keywords-sparse: how to run the tests, why did the test skip, add a parity test, which suite, test the package, live optuna, redis test, artifact emulator, bit-exact, fetch_openblas
+keywords-sparse: how to run the tests, why did the test skip, add a parity test, which suite, test the package, live optuna, redis test, artifact emulator, bit-exact, numsharp nuget
 ---
 
 # testing — how OptunaSharp validates itself
@@ -15,22 +15,16 @@ consumes `np.random.RandomState` through `LazyRandomState` on NumSharp's `MT1993
 `CategoricalChoice` Python-equality rule is the other load-bearing invariant. Break either and parity
 tests go red.
 
-## 0. Prerequisites — nothing builds without these
+## 0. Prerequisites
 
-Core references NumSharp via the **`src/NumSharp` submodule** (pinned `journey3`), not nuget. Before
-any build or test, on a fresh clone or CI runner:
-
-```bash
-git submodule update --init src/NumSharp
-python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py   # stage OpenBLAS natives
-```
-
-The second step is easy to forget and non-obvious: the OpenBLAS native binaries are **fetched from
-PyPI (scipy-openblas), not committed**, and a `ProjectReference` (our submodule) does NOT get them the
-way a package consumer does via `buildTransitive`. Skip it and the managed build still **compiles**,
-but `np.linalg` throws `OpenBlasMissingBackendException` at runtime, so every linalg-backed test
-(cholesky/eigh/solve → GP, CMA-ES, NSGA-III) fails. Other prereqs, per suite: **Python + optuna
-5.0.0.dev** (interop) and **Docker** (service/container suites).
+Core references NumSharp + NumSharp.Interop.OpenBLAS as **NuGet packages** (from nuget.org, version
+`$(NumSharpVersion)` in `Directory.Build.props`), so a plain `dotnet build`/`dotnet test` restores
+everything — **no submodule init, no native staging**. The OpenBLAS package ships the LAPACK natives
+under `runtimes/<rid>/native/` and its `buildTransitive` targets copy them to the test/executable
+output automatically, so `np.linalg` (cholesky/eigh/solve → GP, CMA-ES, NSGA-III) is bit-identical to
+NumPy at runtime with no setup. Per-suite prereqs: **Python + optuna 5.0.0.dev** (interop) and
+**Docker** (service/container suites). The NumSharp source is vendored reference-only at `refs/NumSharp`
+(`git submodule update --init refs/NumSharp`) for browsing — it is not part of the build.
 
 ## 1. The suites
 
@@ -136,9 +130,9 @@ configurable backends compose into the container model (Redis via `OPTUNASHARP_R
 the exclusion filter; `verify-signing`; `interop-test` = live optuna, `REQUIRE_ENGINE=1`; release
 pipeline on `v*` tags), **docs** (DocFX compiles Core; PR gates, master deploys), **benchmark**
 (build-smoke always; full run manual), **package-parity** (build→package→deploy→test-in-container).
-**Every Core-building job first runs the two prereq steps from §0** (submodule init + fetch_openblas.py).
-The direction of travel is per-suite `docker-compose` running each suite in its container across the
-3-OS matrix.
+Core-building jobs just restore NumSharp + NumSharp.Interop.OpenBLAS from nuget.org — no submodule init
+or native staging. The direction of travel is per-suite `docker-compose` running each suite in its
+container across the 3-OS matrix.
 
 ## 8. Adding a test — Definition of Done
 
@@ -157,8 +151,5 @@ To port tests from real-world GitHub Optuna usage specifically, use the **`inter
 
 ## 9. Current blockers to know
 
-- **Package-parity consumer stage** can't restore the packed `.nupkg` yet — Core depends on
-  `NumSharp.Interop.OpenBLAS` (and a NumSharp newer than published 0.60.0), unpublished until NumSharp
-  **0.70.0**. Building/running from the submodule is fine; consuming the *package* isn't.
 - **TPE parity over integer-parameter spaces** with repeats is not byte-comparable (NumPy simd-sort tie
   order) — assert RandomSampler bit-exact there, or a continuous-only space for TPE.

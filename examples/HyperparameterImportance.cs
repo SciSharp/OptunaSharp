@@ -1,7 +1,5 @@
 #:project ../src/OptunaSharp.Core/OptunaSharp.Core.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // Hyperparameter importance — after a study, ask which parameters actually mattered. optuna's
 // get_param_importances (fANOVA / PedAnova / MDI) turns a finished study into a ranked, normalized

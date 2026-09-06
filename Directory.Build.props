@@ -69,4 +69,15 @@
     <FileVersion Condition="'$(FileVersion)' == ''">0.1.0</FileVersion>
   </PropertyGroup>
 
+  <!-- ====================================================================================
+       NumSharp dependency version — single-sourced for OptunaSharp.Core's two NuGet
+       references (NumSharp + NumSharp.Interop.OpenBLAS, both from nuget.org). The matching
+       NumSharp source is vendored REFERENCE-ONLY at refs/NumSharp, pinned to the same
+       release tag (v$(NumSharpVersion)) for offline browsing / LLM cross-referencing — it is
+       NOT part of the build. Bump this one value to move to a newer NumSharp release.
+       ==================================================================================== -->
+  <PropertyGroup>
+    <NumSharpVersion Condition="'$(NumSharpVersion)' == ''">0.70.0</NumSharpVersion>
+  </PropertyGroup>
+
 </Project>

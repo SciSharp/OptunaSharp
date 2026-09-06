@@ -701,7 +701,7 @@ moment OptunaSharp.Core loads. Keep it.
 - ✅ **2.15** — `feat(linalg): Phase 2.15 — OpenBLAS-backed linalg primitives (LinAlg) for CMA-ES/GP`.
   **Redirected mid-flight by the maintainer** from hand-rolled managed primitives to
   **`NumSharp.Interop.OpenBLAS`** (*"use NumSharp + OpenBLAS any time Optuna uses NumPy"*). Core's csproj
-  now references the OpenBLAS project the same conditional "csproj now / nuget later" way as NumSharp.Core;
+  references the OpenBLAS package from NuGet alongside NumSharp (both `$(NumSharpVersion)`);
   `Internal/OpenBlasActivation.cs` is a `[ModuleInitializer]` that force-loads it (a bare reference is not
   enough — the backend self-registers from its own module initializer, which the CLR runs only on first
   type touch). `Internal/LinAlg.cs` is a thin `double[,]`/`double[]` adapter whose `Solve`/`MatrixRank`/
@@ -1038,14 +1038,10 @@ moment OptunaSharp.Core loads. Keep it.
 
 ### Build / test notes for the next agent
 
-- **Build:** `dotnet build SciSharp.OptunaSharp.sln -c Release -p:SkipNDScopeWeave=true
-  -p:GeneratePackageOnBuild=false`. NumSharp resolves as sibling `ProjectReference` → NuGet fallback
-  (see main §"NumSharp reference" in CLAUDE.md). A new MSBuild property **`NumSharpCoreProject`**
-  (settable via env var of the same name) pins an alternate NumSharp checkout — added because the
-  sibling working tree was temporarily mid-edit and wouldn't compile during this work. **If a build
-  fails *inside* `NumSharp.Core`, that's the sibling checkout, not OptunaSharp** — point
-  `NumSharpCoreProject` at a good NumSharp worktree/commit, or delete the sibling to force the NuGet
-  fallback.
+- **Build:** `dotnet build SciSharp.OptunaSharp.sln -c Release`. NumSharp + NumSharp.Interop.OpenBLAS
+  restore from NuGet (nuget.org), version `$(NumSharpVersion)` in `Directory.Build.props` — no submodule
+  init, no native staging (see main §"NumSharp reference" in CLAUDE.md). The NumSharp source is vendored
+  reference-only at `refs/NumSharp` for browsing; it is not on the build path.
 - **Test:** `dotnet test test/OptunaSharp.Tests/...` (393 unit, both TFMs) and
   `dotnet test test/OptunaSharp.Tests.Interop/...` (151 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.

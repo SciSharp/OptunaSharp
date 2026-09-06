@@ -1,7 +1,5 @@
 #:project ../../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // OptunaHub sampler shootout, in color — race several REAL OptunaHub samplers (loaded through the
 // bridge) against OptunaSharp's own native TPE on the 2-D Rastrigin function, and draw each one's

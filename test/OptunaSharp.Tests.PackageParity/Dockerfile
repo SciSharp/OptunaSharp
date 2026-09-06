@@ -34,9 +34,9 @@ ENV OPTUNASHARP_VERSION=${OPTUNASHARP_VERSION} \
 # ONLY the isolated test project (incl. its ./feed with the packed .nupkg) enters the image.
 COPY . ./
 
-# Restore the PACKAGED OptunaSharp from the local feed. Its NumSharp / NumSharp.Interop.OpenBLAS deps
-# ALSO come from the local feed (journey3 build, pinned by NuGet.config source-mapping) — nuget.org has
-# only an older NumSharp 0.60.0 and no OpenBLAS package; everything else still restores from nuget.org.
+# Restore the PACKAGED OptunaSharp from the local feed (pinned by NuGet.config source-mapping). Its
+# NumSharp / NumSharp.Interop.OpenBLAS deps — and everything else — restore from nuget.org, exactly as
+# a downstream consumer installing OptunaSharp would.
 RUN dotnet restore OptunaSharp.Tests.PackageParity.csproj -p:OptunaSharpPackageVersion=${OPTUNASHARP_VERSION}
 
 # 1) generate oracles from REAL optuna + xgboost/lightgbm/sklearn, then 2) replay them against the

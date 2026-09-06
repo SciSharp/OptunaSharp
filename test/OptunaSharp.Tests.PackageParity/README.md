@@ -12,7 +12,8 @@ lightgbm, scikit-learn).
   (`NuGet.config` → `feed/`), so the tests bind to the shipped assembly + its declared deps
   (`NumSharp`, `NumSharp.Interop.OpenBLAS`) — there is no compile path to `src/`.
 - **Its own `Directory.Build.props`** stops MSBuild's upward search, so the repo-root props (the
-  conditional sibling-NumSharp/Core references, strong-naming) never apply here.
+  NumSharp package version, Core references, strong-naming) never apply here — the packaged deps
+  (`NumSharp`, `NumSharp.Interop.OpenBLAS`) restore from nuget.org.
 - **Container build context is this directory only** (`Dockerfile` + `.dockerignore`), so `src/` is not
   present anywhere in the image. CI additionally sparse-checks-out only this folder.
 
@@ -67,22 +68,18 @@ endpoint-configurable backends compose cleanly into that model — `JournalRedis
 endpoint env var** — the one change needed to add packaged S3/GCS/Azure artifact parity here.
 
 Redis is up and reachable from the test container today; the **packaged** `JournalRedis` /
-artifact-store **parity tests** that consume it land once (1) the OpenBLAS blocker below is resolved so
-the packaged assembly loads, and (2) the satellite packages (`OptunaSharp.Storage.Redis`,
-`OptunaSharp.Artifacts.*`) are packed into `feed/` alongside Core.
+artifact-store **parity tests** that consume it land once the satellite packages
+(`OptunaSharp.Storage.Redis`, `OptunaSharp.Artifacts.*`) are packed into `feed/` alongside Core.
 
-## ⚠️ Known blocker this gate surfaces (as of the first run)
+## Dependency graph restores from nuget.org
 
-The gate currently **fails at restore** with:
+`OptunaSharp.Core` depends on `NumSharp` and `NumSharp.Interop.OpenBLAS` (the latter's `<Module>`
+initializer force-loads `OpenBlasEngine`). Both are **published to nuget.org** (`0.70.0`), so the
+packaged OptunaSharp restores its **entire** dependency graph from nuget.org — exactly as any downstream
+consumer would — and the OpenBLAS native LAPACK binaries arrive via the package's `runtimes/<rid>/native`
++ `buildTransitive` machinery. The local feed carries only the freshly-built `OptunaSharp.<version>.nupkg`.
 
-```
-NU1101: Unable to find package NumSharp.Interop.OpenBLAS.
-```
-
-This is a **real finding, not a harness bug**: `OptunaSharp.Core` hard-depends on
-`NumSharp.Interop.OpenBLAS 0.60.0` (and its `<Module>` initializer force-loads `OpenBlasEngine`), but
-that package **is not published to nuget.org** (`OptunaSharp.Core.csproj` line ~69 documents this). So
-the packaged OptunaSharp is **not restorable by any consumer that lacks the sibling NumSharp checkout** —
-including this container and, once CI runs on a remote, the existing build/interop jobs. The gate will
-go green once the OpenBLAS dependency is published or made optional (the satellite-package pattern the
-project's own `CLAUDE.md` prescribes for foreign-runtime deps).
+> Historical note: this gate originally **failed at restore** (`NU1101: Unable to find package
+> NumSharp.Interop.OpenBLAS`) because OpenBLAS wasn't published and nuget.org's NumSharp was a stale
+> `0.60.0` without `np.linalg` — a real finding this isolated gate surfaced. Resolved when NumSharp +
+> NumSharp.Interop.OpenBLAS `0.70.0` shipped to nuget.org.

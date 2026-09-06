@@ -1,7 +1,5 @@
 #:project ../../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // OptunaHub benchmark, live and in color — load a REAL OptunaHub benchmark (BBOB Sphere) and optimize
 // it with an OptunaSharp sampler. this is the paper's "Code 1" run, in .NET: optunahub.load_module(

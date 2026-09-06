@@ -27,9 +27,13 @@ to build and in what order**.
   Python/Optuna first, observe, then replicate in C#.**
 - **rustuna (accelerator reference):** `K:/source/rustuna` — a Rust Optuna port, useful for the
   SQLite schema and Sobol direction numbers (see the plan).
-- **NumSharp (the numerical foundation + the infra template):** `K:/source/NumSharp`. OptunaSharp's
-  whole stack is modeled on NumSharp's; when in doubt about an infra decision, look at how NumSharp
-  does it.
+- **NumSharp (the numerical foundation + the infra template):** consumed from **NuGet** (`NumSharp` +
+  `NumSharp.Interop.OpenBLAS`, version single-sourced as `$(NumSharpVersion)` in
+  `Directory.Build.props`), and **vendored reference-only as a pinned git submodule at `refs/NumSharp`**
+  (`SciSharp/NumSharp` @ the matching `v$(NumSharpVersion)` release tag — `git submodule update --init
+  refs/NumSharp`) for offline browsing / LLM cross-referencing; it is NOT part of the build. A local
+  sibling `K:/source/NumSharp` is also fine for reference. OptunaSharp's whole stack is modeled on
+  NumSharp's; when in doubt about an infra decision, look at how NumSharp does it.
 
 Run real Optuna to observe behavior:
 
@@ -76,11 +80,12 @@ Four load-bearing rules from the plan that infra must respect (full detail in
 OptunaSharp/
 ├── src/
 │   ├── OptunaSharp.Core/            # THE package — OptunaSharp (net8.0;net10.0). Empty scaffolding today.
-│   │   ├── OptunaSharp.Core.csproj  #   packable; PackageIcon; conditional NumSharp reference
+│   │   ├── OptunaSharp.Core.csproj  #   packable; PackageIcon; NuGet NumSharp + OpenBLAS reference
 │   │   ├── Assembly/Properties.cs   #   InternalsVisibleTo (must carry PublicKey) + friend-key const
 │   │   ├── Version.cs               #   OptunaSharp.OptunaSharpVersion (the only public symbol so far)
 │   │   └── README.md                #   packed into the .nupkg
 │   └── optuna/                      # pinned git submodule — Optuna @ f6898da (v5.0.0.dev), the porting reference
+├── refs/                            # reference-only pinned submodules (NOT built) — NumSharp @ v0.70.0, optunahub, optuna-integration, shap, scikit-learn
 ├── test/
 │   ├── OptunaSharp.Tests/           # unit tests — MSTest v3 + AwesomeAssertions
 │   ├── OptunaSharp.Tests.Interop/   # LIVE-Optuna parity harness (pythonnet)
@@ -110,36 +115,38 @@ OptunaSharp/
 | `test/OptunaSharp.Tests.Interop` | net8.0; net10.0 | MSTest exe, `IsPackable=false` | MSTest, AwesomeAssertions, **pythonnet 3.0.5** | Byte/behavior parity vs **live Optuna** in-process. |
 | `test/OptunaSharp.Benchmark` | net8.0; net10.0 | exe, `IsPackable=false` | BenchmarkDotNet 0.15.8 | Perf harness (template). |
 
-The solution (`SciSharp.OptunaSharp.sln`) contains only these four projects; NumSharp is referenced
-by path (see below) but is **not** a solution member.
+The solution (`SciSharp.OptunaSharp.sln`) contains only these four projects; NumSharp is a **NuGet
+package dependency** (see below), not a solution member.
 
 ---
 
-## The NumSharp reference — "csproj for now, nuget in future"
+## The NumSharp reference — NuGet (`NumSharp` + `NumSharp.Interop.OpenBLAS`)
 
-`OptunaSharp.Core` depends on NumSharp, resolved **conditionally on `Exists(...)`** in the csproj, in
-priority order:
+`OptunaSharp.Core` depends on **NumSharp** and its native LAPACK/CBLAS backend
+**NumSharp.Interop.OpenBLAS**, both consumed as **NuGet packages from nuget.org** (SciSharp STACK) —
+two plain `PackageReference`s in `OptunaSharp.Core.csproj`, versioned by the single-sourced
+`$(NumSharpVersion)` property in `Directory.Build.props` (currently `0.70.0`; bump that one value to
+move to a newer release). **Build and CI restore these from nuget.org, always** — there is no submodule
+init and no OpenBLAS-native staging step anymore.
 
-- **Submodule (canonical)** — the pinned **`src/NumSharp` git submodule** (`SciSharp/NumSharp` @
-  `journey3`, mirroring `src/optuna`), referenced by **ProjectReference** at
-  `src/NumSharp/src/{NumSharp.Core,NumSharp.Interop.OpenBLAS}`. Restore it with
-  `git submodule update --init src/NumSharp`, then **stage the OpenBLAS natives once** with
-  `python src/NumSharp/src/NumSharp.Interop.OpenBLAS/tools/fetch_openblas.py` — they're pulled from
-  PyPI (scipy-openblas), NOT committed, and without them the managed build still compiles but
-  `np.linalg` throws `OpenBlasMissingBackendException` at runtime (so linalg-backed samplers/tests
-  fail). CI runs both steps in every Core-building job. It does NOT need NumSharp's own nested
-  submodules (numpy/pocketfft/OpenBLAS-source).
-- **Sibling (fallback)** — if the submodule isn't initialised but a sibling `NumSharp` checkout exists at
-  `../../../NumSharp` (i.e. `K:/source/NumSharp`), that is used instead, so a local sibling still works.
-- **NuGet (last resort)** — otherwise a `PackageReference` on `NumSharp` / `NumSharp.Interop.OpenBLAS`
-  `0.60.0`. This currently CANNOT restore or compile: Core targets a NumSharp ahead of published 0.60.0
-  (`np.linalg`, `RuntimeError`, `KeyError`) and OpenBLAS isn't published at all — it becomes viable at
-  NumSharp `0.70.0`.
-
-Exactly one applies (submodule wins where present). **CI initialises the submodule** — every
-Core-building job runs `git submodule update --init src/NumSharp` and builds via the P2P (so it now
-does hit the cross-repo build friction below). Override the path with
-`-p:NumSharpCoreProject=<path>` / `-p:NumSharpOpenBlasProject=<path>` if needed.
+- **OpenBLAS ships the natives.** `NumSharp.Interop.OpenBLAS` carries the prebuilt scipy-openblas
+  binaries NumPy itself bundles, under `runtimes/<rid>/native/`; the package's `buildTransitive`
+  targets copy the right RID's natives to the consuming executable/test output automatically (no
+  `fetch_openblas.py`). So `np.linalg` (cholesky / eigh / solve / matrix_rank / svd / qr) computes
+  through LAPACK and is **bit-identical to NumPy** (verified byte-for-byte vs numpy 2.4.2) — the basis
+  for the byte-exact linalg-backed samplers (NSGA-III's hyperplane solve, CMA-ES's eigendecomposition,
+  the GP stack's Cholesky). OpenBLAS depends on the same NumSharp version, so pack records both as
+  direct dependencies.
+- **The backend is force-loaded.** OpenBLAS self-registers from its own `[ModuleInitializer]`, but the
+  CLR runs a referenced assembly's initializer only when the assembly is first touched.
+  `src/OptunaSharp.Core/Internal/OpenBlasActivation.cs` touches `OpenBlasEngine.LapackAvailable` from
+  Core's own `[ModuleInitializer]` to force the load; without it `np.linalg.cholesky` throws
+  `OpenBlasMissingBackendException`.
+- **Reference-only source at `refs/NumSharp`.** The matching NumSharp source is vendored as a pinned
+  submodule at `refs/NumSharp` (`SciSharp/NumSharp` @ the `v$(NumSharpVersion)` release tag), for
+  offline browsing / LLM cross-referencing — **NOT built, never on the build path**. Restore it with
+  `git submodule update --init refs/NumSharp`; a local sibling `K:/source/NumSharp` also works for
+  reference. It does NOT need NumSharp's own nested submodules (numpy/pocketfft/OpenBLAS-source).
 
 ---
 
@@ -187,22 +194,6 @@ dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj -c R
 # Pack the OptunaSharp package
 dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj -c Release -o packages
 ```
-
-### Local-build gotcha: the sibling-NumSharp two-hop P2P
-
-When a sibling NumSharp checkout is present, building OptunaSharp compiles `NumSharp.Core` via the
-ProjectReference — which triggers **NumSharp's NDScope IL weaver** and its `GeneratePackageOnBuild`.
-That is slow and pollutes `NumSharp/packages/`. For fast, side-effect-free local builds pass NumSharp's
-own escape hatches (they propagate to the P2P dependency as global properties):
-
-```bash
-dotnet build SciSharp.OptunaSharp.sln -c Release -p:SkipNDScopeWeave=true -p:GeneratePackageOnBuild=false
-```
-
-There is also a **cold-build race** in the two-hop cross-repo P2P (`OptunaSharp.Tests[.Interop] →
-OptunaSharp.Core → NumSharp.Core`): on a first build it can briefly resolve `NumSharp.Core` in
-**Debug** and fail copying `NumSharp.dll` (MSB3030 "not found"). It **self-heals on retry**. CI never
-hits it (NuGet fallback). Cause: the "Any CPU" (sln) vs "AnyCPU" (project) config-flow quirk.
 
 ### Test categories
 
@@ -301,12 +292,10 @@ The site source is `docs/website-src/`, built with **DocFX** and deployed to Git
   `index.md`, `api/index.md`, `filterConfig.yml`.
 - `scripts/generate-llms-txt.sh` emits an [llms.txt](https://llmstxt.org/) index of the built site.
 
-Build it locally. The metadata step compiles Core, which (with a sibling NumSharp) would run
-NumSharp's weaver/pack — suppress that by exporting the flags as environment variables (MSBuild reads
-env vars as properties). **`-p:` is not a DocFX CLI flag.**
+Build it locally. The metadata step compiles Core, which restores NumSharp + NumSharp.Interop.OpenBLAS
+from NuGet — no submodule init or weaver setup needed.
 
 ```bash
-export SkipNDScopeWeave=true GeneratePackageOnBuild=false
 docfx docs/website-src/docfx.json --serve          # http://localhost:8080
 ```
 

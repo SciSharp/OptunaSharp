@@ -1,7 +1,5 @@
 #:project ../../src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // OptunaHub multi-objective — optimize a real BI-objective hub benchmark (bbob_biobj) and recover the
 // Pareto front. this exercises the bridge's MULTI-objective path: OptunaHubProblem.Objective returns a

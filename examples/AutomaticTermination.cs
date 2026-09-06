@@ -1,7 +1,5 @@
 #:project ../src/OptunaSharp.Core/OptunaSharp.Core.csproj
 #:property PublishAot=false
-#:property SkipNDScopeWeave=true
-#:property GeneratePackageOnBuild=false
 
 // Automatic termination — instead of guessing n_trials, let Optuna's Terminator decide when to stop.
 // a TerminatorCallback checks after each trial and calls study.Stop() once the study should end. here
