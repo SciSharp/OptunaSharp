@@ -194,7 +194,7 @@ public sealed class BoTorchSampler : BaseSampler
         _candidatesFunc ??= BoTorchCandidates.Resolve(
             _selection, nObjectives, hasConstraint: false, _considerRunningTrials);
 
-        double[] candidate = PythonRuntime.Run(() =>
+        NDArray candidate = PythonRuntime.Run(() =>
         {
             using PyObject trainX = BoTorchInterop.ToTensor(completedParams);
             using PyObject trainObj = BoTorchInterop.ToTensor(completedValues);
@@ -225,14 +225,14 @@ public sealed class BoTorchSampler : BaseSampler
         });
 
         // Un-transform back to the actual parameter values (in the search-space key order).
-        return trans.Untransform(np.array(candidate));
+        return trans.Untransform(candidate);
     }
 
     /// <summary>
-    ///     Validate and flatten the candidates tensor to a 1-D array (botorch.py's shape checks +
-    ///     <c>squeeze(0)</c>). Under the GIL.
+    ///     Validate the candidates tensor (botorch.py's shape checks + <c>squeeze(0)</c>) and cross it to a
+    ///     1-D NumSharp <see cref="NDArray" /> through NumSharp's zero-copy interop. Under the GIL.
     /// </summary>
-    private static double[] ExtractCandidate(PyObject candidates, int nBounds)
+    private static NDArray ExtractCandidate(PyObject candidates, int nBounds)
     {
         if (!candidates.HasAttr("dim"))
             throw new TypeError("Candidates must be a torch.Tensor.");
@@ -263,7 +263,7 @@ public sealed class BoTorchSampler : BaseSampler
                     "Candidates size must match with the given bounds. Actual candidates: " +
                     $"{candSize}, bounds: {nBounds}.");
 
-            return BoTorchInterop.ToArray1D(work);
+            return BoTorchInterop.ToNDArray(work);
         }
         finally
         {

@@ -48,6 +48,12 @@
     <!-- The runtime plumbing (embedded CPython, GIL wrappers, interpreter discovery, CLR<->Py marshaling)
          comes from the pythonnet interop package; it transitively brings pythonnet [3.0.5,4.0.0). -->
     <ProjectReference Include="..\OptunaSharp.Interop.pythonnet\OptunaSharp.Interop.pythonnet.csproj" />
+    <!-- NumSharp's zero-copy pythonnet interop: the NDArray <-> numpy <-> torch crossing
+         (NDArray.ToTorch / PyObject.ToTorchNDArray) the tensor marshaling rides on instead of
+         per-element PyList/tolist loops. Version single-sourced with Core's NumSharp via
+         $(NumSharpVersion). It requires an already-initialized PythonEngine, so it wires onto the
+         SAME embedded engine OptunaSharp.Interop.pythonnet starts (it does not start its own). -->
+    <PackageReference Include="NumSharp.Interop.pythonnet" Version="$(NumSharpVersion)" />
     <!-- Core is referenced by project; packing records a clean "OptunaSharp" dependency. This package
          is a Core FRIEND (InternalsVisibleTo in Core's Assembly/Properties.cs) so it reuses the
          bit-exact one-hot SearchSpaceTransform + the intersection search space + the warning seam. -->

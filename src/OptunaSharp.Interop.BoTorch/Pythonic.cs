@@ -5,29 +5,23 @@ using OptunaSharp.Interop.PythonNet;
 namespace Python;
 
 /// <summary>
-///     <c>import botorch</c>, the OptunaSharp flavour. The BoTorch bridge's Python layer has two halves,
-///     both living in the <c>Python</c> namespace (beside <c>Python.Runtime</c>) so the consuming C# reads
-///     for what it is — <c>botorch.evalStmts(...)</c> and <c>torch.tensor(...)</c> run real BoTorch/torch.
-///     Bring them into scope with <c>using Python;</c>.
-///     <list type="bullet">
-///       <item>
-///         <b>This class, <c>botorch</c> — the Python-SNIPPET runner.</b> <see cref="with" /> and
-///         <see cref="evalStmts" /> execute the multi-statement <c>candidates_func</c> bodies as real
-///         Python <em>source</em> (the bodies live as string constants in
-///         <see cref="OptunaSharp.Interop.BoTorch.BoTorchCandidates" /> and must diff 1:1 against
-///         <c>botorch.py</c>), plus the module-level calls the bridge makes on botorch itself
-///         (<see cref="check" />, <see cref="manual_seed" />). This is deliberately NOT a typed facade —
-///         it is the escape hatch NumSharp's test-side <c>Python.np</c> also keeps (its
-///         <c>eval</c>/<c>with</c>/<c>evalStmts</c>) for the code Python expresses far more clearly than a
-///         chain of <see cref="PyObject" /> calls.
-///       </item>
-///       <item>
-///         <b><see cref="torch" /> + the tensor extension members — the TYPED facade.</b> One C# member
-///         per torch call, dispatching straight to the cached module (no Python source), modelled on
-///         NumSharp's src <c>Python.np</c>. That is where the tensor marshaling reads like Python —
-///         <c>torch.tensor(list)</c>, <c>t.detach().cpu()</c>, <c>t.size(-1)</c>.
-///       </item>
-///     </list>
+///     <c>import botorch</c>, the OptunaSharp flavour — the BoTorch bridge's Python layer, living in the
+///     <c>Python</c> namespace (beside <c>Python.Runtime</c>) so the consuming C# reads for what it is
+///     — <c>botorch.evalStmts(...)</c> runs real BoTorch. Bring it into scope with <c>using Python;</c>.
+///     <para>
+///     This is the Python-SNIPPET runner: <see cref="with" /> and <see cref="evalStmts" /> execute the
+///     multi-statement <c>candidates_func</c> bodies as real Python <em>source</em> (the bodies live as
+///     string constants in <see cref="OptunaSharp.Interop.BoTorch.BoTorchCandidates" /> and must diff
+///     1:1 against <c>botorch.py</c>), plus the module-level calls the bridge makes on botorch itself
+///     (<see cref="check" />, <see cref="manual_seed" />). It is deliberately NOT a typed torch facade —
+///     the tensor MARSHALING is done zero-copy through NumSharp's interop
+///     (<c>NumSharp.Interop.pythonnet</c>: <c>NDArray.ToTorch</c> / <c>PyObject.ToTorchNDArray</c>, see
+///     <see cref="OptunaSharp.Interop.BoTorch.BoTorchInterop" />), and this class keeps only the escape
+///     hatch NumSharp's own test-side <c>Python.np</c> also keeps (its <c>eval</c>/<c>with</c>/
+///     <c>evalStmts</c>) for code Python expresses far more clearly than a chain of
+///     <see cref="PyObject" /> calls. The small torch-tensor introspection the bridge still needs for
+///     botorch.py's candidate-shape checks is the extension members in <see cref="TorchTensorExtensions" />.
+///     </para>
 ///     <para>Every member calls the C-API and MUST run under the GIL (from a
 ///     <see cref="PythonRuntime.Run(System.Action)" /> body). A returned <see cref="PyObject" /> outlives
 ///     the throwaway scope and is owned by the caller (dispose it); bound operands stay owned by the
@@ -124,52 +118,16 @@ internal static class botorch
 }
 
 /// <summary>
-///     <c>import torch</c>, the OptunaSharp flavour — the torch calls the BoTorch bridge marshals through,
-///     spelled as they read in Python. Modelled on NumSharp's src <c>Python.np</c>: one typed C# member
-///     per torch call, dispatching to the cached module via <see cref="PythonRuntime.Import" /> — no
-///     Python source strings. Under the GIL.
-/// </summary>
-internal static class torch
-{
-    /// <summary>The cached <c>torch</c> module (process-scoped; do NOT dispose it). Under the GIL.</summary>
-    private static PyObject Module => PythonRuntime.Import("torch");
-
-    /// <summary><c>torch.float64</c> — a fresh handle to the dtype singleton; the caller disposes it. Under the GIL.</summary>
-    internal static PyObject float64 => Module.GetAttr("float64");
-
-    /// <summary>
-    ///     <c>torch.tensor(data, dtype=torch.float64)</c> — the bridge marshals every tensor as float64
-    ///     (BoTorch's <c>SingleTaskGP</c> fits in float64; a float32 tensor would silently break parity).
-    ///     The returned tensor is owned by the caller (dispose it). Under the GIL.
-    /// </summary>
-    internal static PyObject tensor(PyObject data)
-    {
-        using PyObject fn = Module.GetAttr("tensor");
-        using PyObject dtype = float64;
-        using var kwargs = new PyDict();
-        kwargs["dtype"] = dtype;
-        return fn.Invoke(new[] { data }, kwargs);
-    }
-}
-
-/// <summary>
-///     Python-shaped instance members on a torch tensor <see cref="PyObject" /> — the attribute reads and
-///     method calls the bridge makes, spelled as they are in Python (<c>t.detach()</c>, <c>t.cpu()</c>,
-///     <c>t.tolist()</c>, <c>t.dim()</c>, <c>t.size(-1)</c>, <c>t.squeeze(0)</c>). Brought into scope by
-///     <c>using Python;</c>. Members returning a <see cref="PyObject" /> hand ownership to the caller
-///     (dispose it); the rest return CLR values. Under the GIL.
+///     The small set of torch-tensor introspection members the bridge needs to reproduce botorch.py's
+///     candidate-shape validation, spelled as they read in Python (<c>t.dim()</c>, <c>t.size(-1)</c>,
+///     <c>t.size()</c>, <c>t.squeeze(0)</c>). Data marshaling does NOT go through here — that is NumSharp's
+///     zero-copy crossing (see <see cref="OptunaSharp.Interop.BoTorch.BoTorchInterop" />); these are pure
+///     metadata/shape calls. Brought into scope by <c>using Python;</c>. Members returning a
+///     <see cref="PyObject" /> hand ownership to the caller (dispose it); the rest return CLR values.
+///     Under the GIL.
 /// </summary>
 internal static class TorchTensorExtensions
 {
-    /// <summary><c>tensor.detach()</c> — a fresh detached view. Dispose it.</summary>
-    internal static PyObject detach(this PyObject t) => t.InvokeMethod("detach");
-
-    /// <summary><c>tensor.cpu()</c> — the tensor on the CPU device. Dispose it.</summary>
-    internal static PyObject cpu(this PyObject t) => t.InvokeMethod("cpu");
-
-    /// <summary><c>tensor.tolist()</c> — a (nested) Python list of the values. Dispose it.</summary>
-    internal static PyObject tolist(this PyObject t) => t.InvokeMethod("tolist");
-
     /// <summary><c>tensor.dim()</c> — the number of dimensions.</summary>
     internal static long dim(this PyObject t)
     {
