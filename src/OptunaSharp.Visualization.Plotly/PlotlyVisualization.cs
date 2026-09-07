@@ -58,4 +58,31 @@ public static class PlotlyVisualization
         var infoList = OptimizationHistory.GetInfoList(studies, target, targetName, errorBar);
         return OptimizationHistoryPlot.Render(infoList, targetName);
     }
+
+    /// <summary>
+    ///     <c>plot_optimization_history</c> for a single study, then apply a golden-standard Plotly.NET
+    ///     <paramref name="customization" /> (config / merged layout / display options) — the idiomatic
+    ///     way to size the figure, disable the mode bar, make it a static export, swap the template, …
+    ///     Equivalent to <c>PlotOptimizationHistory(study, …).WithCustomization(customization)</c>.
+    /// </summary>
+    public static GenericChart PlotOptimizationHistory(
+        Study study,
+        PlotlyChartCustomization customization,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value",
+        bool errorBar = false)
+        => PlotOptimizationHistory(study, target, targetName, errorBar).WithCustomization(customization);
+
+    /// <summary>
+    ///     <c>plot_optimization_history</c> for several studies, then apply a golden-standard Plotly.NET
+    ///     <paramref name="customization" />. Equivalent to
+    ///     <c>PlotOptimizationHistory(studies, …).WithCustomization(customization)</c>.
+    /// </summary>
+    public static GenericChart PlotOptimizationHistory(
+        IReadOnlyList<Study> studies,
+        PlotlyChartCustomization customization,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value",
+        bool errorBar = false)
+        => PlotOptimizationHistory(studies, target, targetName, errorBar).WithCustomization(customization);
 }

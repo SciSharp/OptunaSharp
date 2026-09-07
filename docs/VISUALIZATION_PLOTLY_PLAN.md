@@ -124,6 +124,16 @@ extensions — `chart.Show()` (opens a browser) and `chart.SaveHtml(path)`; add 
 `PlotlyVisualization.ToFigureJson(chart)` for the spec (parity + embedding). No new rendering code —
 Plotly.NET ships the HTML/plotly.js emitter.
 
+**Customization seam (golden-standard Plotly.NET config) — DONE, the pattern for every `Plot*`.** Each
+`Plot*` returns a `GenericChart`, so the Plotly.NET **core** fluent extensions already apply
+(`using Plotly.NET;` gives `.WithConfig`/`.WithLayout`/`.WithSize`/`.WithTitle`/…). This package adds
+only the gaps: `PlotlyChartExtensions.WithDisplayOptions` (core has no fluent `DisplayOptions` setter)
+and `WithCustomization`, plus a `PlotlyChartCustomization` bundle (`Config`/`Layout`/`DisplayOptions`,
+layout **merged** via `addLayout` so Optuna's title/axes survive) and a **customization overload** on
+each `Plot*` — `Plot*(study, PlotlyChartCustomization customization, …)` — that leaves the canonical
+Optuna-faithful signature untouched (the overload takes a required bundle, so no ambiguity). **Every
+new renderer gets the same overload for free** (route the canonical result through `WithCustomization`).
+
 ---
 
 ## 3. Data-layer entrypoints each renderer consumes (all already public in Core)

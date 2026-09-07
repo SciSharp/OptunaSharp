@@ -19,6 +19,28 @@ PlotlyVisualization.PlotOptimizationHistory(study).SaveHtml("history.html");
 PlotlyVisualization.PlotOptimizationHistory(study).Show();   // opens a browser
 ```
 
+### Customizing (golden-standard Plotly.NET config)
+
+Every `Plot*` returns a Plotly.NET `GenericChart`, so configure it the idiomatic way. Most of the
+fluent surface ships in **Plotly.NET core** (`using Plotly.NET;`) — `.WithConfig`, `.WithLayout`,
+`.WithSize`, `.WithTitle`, … This package adds the two things it's missing: `.WithDisplayOptions` and
+`.WithCustomization` (a one-call bundle), plus a `customization` **overload** on each `Plot*`:
+
+```csharp
+using Plotly.NET;                       // .WithConfig / .WithSize / .WithLayout (Plotly.NET core)
+using OptunaSharp.Visualization.Plotly; // .WithDisplayOptions / .WithCustomization + the overloads
+
+var config = new Config();  config.SetValue("staticPlot", true);
+var layout = new Layout();  layout.SetValue("width", 900);   // merged onto Optuna's title/axes
+
+// fluent:
+PlotlyVisualization.PlotOptimizationHistory(study).WithConfig(config).WithSize(900, 500);
+
+// or the one-shot overload:
+PlotlyVisualization.PlotOptimizationHistory(
+    study, new PlotlyChartCustomization { Config = config, Layout = layout });
+```
+
 ## Status
 
 Incremental — renderers land per `docs/VISUALIZATION_PLOTLY_PLAN.md`. Currently available:
