@@ -1,6 +1,6 @@
 ---
 name: pythonic
-description: Write or use OptunaSharp's "pythonic" pythonnet interop layer — the `Python.*` namespace pattern that makes C# driving embedded CPython read like Python, plus the GIL/PyObject-lifetime discipline and NumSharp's ZERO-COPY NDArray⇄numpy⇄torch crossing (so you never hand-roll element loops). Use when building or editing a pythonnet bridge (BoTorch, OptunaHub, …), adding a `Python.*` facade member or a PyObject tensor-extension, crossing data between C# and numpy/torch, deciding typed-facade vs `evalStmts` snippet, or debugging a GIL / leak / lifetime / "numpy scalar isn't a Python int" bug in the interop.
+description: Write or use OptunaSharp's "pythonic" pythonnet interop layer — the `Python.*` namespace pattern that makes C# driving embedded CPython read like Python, plus the GIL/PyObject-lifetime discipline and NumSharp's ZERO-COPY NDArray⇄numpy⇄torch crossing (so you never hand-roll element loops). Use when building or editing a pythonnet bridge (BoTorch, OptunaHub, …), adding a `Python.*` facade member or a PyObject tensor-extension, crossing data between C# and numpy/torch, deciding typed-facade vs `evalStmts` snippet or explicit-verb vs codec (RegisterCodec/NumpyCodec) crossing, or debugging a GIL / leak / lifetime / "numpy scalar isn't a Python int" bug in the interop.
 keywords: pythonic layer, Python.* facade, pythonnet bridge, make C# read like Python, zero-copy tensor crossing, NDArray to torch, ToTorch, ToTorchNDArray, GIL discipline, PyObject lifetime, evalStmts snippet runner, PythonRuntime.Run
 keywords-sparse: pythonic interop, Python.* namespace, write a pythonnet bridge, zero-copy numpy/torch crossing, GIL and PyObject lifetime, typed facade vs evalStmts, tensor extension member
 ---
@@ -136,8 +136,9 @@ Add the package (version single-sourced with Core's NumSharp):
 <PackageReference Include="NumSharp.Interop.pythonnet" Version="$(NumSharpVersion)" />
 ```
 It **requires an already-running engine** (`EnsureEngine` throws otherwise) and wires onto the SAME
-embedded engine `PythonRuntime` starts — it does NOT start its own, and its GIL is re-entrant. Use the
-explicit extension methods; you do **not** need `RegisterCodec()` (avoid the global side effect).
+embedded engine `PythonRuntime` starts — it does NOT start its own, and its GIL is re-entrant. Two ways
+to cross data: the **explicit verbs** here (local, no global side effect — the right default for a
+bridge), or **codecs** that convert implicitly at every boundary (§5).
 
 **The four verbs** (`NumSharp.Interop.PythonNet.NDArrayPythonInterop`):
 | Verb | Direction | Copy? |
@@ -168,9 +169,62 @@ and not mutated** by the Python side (pin lifetime = tensor lifetime, released o
 per-call training matrices. The old PyList-append / `tolist()`-loop marshaling is the anti-pattern this
 replaces.
 
+**Why this is genuinely zero-copy — not just "no loop".** Export is `ctypes.c_char.from_address(ptr)` →
+`np.frombuffer` → `np.lib.stride_tricks.as_strided(dims, byteStrides)`, so numpy gets the EXACT layout —
+strides, offset, negative strides, Fortran order, and broadcast (stride-0 → `setflags(write=False)`) —
+with **zero** per-element objects (**O(1)** in element count), where a PyList/`tolist` loop allocates one
+Python object *per element* (O(n) churn + boxing). Import is symmetric: a contiguous exporter is leased
+with a `PyBUF.WRITABLE` lock, a non-contiguous numpy array is viewed through `__array_interface__`, a
+non-contiguous non-numpy exporter through `PyBUF.STRIDED` — full stride fidelity, read-only sources → non-
+writeable views. **Lifetime is handled:** exports take an ARC ref released by a `weakref.finalize` on the
+numpy base (survives C# `NDArray` GC; `resize(refcheck=True)` refuses while exported); imports lease the
+buffer until the last NumSharp view dies. Only irreducible cases fall back to a copy, and **loudly** —
+complex64 widens, UCS-4 text narrows to Char, big-endian is **refused** (never silently byte-swapped).
+
 ---
 
-## 5 — The generic backend vs library specifics
+## 5 — Codecs: implicit crossing at every boundary (the ergonomic layer)
+
+`NDArrayPythonInterop.RegisterCodec()` registers `NumpyCodec` (an `IPyObjectEncoder` + `IPyObjectDecoder`),
+so from then on `NDArray` ⇄ Python conversion happens **automatically at every pythonnet boundary** — no
+explicit verb:
+
+```csharp
+NDArrayPythonInterop.RegisterCodec();     // once per engine session (idempotent); PROCESS-GLOBAL
+scope.Set("x", nd);                       // NDArray -> numpy VIEW implicitly (encode)
+using PyObject r = pyfunc.Invoke(nd);     // an NDArray argument auto-encodes
+NDArray back = r.As<NDArray>();           // numpy / torch / pandas / list -> NDArray implicitly (decode)
+```
+
+- **Encode** (`NumpyCodecMode.Auto`, default) is view-first (`ToNumpy`), copy only when unviewable — so it
+  stays zero-copy by default.
+- **Decode covers far more than numpy:** registered **adapters** (`torch.Tensor`, Pandas
+  `DataFrame`/`Series`/…), **any PEP 3118 buffer** (`memoryview`/`bytes`/`bytearray`/`array.array`/ctypes,
+  via the PEP 688 `__buffer__` capability check), and **array-like builtins** (`list`/`tuple`/nested/scalar
+  through `numpy.asarray`, always a copy). Modes: `Auto` (view→copy) · `View` (decline if no view) · `Copy`
+  (always) — per-direction `NumpyCodecOptions` toggles.
+- **`ConvertTuples` (default on)** also registers `TupleCodec`, so a C# `(long,long)` shape crosses as a
+  Python `tuple` and back — pythonnet has no tuple conversion of its own.
+- **Why implicit encoding is leak-safe — `EncoderHandoff`.** pythonnet takes its OWN reference from an
+  encoder's wrapper and **never disposes it**, so a naive codec would keep every exported view pinned until
+  the CLR finalizer (a loop of 150 encodes → 150 live exports). The codec routes each encode through a
+  one-slot-per-thread handoff that disposes the *previous* encode's wrapper — bounding the outstanding pin
+  to one per thread. Invisible to you, but it is why implicit encoding at scale doesn't leak.
+- Registration is **per engine session** (pythonnet clears codecs on `Shutdown`; `RegisterCodec` re-adds
+  after re-init) and **process-global** — it changes conversion for the WHOLE process.
+
+**Explicit verbs (§4) vs codecs — the decision:**
+- **Explicit** — local, zero global footprint, per-call view/copy control; the typed `nd.ToPython()` even
+  yields numpy **without any registration** (it wins overload resolution over pythonnet's `object.ToPython`).
+  **Default for a focused bridge** (BoTorch builds torch tensors explicitly; a codec wouldn't touch the
+  torch-encode side anyway — which is why this repo's bridges use the verbs and register **no** codec).
+- **Codecs** — implicit and broad (numpy + torch/pandas + buffers + array-likes + tuples), best when you
+  **own the process** or pass lots of numpy/lists and want it ergonomic. The cost is the process-global
+  scope: never register from a library that shouldn't dictate conversion for unrelated code.
+
+---
+
+## 6 — The generic backend vs library specifics
 
 `OptunaSharp.Interop.pythonnet/PythonRuntime.cs` is **library-agnostic**: `Initialize()` (idempotent,
 process-scoped; honors `PYTHONNET_PYDLL`, else probes `python`/`python3` for libpython + injects
@@ -183,7 +237,7 @@ Discovery pin for this machine: `PYTHONNET_PYDLL=C:/Users/ELI/.claude/python/pyt
 
 ---
 
-## 6 — Gotchas (each cost real time)
+## 7 — Gotchas (each cost real time)
 
 - **`using static` does NOT import extension methods.** To read `t.size(-1)` / `torch.tensor(...)` you need
   the namespace form `using Python;`, not `using static Python.torch;` (which would also drop the
@@ -209,6 +263,7 @@ The bridge reads like the Python it ports: single calls are **facade rows** or *
 (`namespace Python`, `using Python;`), multi-statement bodies are **`evalStmts` snippets** that diff 1:1
 against the source; every `PyObject` touch is under the GIL via `PythonRuntime.Run`; every returned
 `PyObject` is `using`-disposed and no fluent chain leaks an intermediate; and **all** array/tensor data
-crosses through NumSharp's zero-copy `NumSharp.Interop.pythonnet` verbs (`np.array(x, copy:false).ToTorch()`
-in, `ToTorchNDArray` out) — never a hand-rolled element loop. Validate with the live interop gate
+crosses through NumSharp's zero-copy `NumSharp.Interop.pythonnet` — the explicit verbs
+(`np.array(x, copy:false).ToTorch()` in, `ToTorchNDArray` out) or a registered codec — **never** a
+hand-rolled element loop. Validate with the live interop gate
 (byte-exact vs the real library) on both TFMs; a leak gate that returns to baseline proves the lifetimes.
