@@ -54,7 +54,7 @@ Console.WriteLine();
 Console.WriteLine(C("  ╔══════════════════════════════════════════════════════════╗", "35"));
 Console.WriteLine(C("  ║        OptunaHub sampler shootout  —  2-D Rastrigin       ║", "1;35"));
 Console.WriteLine(C("  ╚══════════════════════════════════════════════════════════╝", "35"));
-Console.WriteLine($"  optuna {C(PythonRuntime.OptunaVersion ?? "?", "32")}   optunahub {C(PythonRuntime.OptunaHubVersion ?? "?", "32")}   ·   {nTrials} trials each   ·   lower is better");
+Console.WriteLine($"  optuna {C(OptunaHubRuntime.OptunaVersion ?? "?", "32")}   optunahub {C(OptunaHubRuntime.OptunaHubVersion ?? "?", "32")}   ·   {nTrials} trials each   ·   lower is better");
 Console.WriteLine();
 
 // the roster: native OptunaSharp samplers + real OptunaHub samplers (via the bridge). each factory
@@ -183,7 +183,7 @@ static bool TryProbe(out string reason)
 {
     try
     {
-        PythonRuntime.Run(() => { _ = PythonRuntime.Optuna; _ = PythonRuntime.OptunaHubModuleRef; });
+        PythonRuntime.Run(() => { _ = OptunaHubRuntime.Optuna; _ = OptunaHubRuntime.OptunaHub; });
         reason = "";
         return true;
     }

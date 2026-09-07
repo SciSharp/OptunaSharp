@@ -1,6 +1,5 @@
 using System;
 using Python.Runtime;
-using OptunaSharp.Interop.PythonNet;
 
 namespace OptunaSharp.Interop.BoTorch;
 
@@ -41,16 +40,16 @@ internal delegate PyObject NativeCandidatesFunc(
     PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX);
 
 /// <summary>
-///     The built-in <c>candidates_func</c> implementations — faithful C# ports of the functions in
-///     <c>optuna_integration/botorch/botorch.py</c>, each orchestrating the <b>real BoTorch</b>
-///     (<c>SingleTaskGP</c> → <c>fit_gpytorch_mll</c> → an acquisition function → <c>optimize_acqf</c>)
-///     over <c>torch.Tensor</c>s via pythonnet. Internal by design (they speak <see cref="PyObject" />);
-///     the sampler resolves the public <see cref="BoTorchCandidatesFunc" /> enum to one of these. Every
-///     method must be called under the GIL.
+///     The built-in <c>candidates_func</c> implementations — faithful ports of the functions in
+///     <c>optuna_integration/botorch/botorch.py</c>, each expressed as a near-verbatim BoTorch snippet
+///     run through the Pythonic <see cref="Python.botorch" /> layer (bind the tensors, fit the
+///     <c>SingleTaskGP</c>, build the acquisition, optimize it — all in real BoTorch). Internal by design
+///     (they speak <see cref="PyObject" />); the sampler resolves the public
+///     <see cref="BoTorchCandidatesFunc" /> enum to one of these. Every method must be called under the
+///     GIL.
 ///     <para><b>Phase A</b> ships the single-objective path; multi-objective / constrained /
-///     knowledge-gradient variants follow in later phases. <b>Cached-module discipline:</b>
-///     <see cref="PythonRuntime.Import" /> returns per-process cached modules — used as plain locals,
-///     never disposed; only fresh <c>GetAttr</c>/<c>Invoke</c> results are wrapped in <c>using</c>.</para>
+///     knowledge-gradient variants follow in later phases (the constrained branch of each raises for
+///     now).</para>
 /// </summary>
 internal static class BoTorchCandidates
 {
@@ -91,19 +90,8 @@ internal static class BoTorchCandidates
         if (trainCon is not null)
             throw ConstraintsNotYetSupported("logei_candidates_func");
 
-        PyObject trainY = trainObj;
-        using PyObject bestF = trainObj.InvokeMethod("max");
-        using PyObject normX = Normalize(trainX, bounds);
-        using PyObject model = FitSingleTaskGp(normX, trainY);
-
-        PyObject analytic = PythonRuntime.Import("botorch.acquisition.analytic");
-        using PyObject logEiCtor = analytic.GetAttr("LogExpectedImprovement");
-        using var acqfKwargs = new PyDict();
-        acqfKwargs["model"] = model;
-        acqfKwargs["best_f"] = bestF;
-        using PyObject acqf = logEiCtor.Invoke(Array.Empty<PyObject>(), acqfKwargs);
-
-        return OptimizeAndUnnormalize(acqf, bounds, numRestarts: 10, rawSamples: 512, nonnegative: false);
+        return Python.botorch.evalStmts(LogEiBody, "result",
+            ("train_x", trainX), ("train_obj", trainObj), ("bounds", bounds));
     }
 
     /// <summary>Quasi-MC batch Expected Improvement (qEI). Port of <c>qei_candidates_func</c>.</summary>
@@ -114,23 +102,8 @@ internal static class BoTorchCandidates
         if (trainCon is not null)
             throw ConstraintsNotYetSupported("qei_candidates_func");
 
-        PyObject trainY = trainObj;
-        using PyObject bestF = trainObj.InvokeMethod("max");
-        using PyObject normX = Normalize(trainX, bounds);
-        using PyObject? normPending = MaybeNormalize(pendingX, bounds);
-        using PyObject model = FitSingleTaskGp(normX, trainY);
-
-        PyObject mc = PythonRuntime.Import("botorch.acquisition.monte_carlo");
-        using PyObject qeiCtor = mc.GetAttr("qExpectedImprovement");
-        using PyObject sampler = SobolQmcNormalSampler(256);
-        using var acqfKwargs = new PyDict();
-        acqfKwargs["model"] = model;
-        acqfKwargs["best_f"] = bestF;
-        acqfKwargs["sampler"] = sampler;
-        acqfKwargs["X_pending"] = XPending(normPending);
-        using PyObject acqf = qeiCtor.Invoke(Array.Empty<PyObject>(), acqfKwargs);
-
-        return OptimizeAndUnnormalize(acqf, bounds, numRestarts: 10, rawSamples: 512, nonnegative: false);
+        return Python.botorch.evalStmts(QeiBody, "result",
+            ("train_x", trainX), ("train_obj", trainObj), ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
 
     /// <summary>Quasi-MC batch Log Expected Improvement (qLogEI). Port of <c>qlogei_candidates_func</c>.</summary>
@@ -141,23 +114,8 @@ internal static class BoTorchCandidates
         if (trainCon is not null)
             throw ConstraintsNotYetSupported("qlogei_candidates_func");
 
-        PyObject trainY = trainObj;
-        using PyObject bestF = trainObj.InvokeMethod("max");
-        using PyObject normX = Normalize(trainX, bounds);
-        using PyObject? normPending = MaybeNormalize(pendingX, bounds);
-        using PyObject model = FitSingleTaskGp(normX, trainY);
-
-        PyObject logei = PythonRuntime.Import("botorch.acquisition.logei");
-        using PyObject qLogEiCtor = logei.GetAttr("qLogExpectedImprovement");
-        using PyObject sampler = SobolQmcNormalSampler(256);
-        using var acqfKwargs = new PyDict();
-        acqfKwargs["model"] = model;
-        acqfKwargs["best_f"] = bestF;
-        acqfKwargs["sampler"] = sampler;
-        acqfKwargs["X_pending"] = XPending(normPending);
-        using PyObject acqf = qLogEiCtor.Invoke(Array.Empty<PyObject>(), acqfKwargs);
-
-        return OptimizeAndUnnormalize(acqf, bounds, numRestarts: 10, rawSamples: 512, nonnegative: false);
+        return Python.botorch.evalStmts(QLogEiBody, "result",
+            ("train_x", trainX), ("train_obj", trainObj), ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
 
     /// <summary>Quasi-MC batch Noisy Expected Improvement (qNEI). Port of <c>qnei_candidates_func</c>.</summary>
@@ -168,145 +126,68 @@ internal static class BoTorchCandidates
         if (trainCon is not null)
             throw ConstraintsNotYetSupported("qnei_candidates_func");
 
-        PyObject trainY = trainObj;
-        using PyObject normX = Normalize(trainX, bounds);
-        using PyObject? normPending = MaybeNormalize(pendingX, bounds);
-        using PyObject model = FitSingleTaskGp(normX, trainY);
-
-        PyObject mc = PythonRuntime.Import("botorch.acquisition.monte_carlo");
-        using PyObject qNeiCtor = mc.GetAttr("qNoisyExpectedImprovement");
-        using PyObject sampler = SobolQmcNormalSampler(256);
-        using var acqfKwargs = new PyDict();
-        acqfKwargs["model"] = model;
-        acqfKwargs["X_baseline"] = normX;
-        acqfKwargs["sampler"] = sampler;
-        acqfKwargs["X_pending"] = XPending(normPending);
-        using PyObject acqf = qNeiCtor.Invoke(Array.Empty<PyObject>(), acqfKwargs);
-
-        return OptimizeAndUnnormalize(acqf, bounds, numRestarts: 10, rawSamples: 512, nonnegative: false);
+        return Python.botorch.evalStmts(QNeiBody, "result",
+            ("train_x", trainX), ("train_obj", trainObj), ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
 
-    // ---- shared botorch orchestration -----------------------------------------------------------
+    // ---- the ported candidates_func bodies (near-verbatim botorch.py, single-objective) ----------
 
-    /// <summary><c>normalize(x, bounds=bounds)</c> from <c>botorch.utils.transforms</c>.</summary>
-    private static PyObject Normalize(PyObject x, PyObject bounds)
-    {
-        PyObject transforms = PythonRuntime.Import("botorch.utils.transforms");
-        using PyObject normalize = transforms.GetAttr("normalize");
-        using var kwargs = new PyDict();
-        kwargs["bounds"] = bounds;
-        return normalize.Invoke(new[] { x }, kwargs);
-    }
+    private const string StandardBoundsAndOptimize =
+        "standard_bounds = torch.zeros_like(bounds)\n" +
+        "standard_bounds[1] = 1\n" +
+        "candidates, _ = optimize_acqf(\n" +
+        "    acq_function=acqf, bounds=standard_bounds, q=1, num_restarts=10, raw_samples=512,\n" +
+        "    options={'batch_limit': 5, 'maxiter': 200}, sequential=True)\n" +
+        "result = unnormalize(candidates.detach(), bounds=bounds)\n";
 
-    private static PyObject? MaybeNormalize(PyObject? x, PyObject bounds)
-        => x is null ? null : Normalize(x, bounds);
+    private const string LogEiBody =
+        "train_y = train_obj\n" +
+        "best_f = train_obj.max()\n" +
+        "train_x = normalize(train_x, bounds=bounds)\n" +
+        "model = SingleTaskGP(train_x, train_y, outcome_transform=Standardize(m=train_y.size(-1)))\n" +
+        "fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))\n" +
+        "acqf = LogExpectedImprovement(model=model, best_f=best_f)\n" +
+        StandardBoundsAndOptimize;
 
-    private static PyObject XPending(PyObject? normalizedPending)
-        => normalizedPending ?? PyObject.None;
+    private const string QeiBody =
+        "train_y = train_obj\n" +
+        "best_f = train_obj.max()\n" +
+        "train_x = normalize(train_x, bounds=bounds)\n" +
+        "if pending_x is not None:\n" +
+        "    pending_x = normalize(pending_x, bounds=bounds)\n" +
+        "model = SingleTaskGP(train_x, train_y, outcome_transform=Standardize(m=train_y.size(-1)))\n" +
+        "fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))\n" +
+        "acqf = qExpectedImprovement(model=model, best_f=best_f, sampler=SobolQMCNormalSampler(torch.Size([256])), X_pending=pending_x)\n" +
+        StandardBoundsAndOptimize;
 
-    /// <summary>
-    ///     <c>model = SingleTaskGP(train_x, train_y, outcome_transform=Standardize(m=train_y.size(-1)));
-    ///     fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))</c> — the fitted GP.
-    /// </summary>
-    private static PyObject FitSingleTaskGp(PyObject trainXNormalized, PyObject trainY)
-    {
-        long m = Size(trainY, -1);
+    private const string QLogEiBody =
+        "train_y = train_obj\n" +
+        "best_f = train_obj.max()\n" +
+        "train_x = normalize(train_x, bounds=bounds)\n" +
+        "if pending_x is not None:\n" +
+        "    pending_x = normalize(pending_x, bounds=bounds)\n" +
+        "model = SingleTaskGP(train_x, train_y, outcome_transform=Standardize(m=train_y.size(-1)))\n" +
+        "fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))\n" +
+        "acqf = qLogExpectedImprovement(model=model, best_f=best_f, sampler=SobolQMCNormalSampler(torch.Size([256])), X_pending=pending_x)\n" +
+        StandardBoundsAndOptimize;
 
-        PyObject outcome = PythonRuntime.Import("botorch.models.transforms.outcome");
-        using PyObject standardizeCtor = outcome.GetAttr("Standardize");
-        using var stdKwargs = new PyDict();
-        stdKwargs["m"] = new PyInt(m);
-        using PyObject standardize = standardizeCtor.Invoke(Array.Empty<PyObject>(), stdKwargs);
+    private const string QNeiBody =
+        "train_y = train_obj\n" +
+        "train_x = normalize(train_x, bounds=bounds)\n" +
+        "if pending_x is not None:\n" +
+        "    pending_x = normalize(pending_x, bounds=bounds)\n" +
+        "model = SingleTaskGP(train_x, train_y, outcome_transform=Standardize(m=train_y.size(-1)))\n" +
+        "fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))\n" +
+        "acqf = qNoisyExpectedImprovement(model=model, X_baseline=train_x, sampler=SobolQMCNormalSampler(torch.Size([256])), X_pending=pending_x)\n" +
+        StandardBoundsAndOptimize;
 
-        PyObject models = PythonRuntime.Import("botorch.models");
-        using PyObject singleTaskGpCtor = models.GetAttr("SingleTaskGP");
-        using var gpKwargs = new PyDict();
-        gpKwargs["outcome_transform"] = standardize;
-        PyObject model = singleTaskGpCtor.Invoke(new[] { trainXNormalized, trainY }, gpKwargs);
-
-        PyObject mlls = PythonRuntime.Import("gpytorch.mlls");
-        using PyObject emllCtor = mlls.GetAttr("ExactMarginalLogLikelihood");
-        using PyObject likelihood = model.GetAttr("likelihood");
-        using PyObject mll = emllCtor.Invoke(likelihood, model);
-
-        PyObject fit = PythonRuntime.Import("botorch.fit");
-        using PyObject fitGpytorchMll = fit.GetAttr("fit_gpytorch_mll");
-        fitGpytorchMll.Invoke(mll).Dispose();
-
-        return model;
-    }
-
-    /// <summary><c>SobolQMCNormalSampler(torch.Size((num_samples,)))</c> (botorch &gt;= 0.8.0).</summary>
-    private static PyObject SobolQmcNormalSampler(int numSamples)
-    {
-        PyObject sampling = PythonRuntime.Import("botorch.sampling");
-        using PyObject samplerCtor = sampling.GetAttr("SobolQMCNormalSampler");
-        using PyObject sizeCtor = BoTorchInterop.Torch.GetAttr("Size");
-        using var shapeList = new PyList();
-        using (var n = new PyInt(numSamples))
-            shapeList.Append(n);
-        using PyObject sampleShape = sizeCtor.Invoke(shapeList);
-        return samplerCtor.Invoke(sampleShape);
-    }
-
-    /// <summary>
-    ///     <c>optimize_acqf(acqf, standard_bounds, q=1, num_restarts, raw_samples, options={...},
-    ///     sequential=True)</c> then <c>unnormalize(candidates.detach(), bounds=bounds)</c>.
-    /// </summary>
-    private static PyObject OptimizeAndUnnormalize(
-        PyObject acqf, PyObject bounds, int numRestarts, int rawSamples, bool nonnegative)
-    {
-        using PyObject standardBounds = StandardBounds(bounds);
-
-        PyObject optim = PythonRuntime.Import("botorch.optim");
-        using PyObject optimizeAcqf = optim.GetAttr("optimize_acqf");
-        using var options = new PyDict();
-        options["batch_limit"] = new PyInt(5);
-        options["maxiter"] = new PyInt(200);
-        if (nonnegative)
-            options["nonnegative"] = true.ToPython();
-        using var kwargs = new PyDict();
-        kwargs["acq_function"] = acqf;
-        kwargs["bounds"] = standardBounds;
-        kwargs["q"] = new PyInt(1);
-        kwargs["num_restarts"] = new PyInt(numRestarts);
-        kwargs["raw_samples"] = new PyInt(rawSamples);
-        kwargs["options"] = options;
-        kwargs["sequential"] = true.ToPython();
-        using PyObject result = optimizeAcqf.Invoke(Array.Empty<PyObject>(), kwargs);
-
-        // optimize_acqf returns (candidates, acq_values); take the candidates.
-        using PyObject candidates = result[new PyInt(0)];
-        using PyObject detached = candidates.InvokeMethod("detach");
-
-        PyObject transforms = PythonRuntime.Import("botorch.utils.transforms");
-        using PyObject unnormalize = transforms.GetAttr("unnormalize");
-        using var unKwargs = new PyDict();
-        unKwargs["bounds"] = bounds;
-        return unnormalize.Invoke(new[] { detached }, unKwargs);
-    }
-
-    /// <summary><c>standard_bounds = torch.zeros_like(bounds); standard_bounds[1] = 1</c>.</summary>
-    private static PyObject StandardBounds(PyObject bounds)
-    {
-        using PyObject zerosLike = BoTorchInterop.Torch.GetAttr("zeros_like");
-        PyObject standardBounds = zerosLike.Invoke(bounds);
-        using (var one = new PyInt(1))
-        using (PyObject upperValue = 1.ToPython())
-            standardBounds.SetItem(one, upperValue);
-        return standardBounds;
-    }
-
-    private static long Size(PyObject tensor, int dim)
-    {
-        using PyObject d = dim.ToPython();
-        using PyObject size = tensor.InvokeMethod("size", d);
-        return size.As<long>();
-    }
+    // ---- guards ---------------------------------------------------------------------------------
 
     private static void RequireSingleObjective(PyObject trainObj, string name)
     {
-        if (Size(trainObj, -1) != 1)
+        using PyObject dim = (-1).ToPython();
+        using PyObject size = trainObj.InvokeMethod("size", dim);
+        if (size.As<long>() != 1)
             throw new NumSharp.ValueError($"Objective may only contain single values with {name}.");
     }
 

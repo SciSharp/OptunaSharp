@@ -122,8 +122,8 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
 
     private static PyObject BuildStudy(Study study, int currentNumber)
     {
-        PythonRuntime.EnsureQuiet(); // re-assert right before create_study (Optuna re-configures logging lazily)
-        using var createStudy = PythonRuntime.Optuna.GetAttr("create_study");
+        OptunaHubRuntime.EnsureQuiet(); // re-assert right before create_study (Optuna re-configures logging lazily)
+        using var createStudy = OptunaHubRuntime.Optuna.GetAttr("create_study");
         using var kwargs = new PyDict();
         var dirItems = new List<PyObject>();
         foreach (var d in study.Directions)
@@ -162,7 +162,7 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
 
     private static PyObject CreateFrozenTrial(FrozenTrial ft)
     {
-        using var trialModule = PythonRuntime.Optuna.GetAttr("trial");
+        using var trialModule = OptunaHubRuntime.Optuna.GetAttr("trial");
         using var createTrial = trialModule.GetAttr("create_trial");
         using var kwargs = new PyDict();
 
@@ -203,7 +203,7 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
             TrialState.Waiting => "WAITING",
             _ => "RUNNING",
         };
-        using var trialModule = PythonRuntime.Optuna.GetAttr("trial");
+        using var trialModule = OptunaHubRuntime.Optuna.GetAttr("trial");
         using var stateEnum = trialModule.GetAttr("TrialState");
         return stateEnum.GetAttr(name);
     }

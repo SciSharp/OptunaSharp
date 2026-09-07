@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
@@ -8,11 +8,12 @@ using Python.Runtime;
 namespace OptunaSharp.Interop.PythonNet;
 
 /// <summary>
-///     Process-wide embedded-CPython session for the OptunaHub bridge — the analog of NumSharp's
-///     <c>PythonRuntimeInterop</c>. Owns discovery of a libpython, one-time
+///     Process-wide embedded-CPython session — the <b>generic backend</b> every OptunaSharp pythonnet
+///     bridge is built on (OptunaHub, BoTorch, …). Owns discovery of a libpython, one-time
 ///     <see cref="PythonEngine" /> initialization, the GIL entry point every Python call goes through,
-///     and a per-session cache of the modules the bridge touches (<c>optuna</c>, <c>optunahub</c>,
-///     <c>builtins</c>).
+///     and a per-process cache of imported modules (<see cref="Import" />). It is deliberately
+///     library-agnostic: consumers layer their own module accessors / Pythonic helpers on top (e.g.
+///     <c>OptunaHubRuntime</c>, the BoTorch <c>Python</c> layer).
 ///     <para>
 ///     CPython+pythonnet cannot re-initialize after <c>Py_Finalize</c>, so the engine lifecycle is
 ///     process-scoped: <see cref="Initialize" /> is idempotent and there is no public shutdown.
@@ -28,8 +29,7 @@ public static class PythonRuntime
     private static int _initialized;
     private static string? _sitePackages;   // discovered by ResolvePythonDll, injected after Initialize
 
-    private static PyObject? _optuna, _optunahub, _builtins;
-    private static readonly Dictionary<string, PyObject> _importCache = new();
+    private static readonly ConcurrentDictionary<string, PyObject> _importCache = new();
 
     /// <summary><c>true</c> once <see cref="PythonEngine" /> is running (started by us or the host).</summary>
     public static bool IsInitialized => PythonEngine.IsInitialized;
@@ -40,7 +40,7 @@ public static class PythonRuntime
     ///     <c>python</c>/<c>python3</c> (or <c>$PYTHON</c>) on PATH for its shared library. A host that
     ///     has already called <see cref="PythonEngine.Initialize()" /> is respected as-is.
     /// </summary>
-    /// <exception cref="OptunaHubInteropException">No usable libpython could be located/started.</exception>
+    /// <exception cref="PythonInteropException">No usable libpython could be located/started.</exception>
     public static void Initialize()
     {
         if (Volatile.Read(ref _initialized) == 1 && PythonEngine.IsInitialized)
@@ -60,43 +60,17 @@ public static class PythonRuntime
                 PythonEngine.Initialize();
                 PythonEngine.BeginAllowThreads();
                 InjectSitePackages();   // add the probed interpreter's site-packages to sys.path
-                EnsureQuiet();
             }
-            catch (Exception ex) when (ex is not OptunaHubInteropException)
+            catch (Exception ex) when (ex is not PythonInteropException)
             {
-                throw new OptunaHubInteropException(
-                    "Could not initialize an embedded CPython engine for the OptunaHub bridge. Install a " +
-                    "CPython with `pip install optuna optunahub`, and if it cannot be found automatically " +
-                    "set PYTHONNET_PYDLL to the libpython path (e.g. " +
-                    "/usr/lib/x86_64-linux-gnu/libpython3.12.so, or C:\\...\\python312.dll).", ex);
+                throw new PythonInteropException(
+                    "Could not initialize an embedded CPython engine. Install a CPython with the packages " +
+                    "your bridge needs, and if it cannot be found automatically set PYTHONNET_PYDLL to the " +
+                    "libpython path (e.g. /usr/lib/x86_64-linux-gnu/libpython3.12.so, or " +
+                    "C:\\...\\python312.dll).", ex);
             }
 
             Volatile.Write(ref _initialized, 1);
-        }
-    }
-
-    /// <summary>
-    ///     Lower Optuna's log verbosity to WARNING (the idiomatic quieting shown in Optuna's own docs).
-    ///     The sampler bridge rebuilds an in-memory shadow study per trial, so INFO-level
-    ///     "A new study created in memory" lines would otherwise flood the console. Idempotent and
-    ///     best-effort; re-asserted right before each shadow study is created (Optuna re-configures its
-    ///     root logger lazily on first real use, which can undo an early call). Opt out with
-    ///     <c>OPTUNASHARP_OPTUNAHUB_QUIET=0</c>. Safe to call whether or not the GIL is already held
-    ///     (<see cref="Py.GIL" /> is reentrant).
-    /// </summary>
-    internal static void EnsureQuiet()
-    {
-        string? v = Environment.GetEnvironmentVariable("OPTUNASHARP_OPTUNAHUB_QUIET");
-        if (v is "0" or "false" or "FALSE" or "no" or "off")
-            return;
-        try
-        {
-            using (Py.GIL())
-                PythonEngine.Exec("import optuna\noptuna.logging.set_verbosity(optuna.logging.WARNING)\n");
-        }
-        catch
-        {
-            // quieting is a convenience, never a reason to fail an operation.
         }
     }
 
@@ -116,93 +90,40 @@ public static class PythonRuntime
             return body();
     }
 
-    /// <summary>Cached <c>optuna</c> module (per process). Call under the GIL.</summary>
-    public static PyObject Optuna => GetModule(ref _optuna, "optuna");
-
-    /// <summary>Cached <c>optunahub</c> module (per process). Call under the GIL.</summary>
-    public static PyObject OptunaHubModuleRef => GetModule(ref _optunahub, "optunahub");
-
-    /// <summary>Cached <c>builtins</c> module (per process). Call under the GIL.</summary>
-    public static PyObject Builtins => GetModule(ref _builtins, "builtins");
-
     /// <summary>
-    ///     Import (once) and cache an arbitrary Python module by name — e.g. <c>torch</c>,
-    ///     <c>botorch.acquisition.logei</c>. The generic form of <see cref="Optuna" /> /
-    ///     <see cref="Builtins" /> for bridges that touch other libraries. The returned handle is
-    ///     process-scoped: use it as a plain local and <b>do not dispose it</b> (only fresh
-    ///     <c>GetAttr</c>/<c>Invoke</c> results are disposable). Call under the GIL (from a
+    ///     Import (once) and cache an arbitrary Python module by name — e.g. <c>optuna</c>, <c>torch</c>,
+    ///     <c>botorch.acquisition.logei</c>. The one generic module accessor every bridge shares. The
+    ///     returned handle is process-scoped: use it as a plain local and <b>do not dispose it</b> (only
+    ///     fresh <c>GetAttr</c>/<c>Invoke</c> results are disposable). Call under the GIL (from a
     ///     <see cref="Run(Action)" /> body).
     /// </summary>
-    /// <exception cref="OptunaHubInteropException">The module could not be imported.</exception>
+    /// <exception cref="PythonInteropException">The module could not be imported.</exception>
     public static PyObject Import(string moduleName)
     {
-        lock (_gate)
-        {
-            if (_importCache.TryGetValue(moduleName, out PyObject? cached))
-                return cached;
+        if (_importCache.TryGetValue(moduleName, out PyObject? cached))
+            return cached;
 
-            PyObject module;
-            try
-            {
-                module = Py.Import(moduleName);
-            }
-            catch (PythonException ex)
-            {
-                throw new OptunaHubInteropException(
-                    $"Failed to `import {moduleName}` in the embedded interpreter. Install the package " +
-                    "that provides it into the Python that hosts this process.", ex);
-            }
-
-            _importCache[moduleName] = module;
-            return module;
-        }
-    }
-
-    /// <summary>The discovered <c>optuna.__version__</c> (or <c>null</c> before first use / on failure).</summary>
-    public static string? OptunaVersion { get; private set; }
-
-    /// <summary>The discovered <c>optunahub.__version__</c> (or <c>null</c> before first use / on failure).</summary>
-    public static string? OptunaHubVersion { get; private set; }
-
-    private static PyObject GetModule(ref PyObject? cache, string name)
-    {
-        var module = Volatile.Read(ref cache);
-        if (module is not null)
-            return module;
-
+        PyObject module;
         try
         {
-            module = Py.Import(name);
+            module = Py.Import(moduleName);
         }
         catch (PythonException ex)
         {
-            throw new OptunaHubInteropException(
-                $"Failed to `import {name}` in the embedded interpreter. Install it with " +
-                $"`pip install {name}` into the Python that hosts this process.", ex);
+            throw new PythonInteropException(
+                $"Failed to `import {moduleName}` in the embedded interpreter. Install the package that " +
+                "provides it into the Python that hosts this process.", ex);
         }
 
-        var winner = Interlocked.CompareExchange(ref cache, module, null);
-        if (winner is not null)
-        {
-            module.Dispose();
-            return winner;
-        }
-
-        // Record versions opportunistically (cheap, under the GIL the caller already holds).
-        try
-        {
-            if (name == "optuna")
-                OptunaVersion = module.GetAttr("__version__").As<string>();
-            else if (name == "optunahub")
-                OptunaHubVersion = module.GetAttr("__version__").As<string>();
-        }
-        catch
-        {
-            // version is diagnostic only.
-        }
-
-        return module;
+        // The GIL serializes callers, but guard the race anyway: dispose the loser, keep the winner.
+        if (_importCache.TryAdd(moduleName, module))
+            return module;
+        module.Dispose();
+        return _importCache[moduleName];
     }
+
+    /// <summary>Cached <c>builtins</c> module (per process). Call under the GIL.</summary>
+    public static PyObject Builtins => Import("builtins");
 
     /// <summary>
     ///     Point pythonnet at a libpython AND at the interpreter's site-packages. Honors
@@ -211,8 +132,8 @@ public static class PythonRuntime
     ///     which are then inserted into the embedded <c>sys.path</c> right after startup (see
     ///     <see cref="InjectSitePackages"/>) so it can import whatever that python can — venv /
     ///     <c>--user</c> site / conda included. Without that step, pythonnet can start from the base DLL
-    ///     and miss where <c>pip install optuna</c> actually landed — the classic "Failed to import
-    ///     optuna in the embedded interpreter" despite a successful install. (Setting <c>PYTHONPATH</c>
+    ///     and miss where <c>pip install …</c> actually landed — the classic "Failed to import
+    ///     &lt;pkg&gt; in the embedded interpreter" despite a successful install. (Setting <c>PYTHONPATH</c>
     ///     doesn't help: an embeddable-distribution base — a <c>python3xx._pth</c> — ignores it, so the
     ///     paths must be pushed onto <c>sys.path</c> from inside the running interpreter.)
     /// </summary>
@@ -331,9 +252,9 @@ public static class PythonRuntime
     }
 }
 
-/// <summary>Raised when the embedded Python / OptunaHub bridge cannot be initialized or a Python call fails.</summary>
-public sealed class OptunaHubInteropException : Exception
+/// <summary>Raised when the embedded CPython engine cannot be initialized or a Python call fails.</summary>
+public class PythonInteropException : Exception
 {
-    public OptunaHubInteropException(string message) : base(message) { }
-    public OptunaHubInteropException(string message, Exception inner) : base(message, inner) { }
+    public PythonInteropException(string message) : base(message) { }
+    public PythonInteropException(string message, Exception inner) : base(message, inner) { }
 }

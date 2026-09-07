@@ -52,7 +52,7 @@ Console.WriteLine();
 Console.WriteLine(C("  ╔══════════════════════════════════════════════════════════╗", "36"));
 Console.WriteLine(C("  ║           OptunaHub  ×  OptunaSharp   —   live run        ║", "1;36"));
 Console.WriteLine(C("  ╚══════════════════════════════════════════════════════════╝", "36"));
-Console.WriteLine($"  optuna {C(PythonRuntime.OptunaVersion ?? "?", "32")}   optunahub {C(PythonRuntime.OptunaHubVersion ?? "?", "32")}   (embedded CPython via pythonnet)");
+Console.WriteLine($"  optuna {C(OptunaHubRuntime.OptunaVersion ?? "?", "32")}   optunahub {C(OptunaHubRuntime.OptunaHubVersion ?? "?", "32")}   (embedded CPython via pythonnet)");
 Console.WriteLine();
 
 // ── load a real OptunaHub benchmark ──────────────────────────────────────────────────────────────
@@ -160,8 +160,8 @@ static bool TryProbe(out string reason)
     {
         PythonRuntime.Run(() =>
         {
-            _ = PythonRuntime.Optuna;                              // touch cached modules → populates versions
-            _ = PythonRuntime.OptunaHubModuleRef;
+            _ = OptunaHubRuntime.Optuna;                              // touch cached modules → populates versions
+            _ = OptunaHubRuntime.OptunaHub;
             using var __ = Python.Runtime.Py.Import("cocoex");     // coco-experiment — BBOB's backend
         });
         reason = "";

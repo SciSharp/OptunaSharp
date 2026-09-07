@@ -19,29 +19,6 @@ internal static class BoTorchInterop
     /// <summary>The <c>torch</c> module (cached by <see cref="PythonRuntime" />). Under the GIL.</summary>
     internal static PyObject Torch => PythonRuntime.Import("torch");
 
-    /// <summary>
-    ///     Ensure torch + botorch import (botorch.py's <c>_imports.check()</c>), recording
-    ///     <c>botorch.version.version</c>. Called once from the sampler constructor. Under the GIL.
-    /// </summary>
-    internal static void EnsureImported()
-    {
-        _ = Torch;
-        PyObject botorch = PythonRuntime.Import("botorch");
-        try
-        {
-            using PyObject versionModule = botorch.GetAttr("version");
-            using PyObject version = versionModule.GetAttr("version");
-            BoTorchVersion = version.As<string>();
-        }
-        catch
-        {
-            // version is diagnostic only.
-        }
-    }
-
-    /// <summary>The discovered <c>botorch.version.version</c> (or <c>null</c> before first use).</summary>
-    internal static string? BoTorchVersion { get; private set; }
-
     // ---- tensor marshaling ----------------------------------------------------------------------
 
     /// <summary>

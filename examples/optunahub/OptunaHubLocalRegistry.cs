@@ -45,7 +45,7 @@ if (!TryProbe(out string why))
 
 Console.WriteLine();
 Console.WriteLine(C("  OptunaHub local registry  —  LoadLocalModule + a mixed Float/Int/Categorical space", "1;36"));
-Console.WriteLine($"  optuna {C(PythonRuntime.OptunaVersion ?? "?", "32")}   optunahub {C(PythonRuntime.OptunaHubVersion ?? "?", "32")}");
+Console.WriteLine($"  optuna {C(OptunaHubRuntime.OptunaVersion ?? "?", "32")}   optunahub {C(OptunaHubRuntime.OptunaHubVersion ?? "?", "32")}");
 Console.WriteLine();
 
 string root = WriteToyRegistry();
@@ -139,7 +139,7 @@ static bool TryProbe(out string reason)
 {
     try
     {
-        PythonRuntime.Run(() => { _ = PythonRuntime.Optuna; _ = PythonRuntime.OptunaHubModuleRef; });
+        PythonRuntime.Run(() => { _ = OptunaHubRuntime.Optuna; _ = OptunaHubRuntime.OptunaHub; });
         reason = "";
         return true;
     }

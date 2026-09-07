@@ -46,8 +46,8 @@ public sealed class OptunaHubPruner : BasePruner, IDisposable
 
     private static PyObject BuildStudy(Study study, int currentNumber)
     {
-        PythonRuntime.EnsureQuiet();
-        using var createStudy = PythonRuntime.Optuna.GetAttr("create_study");
+        OptunaHubRuntime.EnsureQuiet();
+        using var createStudy = OptunaHubRuntime.Optuna.GetAttr("create_study");
         using var kwargs = new PyDict();
         string dir = study.Directions.Count > 0 && study.Directions[0] == StudyDirection.Maximize
             ? "maximize" : "minimize";
@@ -91,7 +91,7 @@ public sealed class OptunaHubPruner : BasePruner, IDisposable
 
     private static PyObject CreateFrozenTrial(FrozenTrial ft)
     {
-        using var trialModule = PythonRuntime.Optuna.GetAttr("trial");
+        using var trialModule = OptunaHubRuntime.Optuna.GetAttr("trial");
         using var createTrial = trialModule.GetAttr("create_trial");
         using var kwargs = new PyDict();
 
@@ -137,7 +137,7 @@ public sealed class OptunaHubPruner : BasePruner, IDisposable
             TrialState.Waiting => "WAITING",
             _ => "RUNNING",
         };
-        using var trialModule = PythonRuntime.Optuna.GetAttr("trial");
+        using var trialModule = OptunaHubRuntime.Optuna.GetAttr("trial");
         using var stateEnum = trialModule.GetAttr("TrialState");
         return stateEnum.GetAttr(name);
     }

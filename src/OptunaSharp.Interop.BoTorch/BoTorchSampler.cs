@@ -90,7 +90,7 @@ public sealed class BoTorchSampler : BaseSampler
             WarningCategory.ExperimentalWarning);
 
         // botorch.py's `_imports.check()` — fail fast with a helpful message if BoTorch is missing.
-        PythonRuntime.Run(BoTorchInterop.EnsureImported);
+        PythonRuntime.Run(Python.botorch.check);
 
         _selection = candidatesFunc;
         _considerRunningTrials = considerRunningTrials;

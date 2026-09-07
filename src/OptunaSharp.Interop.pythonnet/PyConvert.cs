@@ -14,7 +14,7 @@ namespace OptunaSharp.Interop.PythonNet;
 /// </summary>
 public static class PyConvert
 {
-    private static PyObject Distributions => PythonRuntime.Optuna.GetAttr("distributions");
+    private static PyObject Distributions => OptunaHubRuntime.Optuna.GetAttr("distributions");
 
     // ---- values ---------------------------------------------------------------------------------
 

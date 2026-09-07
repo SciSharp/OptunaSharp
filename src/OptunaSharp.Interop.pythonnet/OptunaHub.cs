@@ -47,7 +47,7 @@ public static class OptunaHub
 
         return PythonRuntime.Run(() =>
         {
-            using var loadModule = PythonRuntime.OptunaHubModuleRef.GetAttr("load_module");
+            using var loadModule = OptunaHubRuntime.OptunaHub.GetAttr("load_module");
             using var kwargs = new PyDict();
             kwargs["repo_owner"] = repoOwner.ToPython();
             kwargs["repo_name"] = repoName.ToPython();
@@ -90,7 +90,7 @@ public static class OptunaHub
 
         return PythonRuntime.Run(() =>
         {
-            using var loadLocal = PythonRuntime.OptunaHubModuleRef.GetAttr("load_local_module");
+            using var loadLocal = OptunaHubRuntime.OptunaHub.GetAttr("load_local_module");
             using var kwargs = new PyDict();
             kwargs["registry_root"] = registryRoot.ToPython();
             using var pkg = package.ToPython();

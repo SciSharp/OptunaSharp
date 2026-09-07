@@ -42,7 +42,7 @@ if (!TryProbe(out string why))
 
 Console.WriteLine();
 Console.WriteLine(C("  OptunaHub \"Code 1\"  —  a hub sampler + a hub benchmark, together", "1;36"));
-Console.WriteLine($"  optuna {C(PythonRuntime.OptunaVersion ?? "?", "32")}   optunahub {C(PythonRuntime.OptunaHubVersion ?? "?", "32")}");
+Console.WriteLine($"  optuna {C(OptunaHubRuntime.OptunaVersion ?? "?", "32")}   optunahub {C(OptunaHubRuntime.OptunaHubVersion ?? "?", "32")}");
 Console.WriteLine();
 
 try
@@ -105,8 +105,8 @@ static bool TryProbe(out string reason)
     {
         PythonRuntime.Run(() =>
         {
-            _ = PythonRuntime.Optuna;
-            _ = PythonRuntime.OptunaHubModuleRef;
+            _ = OptunaHubRuntime.Optuna;
+            _ = OptunaHubRuntime.OptunaHub;
             using var _c = Python.Runtime.Py.Import("cocoex");
         });
         reason = "";
