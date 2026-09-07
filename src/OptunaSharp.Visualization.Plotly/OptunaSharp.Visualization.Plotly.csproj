@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <AssemblyName>OptunaSharp.Visualization.Plotly</AssemblyName>
+    <RootNamespace>OptunaSharp.Visualization.Plotly</RootNamespace>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/license/
+         version) is centralized in ../../Directory.Build.props. This is a Tier X satellite that ships
+         SEPARATELY from Core, but it is PURE MANAGED — Plotly.NET (+ Plotly.NET.CSharp) pull only
+         managed deps (DynamicObj, FSharp.Core, Giraffe.ViewEngine, Newtonsoft.Json — zero native).
+         Core stays NumSharp-only; this package is the rendering half over Core's public visualization
+         DATA layer (the pure `_get_*_info` records ported in Phase 3.1).
+
+         Purpose: render `optuna.visualization` (the plotly backend) — the 13 `plot_*` figures — from
+         raw C# built on Plotly.NET. Figures are plotly.js figures, byte-for-byte the spec Optuna emits
+         (structurally diff-able against live Optuna's `figure.to_dict()`). See
+         docs/VISUALIZATION_PLOTLY_PLAN.md. -->
+    <PackageId>OptunaSharp.Visualization.Plotly</PackageId>
+    <Description>The plotly visualization backend for OptunaSharp — a raw-C# port of optuna.visualization (the 13 plot_* functions) built on Plotly.NET, over OptunaSharp's Phase 3.1 visualization data layer. Renders interactive plotly.js figures (optimization history, EDF, intermediate values, hypervolume history, parameter importances, slice, Pareto front, contour, rank, parallel coordinate, timeline, terminator improvement) whose figure spec matches live Optuna's. Pure managed (Plotly.NET only — no native dependency). Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;visualization;plotly;Plotly.NET;plot;chart;figure;HyperparameterOptimization;HPO;AutoML;BlackBoxOptimization;SciSharp</PackageTags>
+
+    <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on doc-comment nits. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <!-- Emit the .pdb inside the .nupkg (the release pipeline pushes only *.nupkg). -->
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+
+    <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- Reuse the shared OptunaSharp package icon. -->
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The figure model + plotly.js HTML renderer. Both PURE MANAGED. Plotly.NET.CSharp adds the
+         C#-idiomatic fluent extensions (.Show()/.SaveHtml()) consumers use to render. -->
+    <PackageReference Include="Plotly.NET" Version="5.1.0" />
+    <PackageReference Include="Plotly.NET.CSharp" Version="0.13.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core is in-repo, referenced by project; packing records a clean "OptunaSharp" dependency. This
+         package consumes only Core's PUBLIC visualization data layer (OptunaSharp.Visualization.*Info +
+         *.GetInfo* statics), so it is NOT a Core friend. -->
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

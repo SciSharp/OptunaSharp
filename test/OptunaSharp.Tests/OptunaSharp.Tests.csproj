@@ -19,6 +19,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+    <!-- The plotly visualization backend (Phase 5.2) — unit tests assert the rendered plotly figure
+         spec (traces + layout) built from the Core data layer. Pure managed (Plotly.NET). -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Visualization.Plotly\OptunaSharp.Visualization.Plotly.csproj" />
   </ItemGroup>
 
   <ItemGroup>
