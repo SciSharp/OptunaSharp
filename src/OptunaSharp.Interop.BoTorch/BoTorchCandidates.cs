@@ -1,4 +1,5 @@
 using System;
+using Python;
 using Python.Runtime;
 
 namespace OptunaSharp.Interop.BoTorch;
@@ -90,7 +91,7 @@ internal static class BoTorchCandidates
         if (trainCon is not null)
             throw ConstraintsNotYetSupported("logei_candidates_func");
 
-        return Python.botorch.evalStmts(LogEiBody, "result",
+        return botorch.evalStmts(LogEiBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("bounds", bounds));
     }
 
@@ -102,7 +103,7 @@ internal static class BoTorchCandidates
         if (trainCon is not null)
             throw ConstraintsNotYetSupported("qei_candidates_func");
 
-        return Python.botorch.evalStmts(QeiBody, "result",
+        return botorch.evalStmts(QeiBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
 
@@ -114,7 +115,7 @@ internal static class BoTorchCandidates
         if (trainCon is not null)
             throw ConstraintsNotYetSupported("qlogei_candidates_func");
 
-        return Python.botorch.evalStmts(QLogEiBody, "result",
+        return botorch.evalStmts(QLogEiBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
 
@@ -126,7 +127,7 @@ internal static class BoTorchCandidates
         if (trainCon is not null)
             throw ConstraintsNotYetSupported("qnei_candidates_func");
 
-        return Python.botorch.evalStmts(QNeiBody, "result",
+        return botorch.evalStmts(QNeiBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
 
@@ -185,9 +186,7 @@ internal static class BoTorchCandidates
 
     private static void RequireSingleObjective(PyObject trainObj, string name)
     {
-        using PyObject dim = (-1).ToPython();
-        using PyObject size = trainObj.InvokeMethod("size", dim);
-        if (size.As<long>() != 1)
+        if (trainObj.size(-1) != 1)
             throw new NumSharp.ValueError($"Objective may only contain single values with {name}.");
     }
 

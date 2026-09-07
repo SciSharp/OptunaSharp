@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using NumSharp;
+using Python;
 using Python.Runtime;
 using OptunaSharp;
 using OptunaSharp.Collections;
@@ -90,7 +91,7 @@ public sealed class BoTorchSampler : BaseSampler
             WarningCategory.ExperimentalWarning);
 
         // botorch.py's `_imports.check()` — fail fast with a helpful message if BoTorch is missing.
-        PythonRuntime.Run(Python.botorch.check);
+        PythonRuntime.Run(botorch.check);
 
         _selection = candidatesFunc;
         _considerRunningTrials = considerRunningTrials;
@@ -201,10 +202,10 @@ public sealed class BoTorchSampler : BaseSampler
             PyObject? pendingTensor = runningParams is null ? null : BoTorchInterop.ToTensor(runningParams);
             try
             {
-                int? seedForCall = _seed;
-                PyObject cand = BoTorchInterop.WithManualSeed(
-                    seedForCall,
-                    () => _candidatesFunc!(trainX, trainObj, null, boundsTensor, pendingTensor));
+                // Each acquisition optimization runs inside BoTorch's manual_seed(seed) scope.
+                PyObject cand;
+                using (botorch.manual_seed(_seed))
+                    cand = _candidatesFunc!(trainX, trainObj, null, boundsTensor, pendingTensor);
                 // Advance the seed per trial (Optuna does `self._seed += 1` inside the manual_seed scope).
                 if (_seed is { } seedValue)
                     _seed = seedValue + 1;
@@ -236,29 +237,27 @@ public sealed class BoTorchSampler : BaseSampler
         if (!candidates.HasAttr("dim"))
             throw new TypeError("Candidates must be a torch.Tensor.");
 
-        long dim = candidates.InvokeMethod("dim").As<long>();
+        long dim = candidates.dim();
         PyObject work = candidates;
         bool disposeWork = false;
         try
         {
             if (dim == 2)
             {
-                long size0 = TensorSize(candidates, 0);
-                if (size0 != 1)
+                if (candidates.size(0) != 1)
                 {
-                    using PyObject shape = candidates.InvokeMethod("size");
+                    using PyObject shape = candidates.size();
                     throw new ValueError(
                         "Candidates batch optimization is not supported and the first dimension must " +
                         $"have size 1 if candidates is a two-dimensional tensor. Actual: {shape}.");
                 }
-                work = candidates.InvokeMethod("squeeze", 0.ToPython());
+                work = candidates.squeeze(0);
                 disposeWork = true;
             }
 
-            long workDim = work.InvokeMethod("dim").As<long>();
-            if (workDim != 1)
+            if (work.dim() != 1)
                 throw new ValueError("Candidates must be one or two-dimensional.");
-            long candSize = TensorSize(work, 0);
+            long candSize = work.size(0);
             if (candSize != nBounds)
                 throw new ValueError(
                     "Candidates size must match with the given bounds. Actual candidates: " +
@@ -271,13 +270,6 @@ public sealed class BoTorchSampler : BaseSampler
             if (disposeWork)
                 work.Dispose();
         }
-    }
-
-    private static long TensorSize(PyObject tensor, int dim)
-    {
-        using PyObject d = dim.ToPython();
-        using PyObject size = tensor.InvokeMethod("size", d);
-        return size.As<long>();
     }
 
     public override object? SampleIndependent(

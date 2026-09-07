@@ -191,7 +191,10 @@ public class BoTorchApiParityTests : OptunaInteropTestBase
             {
                 // C# side — the ported candidates_func over these tensors under manual_seed.
                 double[] cs;
-                using (PyObject csCand = BoTorchInterop.WithManualSeed(seed, () => csFunc(tx, to, null, bd, pd)))
+                PyObject csCand;
+                using (Python.botorch.manual_seed(seed))
+                    csCand = csFunc(tx, to, null, bd, pd);
+                using (csCand)
                     cs = Flatten(csCand);
 
                 // Python side — the real optuna_integration candidates_func over the SAME tensors + seed.

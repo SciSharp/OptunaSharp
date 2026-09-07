@@ -1,24 +1,21 @@
-using System;
+using Python;
 using Python.Runtime;
-using OptunaSharp.Interop.PythonNet;
 
 namespace OptunaSharp.Interop.BoTorch;
 
 /// <summary>
-///     The BoTorch-specific pythonnet plumbing the bridge is built on: <c>double[,]</c>⇄
-///     <c>torch.Tensor(float64)</c> marshaling and BoTorch's <c>manual_seed</c> scope (the context
-///     manager that makes the acquisition optimization reproducible). Module import + caching, GIL, and
-///     interpreter discovery come from the shared <see cref="PythonRuntime" /> (this type does not
-///     duplicate them — it calls <see cref="PythonRuntime.Import" /> for <c>torch</c>/<c>botorch</c>/… and
-///     runs inside <see cref="PythonRuntime.Run(Action)" />).
-///     <para><b>GIL discipline:</b> every method here touches <see cref="PyObject" />s and MUST be
-///     called under the GIL — i.e. from inside a <see cref="PythonRuntime.Run(Action)" /> body.</para>
+///     The BoTorch-specific pythonnet marshaling the bridge is built on: <c>double[,]</c>/<c>double[]</c>
+///     ⇄ <c>torch.Tensor(float64)</c>. It builds tensors through the Pythonic <see cref="Python.torch" />
+///     facade (<c>torch.tensor(list)</c>) and reads them back through the tensor extension members
+///     (<c>t.detach().cpu().tolist()</c>), so this file is pure data crossing — the reproducibility scope
+///     lives on the facade as <c>botorch.manual_seed</c>, and module import + caching / GIL / interpreter
+///     discovery come from the shared <see cref="OptunaSharp.Interop.PythonNet.PythonRuntime" />.
+///     <para><b>GIL discipline:</b> every method here touches <see cref="PyObject" />s and MUST be called
+///     under the GIL — i.e. from inside a
+///     <see cref="OptunaSharp.Interop.PythonNet.PythonRuntime.Run(System.Action)" /> body.</para>
 /// </summary>
 internal static class BoTorchInterop
 {
-    /// <summary>The <c>torch</c> module (cached by <see cref="PythonRuntime" />). Under the GIL.</summary>
-    internal static PyObject Torch => PythonRuntime.Import("torch");
-
     // ---- tensor marshaling ----------------------------------------------------------------------
 
     /// <summary>
@@ -39,7 +36,7 @@ internal static class BoTorchInterop
                     row.Append(v);
             outer.Append(row);
         }
-        return TorchTensorFloat64(outer);
+        return torch.tensor(outer);
     }
 
     /// <summary>A 1-D array → a <c>torch.Tensor</c> of dtype <c>float64</c>. Under the GIL.</summary>
@@ -49,16 +46,7 @@ internal static class BoTorchInterop
         foreach (double x in data)
             using (PyObject v = x.ToPython())
                 list.Append(v);
-        return TorchTensorFloat64(list);
-    }
-
-    private static PyObject TorchTensorFloat64(PyObject data)
-    {
-        using PyObject tensorFn = Torch.GetAttr("tensor");
-        using PyObject float64 = Torch.GetAttr("float64");
-        using var kwargs = new PyDict();
-        kwargs["dtype"] = float64;
-        return tensorFn.Invoke(new[] { data }, kwargs);
+        return torch.tensor(list);
     }
 
     /// <summary>
@@ -67,40 +55,14 @@ internal static class BoTorchInterop
     /// </summary>
     internal static double[] ToArray1D(PyObject tensor)
     {
-        using PyObject detached = tensor.InvokeMethod("detach");
-        using PyObject cpu = detached.InvokeMethod("cpu");
-        using PyObject list = cpu.InvokeMethod("tolist");
+        using PyObject detached = tensor.detach();
+        using PyObject cpu = detached.cpu();
+        using PyObject list = cpu.tolist();
         long n = list.Length();
         var result = new double[n];
         for (long i = 0; i < n; i++)
             using (PyObject item = list[new PyInt(i)])
                 result[i] = item.As<double>();
         return result;
-    }
-
-    // ---- reproducibility scope -------------------------------------------------------------------
-
-    /// <summary>
-    ///     Run <paramref name="body" /> inside BoTorch's <c>manual_seed(seed)</c> context manager (a
-    ///     no-op when <paramref name="seed" /> is <c>null</c>, matching Optuna) so the acquisition
-    ///     optimization is reproducible. Returns the body's result. Under the GIL.
-    /// </summary>
-    internal static PyObject WithManualSeed(int? seed, Func<PyObject> body)
-    {
-        PyObject sampling = PythonRuntime.Import("botorch.utils.sampling");
-        using PyObject manualSeed = sampling.GetAttr("manual_seed");
-        using PyObject seedArg = seed is { } s ? s.ToPython() : PyObject.None;
-        using PyObject cm = manualSeed.Invoke(seedArg);
-        using PyObject enter = cm.GetAttr("__enter__");
-        enter.Invoke().Dispose();
-        try
-        {
-            return body();
-        }
-        finally
-        {
-            using PyObject exit = cm.GetAttr("__exit__");
-            exit.Invoke(PyObject.None, PyObject.None, PyObject.None).Dispose();
-        }
     }
 }
