@@ -58,6 +58,11 @@
          and drive an OptunaSharp study with them. Shares this project's embedded CPython engine; the
          tests self-skip when optunahub or the refs/optunahub-registry submodule is absent. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Interop.pythonnet\OptunaSharp.Interop.pythonnet.csproj" />
+    <!-- The BoTorch bridge (OptunaSharp.Interop.BoTorch): BoTorchSamplerParityTests runs an OptunaSharp
+         study with the native BoTorchSampler and asserts byte-exact parity against a replay through the
+         real optuna_integration.BoTorchSampler in this project's embedded CPython. Self-skips when
+         botorch / optuna_integration are absent. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Interop.BoTorch\OptunaSharp.Interop.BoTorch.csproj" />
   </ItemGroup>
 
 </Project>

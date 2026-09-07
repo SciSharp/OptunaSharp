@@ -83,6 +83,14 @@ using System.Runtime.CompilerServices;
 // (The scikit-learn port — namespace OptunaSharp.Integration.Sklearn, in Core alongside OptunaSearchCV —
 // needs no dedicated friend: its tests live in OptunaSharp.Tests, already granted above.)
 
+// The BoTorch bridge (satellite package OptunaSharp.Interop.BoTorch) is a native OptunaSharp
+// BaseSampler that drives the real BoTorch library via pythonnet — a port of optuna_integration's
+// BoTorchSampler glue. Like GPSampler it encodes params with the bit-exact one-hot SearchSpaceTransform
+// and reads the IntersectionSearchSpace, enforces the single-study guard via Study.StudyId, and raises
+// the experimental/deprecation warnings through OptunaWarnings/WarningCategory/Deprecations — all
+// internal to Core. (The numerics are botorch's, not Core's, so this is the only internal reuse.)
+[assembly: InternalsVisibleTo("OptunaSharp.Interop.BoTorch, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 // The Redis backends' shared test project asserts that experimental warning fired via the internal
 // OptunaWarnings.WarningRaised event (same reason the interop suite is a friend).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
