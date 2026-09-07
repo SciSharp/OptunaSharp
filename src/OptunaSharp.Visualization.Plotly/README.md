@@ -43,8 +43,11 @@ PlotlyVisualization.PlotOptimizationHistory(
 
 ## Status
 
-Incremental — renderers land per `docs/VISUALIZATION_PLOTLY_PLAN.md`. Currently available:
+**Complete** — all 12 `optuna.visualization` plot functions are ported (each with a golden-standard
+Plotly.NET customization overload) and byte-exact vs live Optuna:
 
-- `PlotOptimizationHistory`
+`PlotOptimizationHistory` · `PlotEdf` · `PlotIntermediateValues` · `PlotHypervolumeHistory` ·
+`PlotTimeline` · `PlotParamImportances` · `PlotTerminatorImprovement` · `PlotContour` · `PlotRank` ·
+`PlotParallelCoordinate` · `PlotParetoFront` — plus `IsAvailable`.
 
 Part of the [SciSharp STACK](https://github.com/SciSharp).

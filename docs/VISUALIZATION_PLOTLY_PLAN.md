@@ -1,6 +1,13 @@
 # Phase 5.2 — `OptunaSharp.Visualization.Plotly` (raw-C# rendering on Plotly.NET)
 
-> **Status: PLAN.** Renders the already-complete visualization **data layer** (Phase 3.1, in Core's
+> **Status: COMPLETE.** All 12 `optuna.visualization` `plot_*` functions (+ `IsAvailable`) are ported,
+> each with the golden-standard Plotly.NET customization overload, and validated **byte-exact vs live
+> Optuna** (50 render-parity scenarios, both TFMs). Byte-exact except three documented exclusions: the
+> `make_subplots` `domain` geometry (float-op-order boilerplate, N×N contour/rank), the timeline plot's
+> wall-clock `base`/`x`, and the GP-derived terminator `y`/`range` (validated in the GP suite); the MO
+> parallel-coordinate `draw_order` stays the documented `[Misaligned]`.
+>
+> Renders the already-complete visualization **data layer** (Phase 3.1, in Core's
 > `OptunaSharp.Visualization` namespace) into interactive **plotly figures** using
 > [Plotly.NET](https://plotly.net/), driven from **raw C#** (bare `Trace`/`Layout` objects + the
 > `DynamicObj` escape hatch — not the F# DSL, not the `Chart2D` sugar). One Tier X satellite package,
