@@ -47,7 +47,7 @@ PlotlyVisualization.PlotOptimizationHistory(
 Plotly.NET customization overload) and byte-exact vs live Optuna:
 
 `PlotOptimizationHistory` · `PlotEdf` · `PlotIntermediateValues` · `PlotHypervolumeHistory` ·
-`PlotTimeline` · `PlotParamImportances` · `PlotTerminatorImprovement` · `PlotContour` · `PlotRank` ·
-`PlotParallelCoordinate` · `PlotParetoFront` — plus `IsAvailable`.
+`PlotTimeline` · `PlotParamImportances` · `PlotSlice` · `PlotTerminatorImprovement` · `PlotContour` ·
+`PlotRank` · `PlotParallelCoordinate` · `PlotParetoFront` — plus `IsAvailable`.
 
 Part of the [SciSharp STACK](https://github.com/SciSharp).

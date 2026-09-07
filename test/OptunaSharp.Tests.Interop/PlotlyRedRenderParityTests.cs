@@ -249,4 +249,89 @@ public class PlotlyRedRenderParityTests : PlotlyRenderParityBase
             $"study.optimize(_oss_obj_pf3, n_trials={nTrials})\n",
             "optuna.visualization.plot_pareto_front(study)");
     }
+
+    // ---- slice ----------------------------------------------------------------------------------
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 25)]
+    [DataRow(6, 35)]
+    public void Slice_SingleParam_Render_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        // One param => single plot (no make_subplots), byte-exact incl. the colorbar marker.
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            return a * a;
+        }, nTrials: nTrials);
+        string csJson = GenericChart.toJson(PlotlyVisualization.PlotSlice(csStudy));
+
+        AssertRenderParity(csJson,
+            "def _oss_obj_sl(t):\n" +
+            "    a = t.suggest_float('a', -5, 5)\n" +
+            "    return a * a\n" +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_obj_sl, n_trials={nTrials})\n",
+            "optuna.visualization.plot_slice(study)");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 30)]
+    public void Slice_Grid_Render_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            double b = t.SuggestFloat("b", -5, 5);
+            double c = t.SuggestFloat("c", -5, 5);
+            return a * a + b * b + c * c;
+        }, nTrials: nTrials);
+        string csJson = GenericChart.toJson(PlotlyVisualization.PlotSlice(csStudy));
+
+        AssertRenderParity(csJson,
+            "def _oss_obj_sl3(t):\n" +
+            "    a = t.suggest_float('a', -5, 5)\n" +
+            "    b = t.suggest_float('b', -5, 5)\n" +
+            "    c = t.suggest_float('c', -5, 5)\n" +
+            "    return a * a + b * b + c * c\n" +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_obj_sl3, n_trials={nTrials})\n",
+            "optuna.visualization.plot_slice(study)",
+            ignoreKeys: new[] { "domain" });
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 30)]
+    public void Slice_LogAndCategorical_Render_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        // A log axis + a categorical axis (repr labels, categoryarray) — two params => make_subplots.
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(t =>
+        {
+            double lr = t.SuggestFloat("lr", 1e-5, 1e-1, log: true);
+            string opt = t.SuggestCategorical("opt", new[] { "adam", "sgd", "rmsprop" });
+            return lr * 100.0 + (opt == "adam" ? 1.0 : 2.0);
+        }, nTrials: nTrials);
+        string csJson = GenericChart.toJson(PlotlyVisualization.PlotSlice(csStudy));
+
+        AssertRenderParity(csJson,
+            "def _oss_obj_slc(t):\n" +
+            "    lr = t.suggest_float('lr', 1e-5, 1e-1, log=True)\n" +
+            "    opt = t.suggest_categorical('opt', ['adam', 'sgd', 'rmsprop'])\n" +
+            "    return lr * 100.0 + (1.0 if opt == 'adam' else 2.0)\n" +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_obj_slc, n_trials={nTrials})\n",
+            "optuna.visualization.plot_slice(study)",
+            ignoreKeys: new[] { "domain" });
+    }
 }

@@ -280,6 +280,28 @@ public static class PlotlyVisualization
         string targetName = "Objective Value")
         => PlotParallelCoordinate(study, @params, target, targetName).WithCustomization(customization);
 
+    // ---- slice ----------------------------------------------------------------------------------
+
+    /// <summary>
+    ///     <c>optuna.visualization.plot_slice</c> — one subplot per parameter, plotting the target value
+    ///     against that parameter (markers colored by trial number).
+    /// </summary>
+    public static GenericChart PlotSlice(
+        Study study,
+        IReadOnlyList<string>? @params = null,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => SlicePlotRenderer.Render(SlicePlot.GetPlotInfo(study, @params, target, targetName));
+
+    /// <inheritdoc cref="PlotSlice(Study, IReadOnlyList{string}, Func{FrozenTrial, double}, string)" />
+    public static GenericChart PlotSlice(
+        Study study,
+        PlotlyChartCustomization customization,
+        IReadOnlyList<string>? @params = null,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => PlotSlice(study, @params, target, targetName).WithCustomization(customization);
+
     // ---- pareto front ---------------------------------------------------------------------------
 
     /// <summary>
