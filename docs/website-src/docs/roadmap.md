@@ -1,7 +1,7 @@
 # Porting Roadmap
 
-OptunaSharp is being ported module-by-module, tracking Optuna's own layout. Nothing below is
-implemented yet — this is the map.
+OptunaSharp is being ported module-by-module, tracking Optuna's own layout. The core algorithm
+surface is in place; the table below tracks where each module stands.
 
 ## Methodology: Optuna is the source of truth
 
@@ -19,17 +19,17 @@ This mirrors how [NumSharp](https://github.com/SciSharp/NumSharp) treats NumPy a
 
 | Optuna module | Role | Status |
 |---------------|------|--------|
-| `distributions` | Search-space distributions (float / int / categorical) | not started |
-| `trial` | `Trial` + `FrozenTrial`, the `suggest_*` API | not started |
-| `study` | `Study`, `optimize`, directions, storage glue | not started |
-| `samplers` | TPE, random, grid, CMA-ES, GP, QMC, ... | not started |
-| `pruners` | Median, Hyperband, successive halving, threshold, ... | not started |
-| `storages` | In-memory + RDB / journal persistence | not started |
-| `search_space` | Search-space inference | not started |
-| `importance` | Hyperparameter importance | not started |
-| `terminator` | Automated termination | not started |
-| `visualization` | Optimization-history plots | not started |
-| `exceptions` / `logging` | Framework exceptions + logging | not started |
+| `distributions` | Search-space distributions (float / int / categorical) | ✅ ported |
+| `trial` | `Trial` + `FrozenTrial`, the `suggest_*` API | ✅ ported |
+| `study` | `Study`, `optimize`, directions, storage glue | ✅ ported |
+| `samplers` | random, grid, TPE, CMA-ES, GP, QMC, NSGA-II/III, brute-force, partial-fixed | ✅ ported |
+| `pruners` | median, percentile, successive halving, Hyperband, threshold, patient, Wilcoxon, nop | ✅ ported |
+| `storages` | in-memory + RDB (SQLite / EF Core) + Redis journal + gRPC proxy | ✅ ported |
+| `search_space` | Search-space inference | ✅ ported |
+| `importance` | Hyperparameter importance (PED-ANOVA, fANOVA, MDI, SHAP) | ✅ ported |
+| `terminator` | Automated termination | ✅ ported |
+| `visualization` | Optimization-history plots | 🟡 data records ported; Plotly rendering package planned |
+| `exceptions` / `logging` | Framework exceptions + logging | ✅ ported |
 
 ## Infrastructure status
 
@@ -40,8 +40,8 @@ are algorithms to exercise:
 |------------|--------|
 | Solution, multi-target projects (net8.0 / net10.0) | ✅ in place |
 | Strong-naming (shared SciSharp key) + verifier gate | ✅ in place |
-| Unit tests (MSTest v3) | ✅ scaffolding smoke tests |
-| Live-Optuna interop (pythonnet) | ✅ harness + smoke tests |
+| Unit tests (MSTest v3) | ✅ full suites (committed-oracle + behavior tests, both TFMs) |
+| Live-Optuna interop (pythonnet) | ✅ differential parity harness + suites |
 | NuGet packaging + tag-driven release pipeline | ✅ in place |
 | This DocFX site + GitHub Pages deploy | ✅ in place |
 | Community health (issue/PR templates, security, funding, citation) | ✅ in place |
