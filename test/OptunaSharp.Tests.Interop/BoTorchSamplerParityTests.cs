@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Text;
 using AwesomeAssertions;
+using OptunaSharp.Distributions;
 using OptunaSharp.Interop.BoTorch;
 
 namespace OptunaSharp.Tests.Interop;
@@ -129,6 +130,23 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
             candidatesFunc: BoTorchCandidatesFunc.Auto, cfExpr: "None",
             nStartup: 6, nTrials: 12, seed: 2);
 
+    // ---- categorical search space (one-hot transform → botorch) ---------------------------------
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void Categorical_ByteExact()
+        => AssertReplayParity(
+            objective: t =>
+            {
+                double x = t.SuggestFloat("x", -5, 5);
+                string c = (string)t.SuggestCategorical("c", new CategoricalChoice[] { "a", "b", "c" }).Value!;
+                double bonus = c == "a" ? 0.0 : c == "b" ? 1.0 : 2.0;
+                return (x - 2.0) * (x - 2.0) + bonus;
+            },
+            spaceExpr: "{'x': FloatDistribution(-5, 5), 'c': CategoricalDistribution(['a', 'b', 'c'])}",
+            candidatesFunc: BoTorchCandidatesFunc.Auto, cfExpr: "None",
+            nStartup: 6, nTrials: 13, seed: 4);
+
     // ---- C# determinism (no Python) -------------------------------------------------------------
 
     [TestMethod]
@@ -206,9 +224,13 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
                 if (!firstParam) sb.Append(',');
                 firstParam = false;
                 sb.Append('"').Append(name).Append("\":");
-                sb.Append(value is double d
-                    ? FmtFloat(d)
-                    : Convert.ToInt64(value).ToString(CultureInfo.InvariantCulture));
+                sb.Append(value switch
+                {
+                    double d => FmtFloat(d),
+                    string s => "\"" + s + "\"",                // categorical string choice
+                    bool b => b ? "true" : "false",
+                    _ => Convert.ToInt64(value).ToString(CultureInfo.InvariantCulture),  // int / stepped
+                });
             }
             sb.Append("},\"value\":").Append(FmtFloat(t.Value!.Value)).Append('}');
         }
