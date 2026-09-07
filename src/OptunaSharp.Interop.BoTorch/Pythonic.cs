@@ -31,21 +31,78 @@ internal static class botorch
 {
     /// <summary>
     ///     The names each snippet resolves against — <c>torch</c> plus the BoTorch/GPyTorch symbols the
-    ///     ported <c>candidates_func</c>s use. Imports are cached in <c>sys.modules</c>, so re-running
-    ///     this per call is a dictionary lookup, not a real import.
+    ///     ported <c>candidates_func</c>s use — followed by the botorch.py module-level helpers the bodies
+    ///     call (<c>_get_constraint_funcs</c>, <c>_get_sobol_qmc_normal_sampler</c>,
+    ///     <c>_validate_botorch_version_for_constrained_opt</c>) and the <c>try_import</c> success flags
+    ///     (<c>_logei_ok</c> / <c>_qlogei_ok</c> / <c>_qloghvi_ok</c> / <c>_qhvkg_ok</c>) that mirror
+    ///     botorch.py's <c>_imports_*.is_successful()</c>. The version-gated symbols are wrapped in
+    ///     <c>try/except ImportError</c> exactly as botorch.py wraps them in <c>with try_import()</c>, so a
+    ///     too-old botorch fails inside the ported func (with the verbatim message) rather than in the
+    ///     preamble. Imports and defs are cached in <c>sys.modules</c> / re-bound per call (a dictionary
+    ///     lookup), so re-running this per candidates_func call is cheap.
     /// </summary>
     private const string Imports =
         "import torch\n" +
+        "from packaging import version\n" +
+        "import botorch.version\n" +
         "from botorch.utils.transforms import normalize, unnormalize\n" +
-        "from botorch.models import SingleTaskGP\n" +
+        "from botorch.models import SingleTaskGP, ModelListGP\n" +
         "from botorch.models.transforms.outcome import Standardize\n" +
         "from gpytorch.mlls import ExactMarginalLogLikelihood\n" +
+        "from gpytorch.mlls.sum_marginal_log_likelihood import SumMarginalLogLikelihood\n" +
         "from botorch.fit import fit_gpytorch_mll\n" +
-        "from botorch.acquisition.analytic import LogExpectedImprovement\n" +
         "from botorch.acquisition.monte_carlo import qExpectedImprovement, qNoisyExpectedImprovement\n" +
-        "from botorch.acquisition.logei import qLogExpectedImprovement\n" +
+        "from botorch.acquisition.knowledge_gradient import qKnowledgeGradient\n" +
+        "from botorch.acquisition.objective import ConstrainedMCObjective, GenericMCObjective\n" +
+        "from botorch.acquisition.multi_objective import monte_carlo\n" +
+        "from botorch.acquisition.multi_objective import objective as multi_objective_objective\n" +
+        "from botorch.acquisition.multi_objective.analytic import ExpectedHypervolumeImprovement\n" +
+        "from botorch.acquisition.multi_objective.objective import IdentityMCMultiOutputObjective\n" +
         "from botorch.sampling import SobolQMCNormalSampler\n" +
-        "from botorch.optim import optimize_acqf\n";
+        "from botorch.sampling.list_sampler import ListSampler\n" +
+        "from botorch.optim import optimize_acqf\n" +
+        "from botorch.utils.multi_objective.box_decompositions import NondominatedPartitioning\n" +
+        "from botorch.utils.multi_objective.scalarization import get_chebyshev_scalarization\n" +
+        "from botorch.utils.sampling import sample_simplex\n" +
+        // botorch>=0.8.1 — LogExpectedImprovement / LogConstrainedExpectedImprovement (_imports_logei).
+        "try:\n" +
+        "    from botorch.acquisition.analytic import LogExpectedImprovement, LogConstrainedExpectedImprovement\n" +
+        "    _logei_ok = True\n" +
+        "except ImportError:\n" +
+        "    _logei_ok = False\n" +
+        // botorch>=0.9.0 — qLogExpectedImprovement (_imports_qlogei).
+        "try:\n" +
+        "    from botorch.acquisition.logei import qLogExpectedImprovement\n" +
+        "    _qlogei_ok = True\n" +
+        "except ImportError:\n" +
+        "    _qlogei_ok = False\n" +
+        // qLog(Noisy)ExpectedHypervolumeImprovement (_imports_qloghvi).
+        "try:\n" +
+        "    from botorch.acquisition.multi_objective.logei import qLogExpectedHypervolumeImprovement, qLogNoisyExpectedHypervolumeImprovement\n" +
+        "    _qloghvi_ok = True\n" +
+        "except ImportError:\n" +
+        "    _qloghvi_ok = False\n" +
+        // botorch>=0.9.5 — hypervolume_knowledge_gradient (_imports_qhvkg).
+        "try:\n" +
+        "    from botorch.acquisition.multi_objective import hypervolume_knowledge_gradient\n" +
+        "    _qhvkg_ok = True\n" +
+        "except ImportError:\n" +
+        "    _qhvkg_ok = False\n" +
+        // botorch.py module-level helpers (ported verbatim), so the bodies read 1:1.
+        "def _get_sobol_qmc_normal_sampler(num_samples):\n" +
+        "    return SobolQMCNormalSampler(torch.Size((num_samples,)))\n" +
+        "def _get_constraint_funcs(n_constraints):\n" +
+        "    def _make_func(i):\n" +
+        "        def _constraint(Z):\n" +
+        "            return Z[..., -n_constraints + i]\n" +
+        "        return _constraint\n" +
+        "    return [_make_func(i) for i in range(n_constraints)]\n" +
+        "def _validate_botorch_version_for_constrained_opt(func_name):\n" +
+        "    if version.parse(botorch.version.version) < version.parse('0.9.0'):\n" +
+        "        raise ImportError(\n" +
+        "            f'{func_name} requires botorch>=0.9.0 for constrained problems, but got '\n" +
+        "            f'botorch={botorch.version.version}.\\n'\n" +
+        "            'Please run ``pip install botorch --upgrade``.')\n";
 
     /// <summary>Ensure torch + botorch import (botorch.py's <c>_imports.check()</c>). Under the GIL.</summary>
     internal static void check()

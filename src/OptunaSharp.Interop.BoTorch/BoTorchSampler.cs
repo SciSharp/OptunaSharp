@@ -28,9 +28,12 @@ namespace OptunaSharp.Interop.BoTorch;
 ///     <para>Unlike Python, this does <b>not</b> require the <c>optuna_integration</c> package (we port
 ///     it); install only <c>botorch</c> (which pulls torch + gpytorch) into a discoverable CPython.</para>
 ///
-///     <para><b>Scope (Phase A):</b> single-objective optimization (default: log-Expected Improvement;
-///     the q-batch variants when running trials are considered). Multi-objective, constrained, and
-///     knowledge-gradient variants land in later phases (see <see cref="BoTorchCandidates" />).</para>
+///     <para><b>Scope:</b> the full <c>optuna_integration.BoTorchSampler</c> surface — single-objective
+///     (LogEI / qEI / qLogEI / qNEI), multi-objective (qEHVI / EHVI / qNEHVI / qParEGO / qLogEI-ParEGO),
+///     constrained optimization (via <c>Trial.SetConstraint</c> or the deprecated
+///     <paramref name="constraintsFunc" />), knowledge-gradient acquisitions (qKG / qHVKG), and a CPU/GPU
+///     <paramref name="device" /> — all selected through the <see cref="BoTorchCandidatesFunc" /> enum (see
+///     <see cref="BoTorchCandidates" />).</para>
 ///
 ///     <para><b>Reproducibility.</b> The first <see cref="_nStartupTrials" /> trials use an independent
 ///     <see cref="RandomSampler" /> (bit-exact with Optuna); from then on each acquisition optimization
@@ -50,6 +53,8 @@ public sealed class BoTorchSampler : BaseSampler
     private readonly BaseSampler _independentSampler;
     private readonly int _nStartupTrials;
     private readonly IntersectionSearchSpace _searchSpace = new();
+    private readonly Func<FrozenTrial, IEnumerable<double>>? _constraintsFunc;
+    private readonly string? _device;
 
     // The acquisition selection from the ctor, and the resolved implementation cached on first use
     // (Python caches self._candidates_func the same way — the explicit one, else the auto-picked default).
@@ -73,17 +78,32 @@ public sealed class BoTorchSampler : BaseSampler
     ///     suggested but not yet evaluated), which can improve parallel optimization. Experimental
     ///     (added in Optuna v3.2.0).
     /// </param>
+    /// <param name="constraintsFunc">
+    ///     An optional function that computes the objective constraints from a completed
+    ///     <see cref="FrozenTrial" />; a value strictly larger than 0 marks a violated constraint, a value
+    ///     ≤ 0 is feasible. <b>Deprecated in v5.0.0</b> (removal scheduled for v7.0.0) — prefer
+    ///     <c>Trial.SetConstraint</c>. When supplied, the sampler is stateful and <b>must not be reused
+    ///     across studies</b>; create a new instance per study.
+    /// </param>
     /// <param name="independentSampler">
     ///     Sampler used for the initial trials and for conditional parameters. Defaults to a
     ///     <see cref="RandomSampler" /> with the same <paramref name="seed" />.
     /// </param>
     /// <param name="seed">Seed for the random number generator. Defaults to <c>null</c>.</param>
+    /// <param name="device">
+    ///     The torch device that stores BoTorch's input/output tensors — <c>"cpu"</c> (the default when
+    ///     <c>null</c>), <c>"cuda"</c>, <c>"cuda:0"</c>, … Set a CUDA device for faster sampling. Byte-parity
+    ///     against Python holds only for an identical device + torch build; the CPU path is the zero-copy
+    ///     parity path.
+    /// </param>
     public BoTorchSampler(
         BoTorchCandidatesFunc candidatesFunc = BoTorchCandidatesFunc.Auto,
+        Func<FrozenTrial, IEnumerable<double>>? constraintsFunc = null,
         int nStartupTrials = 10,
         bool considerRunningTrials = false,
         BaseSampler? independentSampler = null,
-        int? seed = null)
+        int? seed = null,
+        string? device = null)
     {
         // @experimental_class("2.4.0") — the whole sampler is experimental.
         OptunaWarnings.Warn(
@@ -93,11 +113,20 @@ public sealed class BoTorchSampler : BaseSampler
         // botorch.py's `_imports.check()` — fail fast with a helpful message if BoTorch is missing.
         PythonRuntime.Run(botorch.check);
 
+        // `constraints_func` is deprecated in v5.0.0 (removal 7.0.0) — mirror Optuna's FutureWarning.
+        if (constraintsFunc != null)
+            OptunaWarnings.Warn(
+                string.Format(Deprecations.Template, "`constraints_func`", "5.0.0", "7.0.0")
+                + " Use `optuna.trial.Trial.set_constraint` instead.",
+                WarningCategory.FutureWarning);
+
         _selection = candidatesFunc;
+        _constraintsFunc = constraintsFunc;
         _considerRunningTrials = considerRunningTrials;
         _independentSampler = independentSampler ?? new RandomSampler(seed);
         _nStartupTrials = nStartupTrials;
         _seed = seed;
+        _device = device;
     }
 
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
@@ -144,9 +173,11 @@ public sealed class BoTorchSampler : BaseSampler
         double[,] rawBounds = trans.RawBounds;   // (n_bounds, 2); transform01 is false (the default).
         int nBounds = rawBounds.GetLength(0);
 
-        // Completed trials → maximization-signed objectives + transformed params.
+        // Completed trials → maximization-signed objectives + transformed params (+ the constraint matrix).
         var completedParams = new double[nCompleted, nBounds];
         var completedValues = new double[nCompleted, nObjectives];
+        List<string>? constraintKeys = null;
+        double[,]? con = null;
         for (int i = 0; i < nCompleted; i++)
         {
             FrozenTrial t = completedTrials[i];
@@ -162,7 +193,38 @@ public sealed class BoTorchSampler : BaseSampler
                     value *= -1;
                 completedValues[i, j] = value;
             }
+
+            // Constraint matrix (botorch.py:1240-1256): the constraint names are fixed by the FIRST
+            // completed trial; every later trial must carry the identical set, else it is a hard error.
+            // con is (n_completed, n_constraints), NaN-filled up front like numpy.full.
+            OrderedDict<string, double> constraints = t.Constraints;
+            if (constraintKeys is null)
+            {
+                constraintKeys = constraints.Keys.ToList();
+                if (constraintKeys.Count != 0)
+                {
+                    con = new double[nCompleted, constraintKeys.Count];
+                    for (int r = 0; r < nCompleted; r++)
+                        for (int c = 0; c < constraintKeys.Count; c++)
+                            con[r, c] = double.NaN;
+                }
+            }
+            else if (!new HashSet<string>(constraints.Keys).SetEquals(constraintKeys))
+            {
+                throw new RuntimeError(
+                    $"Expected the constraints named {PyListRepr(constraintKeys)} " +
+                    $"but received {PyListRepr(constraints.Keys)}.");
+            }
+            if (con is not null)
+                for (int c = 0; c < constraintKeys!.Count; c++)
+                    con[i, c] = constraints[constraintKeys[c]];
         }
+
+        // botorch.py:1265 — constraints_func was supplied but nothing correctly computed a constraint.
+        if (_constraintsFunc is not null && con is null)
+            OptunaWarnings.Warn(
+                "`constraints_func` was given but no call to it correctly computed constraints. " +
+                "Constraints passed to `candidates_func` will be `None`.");
 
         // Running trials (only when considered): the ones whose full param set is already suggested.
         // (Python fills the rest with NaN and drops them; skipping non-present rows is the same set.)
@@ -190,22 +252,24 @@ public sealed class BoTorchSampler : BaseSampler
             boundsTransposed[1, d] = rawBounds[d, 1];
         }
 
-        // Phase A: no constraints (train_con is always null).
+        // Resolve the candidates_func once (Python caches self._candidates_func the same way): the
+        // explicit selection, or the Auto default from n_objectives / constraint / running-trials.
         _candidatesFunc ??= BoTorchCandidates.Resolve(
-            _selection, nObjectives, hasConstraint: false, _considerRunningTrials);
+            _selection, nObjectives, hasConstraint: con is not null, _considerRunningTrials);
 
         NDArray candidate = PythonRuntime.Run(() =>
         {
-            using PyObject trainX = BoTorchInterop.ToTensor(completedParams);
-            using PyObject trainObj = BoTorchInterop.ToTensor(completedValues);
-            using PyObject boundsTensor = BoTorchInterop.ToTensor(boundsTransposed);
-            PyObject? pendingTensor = runningParams is null ? null : BoTorchInterop.ToTensor(runningParams);
+            using PyObject trainX = BoTorchInterop.ToTensor(completedParams, _device);
+            using PyObject trainObj = BoTorchInterop.ToTensor(completedValues, _device);
+            using PyObject boundsTensor = BoTorchInterop.ToTensor(boundsTransposed, _device);
+            PyObject? conTensor = con is null ? null : BoTorchInterop.ToTensor(con, _device);
+            PyObject? pendingTensor = runningParams is null ? null : BoTorchInterop.ToTensor(runningParams, _device);
             try
             {
                 // Each acquisition optimization runs inside BoTorch's manual_seed(seed) scope.
                 PyObject cand;
                 using (botorch.manual_seed(_seed))
-                    cand = _candidatesFunc!(trainX, trainObj, null, boundsTensor, pendingTensor);
+                    cand = _candidatesFunc!(trainX, trainObj, conTensor, boundsTensor, pendingTensor);
                 // Advance the seed per trial (Optuna does `self._seed += 1` inside the manual_seed scope).
                 if (_seed is { } seedValue)
                     _seed = seedValue + 1;
@@ -220,6 +284,7 @@ public sealed class BoTorchSampler : BaseSampler
             }
             finally
             {
+                conTensor?.Dispose();
                 pendingTensor?.Dispose();
             }
         });
@@ -293,5 +358,15 @@ public sealed class BoTorchSampler : BaseSampler
         => _independentSampler.BeforeTrial(study, trial);
 
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
-        => _independentSampler.AfterTrial(study, trial, state, values);
+    {
+        // botorch.py's after_trial: compute + store the deprecated constraints_func's values, then delegate.
+        if (_constraintsFunc != null)
+            SamplerHelpers.ProcessConstraintsAfterTrial(_constraintsFunc, study, trial, state);
+        _independentSampler.AfterTrial(study, trial, state, values);
+    }
+
+    /// <summary>Format a key set as Python's <c>list</c> repr (<c>['0', '1']</c>) for the verbatim
+    /// constraint-mismatch <see cref="RuntimeError" /> message.</summary>
+    private static string PyListRepr(IEnumerable<string> keys)
+        => "[" + string.Join(", ", keys.Select(k => "'" + k + "'")) + "]";
 }

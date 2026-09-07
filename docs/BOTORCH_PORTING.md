@@ -1,8 +1,19 @@
 # BoTorch Porting — Completion Plan
 
+> **STATUS: COMPLETE ✅ (all phases done).** `OptunaSharp.Interop.BoTorch` now covers the entire
+> `optuna_integration.BoTorchSampler` surface — single-objective (Phase A), **multi-objective (Phase B:
+> qEHVI / EHVI / qNEHVI / qParEGO / qLogEI-ParEGO), constraints (Phase C), knowledge-gradient (Phase D:
+> qKG / qHVKG), and CPU/GPU `device` (Phase E)** — all selected through the `BoTorchCandidatesFunc` enum
+> (the public surface stays `PyObject`-free). Every working `candidates_func` is **0-ULP** vs its
+> `optuna_integration.botorch.*` twin; the only non-parity spot is *constrained qKG*, which raises the
+> **identical** botorch `RuntimeError` on both sides (a real botorch limitation, faithfully reproduced).
+> Gated by `BoTorchApiParityTests` (31, function-level byte-exact) + `BoTorchSamplerParityTests` (15,
+> end-to-end replay incl. the CUDA device smoke test), both `net8.0` + `net10.0`. The custom-callable
+> `candidates_func` (§7) remains deliberately deferred (enum-only surface).
+
 Governs completing **`OptunaSharp.Interop.BoTorch`** to full parity with
-`optuna_integration.BoTorchSampler`. This is the detailed sub-plan for **PORTING_PLAN.md §6.5**
-(where BoTorch is marked *DONE (Phase A)*). Reference source of truth:
+`optuna_integration.BoTorchSampler`. This is the detailed sub-plan for **PORTING_PLAN.md §6.5**.
+Reference source of truth:
 `refs/optuna-integration/optuna_integration/botorch/botorch.py` (1357 lines) and the live
 `botorch` package via the pythonnet interop.
 
@@ -75,7 +86,7 @@ else                        -> logei
 
 ---
 
-## 3. Phase B — Multi-objective (qEHVI / EHVI / qNEHVI / qParEGO / qLogEI-ParEGO)
+## 3. Phase B — Multi-objective (qEHVI / EHVI / qNEHVI / qParEGO / qLogEI-ParEGO) ✅ DONE
 
 **Goal:** `nObjectives > 1` studies work; the `Auto` MO branches resolve exactly like Python.
 
@@ -109,7 +120,11 @@ exercise the `alpha` box-decomposition branch (botorch.py:526).
 
 ---
 
-## 4. Phase C — Constraints (`constraints_func` + the `train_con` branch)
+## 4. Phase C — Constraints (`constraints_func` + the `train_con` branch) ✅ DONE
+
+> Note: contrary to an earlier draft of this plan, **`logei` supports constraints** (via
+> `LogConstrainedExpectedImprovement`); only **`ehvi`** rejects them. Ported from
+> `botorch.py` directly, per the "source of truth" rule.
 
 **Reuse Core's existing constraint infrastructure** — the exact pattern `GPSampler` uses:
 
@@ -152,7 +167,11 @@ constraint value exercises the NaN-fill + warning.
 
 ---
 
-## 5. Phase D — Knowledge Gradient (qKG / qHVKG)
+## 5. Phase D — Knowledge Gradient (qKG / qHVKG) ✅ DONE
+
+> Note: **constrained qKG** raises botorch's own `RuntimeError` (`shape '[256, 1, 2, 1]' is invalid …`)
+> on the live library — reproduced identically by the port (verified both sides raise the same error).
+> It is therefore not a byte-exact test case; SO-unconstrained qKG and the multi-value guard are gated.
 
 **Work**
 1. **Enum**: add `Qkg, Qhvkg`.
@@ -171,7 +190,13 @@ constraint value exercises the NaN-fill + warning.
 
 ---
 
-## 6. Phase E — `device` (CPU / GPU)
+## 6. Phase E — `device` (CPU / GPU) ✅ DONE
+
+> Shipped as a **pythonnet-free `string? device`** ctor param (`"cpu"` default / `"cuda"` / `"cuda:0"`).
+> `BoTorchInterop.ToTensor(matrix, device)` keeps the zero-copy pinned view for CPU and does
+> `tensor.to(device)` (a copy — a device tensor cannot alias host pinned memory) otherwise; the result
+> crosses back through `ToTorchNDArray(force:true)`'s `.cpu()`. Gated by a CUDA smoke test
+> (self-Inconclusive without a device); byte-parity holds only for identical device + torch build.
 
 Python threads a `torch.device` (default CPU) and does `.to(device)` on values/params/con/bounds
 (botorch.py:1150,1271–1275).

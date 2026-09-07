@@ -1,6 +1,7 @@
 using NumSharp;
 using NumSharp.Interop.PythonNet;
 using Python.Runtime;
+using OptunaSharp.Interop.PythonNet;
 
 namespace OptunaSharp.Interop.BoTorch;
 
@@ -32,6 +33,24 @@ internal static class BoTorchInterop
     ///     Under the GIL.
     /// </summary>
     internal static PyObject ToTensor(double[,] data) => np.array(data, copy: false).ToTorch();
+
+    /// <summary>
+    ///     A C# <c>(rows, cols)</c> matrix → a float64 <c>torch.Tensor</c> placed on <paramref name="device" />
+    ///     — botorch.py's <c>torch.from_numpy(x).to(self._device)</c>. For CPU (or a <c>null</c>/empty device)
+    ///     this is the zero-copy pinned view of the matrix overload; for any other device (e.g. <c>"cuda"</c>,
+    ///     <c>"cuda:0"</c>) the pinned CPU view is created, copied to the device via <c>tensor.to(device)</c>
+    ///     (a device tensor cannot alias host pinned memory — the copy is correct), and the CPU view (and its
+    ///     pin) is released. Under the GIL.
+    /// </summary>
+    internal static PyObject ToTensor(double[,] data, string? device)
+    {
+        PyObject tensor = np.array(data, copy: false).ToTorch();
+        if (string.IsNullOrEmpty(device) || device == "cpu")
+            return tensor;
+        using (tensor)
+        using (PyObject dev = device.ToPython())
+            return tensor.InvokeMethod("to", dev);
+    }
 
     /// <summary>A 1-D array → a float64 <c>torch.Tensor</c>, pinned-and-viewed like the matrix overload
     /// (no copy). Under the GIL.</summary>

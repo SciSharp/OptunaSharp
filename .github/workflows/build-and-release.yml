@@ -179,6 +179,18 @@ jobs:
           python -m pip install torch
         fi
         python -m pip install cmaes "scikit-learn==1.8.0" matplotlib
+        # BoTorch parity gate (OptunaSharp.Interop.BoTorch → BoTorchApiParityTests / BoTorchSamplerParityTests):
+        # install botorch (pulls gpytorch/linear_operator, reuses the CPU torch above) + the VENDORED
+        # optuna_integration (refs/optuna-integration, matching the ported botorch.py) so the bridge is
+        # compared against the exact optuna_integration source it ports. Linux-only: byte-parity is the SAME
+        # botorch driven on both sides and is CPU-deterministic / OS-independent, so one OS gates it — macOS
+        # (10x runner minutes) and Windows self-skip (RequireBoTorchOrInconclusive → Inconclusive). --no-deps
+        # keeps the vendored optuna (src/optuna, 5.0.0.dev) from being replaced by a PyPI optuna.
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          git submodule update --init refs/optuna-integration
+          python -m pip install botorch
+          python -m pip install -e refs/optuna-integration --no-deps
+        fi
         # find_libpython locates the loadable libpython across framework/venv/manylinux builds — the
         # macOS framework build's INSTSONAME is a framework path that a naive LIBDIR join misses.
         python -m pip install find_libpython
