@@ -85,4 +85,79 @@ public static class PlotlyVisualization
         string targetName = "Objective Value",
         bool errorBar = false)
         => PlotOptimizationHistory(studies, target, targetName, errorBar).WithCustomization(customization);
+
+    // ---- edf ------------------------------------------------------------------------------------
+
+    /// <summary><c>optuna.visualization.plot_edf</c> for a single study — the empirical distribution function.</summary>
+    public static GenericChart PlotEdf(
+        Study study,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => PlotEdf(new[] { study }, target, targetName);
+
+    /// <summary><c>optuna.visualization.plot_edf</c> for several studies (compares their EDFs).</summary>
+    public static GenericChart PlotEdf(
+        IReadOnlyList<Study> studies,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => EdfPlot.Render(Edf.GetInfo(studies, target, targetName), targetName);
+
+    /// <inheritdoc cref="PlotEdf(Study, Func{FrozenTrial, double}, string)" />
+    public static GenericChart PlotEdf(
+        Study study,
+        PlotlyChartCustomization customization,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => PlotEdf(study, target, targetName).WithCustomization(customization);
+
+    /// <inheritdoc cref="PlotEdf(IReadOnlyList{Study}, Func{FrozenTrial, double}, string)" />
+    public static GenericChart PlotEdf(
+        IReadOnlyList<Study> studies,
+        PlotlyChartCustomization customization,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => PlotEdf(studies, target, targetName).WithCustomization(customization);
+
+    // ---- intermediate values --------------------------------------------------------------------
+
+    /// <summary><c>optuna.visualization.plot_intermediate_values</c> — each trial's reported intermediate values.</summary>
+    public static GenericChart PlotIntermediateValues(Study study)
+        => IntermediateValuesPlot.Render(IntermediateValues.GetPlotInfo(study));
+
+    /// <inheritdoc cref="PlotIntermediateValues(Study)" />
+    public static GenericChart PlotIntermediateValues(Study study, PlotlyChartCustomization customization)
+        => PlotIntermediateValues(study).WithCustomization(customization);
+
+    // ---- hypervolume history --------------------------------------------------------------------
+
+    /// <summary>
+    ///     <c>optuna.visualization.plot_hypervolume_history</c> — the running hypervolume of a
+    ///     multi-objective study relative to <paramref name="referencePoint" />.
+    /// </summary>
+    public static GenericChart PlotHypervolumeHistory(Study study, IReadOnlyList<double> referencePoint)
+        => HypervolumeHistoryPlot.Render(HypervolumeHistory.GetInfo(study, referencePoint));
+
+    /// <inheritdoc cref="PlotHypervolumeHistory(Study, IReadOnlyList{double})" />
+    public static GenericChart PlotHypervolumeHistory(
+        Study study,
+        IReadOnlyList<double> referencePoint,
+        PlotlyChartCustomization customization)
+        => PlotHypervolumeHistory(study, referencePoint).WithCustomization(customization);
+
+    // ---- timeline -------------------------------------------------------------------------------
+
+    /// <summary>
+    ///     <c>optuna.visualization.plot_timeline</c> — each trial's lifetime as a horizontal bar,
+    ///     colored by state. <paramref name="nRecentTrials" /> (if given) keeps only the most recent
+    ///     trials; it must be a positive integer.
+    /// </summary>
+    public static GenericChart PlotTimeline(Study study, int? nRecentTrials = null)
+        => TimelinePlot.Render(Timeline.GetInfo(study, nRecentTrials));
+
+    /// <inheritdoc cref="PlotTimeline(Study, int?)" />
+    public static GenericChart PlotTimeline(
+        Study study,
+        PlotlyChartCustomization customization,
+        int? nRecentTrials = null)
+        => PlotTimeline(study, nRecentTrials).WithCustomization(customization);
 }

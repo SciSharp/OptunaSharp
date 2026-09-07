@@ -15,47 +15,8 @@ namespace OptunaSharp.Tests.Interop;
 ///     are bit-exact (no erf / LAPACK on these paths), so the figures must match exactly.
 /// </summary>
 [TestClass]
-public class PlotlyRenderParityTests : OptunaInteropTestBase
+public class PlotlyRenderParityTests : PlotlyRenderParityBase
 {
-    /// <summary>
-    ///     A Python <c>_oss_fig_json(fig)</c> that returns <c>{data, layout}</c> as a JSON string —
-    ///     stripping plotly.py's auto-injected default <c>layout.template</c> and flattening numpy
-    ///     arrays / scalars to plain JSON, so it lines up with OptunaSharp's <c>GenericChart.toJson</c>.
-    /// </summary>
-    private const string FigJsonHelper =
-        "import numpy as np, base64\n" +
-        "import optuna.visualization\n" +
-        "def _oss_fig_json(fig):\n" +
-        "    d = fig.to_dict()\n" +
-        "    d.get('layout', {}).pop('template', None)\n" +
-        "    def clean(o):\n" +
-        // plotly>=6 base64-encodes numpy arrays in to_dict() as {'dtype','bdata'[,'shape']} — decode them.
-        "        if isinstance(o, dict) and 'bdata' in o and 'dtype' in o:\n" +
-        "            arr = np.frombuffer(base64.b64decode(o['bdata']), dtype=o['dtype'])\n" +
-        "            shape = o.get('shape')\n" +
-        "            if shape is not None:\n" +
-        "                arr = arr.reshape([int(s) for s in str(shape).split(',')])\n" +
-        "            return clean(arr)\n" +
-        "        if isinstance(o, np.ndarray): return [clean(x) for x in o.tolist()]\n" +
-        "        if isinstance(o, dict): return {k: clean(v) for k, v in o.items()}\n" +
-        "        if isinstance(o, (list, tuple)): return [clean(x) for x in o]\n" +
-        "        if isinstance(o, np.generic): return o.item()\n" +
-        "        return o\n" +
-        "    return json.dumps({'data': clean(d.get('data', [])), 'layout': clean(d.get('layout', {}))})\n";
-
-    /// <summary>The shared single-objective quadratic — multiplication (not <c>**</c>) for bit-exactness.</summary>
-    private const string PyQuadratic =
-        "def _oss_obj(t):\n" +
-        "    x = t.suggest_float('x', -10, 10)\n" +
-        "    return (x - 2.0) * (x - 2.0)\n";
-
-    /// <summary>Render both sides and structurally diff — <paramref name="pySetup" /> binds <c>study</c>/<c>studies</c>, <paramref name="pyPlot" /> is the plot call.</summary>
-    private void AssertRenderParity(string csJson, string pySetup, string pyPlot, double tol = 0.0)
-    {
-        PyExec(pySetup + FigJsonHelper + $"fig = {pyPlot}\n");
-        PlotlyFigure.AssertMatches(csJson, PyStr("_oss_fig_json(fig)"), tol);
-    }
-
     [TestMethod]
     [TestCategory("RequiresPython")]
     [DataRow(0, 30)]
@@ -355,27 +316,5 @@ public class PlotlyRenderParityTests : OptunaInteropTestBase
             "study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))\n" +
             "study.optimize(_oss_obj_allp, n_trials=6)\n",
             "optuna.visualization.plot_optimization_history(study)");
-    }
-
-    private static Study BuildQuadraticStudy(int seed, int nTrials)
-    {
-        var study = Optuna.CreateStudy(sampler: new RandomSampler(seed));
-        study.Optimize(t =>
-        {
-            double x = t.SuggestFloat("x", -10, 10);
-            return (x - 2.0) * (x - 2.0);
-        }, nTrials: nTrials);
-        return study;
-    }
-
-    private static Study BuildNamedQuadraticStudy(string name, int seed, int nTrials)
-    {
-        var study = Optuna.CreateStudy(studyName: name, sampler: new RandomSampler(seed));
-        study.Optimize(t =>
-        {
-            double x = t.SuggestFloat("x", -10, 10);
-            return (x - 2.0) * (x - 2.0);
-        }, nTrials: nTrials);
-        return study;
     }
 }
