@@ -30,8 +30,14 @@ internal static class PlotlyFigure
     ///     Object keys to skip anywhere they appear — for values that are inherently non-deterministic
     ///     across two separate runs (e.g. the timeline plot's wall-clock <c>base</c>/<c>x</c>).
     /// </param>
+    /// <param name="tol">Absolute number tolerance (0 ⇒ bit-exact).</param>
+    /// <param name="rtol">
+    ///     Relative tolerance, combined numpy-<c>allclose</c>-style: numbers match when
+    ///     <c>|x-y| ≤ tol + rtol·|y|</c>. Use for GP-derived values (the terminator plot's ~1e-3 fit
+    ///     drift) where the absolute magnitude is large.
+    /// </param>
     public static void AssertMatches(string csFigJson, string pyFigJson, double tol = 0.0,
-        IReadOnlyCollection<string>? ignoreKeys = null)
+        IReadOnlyCollection<string>? ignoreKeys = null, double rtol = 0.0)
     {
         var ignore = ignoreKeys is null ? EmptyIgnore : new HashSet<string>(ignoreKeys);
         var cs = JToken.Parse(csFigJson);
@@ -42,14 +48,14 @@ internal static class PlotlyFigure
         if (csData.Count != pyData.Count)
             throw new Exception($"figure.data trace count mismatch: C#={csData.Count}, Python={pyData.Count}");
         for (int i = 0; i < csData.Count; i++)
-            AssertNode($"data[{i}]", csData[i], pyData[i], tol, ignore);
+            AssertNode($"data[{i}]", csData[i], pyData[i], tol, ignore, rtol);
 
-        AssertNode("layout", cs["layout"]!, py["layout"]!, tol, ignore);
+        AssertNode("layout", cs["layout"]!, py["layout"]!, tol, ignore, rtol);
     }
 
     private static readonly HashSet<string> EmptyIgnore = new();
 
-    private static void AssertNode(string path, JToken cs, JToken py, double tol, HashSet<string> ignore)
+    private static void AssertNode(string path, JToken cs, JToken py, double tol, HashSet<string> ignore, double rtol)
     {
         switch (py.Type)
         {
@@ -68,7 +74,7 @@ internal static class PlotlyFigure
                     if (csv is null) throw new Exception($"{path}.{k}: present in Python but missing in C# (Python={Trunc(pyv!)})");
                     if (pyv is null) throw new Exception($"{path}.{k}: present in C# but missing in Python (C#={Trunc(csv)})");
                     if (k == "title") { csv = UnwrapTitle(csv); pyv = UnwrapTitle(pyv); }
-                    AssertNode($"{path}.{k}", csv, pyv, tol, ignore);
+                    AssertNode($"{path}.{k}", csv, pyv, tol, ignore, rtol);
                 }
                 break;
             }
@@ -80,7 +86,7 @@ internal static class PlotlyFigure
                 if (csa.Count != pya.Count)
                     throw new Exception($"{path}: array length C#={csa.Count}, Python={pya.Count}");
                 for (int i = 0; i < csa.Count; i++)
-                    AssertNode($"{path}[{i}]", csa[i], pya[i], tol, ignore);
+                    AssertNode($"{path}[{i}]", csa[i], pya[i], tol, ignore, rtol);
                 break;
             }
             case JTokenType.Integer:
@@ -93,7 +99,7 @@ internal static class PlotlyFigure
                     throw Mismatch(path, cs, py);
                 double y = py.Value<double>();
                 bool ok = x == y
-                          || Math.Abs(x - y) <= tol
+                          || Math.Abs(x - y) <= tol + rtol * Math.Abs(y)
                           || (double.IsNaN(x) && double.IsNaN(y));
                 if (!ok)
                     throw new Exception($"{path}: number C#={x.ToString("R", CultureInfo.InvariantCulture)}, " +

@@ -49,10 +49,10 @@ public abstract class PlotlyRenderParityBase : OptunaInteropTestBase
     ///     keys (e.g. wall-clock <c>base</c>/<c>x</c>) can be excluded via <paramref name="ignoreKeys" />.
     /// </summary>
     protected void AssertRenderParity(string csJson, string pySetup, string pyPlot, double tol = 0.0,
-        string[]? ignoreKeys = null)
+        string[]? ignoreKeys = null, double rtol = 0.0)
     {
         PyExec(pySetup + FigJsonHelper + $"fig = {pyPlot}\n");
-        PlotlyFigure.AssertMatches(csJson, PyStr("_oss_fig_json(fig)"), tol, ignoreKeys);
+        PlotlyFigure.AssertMatches(csJson, PyStr("_oss_fig_json(fig)"), tol, ignoreKeys, rtol);
     }
 
     protected static Study BuildQuadraticStudy(int seed, int nTrials)

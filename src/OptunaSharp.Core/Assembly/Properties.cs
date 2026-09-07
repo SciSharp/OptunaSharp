@@ -104,6 +104,12 @@ using System.Runtime.CompilerServices;
 // Its test project asserts stdout parity against the same internals (and against live optuna's CLI).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Cli, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The plotly visualization backend (satellite package OptunaSharp.Visualization.Plotly, Phase 5.2 —
+// the rendering half over the public visualization data layer) reuses one Core internal for byte-exact
+// figures: PythonRepr (the CPython repr(float) shortest round-trip) formats the raw importance in
+// plot_param_importances' hovertemplate exactly as Optuna does — the same reason the CLI is a friend.
+[assembly: InternalsVisibleTo("OptunaSharp.Visualization.Plotly, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 /// <summary>
 ///     The public half of the strong-name key OptunaSharp is signed with, as the hex literal
 ///     <see cref="InternalsVisibleToAttribute" /> expects.

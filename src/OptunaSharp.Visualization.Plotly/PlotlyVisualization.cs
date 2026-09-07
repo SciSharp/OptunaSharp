@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using OptunaSharp.Importance;
+using OptunaSharp.Terminator;
 using OptunaSharp.Visualization.Plotly.Renderers;
 using Plotly.NET;
 
@@ -160,4 +162,55 @@ public static class PlotlyVisualization
         PlotlyChartCustomization customization,
         int? nRecentTrials = null)
         => PlotTimeline(study, nRecentTrials).WithCustomization(customization);
+
+    // ---- param importances ----------------------------------------------------------------------
+
+    /// <summary>
+    ///     <c>optuna.visualization.plot_param_importances</c> — a horizontal bar chart of the
+    ///     hyperparameter importances (default evaluator: fANOVA). One bar group per objective.
+    /// </summary>
+    public static GenericChart PlotParamImportances(
+        Study study,
+        BaseImportanceEvaluator? evaluator = null,
+        IReadOnlyList<string>? @params = null,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => ParamImportancesPlot.Render(
+            ParamImportances.GetInfos(study, evaluator, @params, target, targetName), study);
+
+    /// <inheritdoc cref="PlotParamImportances(Study, BaseImportanceEvaluator, IReadOnlyList{string}, Func{FrozenTrial, double}, string)" />
+    public static GenericChart PlotParamImportances(
+        Study study,
+        PlotlyChartCustomization customization,
+        BaseImportanceEvaluator? evaluator = null,
+        IReadOnlyList<string>? @params = null,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => PlotParamImportances(study, evaluator, @params, target, targetName).WithCustomization(customization);
+
+    // ---- terminator improvement -----------------------------------------------------------------
+
+    /// <summary>
+    ///     <c>optuna.visualization.plot_terminator_improvement</c> — the terminator's improvement
+    ///     (and, when <paramref name="plotError" />, the cross-validation error) over the trials.
+    /// </summary>
+    public static GenericChart PlotTerminatorImprovement(
+        Study study,
+        bool plotError = false,
+        BaseImprovementEvaluator? improvementEvaluator = null,
+        BaseErrorEvaluator? errorEvaluator = null,
+        int minNTrials = 20)
+        => TerminatorImprovementPlot.Render(
+            TerminatorImprovement.GetInfo(study, plotError, improvementEvaluator, errorEvaluator), minNTrials);
+
+    /// <inheritdoc cref="PlotTerminatorImprovement(Study, bool, BaseImprovementEvaluator, BaseErrorEvaluator, int)" />
+    public static GenericChart PlotTerminatorImprovement(
+        Study study,
+        PlotlyChartCustomization customization,
+        bool plotError = false,
+        BaseImprovementEvaluator? improvementEvaluator = null,
+        BaseErrorEvaluator? errorEvaluator = null,
+        int minNTrials = 20)
+        => PlotTerminatorImprovement(study, plotError, improvementEvaluator, errorEvaluator, minNTrials)
+            .WithCustomization(customization);
 }
