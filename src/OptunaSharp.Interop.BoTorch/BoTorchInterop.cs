@@ -21,16 +21,21 @@ namespace OptunaSharp.Interop.BoTorch;
 internal static class BoTorchInterop
 {
     /// <summary>
-    ///     A C# <c>(rows, cols)</c> matrix → a float64 <c>torch.Tensor</c>, VIEW-shared with the NumSharp
-    ///     buffer: <c>np.array</c> copies the managed matrix into an <see cref="NDArray" /> once (row-major,
-    ///     dtype float64), then <see cref="TorchInterop.ToTorch" /> is <c>torch.from_numpy(nd.ToNumpy())</c>
-    ///     — zero further copies. float64 matches botorch.py (<c>SingleTaskGP</c> fits in float64; a float32
-    ///     tensor would silently break parity). Under the GIL.
+    ///     A C# <c>(rows, cols)</c> matrix → a float64 <c>torch.Tensor</c>, VIEW-shared with the managed
+    ///     array itself — NO copy in either stage. <c>np.array(data, copy: false)</c> PINS the matrix
+    ///     (<c>GCHandle.Alloc(data, GCHandleType.Pinned)</c>) and wraps its pinned address as an
+    ///     <see cref="NDArray" /> view (row-major, float64), then <see cref="TorchInterop.ToTorch" /> is
+    ///     <c>torch.from_numpy(nd.ToNumpy())</c> — so numpy and torch read the pinned managed memory
+    ///     directly. NumSharp roots the NDArray (and thus the GCHandle pin) for the tensor's lifetime via a
+    ///     Python <c>weakref.finalize</c>, and unpins when the last view is released. float64 matches
+    ///     botorch.py (<c>SingleTaskGP</c> fits in float64; a float32 tensor would silently break parity).
+    ///     Under the GIL.
     /// </summary>
-    internal static PyObject ToTensor(double[,] data) => np.array(data).ToTorch();
+    internal static PyObject ToTensor(double[,] data) => np.array(data, copy: false).ToTorch();
 
-    /// <summary>A 1-D array → a float64 <c>torch.Tensor</c> (see the matrix overload). Under the GIL.</summary>
-    internal static PyObject ToTensor(double[] data) => np.array(data).ToTorch();
+    /// <summary>A 1-D array → a float64 <c>torch.Tensor</c>, pinned-and-viewed like the matrix overload
+    /// (no copy). Under the GIL.</summary>
+    internal static PyObject ToTensor(double[] data) => np.array(data, copy: false).ToTorch();
 
     /// <summary>
     ///     A <c>torch.Tensor</c> → an independent NumSharp <see cref="NDArray" /> via NumSharp's torch
