@@ -63,6 +63,30 @@ internal static class PlotlyColors
     /// <summary>Optuna's grey for infeasible trials — <c>(204, 204, 204)</c> in the same float format.</summary>
     public static string InfeasibleRgb => Rgb(204, 204, 204);
 
+    // COLOR_SCALE (plotly.colors.sequential.Blues) as rgb tuples 0-255 — the parallel-coordinate scale.
+    private static readonly (int R, int G, int B)[] BluesRgb =
+    {
+        (247, 251, 255), (222, 235, 247), (198, 219, 239), (158, 202, 225), (107, 174, 214),
+        (66, 146, 198), (33, 113, 181), (8, 81, 156), (8, 48, 107),
+    };
+
+    /// <summary>
+    ///     Optuna's <c>_sample_colorscale(COLOR_SCALE, value)</c> (parallel-coordinate line color):
+    ///     <c>find_intermediate_color</c> interpolated in 0-255 rgb space, then <c>label_rgb</c> — so
+    ///     the components stay float, e.g. <c>"rgb(20.5, 80.5, 144.0)"</c>.
+    /// </summary>
+    public static string BluesLineColor(double value)
+    {
+        int n = BluesRgb.Length;
+        double scaled = value * (n - 1);
+        int lower = Math.Min((int)scaled, n - 2);
+        double t = scaled - lower;
+        double r = BluesRgb[lower].R + t * (BluesRgb[lower + 1].R - BluesRgb[lower].R);
+        double g = BluesRgb[lower].G + t * (BluesRgb[lower + 1].G - BluesRgb[lower].G);
+        double b = BluesRgb[lower].B + t * (BluesRgb[lower + 1].B - BluesRgb[lower].B);
+        return $"rgb({PythonRepr.FloatRepr(r)}, {PythonRepr.FloatRepr(g)}, {PythonRepr.FloatRepr(b)})";
+    }
+
     private static string Rgb(int r, int g, int b) => $"rgb({r}.0, {g}.0, {b}.0)";
 
     // find_intermediate_color interpolates in 0-1 space (colors normalised by /255).

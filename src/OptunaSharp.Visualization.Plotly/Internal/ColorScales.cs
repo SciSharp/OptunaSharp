@@ -16,6 +16,12 @@ internal static class ColorScales
         "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b",
     });
 
+    /// <summary><c>plotly.colors.sequential.Reds</c> — the best-trial marker scale in the Pareto-front plot.</summary>
+    public static readonly object[] Reds = Expand(new[]
+    {
+        "#fff5f0", "#fee0d2", "#fcbba1", "#fc9272", "#fb6a4a", "#ef3b2c", "#cb181d", "#a50f15", "#67000d",
+    });
+
     private static object[] Expand(string[] hex)
     {
         var result = new object[hex.Length];

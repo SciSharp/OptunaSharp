@@ -157,4 +157,96 @@ public class PlotlyRedRenderParityTests : PlotlyRenderParityBase
             "optuna.visualization.plot_rank(study)",
             ignoreKeys: new[] { "domain" });
     }
+
+    // ---- parallel coordinate --------------------------------------------------------------------
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 25)]
+    [DataRow(6, 35)]
+    public void ParallelCoordinate_Render_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        // Single-objective: draw_order is range(len) (deterministic). Validates the Blues line-color
+        // interpolation, the .3g customdata, the linspace/.3g annotations, shapes and the colorbar.
+        var csStudy = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        csStudy.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            double b = t.SuggestFloat("b", -5, 5);
+            return a * a + b * b;
+        }, nTrials: nTrials);
+        string csJson = GenericChart.toJson(PlotlyVisualization.PlotParallelCoordinate(csStudy));
+
+        AssertRenderParity(csJson,
+            "def _oss_obj_pc(t):\n" +
+            "    a = t.suggest_float('a', -5, 5)\n" +
+            "    b = t.suggest_float('b', -5, 5)\n" +
+            "    return a * a + b * b\n" +
+            $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_obj_pc, n_trials={nTrials})\n",
+            "optuna.visualization.plot_parallel_coordinate(study)");
+    }
+
+    // ---- pareto front ---------------------------------------------------------------------------
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 20)]
+    [DataRow(6, 30)]
+    public void ParetoFront_TwoObjectives_Render_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new RandomSampler(seed));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return new double[] { x, y };
+        }, nTrials: nTrials);
+        string csJson = GenericChart.toJson(PlotlyVisualization.PlotParetoFront(csStudy));
+
+        AssertRenderParity(csJson,
+            "def _oss_obj_pf(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    return [x, y]\n" +
+            $"study = optuna.create_study(directions=['minimize', 'minimize'], sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_obj_pf, n_trials={nTrials})\n",
+            "optuna.visualization.plot_pareto_front(study)");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0, 25)]
+    public void ParetoFront_ThreeObjectives_Render_Matches_LiveOptuna(int seed, int nTrials)
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new RandomSampler(seed));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            double z = t.SuggestFloat("z", -5, 5);
+            return new double[] { x, y, z };
+        }, nTrials: nTrials);
+        string csJson = GenericChart.toJson(PlotlyVisualization.PlotParetoFront(csStudy));
+
+        AssertRenderParity(csJson,
+            "def _oss_obj_pf3(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    z = t.suggest_float('z', -5, 5)\n" +
+            "    return [x, y, z]\n" +
+            $"study = optuna.create_study(directions=['minimize', 'minimize', 'minimize'], sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+            $"study.optimize(_oss_obj_pf3, n_trials={nTrials})\n",
+            "optuna.visualization.plot_pareto_front(study)");
+    }
 }

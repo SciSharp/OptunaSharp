@@ -257,4 +257,53 @@ public static class PlotlyVisualization
         Func<FrozenTrial, double>? target = null,
         string targetName = "Objective Value")
         => PlotRank(study, @params, target, targetName).WithCustomization(customization);
+
+    // ---- parallel coordinate --------------------------------------------------------------------
+
+    /// <summary>
+    ///     <c>optuna.visualization.plot_parallel_coordinate</c> — the high-dimensional parameter
+    ///     relationships as a parallel-coordinate plot, lines colored by target value / Pareto rank.
+    /// </summary>
+    public static GenericChart PlotParallelCoordinate(
+        Study study,
+        IReadOnlyList<string>? @params = null,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => ParallelCoordinatePlot.Render(ParallelCoordinate.GetInfo(study, @params, target, targetName));
+
+    /// <inheritdoc cref="PlotParallelCoordinate(Study, IReadOnlyList{string}, Func{FrozenTrial, double}, string)" />
+    public static GenericChart PlotParallelCoordinate(
+        Study study,
+        PlotlyChartCustomization customization,
+        IReadOnlyList<string>? @params = null,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => PlotParallelCoordinate(study, @params, target, targetName).WithCustomization(customization);
+
+    // ---- pareto front ---------------------------------------------------------------------------
+
+    /// <summary>
+    ///     <c>optuna.visualization.plot_pareto_front</c> — the Pareto front of a 2- or 3-objective study
+    ///     (2D scatter or 3D scatter). Provide <paramref name="targets" /> for studies with more
+    ///     objectives.
+    /// </summary>
+    public static GenericChart PlotParetoFront(
+        Study study,
+        IReadOnlyList<string>? targetNames = null,
+        bool includeDominatedTrials = true,
+        Func<FrozenTrial, IReadOnlyList<double>>? constraintsFunc = null,
+        Func<FrozenTrial, IReadOnlyList<double>>? targets = null)
+        => ParetoFrontPlot.Render(
+            ParetoFront.GetInfo(study, targetNames, includeDominatedTrials, constraintsFunc, targets));
+
+    /// <inheritdoc cref="PlotParetoFront(Study, IReadOnlyList{string}, bool, Func{FrozenTrial, IReadOnlyList{double}}, Func{FrozenTrial, IReadOnlyList{double}})" />
+    public static GenericChart PlotParetoFront(
+        Study study,
+        PlotlyChartCustomization customization,
+        IReadOnlyList<string>? targetNames = null,
+        bool includeDominatedTrials = true,
+        Func<FrozenTrial, IReadOnlyList<double>>? constraintsFunc = null,
+        Func<FrozenTrial, IReadOnlyList<double>>? targets = null)
+        => PlotParetoFront(study, targetNames, includeDominatedTrials, constraintsFunc, targets)
+            .WithCustomization(customization);
 }
