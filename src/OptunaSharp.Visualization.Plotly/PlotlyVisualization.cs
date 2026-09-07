@@ -213,4 +213,48 @@ public static class PlotlyVisualization
         int minNTrials = 20)
         => PlotTerminatorImprovement(study, plotError, improvementEvaluator, errorEvaluator, minNTrials)
             .WithCustomization(customization);
+
+    // ---- contour --------------------------------------------------------------------------------
+
+    /// <summary>
+    ///     <c>optuna.visualization.plot_contour</c> — the parameter relationships as contour plots
+    ///     (a single plot for two params, an N×N matrix for more).
+    /// </summary>
+    public static GenericChart PlotContour(
+        Study study,
+        IReadOnlyList<string>? @params = null,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => ContourPlot.Render(Contour.GetInfo(study, @params, target, targetName));
+
+    /// <inheritdoc cref="PlotContour(Study, IReadOnlyList{string}, Func{FrozenTrial, double}, string)" />
+    public static GenericChart PlotContour(
+        Study study,
+        PlotlyChartCustomization customization,
+        IReadOnlyList<string>? @params = null,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => PlotContour(study, @params, target, targetName).WithCustomization(customization);
+
+    // ---- rank -----------------------------------------------------------------------------------
+
+    /// <summary>
+    ///     <c>optuna.visualization.plot_rank</c> — the (x-param, y-param) scatters colored by the target
+    ///     rank on the <c>RdYlBu_r</c> scale (a single plot for two params, an N×N matrix for more).
+    /// </summary>
+    public static GenericChart PlotRank(
+        Study study,
+        IReadOnlyList<string>? @params = null,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => RankPlot.Render(Rank.GetInfo(study, @params, target, targetName));
+
+    /// <inheritdoc cref="PlotRank(Study, IReadOnlyList{string}, Func{FrozenTrial, double}, string)" />
+    public static GenericChart PlotRank(
+        Study study,
+        PlotlyChartCustomization customization,
+        IReadOnlyList<string>? @params = null,
+        Func<FrozenTrial, double>? target = null,
+        string targetName = "Objective Value")
+        => PlotRank(study, @params, target, targetName).WithCustomization(customization);
 }
