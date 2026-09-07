@@ -7,6 +7,15 @@
 > wall-clock `base`/`x`, and the GP-derived terminator `y`/`range` (validated in the GP suite); the MO
 > parallel-coordinate `draw_order` stays the documented `[Misaligned]`.
 >
+> **The golden-standard customization overload is itself a parity gate, not just the plain renderers.**
+> `PlotlyCustomizationRenderParityTests` (interop) renders every one of the 12 `Plot*(study, customization, …)`
+> overloads and diffs it, live, against the same Optuna figure with the equivalent `fig.update_layout(...)`
+> applied on the plotly.py side — 24 scenarios across all 12 overloads (incl. a layout-key **override**
+> case), both TFMs, so the Plotly.NET `addLayout` merge is proven byte-identical to plotly's own
+> `update_layout` on real Optuna figures. `PlotlyChartCustomizationAllPlotsTests` (unit, Python-free) pins
+> the same contract for all 12 overloads without Python: config/size applied, every canonical `data` trace
+> and `layout` key preserved, DisplayOptions attached, caller keys win on conflict, empty bundle is a no-op.
+>
 > Renders the already-complete visualization **data layer** (Phase 3.1, in Core's
 > `OptunaSharp.Visualization` namespace) into interactive **plotly figures** using
 > [Plotly.NET](https://plotly.net/), driven from **raw C#** (bare `Trace`/`Layout` objects + the
@@ -140,6 +149,10 @@ layout **merged** via `addLayout` so Optuna's title/axes survive) and a **custom
 each `Plot*` — `Plot*(study, PlotlyChartCustomization customization, …)` — that leaves the canonical
 Optuna-faithful signature untouched (the overload takes a required bundle, so no ambiguity). **Every
 new renderer gets the same overload for free** (route the canonical result through `WithCustomization`).
+**Tested by** `PlotlyCustomizationRenderParityTests` (24 live scenarios, all 12 overloads, both TFMs)
+and `PlotlyChartCustomizationAllPlotsTests` (Python-free, all 12 overloads + conflict-override + no-op
+bundle). Note: `addLayout` **mutates** the chart's layout in place, so snapshot a canonical figure's JSON
+before deriving a customized one from it (the unit suite does this for the GP-backed terminator case).
 
 ---
 
