@@ -50,18 +50,19 @@ public sealed class BoTorchSampler : BaseSampler
     private readonly int _nStartupTrials;
     private readonly IntersectionSearchSpace _searchSpace = new();
 
-    // Resolved candidates function (Python caches self._candidates_func the same way): the explicit one
-    // from the ctor, else the default picked from the objective/constraint/running signature on first use.
-    private BoTorchCandidatesFunc? _candidatesFunc;
+    // The acquisition selection from the ctor, and the resolved implementation cached on first use
+    // (Python caches self._candidates_func the same way — the explicit one, else the auto-picked default).
+    private readonly BoTorchCandidatesFunc _selection;
+    private NativeCandidatesFunc? _candidatesFunc;
 
     private int? _seed;
     private int? _studyId;
 
     /// <param name="candidatesFunc">
-    ///     An optional function that suggests the next candidates. If omitted, it is chosen
-    ///     automatically from the number of objectives and whether running trials are considered
-    ///     (single-objective: log-Expected Improvement, or qEI when running trials are considered). It
-    ///     assumes <b>maximization</b>. See <see cref="BoTorchCandidates" />.
+    ///     The BoTorch acquisition function to optimize. Defaults to <see cref="BoTorchCandidatesFunc.Auto" />,
+    ///     which chooses automatically from the number of objectives and whether running trials are
+    ///     considered (single-objective: log-Expected Improvement, or qEI when running trials are
+    ///     considered). All built-ins assume <b>maximization</b>.
     /// </param>
     /// <param name="nStartupTrials">
     ///     Number of initial trials sampled independently before BoTorch takes over. Defaults to 10.
@@ -77,7 +78,7 @@ public sealed class BoTorchSampler : BaseSampler
     /// </param>
     /// <param name="seed">Seed for the random number generator. Defaults to <c>null</c>.</param>
     public BoTorchSampler(
-        BoTorchCandidatesFunc? candidatesFunc = null,
+        BoTorchCandidatesFunc candidatesFunc = BoTorchCandidatesFunc.Auto,
         int nStartupTrials = 10,
         bool considerRunningTrials = false,
         BaseSampler? independentSampler = null,
@@ -91,7 +92,7 @@ public sealed class BoTorchSampler : BaseSampler
         // botorch.py's `_imports.check()` — fail fast with a helpful message if BoTorch is missing.
         PythonRuntime.Run(BoTorchInterop.EnsureImported);
 
-        _candidatesFunc = candidatesFunc;
+        _selection = candidatesFunc;
         _considerRunningTrials = considerRunningTrials;
         _independentSampler = independentSampler ?? new RandomSampler(seed);
         _nStartupTrials = nStartupTrials;
@@ -189,8 +190,8 @@ public sealed class BoTorchSampler : BaseSampler
         }
 
         // Phase A: no constraints (train_con is always null).
-        _candidatesFunc ??= BoTorchCandidates.GetDefaultCandidatesFunc(
-            nObjectives, hasConstraint: false, _considerRunningTrials);
+        _candidatesFunc ??= BoTorchCandidates.Resolve(
+            _selection, nObjectives, hasConstraint: false, _considerRunningTrials);
 
         double[] candidate = PythonRuntime.Run(() =>
         {

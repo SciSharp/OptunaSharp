@@ -71,7 +71,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
         => AssertReplayParity(
             objective: t => { double x = t.SuggestFloat("x", -10, 10); return (x - 2.0) * (x - 2.0); },
             spaceExpr: "{'x': FloatDistribution(-10, 10)}",
-            candidatesFunc: null, cfExpr: "None",
+            candidatesFunc: BoTorchCandidatesFunc.Auto, cfExpr: "None",
             nStartup: 5, nTrials: 12, seed: 0);
 
     [TestMethod]
@@ -86,7 +86,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
                 return (a - 1.0) * (a - 1.0) + (b - 4.0) * (b - 4.0) + c * c;
             },
             spaceExpr: "{'a': FloatDistribution(-5, 5), 'b': FloatDistribution(0, 10), 'c': FloatDistribution(-1, 1)}",
-            candidatesFunc: null, cfExpr: "None",
+            candidatesFunc: BoTorchCandidatesFunc.Auto, cfExpr: "None",
             nStartup: 6, nTrials: 12, seed: 1);
 
     // ---- explicit candidates functions ----------------------------------------------------------
@@ -97,7 +97,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
         => AssertReplayParity(
             objective: t => { double x = t.SuggestFloat("x", -10, 10); return (x - 2.0) * (x - 2.0); },
             spaceExpr: "{'x': FloatDistribution(-10, 10)}",
-            candidatesFunc: BoTorchCandidates.Qei, cfExpr: "integration.botorch.qei_candidates_func",
+            candidatesFunc: BoTorchCandidatesFunc.Qei, cfExpr: "integration.botorch.qei_candidates_func",
             nStartup: 5, nTrials: 11, seed: 0);
 
     [TestMethod]
@@ -106,7 +106,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
         => AssertReplayParity(
             objective: t => { double x = t.SuggestFloat("x", -10, 10); return (x - 2.0) * (x - 2.0); },
             spaceExpr: "{'x': FloatDistribution(-10, 10)}",
-            candidatesFunc: BoTorchCandidates.QLogEi, cfExpr: "integration.botorch.qlogei_candidates_func",
+            candidatesFunc: BoTorchCandidatesFunc.QLogEi, cfExpr: "integration.botorch.qlogei_candidates_func",
             nStartup: 5, nTrials: 11, seed: 3);
 
     [TestMethod]
@@ -115,7 +115,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
         => AssertReplayParity(
             objective: t => { double x = t.SuggestFloat("x", -10, 10); return (x - 2.0) * (x - 2.0); },
             spaceExpr: "{'x': FloatDistribution(-10, 10)}",
-            candidatesFunc: BoTorchCandidates.QNei, cfExpr: "integration.botorch.qnei_candidates_func",
+            candidatesFunc: BoTorchCandidatesFunc.QNei, cfExpr: "integration.botorch.qnei_candidates_func",
             nStartup: 5, nTrials: 11, seed: 7);
 
     // ---- integer search space (untransform snaps to the identical grid point) -------------------
@@ -126,7 +126,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
         => AssertReplayParity(
             objective: t => { long n = t.SuggestInt("n", 0, 50); return (n - 20.0) * (n - 20.0); },
             spaceExpr: "{'n': IntDistribution(0, 50)}",
-            candidatesFunc: null, cfExpr: "None",
+            candidatesFunc: BoTorchCandidatesFunc.Auto, cfExpr: "None",
             nStartup: 6, nTrials: 12, seed: 2);
 
     // ---- C# determinism (no Python) -------------------------------------------------------------
@@ -147,22 +147,11 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
             "the same seed must reproduce the identical trajectory bit-for-bit in C#");
     }
 
-    // ---- default candidates_func selection (no Python) ------------------------------------------
-
-    [TestMethod]
-    public void GetDefaultCandidatesFunc_SingleObjective_PicksLogEiOrQei()
-    {
-        BoTorchCandidates.GetDefaultCandidatesFunc(nObjectives: 1, hasConstraint: false, considerRunningTrials: false)
-            .Should().Be((BoTorchCandidatesFunc)BoTorchCandidates.LogEi);
-        BoTorchCandidates.GetDefaultCandidatesFunc(nObjectives: 1, hasConstraint: false, considerRunningTrials: true)
-            .Should().Be((BoTorchCandidatesFunc)BoTorchCandidates.Qei);
-    }
-
     // ---- harness --------------------------------------------------------------------------------
 
     private void AssertReplayParity(
         Func<Trial, double> objective, string spaceExpr,
-        BoTorchCandidatesFunc? candidatesFunc, string cfExpr,
+        BoTorchCandidatesFunc candidatesFunc, string cfExpr,
         int nStartup, int nTrials, int seed)
     {
         RequireBoTorchOrInconclusive();

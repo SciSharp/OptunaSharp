@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
@@ -28,6 +29,7 @@ public static class PythonRuntime
     private static string? _sitePackages;   // discovered by ResolvePythonDll, injected after Initialize
 
     private static PyObject? _optuna, _optunahub, _builtins;
+    private static readonly Dictionary<string, PyObject> _importCache = new();
 
     /// <summary><c>true</c> once <see cref="PythonEngine" /> is running (started by us or the host).</summary>
     public static bool IsInitialized => PythonEngine.IsInitialized;
@@ -122,6 +124,39 @@ public static class PythonRuntime
 
     /// <summary>Cached <c>builtins</c> module (per process). Call under the GIL.</summary>
     public static PyObject Builtins => GetModule(ref _builtins, "builtins");
+
+    /// <summary>
+    ///     Import (once) and cache an arbitrary Python module by name — e.g. <c>torch</c>,
+    ///     <c>botorch.acquisition.logei</c>. The generic form of <see cref="Optuna" /> /
+    ///     <see cref="Builtins" /> for bridges that touch other libraries. The returned handle is
+    ///     process-scoped: use it as a plain local and <b>do not dispose it</b> (only fresh
+    ///     <c>GetAttr</c>/<c>Invoke</c> results are disposable). Call under the GIL (from a
+    ///     <see cref="Run(Action)" /> body).
+    /// </summary>
+    /// <exception cref="OptunaHubInteropException">The module could not be imported.</exception>
+    public static PyObject Import(string moduleName)
+    {
+        lock (_gate)
+        {
+            if (_importCache.TryGetValue(moduleName, out PyObject? cached))
+                return cached;
+
+            PyObject module;
+            try
+            {
+                module = Py.Import(moduleName);
+            }
+            catch (PythonException ex)
+            {
+                throw new OptunaHubInteropException(
+                    $"Failed to `import {moduleName}` in the embedded interpreter. Install the package " +
+                    "that provides it into the Python that hosts this process.", ex);
+            }
+
+            _importCache[moduleName] = module;
+            return module;
+        }
+    }
 
     /// <summary>The discovered <c>optuna.__version__</c> (or <c>null</c> before first use / on failure).</summary>
     public static string? OptunaVersion { get; private set; }

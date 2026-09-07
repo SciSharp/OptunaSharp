@@ -8,9 +8,10 @@ It is a faithful C# port of the *glue* in `optuna_integration.BoTorchSampler` �
 (search-space intersection, one-hot transform, startup trials, running-trial handling, direction
 flipping, seed handling) and the `candidates_func` selection — while every **numerical** step
 (`SingleTaskGP`, `fit_gpytorch_mll`, the acquisition functions, `optimize_acqf`) is a **direct call
-into `botorch`**. So you get the genuine article: **byte-exact with BoTorch**, the full acquisition
-suite, a custom `candidates_func`, and `device=` GPU offload — with the Optuna side staying native
-OptunaSharp (your study, storage, and RNG).
+into `botorch`**. So you get the genuine article: **byte-exact with BoTorch** and its acquisition
+suite — with the Optuna side staying native OptunaSharp (your study, storage, and RNG). The bridge keeps
+pythonnet off its public surface: you pick an acquisition with the `BoTorchCandidatesFunc` enum, never a
+`torch.Tensor`.
 
 Unlike the Python integration, this package does **not** depend on `optuna_integration` — we port it.
 You only need `botorch` installed in a discoverable CPython:
@@ -31,13 +32,13 @@ study.Optimize(t => Math.Pow(t.SuggestFloat("x", -10, 10) - 2, 2), nTrials: 30);
 Console.WriteLine($"{study.BestValue} at {study.BestParams["x"]}");
 ```
 
-By default the acquisition function is chosen automatically from the number of objectives and whether
-constraints are present (single-objective → log-Expected Improvement). Pick one explicitly, or supply
-your own:
+By default the acquisition function is chosen automatically (`BoTorchCandidatesFunc.Auto`) from the
+number of objectives and whether running trials are considered (single-objective → log-Expected
+Improvement). Pick one explicitly:
 
 ```csharp
 var study = Optuna.CreateStudy(
-    sampler: new BoTorchSampler(candidatesFunc: BoTorchCandidates.Qnei, seed: 0));
+    sampler: new BoTorchSampler(candidatesFunc: BoTorchCandidatesFunc.QNei, seed: 0));
 ```
 
 ## How it works
