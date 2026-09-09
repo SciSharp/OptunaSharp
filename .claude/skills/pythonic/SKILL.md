@@ -1,44 +1,31 @@
 ---
 name: pythonic
-description: Write or use OptunaSharp's "pythonic" pythonnet interop layer — the root `static class Python` whose nested subclasses form a tree reaching each Python call (so C# driving embedded CPython reads like Python), plus the GIL/PyObject-lifetime discipline and NumSharp's ZERO-COPY NDArray⇄numpy⇄torch crossing (so you never hand-roll element loops). Use when building or editing a pythonnet bridge (BoTorch, OptunaHub, …), adding a `Python.*` facade member or a nested class that exposes a Python object's methods/properties, crossing data between C# and numpy/torch, deciding typed-facade vs `evalStmts` snippet or explicit-verb vs codec (RegisterCodec/NumpyCodec) crossing, or debugging a GIL / leak / lifetime / "numpy scalar isn't a Python int" bug in the interop.
-keywords: pythonic layer, static class Python tree, Python.* facade, pythonnet bridge, make C# read like Python, nested class for object members, zero-copy tensor crossing, NDArray to torch, ToTorch, ToTorchNDArray, GIL discipline, PyObject lifetime, evalStmts snippet runner, PythonRuntime.Run
+description: Write a "pythonic" pythonnet interop layer — a root `static class Python` whose nested subclasses form a tree that makes C# driving embedded CPython read like the Python it drives, plus the GIL / PyObject-lifetime discipline and the ZERO-COPY NDArray⇄numpy⇄torch crossing (via NumSharp's `NumSharp.Interop.pythonnet`, so you never hand-roll element loops). Use when building or editing any pythonnet bridge, adding a `Python.*` facade member or a nested class that exposes a Python object's methods/properties, crossing array/tensor data between C# and numpy/torch, deciding typed-facade vs `evalStmts` snippet or explicit-verb vs codec (RegisterCodec/NumpyCodec) crossing, or debugging a GIL / leak / lifetime / "numpy scalar isn't a Python int" bug in the interop.
+keywords: pythonic layer, static class Python tree, Python.* facade, pythonnet bridge, make C# read like Python, nested class for object members, zero-copy tensor crossing, NDArray to torch, ToTorch, ToTorchNDArray, GIL discipline, PyObject lifetime, evalStmts snippet runner
 keywords-sparse: pythonic interop, static class Python, Python.* surface, zero-copy numpy/torch crossing, GIL and PyObject lifetime, typed facade vs evalStmts, nested class not extensions
 ---
 
 # pythonic — the `Python.*` interop layer (read like Python, cross data zero-copy)
 
-How OptunaSharp's pythonnet bridges (`OptunaSharp.Interop.BoTorch`, `.OptunaHub`, …) drive **embedded
-CPython** so the C# reads like the Python it ports — and how to move arrays/tensors across the boundary
-**without copying, element by element, ever**. Built on the generic backend
-`OptunaSharp.Interop.pythonnet` (`PythonRuntime`) and NumSharp's `NumSharp.Interop.pythonnet` crossing.
+How to drive **embedded CPython** from C# (via pythonnet) so the C# reads like the Python it drives — and
+how to move arrays/tensors across the boundary **without copying, element by element, ever**. Two
+ingredients: a small **library-agnostic backend** that owns engine startup + the GIL + a module-import
+cache, and NumSharp's **`NumSharp.Interop.pythonnet`** zero-copy crossing. Everything below is the pattern;
+adapt the module/class names to whatever library your bridge drives.
 
-**Reference implementations — our surface standard (copy these):**
-- `src/OptunaSharp.Interop.BoTorch/Pythonic.cs` — the canonical surface: a root `static class Python`
-  with a tree of nested subclasses — `Python.botorch.*` (the snippet runner + `manual_seed` scope) and
-  `Python.torch.Tensor.*` (a Python object's members exposed as a **nested class**, e.g.
-  `Python.torch.Tensor.size_t(t, -1)` — NOT extension methods).
-- `src/OptunaSharp.Interop.pythonnet/Pythonic.cs` — the same tree for the **OptunaHub** bridge:
-  `Python.optuna.*` (`create_study`, `trial.create_trial`, `distributions.*`, `Study.ask`,
-  `samplers.BaseSampler.sample_relative`, `pruners.BasePruner.prune`) + `Python.optunahub.*`
-  (`load_module`, `benchmarks.BaseProblem.evaluate`). Only FIXED calls live in the tree; fixed
-  object-protocol methods are nested classes taking the object (`Study`, `Trial`, `BaseSampler`, …).
-- `src/OptunaSharp.Interop.pythonnet/PythonRuntime.cs` — the generic, library-agnostic backend
-  (`Initialize` / `Run` / `Import` / `Builtins`; there is **no `Py.*` extension**).
-
-**NumSharp — reference for the CROSSING + the snippet-runner idea, NOT the surface:**
-- `refs/NumSharp/src/NumSharp.Interop.pythonnet/` — the zero-copy `NDArray`⇄numpy⇄torch crossing this
-  builds on (§4/§5). NumSharp exposes its own `Python.np` facade through a **namespace + C# extension
-  members** (`PyObjectPythonic`) — a *different* style we deliberately do **not** use for our surface
-  (§1/§7); read it for the crossing, not the tree.
-- `refs/NumSharp/test/NumSharp.Tests.Interop/Pythonic.cs` — the `eval`/`with`/`evalStmts` snippet-runner
-  escape hatch (the precedent for our flavor B).
+**The shared references** (SciSharp foundation, not tied to any one bridge):
+- `NumSharp.Interop.pythonnet` — the zero-copy `NDArray`⇄numpy⇄torch/pandas crossing (§4/§5) every bridge
+  builds on. Its own `Pythonic.cs` is a worked **typed facade** and its test-side one adds the
+  `eval`/`with`/`evalStmts` **snippet runner** — read them for the crossing and for flavor B. (NumSharp
+  spells its own facade through a *namespace + C# extension members*; that is a different surface style —
+  see §1/§7 — so copy it for the crossing, not for the tree.)
 
 ---
 
 ## 1 — The two flavors (pick the right one)
 
 The pythonic surface is a root **`static class Python`** whose **nested subclasses form a tree** reaching
-each Python call, so call sites read `Python.torch.tensor(...)` / `Python.botorch.evalStmts(...)`. It is
+each Python call, so call sites read `Python.torch.tensor(...)` / `Python.somelib.evalStmts(...)`. It is
 always spelled **`Python.*`** — never a `using` of a namespace, never an extension method. The class
 shadows pythonnet's `Python.Runtime` namespace in scope, so the surface stays explicit and collision-free,
 and any Python object whose methods/properties you need is exposed as **a nested class under `Python`**
@@ -52,7 +39,7 @@ internal static class Python                        // the root; always spelled 
 {
     internal static class torch
     {
-        private static PyObject Module => PythonRuntime.Import("torch");   // cached, process-scoped
+        private static PyObject Module => Import("torch");                 // backend's cached, process-scoped import
         internal static PyObject float64 => Module.GetAttr("float64");     // caller disposes
         internal static PyObject tensor(PyObject data)                     // Python.torch.tensor(data, …)
         {
@@ -87,25 +74,24 @@ internal static class torch                          // nested under Python
 
 **(B) Snippet runner — execute multi-statement Python SOURCE.** For a body that is a little *program*
 (control flow, kwarg-heavy constructor calls) and must **diff 1:1 against the reference Python**, don't
-translate it to `GetAttr`/`Invoke` chains — run it as text. This is NumSharp's test `Python.np`
-`eval`/`with`/`evalStmts`, and our `Python.botorch`:
+translate it to `GetAttr`/`Invoke` chains — run it as text:
 
 ```csharp
 internal static PyObject evalStmts(string setup, string resultVar, params (string name, PyObject val)[] vars)
 {
     using PyModule scope = Py.CreateScope();
-    scope.Exec(Imports);                              // `import torch`, `from botorch… import …`
+    scope.Exec(Imports);                              // the `import …` / `from … import …` the body needs
     foreach ((string name, PyObject val) in vars) scope.Set(name, val);
-    scope.Exec(setup);                                // the 7-line GP-fit + acqf + optimize body
+    scope.Exec(setup);                                // the multi-statement body
     return scope.Eval(resultVar);
 }
 ```
-The body lives as a `const string` that reads like `botorch.py`:
+The body lives as a `const string` that reads 1:1 like the source Python it ports:
 ```csharp
-private const string LogEiBody =
-    "train_x = normalize(train_x, bounds=bounds)\n" +
-    "model = SingleTaskGP(train_x, train_obj, outcome_transform=Standardize(m=train_obj.size(-1)))\n" +
-    "fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))\n" + …;
+private const string FitBody =
+    "model = SomeModel(train_x, train_y, transform=Standardize(m=train_y.size(-1)))\n" +
+    "fit(model)\n" +
+    "result = optimize(acqf(model), bounds=bounds)\n" + …;
 ```
 
 **The decision, in one line:** a single clean call → a **facade row** (A); a multi-statement program you
@@ -114,22 +100,22 @@ and don't unroll multi-statement Python into `PyObject` chains. Keep *both* on p
 
 **Only FIXED calls go in the `Python.*` tree.** A call whose name you know at compile time — a module
 function, a constructor, an object's protocol method — becomes a facade row / nested-class member. A call
-whose target is chosen at RUNTIME — an arbitrary user-loaded contributor class (`module.GetAttr(className)`
-+ instantiate), a `HasAttr` presence probe, `__name__`/type reflection, generic `dict.items()` / `__len__`
-iteration — stays raw at the call site (it can't be a static facade). The OptunaHub bridge is the worked
-example: `Python.optuna.trial.create_trial(...)` is a row; `module.GetAttr(className).Invoke(...)` stays raw.
+whose target is chosen at RUNTIME — an arbitrary user-loaded class (`module.GetAttr(className)` +
+instantiate), a `HasAttr` presence probe, `__name__`/type reflection, generic `dict.items()` / `__len__`
+iteration — stays raw at the call site (it can't be a static facade). A plugin loader is the worked
+example: `Python.lib.make_thing(...)` is a row; `module.GetAttr(userClassName).Invoke(...)` stays raw.
 
 ---
 
 ## 2 — GIL discipline (non-negotiable)
 
-Everything that touches a `PyObject` — including its `Dispose` — runs **under the GIL**. Go through
-`PythonRuntime.Run`, which acquires it (and starts the engine if needed):
+Everything that touches a `PyObject` — including its `Dispose` — runs **under the GIL**. Route every
+Python-touching body through a backend `Run` helper that holds `Py.GIL()` (and starts the engine if needed):
 
 ```csharp
-double best = PythonRuntime.Run(() =>                 // holds Py.GIL() for the whole body
+double best = Run(() =>                               // holds Py.GIL() for the whole body
 {
-    using PyObject t = BoTorchInterop.ToTensor(matrix);
+    using PyObject t = ToTensor(matrix);             // your bridge's marshaling helper
     return Python.torch.Tensor.size_t(t, 0);
 });
 ```
@@ -143,7 +129,7 @@ double best = PythonRuntime.Run(() =>                 // holds Py.GIL() for the 
 
 ## 3 — Lifetime & ownership (where the leaks and use-after-frees hide)
 
-- **Cached modules are process-scoped — never dispose them.** `PythonRuntime.Import("torch")` returns a
+- **Cached modules are process-scoped — never dispose them.** The backend's `Import("torch")` returns a
   session-owned handle; a `using` on it decrefs the cache. Long-lived singletons (a dtype object) may be
   cached the same way; on a race, **loser-dispose** (`ConcurrentDictionary.TryAdd`, dispose the loser).
 - **A returned `PyObject` is owned by the caller — dispose it** (`using`). Bound operands passed into a
@@ -155,22 +141,23 @@ double best = PythonRuntime.Run(() =>                 // holds Py.GIL() for the 
   using PyObject cpu = detached.cpu();
   using PyObject list = cpu.tolist();
   ```
-  (This is why the facade members return owned `PyObject`s and the docs say "dispose it".)
-- **A context manager becomes a disposable scope.** `with manual_seed(seed):` →
-  `using (Python.botorch.manual_seed(seed)) …` (enter on ctor, `__exit__` on `Dispose`, both under the GIL).
+  (This is why facade members return owned `PyObject`s and the docs say "dispose it".)
+- **A context manager becomes a disposable scope.** A Python `with obj(...):` → an `IDisposable` that
+  enters on the ctor and calls `__exit__` on `Dispose` (both under the GIL), used as
+  `using (Python.lib.obj(...)) …`.
 
 ---
 
 ## 4 — Data crossing: NEVER hand-roll element loops — use NumSharp's interop
 
-Add the package (version single-sourced with Core's NumSharp):
+Add the package (single-source the version with the rest of your NumSharp stack):
 ```xml
 <PackageReference Include="NumSharp.Interop.pythonnet" Version="$(NumSharpVersion)" />
 ```
 It **requires an already-running engine** (`EnsureEngine` throws otherwise) and wires onto the SAME
-embedded engine `PythonRuntime` starts — it does NOT start its own, and its GIL is re-entrant. Two ways
-to cross data: the **explicit verbs** here (local, no global side effect — the right default for a
-bridge), or **codecs** that convert implicitly at every boundary (§5).
+embedded engine your backend starts — it does NOT start its own, and its GIL is re-entrant. Two ways to
+cross data: the **explicit verbs** here (local, no global side effect — the right default for a bridge), or
+**codecs** that convert implicitly at every boundary (§5).
 
 **The four verbs** (`NumSharp.Interop.PythonNet.NDArrayPythonInterop`):
 | Verb | Direction | Copy? |
@@ -191,15 +178,14 @@ NumSharp roots its buffer for the tensor's life); `pyTensor.ToTorchNDArray(force
 
 ```csharp
 // managed double[,]  →(pin)→ NDArray view →(np.frombuffer)→ numpy view →(from_numpy)→ torch tensor
-internal static PyObject ToTensor(double[,] data) => np.array(data, copy: false).ToTorch();
+static PyObject ToTensor(double[,] data) => np.array(data, copy: false).ToTorch();
 // torch result → NDArray (one bulk copy, safe to dispose the tensor after)
-internal static NDArray  ToNDArray(PyObject tensor) => tensor.ToTorchNDArray(force: true);
+static NDArray  ToNDArray(PyObject tensor) => tensor.ToTorchNDArray(force: true);
 ```
 NumSharp's `ExportKeeper` + `weakref.finalize` hold the pin until the last Python view dies, then
 `UnmanagedMemoryBlock`'s `Disposer` calls `GCHandle.Free()`. So the managed array must be **short-lived
 and not mutated** by the Python side (pin lifetime = tensor lifetime, released on Python GC) — true for
-per-call training matrices. The old PyList-append / `tolist()`-loop marshaling is the anti-pattern this
-replaces.
+per-call matrices. The old PyList-append / `tolist()`-loop marshaling is the anti-pattern this replaces.
 
 **Why this is genuinely zero-copy — not just "no loop".** Export is `ctypes.c_char.from_address(ptr)` →
 `np.frombuffer` → `np.lib.stride_tricks.as_strided(dims, byteStrides)`, so numpy gets the EXACT layout —
@@ -248,8 +234,8 @@ NDArray back = r.As<NDArray>();           // numpy / torch / pandas / list -> ND
 **Explicit verbs (§4) vs codecs — the decision:**
 - **Explicit** — local, zero global footprint, per-call view/copy control; the typed `nd.ToPython()` even
   yields numpy **without any registration** (it wins overload resolution over pythonnet's `object.ToPython`).
-  **Default for a focused bridge** (BoTorch builds torch tensors explicitly; a codec wouldn't touch the
-  torch-encode side anyway — which is why this repo's bridges use the verbs and register **no** codec).
+  **Default for a focused bridge** (build torch tensors explicitly; a codec wouldn't touch the torch-encode
+  side anyway).
 - **Codecs** — implicit and broad (numpy + torch/pandas + buffers + array-likes + tuples), best when you
   **own the process** or pass lots of numpy/lists and want it ergonomic. The cost is the process-global
   scope: never register from a library that shouldn't dictate conversion for unrelated code.
@@ -258,16 +244,16 @@ NDArray back = r.As<NDArray>();           // numpy / torch / pandas / list -> ND
 
 ## 6 — The generic backend vs library specifics
 
-`OptunaSharp.Interop.pythonnet/PythonRuntime.cs` is **library-agnostic**: `Initialize()` (idempotent,
+Keep a **library-agnostic backend** (one per process) that owns: `Initialize()` (idempotent,
 process-scoped; honors `PYTHONNET_PYDLL`, else probes `python`/`python3` for libpython + injects
-site-packages so `pip install`ed packages import), `Run(Action)`/`Run<T>(Func<T>)` (GIL), `Import(name)`
-(cached), `Builtins`. It does **no** startup imports. Its entry points stay on `PythonRuntime` — there is
-**no `Py.*` extension**; the pythonic surface is the `Python.*` tree, not members hung on pythonnet's `Py`.
-Library-specific accessors (versions, `EnsureQuiet`, module handles) live in their own runtime (e.g.
-`OptunaHubRuntime`). Exception base: `PythonInteropException` (e.g.
-`OptunaHubInteropException : PythonInteropException`).
+site-packages so `pip install`ed packages import), `Run(Action)`/`Run<T>(Func<T>)` (the GIL entry),
+`Import(name)` (cached), `Builtins`. It does **no** startup imports and hangs **nothing** on pythonnet's
+`Py` — there is no `Py.*` extension; the pythonic surface is the `Python.*` tree. Library-specific
+accessors (discovered versions, log-quieting, cached module handles) layer on top in their own runtime
+class. Give the bridge a typed exception base (e.g. `PythonInteropException`) and derive per-library ones
+from it.
 
-Discovery pin for this machine: `PYTHONNET_PYDLL=C:/Users/ELI/.claude/python/python312.dll`.
+Pin discovery when a machine has several interpreters: `PYTHONNET_PYDLL=/path/to/libpython3.x.{dll,so,dylib}`.
 
 ---
 
@@ -283,28 +269,26 @@ Discovery pin for this machine: `PYTHONNET_PYDLL=C:/Users/ELI/.claude/python/pyt
   binds to the class. Reference pythonnet types via `Py` / `PyObject` (from `using Python.Runtime;`), never
   a `Python.Runtime.X` qualifier inside a file where `Python` is the class.
 - **A numpy scalar is not a Python `int`.** pythonnet's primitive conversions never consult codecs, so
-  `PyLong("arr[i]")` on an int64 array throws — use `int(arr[i])` / `.item()`. numpy floats ARE Python
+  `new PyInt(arr[i])` on an int64 array throws — use `int(arr[i])` / `.item()`. numpy floats ARE Python
   floats; a 0-d ndarray is neither (`float(z0)`).
-- **Don't dispose cached module handles** (§3). And don't dispose `PyObject.None` casually — mirror the
-  reference (NumSharp `using`s it, but it's a shared singleton; follow the existing code).
+- **Don't dispose cached module handles** (§3). And don't dispose `PyObject.None` casually — it's a shared
+  singleton; follow the reference code.
 - **`GetEnumerator()` must not return `this`** for an object that owns unmanaged/GIL state — `foreach`
-  disposes the enumerator (closes the iterator). Hand out a thin wrapper (see NumSharp's `nditer` notes).
+  disposes the enumerator (closes the iterator). Hand out a thin wrapper (see NumSharp's `nditer`).
 - **Never build arrays/tensors element by element.** No PyList-append loops in, no `tolist()` loops out —
   §4's crossing does it as a view or one bulk copy.
-- **Keep the reference Python close.** Snippet bodies (flavor B) must diff 1:1 against the source
-  (`botorch.py`, the OptunaHub module) — port them near-verbatim, `import`s in the scope, don't
-  paraphrase.
+- **Keep the reference Python close.** Snippet bodies (flavor B) must diff 1:1 against the source Python you
+  port — port them near-verbatim, `import`s in the scope, don't paraphrase.
 
 ---
 
 ## Definition of done
 
-The bridge reads like the Python it ports: single calls are **facade rows** or **nested-class object
+The bridge reads like the Python it drives: single calls are **facade rows** or **nested-class object
 members** under the root `static class Python` (`Python.torch.Tensor.size_t(t, -1)` — never an extension),
-multi-statement bodies are **`Python.botorch.evalStmts` snippets** that diff 1:1 against the source; every
-`PyObject` touch is under the GIL via `PythonRuntime.Run`; every returned
-`PyObject` is `using`-disposed and no fluent chain leaks an intermediate; and **all** array/tensor data
-crosses through NumSharp's zero-copy `NumSharp.Interop.pythonnet` — the explicit verbs
-(`np.array(x, copy:false).ToTorch()` in, `ToTorchNDArray` out) or a registered codec — **never** a
-hand-rolled element loop. Validate with the live interop gate
-(byte-exact vs the real library) on both TFMs; a leak gate that returns to baseline proves the lifetimes.
+multi-statement bodies are **`evalStmts` snippets** that diff 1:1 against the source; every `PyObject`
+touch is under the GIL via the backend `Run` helper; every returned `PyObject` is `using`-disposed and no
+fluent chain leaks an intermediate; and **all** array/tensor data crosses through NumSharp's zero-copy
+`NumSharp.Interop.pythonnet` — the explicit verbs (`np.array(x, copy:false).ToTorch()` in, `ToTorchNDArray`
+out) or a registered codec — **never** a hand-rolled element loop. Validate with a live interop gate
+(byte-exact vs the real library) on every TFM; a leak gate that returns to baseline proves the lifetimes.
