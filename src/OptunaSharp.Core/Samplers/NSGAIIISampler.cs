@@ -29,6 +29,13 @@ namespace OptunaSharp.Samplers;
 ///     drift in the hyperplane-fit solve, which only changes selection when it flips a niche decision
 ///     within ULPs of a tie — see the <c>[Misaligned]</c> note on
 ///     <see cref="NSGAIIIElitePopulationSelectionStrategy" />.</para>
+///
+///     <para><b>Conditional parameters (OptunaSharp extension).</b> Optuna's GA samplers evolve only the
+///     intersection search space, so a define-by-run parameter suggested under a branch drops out after
+///     the first trial that lacks it and is resampled at random ever after. Passing
+///     <see cref="ConditionalParams" /> declares which parameters are conditional on which activator
+///     values; they then stay in the relative search space and are crossed over, mutated and inherited
+///     whenever active, and are simply absent whenever not. Off by default (parity untouched).</para>
 /// </summary>
 public class NSGAIIISampler : BaseGASampler
 {
@@ -77,6 +84,15 @@ public class NSGAIIISampler : BaseGASampler
     /// <param name="elitePopulationSelectionStrategy">Overrides elite selection.</param>
     /// <param name="childGenerationStrategy">Overrides child generation.</param>
     /// <param name="afterTrialStrategy">Overrides the after-trial procedure.</param>
+    /// <param name="conditionalParams">
+    ///     OptunaSharp extension (no Optuna analog): activation rules for parameters that only exist under
+    ///     some values of other parameters — see <see cref="ConditionalParams" />. Declared parameters are
+    ///     evolved (crossed over, mutated, inherited) whenever active instead of falling out of the
+    ///     intersection search space and being resampled at random on every trial. <c>null</c> (default)
+    ///     keeps the Optuna-parity behavior. Only the built-in child generation honors it; a custom
+    ///     <paramref name="childGenerationStrategy" /> receives the widened search space and must cope with
+    ///     parents that lack conditional parameters itself.
+    /// </param>
     public NSGAIIISampler(
         int populationSize = 50,
         BaseMutation? mutation = null,
@@ -91,7 +107,8 @@ public class NSGAIIISampler : BaseGASampler
         Func<Study, List<FrozenTrial>, List<FrozenTrial>>? elitePopulationSelectionStrategy = null,
         Func<Study, OrderedDict<string, BaseDistribution>, List<FrozenTrial>, OrderedDict<string, object?>>?
             childGenerationStrategy = null,
-        Action<Study, FrozenTrial, TrialState, IReadOnlyList<double>?>? afterTrialStrategy = null)
+        Action<Study, FrozenTrial, TrialState, IReadOnlyList<double>?>? afterTrialStrategy = null,
+        ConditionalParams? conditionalParams = null)
         : base(populationSize)
     {
         // @experimental_class("3.2.0") wraps __init__ and warns before any validation runs.
@@ -120,14 +137,15 @@ public class NSGAIIISampler : BaseGASampler
 
         _randomSampler = new RandomSampler(seed);
         _rng = new LazyRandomState(seed);
-        _searchSpace = new IntersectionSearchSpace();
+        _searchSpace = new IntersectionSearchSpace(conditionalParams: conditionalParams);
 
         _elitePopulationSelectionStrategy = elitePopulationSelectionStrategy
             ?? new NSGAIIIElitePopulationSelectionStrategy(
                 populationSize, _rng, constraintsFunc, referencePoints, dividingParameter).Select;
         _childGenerationStrategy = childGenerationStrategy
             ?? new NSGAIIChildGenerationStrategy(
-                mutation, mutationProb, crossover, crossoverProb, swappingProb, constraintsFunc, _rng).Generate;
+                mutation, mutationProb, crossover, crossoverProb, swappingProb, constraintsFunc, _rng,
+                conditionalParams).Generate;
         _afterTrialStrategy = afterTrialStrategy
             ?? new NSGAIIAfterTrialStrategy(constraintsFunc).Call;
     }

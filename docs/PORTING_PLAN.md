@@ -698,6 +698,22 @@ moment OptunaSharp.Core loads. Keep it.
     same tolerance class). **RESOLVED in 2.15:** the solve/matrix_rank now route through
     `LinAlg`→`np.linalg` over OpenBLAS (byte-identical to numpy), so this note is history — the 400-config
     differential still passes, now with a genuinely byte-exact hyperplane fit.
+- ✅ **2.14-ext** — `feat(samplers): ConditionalParams — activation rules for define-by-run conditional
+  parameters in NSGA-II/III`. **Extension beyond Optuna** (no live-interop parity; opt-in, default path
+  untouched). Optuna's GA samplers evolve only the `IntersectionSearchSpace`, so a parameter suggested
+  under a branch (`if (optimizer == "adam") SuggestFloat("beta1", …)`) leaves the intersection after the
+  first trial that lacks it and is resampled by the independent `RandomSampler` forever — no crossover,
+  mutation or inheritance. `SearchSpace/ConditionalParams.cs` (`When(activator, values…|predicate)
+  .Activates(params…)`; OR within an activator, AND across, chains allowed, cycles/self rejected, Python
+  `==` via `CategoricalChoice`) is consumed at three seams: `SearchSpaceFunctions.CalculateConditional`
+  (same incremental-cache fold; conditional params survive absence, join on first sighting, tombstoned
+  on a distribution change; contradiction warning once per param), `NsgaiiCrossover.
+  PerformConditionalCrossover` (operators over the keys all parents carry, partial carriers inherited,
+  child pruned before the containment check) and the `NSGAIIChildGenerationStrategy` copy branch +
+  pre-mutation prune (so inactive params neither mutate nor count in `1/n_params`). `conditionalParams:`
+  ctor arg on both samplers. `test/OptunaSharp.Tests/ConditionalParamsTests.cs`: rule algebra, prune
+  order, widened space, inheritance-vs-resampling A/B under `mutationProb: 0`, SBX/SPX smoke, and a
+  never-firing rule reproducing the Optuna 5.0.0.dev NSGA-III sequence bit-for-bit.
 - ✅ **2.15** — `feat(linalg): Phase 2.15 — OpenBLAS-backed linalg primitives (LinAlg) for CMA-ES/GP`.
   **Redirected mid-flight by the maintainer** from hand-rolled managed primitives to
   **`NumSharp.Interop.OpenBLAS`** (*"use NumSharp + OpenBLAS any time Optuna uses NumPy"*). Core's csproj

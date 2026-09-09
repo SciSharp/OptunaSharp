@@ -5,6 +5,7 @@ using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
+using OptunaSharp.SearchSpace;
 
 namespace OptunaSharp.Samplers.Nsgaii;
 
@@ -49,6 +50,138 @@ internal static class NsgaiiCrossover
             if (IsContained(childParams, searchSpace))
                 return childParams;
         }
+    }
+
+    /// <summary>
+    ///     The <see cref="ConditionalParams" /> variant of <see cref="PerformCrossover" /> — an OptunaSharp
+    ///     extension with no Optuna analog, reached only when rules are declared, so the parity path above
+    ///     is untouched. Parents may lack conditional parameters: the operators run over what the selected
+    ///     parents share, the rest is inherited from a carrier, and parameters inactive for the child are
+    ///     pruned before the containment check (so an inactive value can neither fail it nor reach the
+    ///     trial). Parent selection is the same binary tournament as the parity path.
+    /// </summary>
+    internal static OrderedDict<string, object?> PerformConditionalCrossover(
+        BaseCrossover crossover,
+        Study study,
+        IReadOnlyList<FrozenTrial> parentPopulation,
+        OrderedDict<string, BaseDistribution> searchSpace,
+        NumPyRandom rng,
+        double swappingProb,
+        Func<FrozenTrial, FrozenTrial, IReadOnlyList<StudyDirection>, bool> dominates,
+        ConditionalParams conditionalParams)
+    {
+        var numericalSearchSpace = new OrderedDict<string, BaseDistribution>();
+        var categoricalSearchSpace = new OrderedDict<string, BaseDistribution>();
+        foreach (var (key, value) in searchSpace)
+        {
+            if (value is FloatDistribution or IntDistribution)
+                numericalSearchSpace[key] = value;
+            else
+                categoricalSearchSpace[key] = value;
+        }
+
+        while (true)  // Repeat while parameters lie outside search space boundaries.
+        {
+            var parents = SelectParents(crossover, study, parentPopulation, rng, dominates);
+            var childParams = TryConditionalCrossover(
+                parents, crossover, study, rng, swappingProb, categoricalSearchSpace, numericalSearchSpace);
+            conditionalParams.Prune(childParams, searchSpace);
+
+            if (IsContained(childParams, searchSpace))
+                return childParams;
+        }
+    }
+
+    /// <summary>
+    ///     <see cref="TryCrossover" /> for parents that may lack conditional parameters. Categorical:
+    ///     uniform crossover between the first and last parent over the keys both carry (one mask draw per
+    ///     shared key, in search-space order — the same draws as the parity path when nothing is missing);
+    ///     a key only one of them carries is inherited from it. Numerical: the crossover operator sees the
+    ///     keys every parent carries (a well-formed parents × dims matrix in the transformed space, with
+    ///     the transform built per parent set); a key only some parents carry is inherited from one of
+    ///     them, drawn uniformly. A key no parent carries stays absent and is sampled independently later
+    ///     if the objective asks for it. Child keys keep search-space order, as in the parity path.
+    /// </summary>
+    private static OrderedDict<string, object?> TryConditionalCrossover(
+        List<FrozenTrial> parents,
+        BaseCrossover crossover,
+        Study study,
+        NumPyRandom rng,
+        double swappingProb,
+        OrderedDict<string, BaseDistribution> categoricalSearchSpace,
+        OrderedDict<string, BaseDistribution> numericalSearchSpace)
+    {
+        var childParams = new OrderedDict<string, object?>();
+
+        if (categoricalSearchSpace.Count > 0)
+        {
+            var first = parents[0].ParamsDict;
+            var last = parents[^1].ParamsDict;
+            var shared = categoricalSearchSpace.Keys.Where(k => first.ContainsKey(k) && last.ContainsKey(k)).ToList();
+            var crossed = shared.Count == 0
+                ? Array.Empty<object?>()
+                : InlinedCategoricalUniformCrossover(
+                    shared.Select(k => first[k]).ToArray(), shared.Select(k => last[k]).ToArray(),
+                    rng, swappingProb, shared.Count);
+
+            int j = 0;
+            foreach (var key in categoricalSearchSpace.Keys)
+            {
+                bool inFirst = first.ContainsKey(key), inLast = last.ContainsKey(key);
+                if (inFirst && inLast)
+                    childParams[key] = crossed[j++];
+                else if (inFirst)
+                    childParams[key] = first[key];
+                else if (inLast)
+                    childParams[key] = last[key];
+            }
+        }
+
+        if (numericalSearchSpace.Count == 0)
+            return childParams;
+
+        var common = new OrderedDict<string, BaseDistribution>();
+        var partialCarriers = new Dictionary<string, List<FrozenTrial>>(StringComparer.Ordinal);
+        foreach (var (key, distribution) in numericalSearchSpace)
+        {
+            var carriers = parents.Where(p => p.ParamsDict.ContainsKey(key)).ToList();
+            if (carriers.Count == parents.Count)
+                common[key] = distribution;
+            else if (carriers.Count > 0)
+                partialCarriers[key] = carriers;
+        }
+
+        var crossedNumerical = new OrderedDict<string, object?>();
+        if (common.Count > 0)
+        {
+            var transform = new SearchSpaceTransform(common);
+            var parentsNumerical = new double[parents.Count][];
+            for (int i = 0; i < parents.Count; i++)
+            {
+                var row = new OrderedDict<string, object?>();
+                foreach (var key in common.Keys)
+                    row[key] = parents[i].ParamsDict[key];
+                parentsNumerical[i] = transform.Transform(row).ToArray<double>();
+            }
+
+            var childNumericalArray = crossover.Crossover(parentsNumerical, rng, study, transform.RawBounds);
+            crossedNumerical = transform.Untransform(np.array(childNumericalArray));
+        }
+
+        foreach (var key in numericalSearchSpace.Keys)
+        {
+            if (crossedNumerical.TryGetValue(key, out var value))
+            {
+                childParams[key] = value;
+            }
+            else if (partialCarriers.TryGetValue(key, out var carriers))
+            {
+                var carrier = carriers.Count == 1 ? carriers[0] : carriers[(int)rng.randint(0, carriers.Count)];
+                childParams[key] = carrier.ParamsDict[key];
+            }
+        }
+
+        return childParams;
     }
 
     private static OrderedDict<string, object?> TryCrossover(

@@ -91,6 +91,56 @@ Available crossovers (all in `OptunaSharp.Samplers.Nsgaii`): `UniformCrossover`,
 `SBXCrossover`, `VSBXCrossover`, `SPXCrossover`, `UNDXCrossover`; mutation: `PolynomialMutation`.
 `NSGAIIISampler` additionally accepts `referencePoints` and `dividingParameter`.
 
+#### Conditional parameters (OptunaSharp extension)
+
+Define-by-run objectives often suggest a parameter only under a branch — `beta1` only when
+`optimizer == "adam"`. Optuna's GA samplers evolve the *intersection* search space (the parameters every
+completed trial has), so such a parameter drops out after the first trial that lacks it and is then
+resampled at random on every trial: no crossover, no mutation, no inheritance. `ConditionalParams`
+(in `OptunaSharp.SearchSpace`) declares the activation structure, so the sampler keeps those parameters
+in the relative search space and evolves them whenever they are active — and leaves them out entirely,
+never blended and never counted, whenever they are not:
+
+```csharp
+using OptunaSharp.SearchSpace;
+
+var rules = new ConditionalParams()
+    .When("optimizer", "adam", "adamw").Activates("beta1", "beta2")   // rules on one activator OR together
+    .When("optimizer", "sgd").Activates("momentum")
+    .When("n_layers", v => (long)v! >= 3).Activates("width_3");        // a predicate for ranges
+
+var sampler = new NSGAIIISampler(populationSize: 32, seed: 0, conditionalParams: rules);
+
+study.Optimize(t =>
+{
+    string optimizer = t.SuggestCategorical("optimizer", new[] { "adam", "adamw", "sgd" });
+    if (optimizer is "adam" or "adamw")
+    {
+        t.SuggestFloat("beta1", 0.5, 0.999);
+        t.SuggestFloat("beta2", 0.9, 0.9999);
+    }
+    else
+    {
+        t.SuggestFloat("momentum", 0.0, 0.99);
+    }
+    // ...
+});
+```
+
+How it behaves: a conditional parameter joins the relative search space once any completed trial has
+suggested it (as long as its distribution never changes); crossover runs over the parameters the selected
+parents share, a parameter only some parents carry is inherited from one of them, and every conditional
+parameter that is inactive for the child is pruned before mutation, so it neither counts toward the
+default `1 / n_params` mutation probability nor reaches the trial. The objective's own `Suggest*` calls
+stay the final word, as always in define-by-run. Rules for the same activator OR together, rules for
+different activators AND together, activators may themselves be conditional (chains), and cycles are
+rejected. Values compare with Python `==` semantics (`1 == 1.0 == true`, strings ordinal); a predicate
+receives the boxed `long` / `double` / raw choice value. The sampler warns once per parameter when a
+completed trial contradicts the rules (present while inactive, or absent while active) — usually a sign
+the objective's branches and the declaration drifted apart. Both `NSGAIISampler` and `NSGAIIISampler`
+accept `conditionalParams`; with none declared (the default) they stay bit-identical to Optuna. There is
+no Optuna analog for the GA samplers (for TPE, Optuna's own answer is `TPESampler(group: true)`).
+
 ### GridSampler and BruteForceSampler
 
 `GridSampler` enumerates an explicit grid you provide and stops when it is exhausted
