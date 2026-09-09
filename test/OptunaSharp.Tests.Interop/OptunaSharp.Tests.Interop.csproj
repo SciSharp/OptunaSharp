@@ -63,6 +63,11 @@
          real optuna_integration.BoTorchSampler in this project's embedded CPython. Self-skips when
          botorch / optuna_integration are absent. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Interop.BoTorch\OptunaSharp.Interop.BoTorch.csproj" />
+    <!-- The PyCma bridge (OptunaSharp.Interop.PyCma): PyCmaSamplerParityTests runs an OptunaSharp study
+         with the native PyCmaSampler (driving the real pycma) and asserts byte-exact full-state parity
+         against a live optuna.integration.PyCmaSampler study in this project's embedded CPython.
+         Self-skips when cma / optuna_integration are absent. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Interop.PyCma\OptunaSharp.Interop.PyCma.csproj" />
     <!-- The plotly visualization backend (Phase 5.2, OptunaSharp.Visualization.Plotly): the render
          parity gate (PlotlyRenderParityTests) builds a study bit-identically in C# and Python, renders
          with both, and structurally diffs the plotly figure spec against live

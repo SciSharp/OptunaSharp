@@ -1,0 +1,69 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <AssemblyName>OptunaSharp.Interop.PyCma</AssemblyName>
+    <RootNamespace>OptunaSharp.Interop.PyCma</RootNamespace>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/license/
+         version) is centralized in ../../Directory.Build.props. This is a Tier X satellite that ships
+         SEPARATELY because it takes a foreign-runtime dependency (an embedded CPython + the pycma
+         library via pythonnet) — Core stays pure managed (NumSharp only), the
+         NumSharp.Interop.OpenBLAS / OptunaSharp.Interop.pythonnet pattern.
+
+         Purpose: PyCmaSampler as a first-class OptunaSharp sampler that drives the REAL pycma
+         (Nikolaus Hansen's `cma` package — `cma.CMAEvolutionStrategy` + `cma.BoundTransform`)
+         in-process — a faithful C# port of optuna_integration's `PyCmaSampler` glue (Layer 1: the
+         sampler protocol, the parameter <-> cma-space transforms, and the ask/tell generation replay)
+         whose actual CMA-ES numerics are direct calls into pycma. This gives the genuine article —
+         byte-exact with pycma, faithful to all of its behaviour — while the Optuna side is native
+         OptunaSharp. It does NOT depend on the Python `optuna_integration` package (we port it); users
+         install only `cma`. Built on OptunaSharp.Interop.pythonnet.
+
+         NOTE this is DISTINCT from OptunaSharp's native CmaEsSampler (Core), which ports the *cmaes*
+         package (CyberAgentAILab). PyCmaSampler wraps the *cma* (pycma) package — a different CMA-ES
+         implementation — mirroring Optuna's own `optuna.integration.PyCmaSampler` vs
+         `optuna.samplers.CmaEsSampler` split. It is @deprecated_class("4.9.0","6.0.0") upstream. -->
+    <PackageId>OptunaSharp.Interop.PyCma</PackageId>
+    <Description>PyCmaSampler for OptunaSharp — a native OptunaSharp BaseSampler that drives the real pycma (Nikolaus Hansen's `cma` package: cma.CMAEvolutionStrategy + cma.BoundTransform) library in-process via Python.NET (pythonnet). A faithful C# port of optuna_integration's PyCmaSampler glue (the sampler protocol + the parameter/cma-space transforms + the ask/tell generation replay) whose CMA-ES numerics are direct pycma calls, so it is byte-exact with pycma. Distinct from OptunaSharp's native CmaEsSampler, which ports the separate `cmaes` package — this mirrors Optuna's own optuna.integration.PyCmaSampler vs optuna.samplers.CmaEsSampler split. Does NOT require the Python optuna_integration package — install only `cma`. The .NET analog of using optuna_integration.PyCmaSampler, built on OptunaSharp.Interop.pythonnet. Part of the SciSharp STACK.</Description>
+    <PackageTags>Optuna;OptunaSharp;pycma;cma;CMA-ES;CMAEvolutionStrategy;EvolutionStrategy;pythonnet;Python.NET;interop;sampler;BlackBoxOptimization;HyperparameterOptimization;HPO;AutoML;SciSharp</PackageTags>
+
+    <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on doc-comment nits. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1572;CS1570;CS1574;CS1587;CS1711;CS1734</NoWarn>
+
+    <!-- Emit the .pdb inside the .nupkg (the release pipeline pushes only *.nupkg). -->
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>optunasharp-icon.png</PackageIcon>
+    <PackageOutputPath>../../packages</PackageOutputPath>
+
+    <!-- Strong-naming (key, SignAssembly, DelaySign) is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- Reuse the shared OptunaSharp package icon. -->
+    <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The runtime plumbing (embedded CPython, GIL wrappers, interpreter discovery, CLR<->Py marshaling)
+         comes from the pythonnet interop package; it transitively brings pythonnet [3.0.5,4.0.0). -->
+    <ProjectReference Include="..\OptunaSharp.Interop.pythonnet\OptunaSharp.Interop.pythonnet.csproj" />
+    <!-- NumSharp's zero-copy pythonnet interop: the NDArray <-> numpy crossing (NDArray.ToNumpy /
+         PyObject.ToNDArray) the parameter-vector marshaling rides on instead of per-element PyList
+         loops. Version single-sourced with Core's NumSharp via $(NumSharpVersion). It requires an
+         already-initialized PythonEngine, so it wires onto the SAME embedded engine
+         OptunaSharp.Interop.pythonnet starts (it does not start its own). -->
+    <PackageReference Include="NumSharp.Interop.pythonnet" Version="$(NumSharpVersion)" />
+    <!-- Core is referenced by project; packing records a clean "OptunaSharp" dependency. This package
+         is a Core FRIEND (InternalsVisibleTo in Core's Assembly/Properties.cs) so it reuses the
+         intersection search space, the multi-objective guard, the distribution compatibility check, and
+         the warning/logging seam. -->
+    <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

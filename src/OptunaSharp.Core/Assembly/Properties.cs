@@ -91,6 +91,15 @@ using System.Runtime.CompilerServices;
 // internal to Core. (The numerics are botorch's, not Core's, so this is the only internal reuse.)
 [assembly: InternalsVisibleTo("OptunaSharp.Interop.BoTorch, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The PyCma bridge (satellite package OptunaSharp.Interop.PyCma) is a native OptunaSharp BaseSampler
+// that drives the real pycma (`cma`) library via pythonnet — a port of optuna_integration's PyCmaSampler
+// glue (Layer 1). It reads the IntersectionSearchSpace, enforces the single/multi-objective rules via
+// the RaiseErrorIfMultiObjective guard, runs its own _is_compatible via the internal
+// Distribution.CheckDistributionCompatibility + BaseDistribution.Contains, reaches Study.GetTrialsInternal
+// (use_cache parity), and raises the deprecation/warnings through OptunaWarnings/WarningCategory/
+// Deprecations and OptunaLogging — all internal to Core. (The CMA-ES numerics are pycma's, not Core's.)
+[assembly: InternalsVisibleTo("OptunaSharp.Interop.PyCma, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 // The Redis backends' shared test project asserts that experimental warning fired via the internal
 // OptunaWarnings.WarningRaised event (same reason the interop suite is a friend).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
