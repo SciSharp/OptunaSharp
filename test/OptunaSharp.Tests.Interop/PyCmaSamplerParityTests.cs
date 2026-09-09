@@ -209,6 +209,217 @@ public class PyCmaSamplerParityTests : OptunaInteropTestBase
             "study.optimize(_obj, n_trials=28)\n");
     }
 
+    // ---- direction = maximize (the tell sign-flip path) -----------------------------------------
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void Maximize_FullState_IsBitIdentical()
+    {
+        RequirePyCmaOrInconclusive();
+
+        // MAXIMIZE flips the sign of each told value (`ys = [-y ...]`); the negated sphere peaks at 0.
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "pycma", direction: StudyDirection.Maximize,
+            sampler: new PyCmaSampler(seed: 21));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return -(Math.Pow(x - 1.5, 2) + Math.Pow(y + 2.0, 2));
+        }, nTrials: 26);
+
+        AssertFullStateParity(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            "study = optuna.create_study(study_name='pycma', direction='maximize', sampler=optuna.integration.PyCmaSampler(seed=21))\n" +
+            "def _obj(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    return -((x - 1.5) ** 2 + (y + 2.0) ** 2)\n" +
+            "study.optimize(_obj, n_trials=26)\n");
+    }
+
+    // ---- cma_stds (per-parameter sigma multipliers → the CMA_stds option) -----------------------
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void CmaStds_FullState_IsBitIdentical()
+    {
+        RequirePyCmaOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "pycma",
+            sampler: new PyCmaSampler(seed: 8, cmaStds: new Dictionary<string, double> { ["x"] = 2.0, ["y"] = 0.5 }));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return Math.Pow(x - 1.5, 2) + Math.Pow(y + 2.0, 2);
+        }, nTrials: 26);
+
+        AssertFullStateParity(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            "study = optuna.create_study(study_name='pycma', sampler=optuna.integration.PyCmaSampler(seed=8, cma_stds={'x': 2.0, 'y': 0.5}))\n" +
+            "def _obj(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    return (x - 1.5) ** 2 + (y + 2.0) ** 2\n" +
+            "study.optimize(_obj, n_trials=26)\n");
+    }
+
+    // ---- explicit popsize via cma_opts (a different generation boundary — the numpy-vs-list zone) --
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void ExplicitPopsizeViaCmaOpts_FullState_IsBitIdentical()
+    {
+        RequirePyCmaOrInconclusive();
+
+        // popsize=10 puts generation boundaries at 10/20/30 — well past the several-generation point
+        // where the tell-argument-type (numpy vs list) divergence first surfaces.
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "pycma",
+            sampler: new PyCmaSampler(seed: 4, cmaOpts: new Dictionary<string, object?> { ["popsize"] = 10 }));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return Math.Pow(x - 1.5, 2) + Math.Pow(y + 2.0, 2);
+        }, nTrials: 34);
+
+        AssertFullStateParity(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            "study = optuna.create_study(study_name='pycma', sampler=optuna.integration.PyCmaSampler(seed=4, cma_opts={'popsize': 10}))\n" +
+            "def _obj(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    return (x - 1.5) ** 2 + (y + 2.0) ** 2\n" +
+            "study.optimize(_obj, n_trials=34)\n");
+    }
+
+    // ---- explicit x0 + sigma0 (skips _initialize_x0 / _initialize_sigma0) -----------------------
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void ExplicitX0AndSigma0_FullState_IsBitIdentical()
+    {
+        RequirePyCmaOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "pycma",
+            sampler: new PyCmaSampler(
+                seed: 6,
+                x0: new Dictionary<string, object?> { ["x"] = 1.0, ["y"] = -1.0 },
+                sigma0: 2.5));
+        csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return Math.Pow(x - 1.5, 2) + Math.Pow(y + 2.0, 2);
+        }, nTrials: 26);
+
+        AssertFullStateParity(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            "study = optuna.create_study(study_name='pycma', sampler=optuna.integration.PyCmaSampler(seed=6, x0={'x': 1.0, 'y': -1.0}, sigma0=2.5))\n" +
+            "def _obj(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    return (x - 1.5) ** 2 + (y + 2.0) ** 2\n" +
+            "study.optimize(_obj, n_trials=26)\n");
+    }
+
+    // ---- int(log) + float(step) + int(step): the remaining _to_cma / _to_optuna transform branches -
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void IntLogAndSteppedParams_FullState_IsBitIdentical()
+    {
+        RequirePyCmaOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "pycma",
+            sampler: new PyCmaSampler(seed: 19));
+        csStudy.Optimize(t =>
+        {
+            long p = t.SuggestInt("p", 1, 100, log: true);
+            double q = t.SuggestFloat("q", -10, 10, step: 0.5);
+            long r = t.SuggestInt("r", -20, 20, step: 5);
+            return Math.Pow(Math.Log(p) - 3.0, 2) + Math.Pow(q - 2.5, 2) + Math.Pow(r + 10, 2);
+        }, nTrials: 26);
+
+        AssertFullStateParity(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            "import numpy as np\n" +
+            "study = optuna.create_study(study_name='pycma', sampler=optuna.integration.PyCmaSampler(seed=19))\n" +
+            "def _obj(t):\n" +
+            "    p = t.suggest_int('p', 1, 100, log=True)\n" +
+            "    q = t.suggest_float('q', -10, 10, step=0.5)\n" +
+            "    r = t.suggest_int('r', -20, 20, step=5)\n" +
+            "    return (np.log(p) - 3.0) ** 2 + (q - 2.5) ** 2 + (r + 10) ** 2\n" +
+            "study.optimize(_obj, n_trials=26)\n");
+    }
+
+    // ---- 1-D search space: PyCmaSampler defers to the independent sampler (verbatim behavior) -----
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void OneDimensional_FallsBackToIndependentSampler()
+    {
+        RequirePyCmaOrInconclusive();
+
+        // A 1-D relative space triggers the "`PyCmaSampler` does not support optimization of 1-D search
+        // space" path: sample_relative returns {} and every trial is drawn by the independent
+        // RandomSampler — so the whole study is bit-exact via RandomSampler.
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "pycma",
+            sampler: new PyCmaSampler(seed: 2));
+        csStudy.Optimize(t => Math.Pow(t.SuggestFloat("x", -5, 5) - 1.5, 2), nTrials: 15);
+
+        AssertFullStateParity(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            "study = optuna.create_study(study_name='pycma', sampler=optuna.integration.PyCmaSampler(seed=2))\n" +
+            "def _obj(t):\n" +
+            "    return (t.suggest_float('x', -5, 5) - 1.5) ** 2\n" +
+            "study.optimize(_obj, n_trials=15)\n");
+    }
+
+    // ---- multi-objective is unsupported — both sides raise the identical ValueError --------------
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void MultiObjective_RaisesLikeOptuna()
+    {
+        RequirePyCmaOrInconclusive();
+
+        const string expected =
+            "If the study is being used for multi-objective optimization, PyCmaSampler cannot be used.";
+
+        var csStudy = Optuna.CreateStudy(
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new PyCmaSampler(seed: 1));
+        Action act = () => csStudy.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return (IReadOnlyList<double>)new[] { x * x + y * y, (x - 2) * (x - 2) + y * y };
+        }, nTrials: 3);
+        act.Should().Throw<NumSharp.ValueError>().Which.Message.Should().Be(expected);
+
+        // Cross-check: live optuna_integration.PyCmaSampler raises ValueError with the same message.
+        PyExec(
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            "_study = optuna.create_study(directions=['minimize', 'minimize'], sampler=optuna.integration.PyCmaSampler(seed=1))\n" +
+            "def _mo(t):\n" +
+            "    x = t.suggest_float('x', -5, 5)\n" +
+            "    y = t.suggest_float('y', -5, 5)\n" +
+            "    return [x * x + y * y, (x - 2) ** 2 + y * y]\n" +
+            "_err = None\n" +
+            "try:\n" +
+            "    _study.optimize(_mo, n_trials=3)\n" +
+            "except ValueError as _e:\n" +
+            "    _err = str(_e)\n");
+        PyStr("_err").Should().Be(expected);
+    }
+
     // ---- C#-side determinism (same seed → identical trajectory) ---------------------------------
 
     [TestMethod]
