@@ -141,6 +141,12 @@ the objective's branches and the declaration drifted apart. Both `NSGAIISampler`
 accept `conditionalParams`; with none declared (the default) they stay bit-identical to Optuna. There is
 no Optuna analog for the GA samplers (for TPE, Optuna's own answer is `TPESampler(group: true)`).
 
+`examples/ConditionalParameters.cs` prints the effect generation by generation: the same seeded NSGA-III
+study with and without the rules, where the branch-only parameters converge on their optima with rules
+and sit at the random-draw level without. `ConditionalParamsProofTests` pins the three guarantees: every
+rule kind drives the sampler's own proposals, a parameter is learned while active, and a deactivated
+parameter leaves the child and the RNG state bit-identical to a world in which it never existed.
+
 ### GridSampler and BruteForceSampler
 
 `GridSampler` enumerates an explicit grid you provide and stops when it is exhausted

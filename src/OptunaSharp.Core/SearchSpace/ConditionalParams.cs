@@ -165,6 +165,17 @@ public sealed class ConditionalParams
         return true;
     }
 
+    /// <summary>
+    ///     Whether <paramref name="value" /> of <paramref name="activator" /> admits <paramref name="name" />
+    ///     under the declared rules — <c>true</c> when no rule links the two. Unlike <see cref="IsActive" />
+    ///     this judges a single activator, so it can be asked of a partial assignment such as a sampler's
+    ///     proposal in which other activators are still to be drawn.
+    /// </summary>
+    internal bool ActivatorAdmits(string name, string activator, object? value)
+        => !_rules.TryGetValue(name, out var byActivator)
+           || !byActivator.TryGetValue(activator, out var conditions)
+           || Admits(conditions, value);
+
     /// <summary>Conditional parameter names ordered so that every activator precedes what it activates.</summary>
     internal IReadOnlyList<string> Order => _order ??= ComputeOrder();
 

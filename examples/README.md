@@ -23,6 +23,7 @@ Each exercises a whole Optuna capability, with a deterministic surrogate objecti
 | [`MultiObjectivePareto.cs`](MultiObjectivePareto.cs) | multi-objective with `NSGAIISampler`, `directions=[…]`, and `study.BestTrials` — the Pareto front |
 | [`HyperparameterImportance.cs`](HyperparameterImportance.cs) | `ImportanceFunctions.GetParamImportances` — fANOVA vs PedAnova on an objective rigged so `a ≫ b ≫ c` |
 | [`AutomaticTermination.cs`](AutomaticTermination.cs) | the `Terminator` / `TerminatorCallback` — stop automatically when the search stops paying off |
+| [`ConditionalParameters.cs`](ConditionalParameters.cs) | `ConditionalParams` activation rules (an OptunaSharp extension) — branch-only parameters that `NSGAIIISampler` evolves while active and leaves dormant while not, printed generation by generation against Optuna's plain intersection behavior, where they stay at the random-draw baseline |
 
 ## Redis storage
 

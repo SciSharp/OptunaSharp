@@ -714,6 +714,12 @@ moment OptunaSharp.Core loads. Keep it.
   ctor arg on both samplers. `test/OptunaSharp.Tests/ConditionalParamsTests.cs`: rule algebra, prune
   order, widened space, inheritance-vs-resampling A/B under `mutationProb: 0`, SBX/SPX smoke, and a
   never-firing rule reproducing the Optuna 5.0.0.dev NSGA-III sequence bit-for-bit.
+  `ConditionalParamsProofTests` pins the three behavioral guarantees — every rule kind (value set, single
+  value, numeric predicate, AND across activators, chain) drives the sampler's own proposals; a parameter is
+  learned while active (pooled 3-seed late-generation medians 5-10× below the plain-intersection arm, which
+  sits at the random-draw level) and the unconditional parameters converge either way; a deactivated
+  parameter leaves the child and the RNG state bit-identical to a world without it (300 seeds, uniform and
+  SBX). `examples/ConditionalParameters.cs` prints the with/without comparison generation by generation.
 - ✅ **2.15** — `feat(linalg): Phase 2.15 — OpenBLAS-backed linalg primitives (LinAlg) for CMA-ES/GP`.
   **Redirected mid-flight by the maintainer** from hand-rolled managed primitives to
   **`NumSharp.Interop.OpenBLAS`** (*"use NumSharp + OpenBLAS any time Optuna uses NumPy"*). Core's csproj
