@@ -68,6 +68,11 @@
          against a live optuna.integration.PyCmaSampler study in this project's embedded CPython.
          Self-skips when cma / optuna_integration are absent. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Interop.PyCma\OptunaSharp.Interop.PyCma.csproj" />
+    <!-- The pymoo bridge (OptunaSharp.Interop.Pymoo): PymooSamplerParityTests runs an OptunaSharp study
+         with the native PymooSampler (driving the real pymoo) and asserts behavioral + value parity
+         against a direct pymoo ask/tell replay in this project's embedded CPython. Self-skips when pymoo
+         is absent. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Interop.Pymoo\OptunaSharp.Interop.Pymoo.csproj" />
     <!-- The plotly visualization backend (Phase 5.2, OptunaSharp.Visualization.Plotly): the render
          parity gate (PlotlyRenderParityTests) builds a study bit-identically in C# and Python, renders
          with both, and structurally diffs the plotly figure spec against live

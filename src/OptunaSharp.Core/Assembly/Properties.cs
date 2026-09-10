@@ -100,6 +100,15 @@ using System.Runtime.CompilerServices;
 // Deprecations and OptunaLogging — all internal to Core. (The CMA-ES numerics are pycma's, not Core's.)
 [assembly: InternalsVisibleTo("OptunaSharp.Interop.PyCma, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
+// The pymoo bridge (satellite package OptunaSharp.Interop.Pymoo) is a native OptunaSharp BaseSampler
+// that drives the real pymoo multi-objective library via pythonnet — one sampler exposing pymoo's whole
+// MOO zoo. Like the BoTorch/PyCma bridges it reads the IntersectionSearchSpace, encodes params with the
+// bit-exact one-hot SearchSpaceTransform (transform01), runs its own _is_compatible via the internal
+// Distribution.CheckDistributionCompatibility + BaseDistribution.Contains, reaches Study.GetTrialsInternal
+// (use_cache parity), and logs the independent-sampling warning through OptunaLogging — all internal to
+// Core. (The evolutionary numerics are pymoo's, not Core's.)
+[assembly: InternalsVisibleTo("OptunaSharp.Interop.Pymoo, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 // The Redis backends' shared test project asserts that experimental warning fired via the internal
 // OptunaWarnings.WarningRaised event (same reason the interop suite is a friend).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
