@@ -733,6 +733,16 @@ moment OptunaSharp.Core loads. Keep it.
   (driving `ApplyDormantCarry` directly) and, end-to-end, that it parks on most trials, keeps both branches
   learning, is a bit-exact no-op with the flag off, and removes 40-60% of random reactivations on a
   256-trial two-branch study (NSGA-II fresh (50,50)→(20,34); NSGA-III (51,58)→(31,27)).
+  **Deactivation math-neutrality**: a parameter inactive for a child must touch nothing. Selection /
+  ranking / niching / tournament / mutation are parameter-independent by construction; the crossover was
+  made **prune-aware** (`TryConditionalCrossover` drops a definitely-inactive numerical key before building
+  `common`/`partialCarriers`, so it never enters the operator nor draws the partial-carrier `rng.randint`).
+  A counterfactual probe (child-on-one-branch vs a world where the deactivated param never existed, child +
+  next-draw bit-compared, 400 seeds) closed the multi-parent gap: SPX 93→0, UNDX 99→0; Uniform/BLX/SBX
+  already 0. `ConditionalParamsMathNeutralityTests` asserts 0 for those five. Documented residual: the
+  conditional crossover's out-of-box reject-and-redraw lets a box-overshooting operator (**vSBX**, 5/264)
+  couple via a param that is *active on a rejected attempt* — not a deactivated-param effect; the default
+  UniformCrossover never overshoots and is exactly neutral.
 - ✅ **2.15** — `feat(linalg): Phase 2.15 — OpenBLAS-backed linalg primitives (LinAlg) for CMA-ES/GP`.
   **Redirected mid-flight by the maintainer** from hand-rolled managed primitives to
   **`NumSharp.Interop.OpenBLAS`** (*"use NumSharp + OpenBLAS any time Optuna uses NumPy"*). Core's csproj

@@ -231,7 +231,13 @@ These are the documented, tested differences from Optuna:
   QR and diverges for 1-D search spaces.
 - **ConditionalParams** (NSGA-II/III) is an OptunaSharp extension with no Optuna analog, off by default;
   its `PreserveDormantValues` mode is a deliberate divergence — a reactivating conditional branch resumes
-  its parked value instead of the random re-sample Optuna would do.
+  its parked value instead of the random re-sample Optuna would do. A parameter that is inactive for a
+  child is math-neutral — out of selection, ranking, niching, the tournament, mutation, and the crossover
+  operator (including the multi-parent operators' partial-carrier draw) — proven bit-for-bit against a
+  "never existed" world (`ConditionalParamsMathNeutralityTests`). The single residual: the conditional
+  crossover rejects out-of-box children and redraws, so a box-overshooting operator (**vSBXCrossover**) can
+  let a parameter that is *active on a rejected attempt* shift the redraw stream — an active-parameter
+  effect on a discarded attempt, not a deactivated one; rare and absent from the default `UniformCrossover`.
 
 All are marked in the source and pinned by tests.
 

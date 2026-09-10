@@ -84,7 +84,8 @@ internal static class NsgaiiCrossover
         {
             var parents = SelectParents(crossover, study, parentPopulation, rng, dominates);
             var childParams = TryConditionalCrossover(
-                parents, crossover, study, rng, swappingProb, categoricalSearchSpace, numericalSearchSpace);
+                parents, crossover, study, rng, swappingProb, categoricalSearchSpace, numericalSearchSpace,
+                conditionalParams);
             conditionalParams.Prune(childParams, searchSpace);
 
             if (IsContained(childParams, searchSpace))
@@ -101,6 +102,15 @@ internal static class NsgaiiCrossover
     ///     the transform built per parent set); a key only some parents carry is inherited from one of
     ///     them, drawn uniformly. A key no parent carries stays absent and is sampled independently later
     ///     if the objective asks for it. Child keys keep search-space order, as in the parity path.
+    ///
+    ///     <para><b>Deactivation is math-neutral.</b> A numerical parameter that is already <i>definitely
+    ///     inactive</i> for this child (its activators are categorical, crossed in the block above, and they
+    ///     exclude it) is dropped here <b>before</b> any crossover work: it never enters the operator's
+    ///     input (so it cannot change the dimensionality or the operator's internal draws for the other
+    ///     parameters) and never triggers the partial-carrier <c>rng.randint</c>. A multi-parent crossover
+    ///     therefore consumes exactly the RNG it would in a world where the deactivated parameter did not
+    ///     exist. Parameters whose activation cannot yet be decided (an activator still to be drawn, e.g. a
+    ///     numerical/int activator) are kept and handled by <see cref="ConditionalParams.Prune" /> as before.</para>
     /// </summary>
     private static OrderedDict<string, object?> TryConditionalCrossover(
         List<FrozenTrial> parents,
@@ -109,7 +119,8 @@ internal static class NsgaiiCrossover
         NumPyRandom rng,
         double swappingProb,
         OrderedDict<string, BaseDistribution> categoricalSearchSpace,
-        OrderedDict<string, BaseDistribution> numericalSearchSpace)
+        OrderedDict<string, BaseDistribution> numericalSearchSpace,
+        ConditionalParams conditionalParams)
     {
         var childParams = new OrderedDict<string, object?>();
 
@@ -144,6 +155,11 @@ internal static class NsgaiiCrossover
         var partialCarriers = new Dictionary<string, List<FrozenTrial>>(StringComparer.Ordinal);
         foreach (var (key, distribution) in numericalSearchSpace)
         {
+            // Keep a parameter already known to be inactive for this child out of every crossover
+            // equation and out of the partial-carrier draw below — it would only be pruned afterwards,
+            // so letting it consume RNG would make deactivation perturb the other parameters' math.
+            if (conditionalParams.ResolveActive(key, childParams) == false)
+                continue;
             var carriers = parents.Where(p => p.ParamsDict.ContainsKey(key)).ToList();
             if (carriers.Count == parents.Count)
                 common[key] = distribution;
