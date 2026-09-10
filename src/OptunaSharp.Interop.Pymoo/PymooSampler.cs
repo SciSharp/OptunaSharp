@@ -234,15 +234,8 @@ public sealed class PymooSampler : BaseSampler
             _nBounds = trans.RawBounds.GetLength(0);
 
             // Under transform01 the parameters live in the unit cube, so the pymoo box is [0,1]^n.
-            var xl = new double[_nBounds];
-            var xu = new double[_nBounds];
-            for (int i = 0; i < _nBounds; i++)
-            {
-                xl[i] = 0.0;
-                xu[i] = 1.0;
-            }
-            using (PyObject xlPy = PymooInterop.ToNumpy(xl))
-            using (PyObject xuPy = PymooInterop.ToNumpy(xu))
+            using (PyObject xlPy = PymooInterop.ToNumpy(np.zeros(_nBounds)))
+            using (PyObject xuPy = PymooInterop.ToNumpy(np.ones(_nBounds)))
                 _problem = Python.pymoo.Problem(_nBounds, _nObj, xlPy, xuPy);
 
             // Phase 1: build without an injected initial population, only to read pymoo's authoritative
@@ -264,13 +257,11 @@ public sealed class PymooSampler : BaseSampler
         /// its initial population (their transformed parameters), so the tell-replay is coherent.</summary>
         internal void Reinitialize(IReadOnlyList<FrozenTrial> complete)
         {
-            var gen0 = new double[_popsize, _nBounds];
+            // Each trial's transformed parameters are already an NDArray (SearchSpaceTransform.Transform),
+            // so they slot straight into the (pop_size, n) initial-population matrix — no element loop.
+            NDArray gen0 = np.zeros(new Shape(_popsize, _nBounds));
             for (int k = 0; k < _popsize; k++)
-            {
-                double[] x = _trans.Transform(complete[k].ParamsDict).ToArray<double>();
-                for (int d = 0; d < _nBounds; d++)
-                    gen0[k, d] = x[d];
-            }
+                gen0[k] = _trans.Transform(complete[k].ParamsDict);
 
             _algo.Dispose();
             using PyObject sampling = PymooInterop.ToNumpy(gen0);
@@ -305,7 +296,7 @@ public sealed class PymooSampler : BaseSampler
                 }
 
                 using PyObject pop = Python.pymoo.Algorithm.ask(_algo);
-                using PyObject fNumpy = PymooInterop.ToNumpy(f);
+                using PyObject fNumpy = PymooInterop.ToNumpy(np.array(f));   // (pop_size, n_obj) objectives
                 Python.pymoo.Population.set(pop, "F", fNumpy);
                 Python.pymoo.Algorithm.tell(_algo, pop);
             }
@@ -325,14 +316,14 @@ public sealed class PymooSampler : BaseSampler
             int individualIndex = CollectTargetTrials(trials, lastToldTrialNumber, targetStates: null).Count;
             individualIndex %= _popsize;
 
-            double[] flat;
+            NDArray x;   // the infill population's (pop_size, n) design matrix
             using (PyObject pop = Python.pymoo.Algorithm.ask(_algo))
             using (PyObject xNumpy = Python.pymoo.Population.get(pop, "X"))
-                flat = PymooInterop.ToNDArray(xNumpy).ToArray<double>();   // C-order (popsize * nBounds)
+                x = PymooInterop.ToNDArray(xNumpy);
 
-            var row = new double[_nBounds];
-            Array.Copy(flat, individualIndex * _nBounds, row, 0, _nBounds);
-            return _trans.Untransform(np.array(row));
+            // The doled individual's row is a 1-D NDArray — SearchSpaceTransform.Untransform consumes it
+            // directly (no double[] round-trip, no element loop).
+            return _trans.Untransform(x[individualIndex]);
         }
 
         /// <summary>Build the pymoo algorithm (with an optional injected initial population) and
@@ -439,7 +430,7 @@ public sealed class PymooSampler : BaseSampler
                 for (int j = 0; j < nObj; j++)
                     matrix[i, j] = directions[j] == StudyDirection.Maximize ? -refPoints[i][j] : refPoints[i][j];
             }
-            return PymooInterop.ToNumpy(matrix);
+            return PymooInterop.ToNumpy(np.array(matrix));
         }
 
         /// <summary>Every search-space parameter is present in the trial, its distribution is compatible,
