@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using OptunaSharp.Distributions;
 using OptunaSharp.Samplers;
 
 namespace OptunaSharp.Benchmark.VolleyEval;
@@ -31,18 +32,69 @@ public static class ContenderRegistry
     /// <summary>Multi-objective TPE's trial ceiling on large-budget challenges.</summary>
     public const int TpeTrialCap = 300;
 
-    /// <summary>The eight native contenders in profile-matrix order.</summary>
+    /// <summary>
+    ///     The eight native contenders in profile-matrix order, each carrying its hyperparameter space
+    ///     (the <c>tunedBuild</c> argument) for the nested-hyperopt protocol. The ranges are small,
+    ///     well-known knob spaces per sampler; <c>random</c> has none. The <c>tunedBuild</c> suggests the
+    ///     knobs and constructs the sampler, so replaying the winning recipe through a <see cref="FixedTrial" />
+    ///     rebuilds exactly the tuned sampler.
+    /// </summary>
     public static IReadOnlyList<Contender> All { get; } = new[]
     {
         new Contender("random", seed => new RandomSampler(seed)),
-        new Contender("qmc",    seed => new QMCSampler(seed: seed)),
-        new Contender("tpe",    seed => new TPESampler(seed: seed), trialCap: TpeTrialCap),
-        new Contender("gp",     seed => new GPSampler(seed: seed),  trialCap: GpTrialCap),
-        new Contender("cmaes",  seed => new CmaEsSampler(seed: seed)),
-        new Contender("lmcma",  seed => new LmCmaSampler(seed: seed)),
-        new Contender("nsga2",  seed => new NSGAIISampler(seed: seed)),
-        new Contender("nsga3",  seed => new NSGAIIISampler(seed: seed)),
+
+        new Contender("qmc", seed => new QMCSampler(seed: seed), tunedBuild: (t, seed) =>
+            new QMCSampler(
+                qmcType: (string)t.SuggestCategorical("qmc_type", new CategoricalChoice[] { "sobol", "halton" }).Value!,
+                scramble: Bool(t, "scramble"),
+                seed: seed)),
+
+        new Contender("tpe", seed => new TPESampler(seed: seed), trialCap: TpeTrialCap, tunedBuild: (t, seed) =>
+            new TPESampler(
+                nStartupTrials: (int)t.SuggestInt("n_startup_trials", 5, 30),
+                nEiCandidates: (int)t.SuggestInt("n_ei_candidates", 12, 48),
+                multivariate: Bool(t, "multivariate"),
+                constantLiar: Bool(t, "constant_liar"),
+                seed: seed)),
+
+        new Contender("gp", seed => new GPSampler(seed: seed), trialCap: GpTrialCap, tunedBuild: (t, seed) =>
+            new GPSampler(
+                seed: seed,
+                nStartupTrials: (int)t.SuggestInt("n_startup_trials", 5, 20),
+                deterministicObjective: Bool(t, "deterministic_objective"))),
+
+        new Contender("cmaes", seed => new CmaEsSampler(seed: seed), tunedBuild: (t, seed) =>
+            new CmaEsSampler(
+                sigma0: t.SuggestFloat("sigma0", 0.05, 2.0, log: true),
+                nStartupTrials: (int)t.SuggestInt("n_startup_trials", 1, 5),
+                useSeparableCma: Bool(t, "use_separable_cma"),
+                seed: seed)),
+
+        new Contender("lmcma", seed => new LmCmaSampler(seed: seed), tunedBuild: (t, seed) =>
+            new LmCmaSampler(
+                nStartupTrials: (int)t.SuggestInt("n_startup_trials", 1, 5),
+                popsize: (int)t.SuggestInt("popsize", 8, 40),
+                nVectors: (int)t.SuggestInt("n_vectors", 2, 12),
+                seed: seed)),
+
+        new Contender("nsga2", seed => new NSGAIISampler(seed: seed), tunedBuild: (t, seed) =>
+            new NSGAIISampler(
+                populationSize: (int)t.SuggestInt("population_size", 10, 100),
+                crossoverProb: t.SuggestFloat("crossover_prob", 0.5, 1.0),
+                swappingProb: t.SuggestFloat("swapping_prob", 0.0, 0.5),
+                seed: seed)),
+
+        new Contender("nsga3", seed => new NSGAIIISampler(seed: seed), tunedBuild: (t, seed) =>
+            new NSGAIIISampler(
+                populationSize: (int)t.SuggestInt("population_size", 10, 100),
+                crossoverProb: t.SuggestFloat("crossover_prob", 0.5, 1.0),
+                swappingProb: t.SuggestFloat("swapping_prob", 0.0, 0.5),
+                seed: seed)),
     };
+
+    // Suggest a boolean knob as a two-value categorical.
+    private static bool Bool(BaseTrial t, string name)
+        => (bool)t.SuggestCategorical(name, new CategoricalChoice[] { false, true }).Value!;
 
     /// <summary>
     ///     The cheap subset (everything except GP) — used by the smoke tests, which need the three-radical

@@ -119,17 +119,26 @@ public sealed class Evaluator
     }
 
     private Study RunStudy(IChallenge challenge, BaseSampler sampler, int nTrials)
+        => RunChallengeStudy(challenge, sampler, nTrials, _maxSecondsPerRun);
+
+    /// <summary>
+    ///     Build a study for <paramref name="challenge" /> (single- or multi-objective) with
+    ///     <paramref name="sampler" /> and optimize it for <paramref name="nTrials" />. The one place a
+    ///     challenge is turned into a run — shared by the <see cref="Evaluator" /> and the
+    ///     <see cref="HyperOptimizer" /> so tuning and scoring go down the identical path.
+    /// </summary>
+    public static Study RunChallengeStudy(IChallenge challenge, BaseSampler sampler, int nTrials, double? maxSeconds = null)
     {
         if (challenge.NumObjectives == 1)
         {
             var study = Optuna.CreateStudy(sampler: sampler, direction: challenge.Directions[0]);
-            study.Optimize(t => challenge.Evaluate(t)[0], nTrials: nTrials, timeout: _maxSecondsPerRun);
+            study.Optimize(t => challenge.Evaluate(t)[0], nTrials: nTrials, timeout: maxSeconds);
             return study;
         }
         else
         {
             var study = Optuna.CreateStudy(sampler: sampler, directions: challenge.Directions);
-            study.Optimize(t => challenge.Evaluate(t), nTrials: nTrials, timeout: _maxSecondsPerRun);
+            study.Optimize(t => challenge.Evaluate(t), nTrials: nTrials, timeout: maxSeconds);
             return study;
         }
     }

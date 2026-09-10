@@ -268,6 +268,48 @@ public sealed class VolleyEvalTests
         a.Median.Should().Be(b.Median);
     }
 
+    // ---- Nested hyperopt: tune each profile, validate on held-out seeds ----
+
+    [TestMethod]
+    public void HyperOptimizer_TunesAProfile_AndValidatesOnHeldOutSeeds()
+    {
+        var challenge = new Rosenbrock(dimension: 10, instanceId: 0, budget: 80);
+        var cmaes = ContenderRegistry.Select(new[] { "cmaes" })[0];
+
+        var profile = new HyperOptimizer(searchSeeds: new[] { 0 }, heldoutSeeds: new[] { 1 }, nTuneTrials: 5)
+            .Tune(challenge, cmaes);
+
+        profile.Tunable.Should().BeTrue();
+        profile.Dnf.Should().BeFalse();
+        profile.Recipe.Should().ContainKey("sigma0", "the tuned recipe records the winning knobs");
+        profile.DefaultScore.Should().BeInRange(0.0, 1.0 + 1e-6);
+        profile.TunedScore.Should().BeInRange(0.0, 1.0 + 1e-6, "the held-out tuned score is a valid normalized score");
+    }
+
+    [TestMethod]
+    public void HyperOptimizer_ReportsUntunableAndDnfProfiles()
+    {
+        var opt = new HyperOptimizer(searchSeeds: new[] { 0 }, heldoutSeeds: new[] { 1 }, nTuneTrials: 4);
+
+        // random has no knobs → tuned == default, Tunable == false.
+        var rnd = opt.Tune(new Rosenbrock(dimension: 8, instanceId: 0, budget: 60),
+            ContenderRegistry.Select(new[] { "random" })[0]);
+        rnd.Tunable.Should().BeFalse();
+        rnd.TunedScore.Should().Be(rnd.DefaultScore);
+
+        // cmaes cannot run a multi-objective study → DNF profile, nothing to tune.
+        var dnf = opt.Tune(new Zdt1(dimension: 10, instanceId: 0, budget: 40),
+            ContenderRegistry.Select(new[] { "cmaes" })[0]);
+        dnf.Dnf.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public void HyperOptimizer_RequiresDisjointSearchAndHeldoutSeeds()
+    {
+        var act = () => new HyperOptimizer(searchSeeds: new[] { 0, 1 }, heldoutSeeds: new[] { 1, 2 }, nTuneTrials: 4);
+        act.Should().Throw<ArgumentException>("the held-out guard is meaningless if the seeds overlap");
+    }
+
     // ---- The three-radical thesis (the headline DoD) ----
 
     [TestMethod]

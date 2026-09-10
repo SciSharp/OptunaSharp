@@ -22,24 +22,23 @@ string verb = argv.Count > 0 && !argv[0].StartsWith("--", StringComparison.Ordin
 
 if (verb is "-h" or "--help" or "help")
 {
-    Console.WriteLine("volley run [--seeds N] [--instance N] [--challenges a,b,c] [--contenders x,y,z] [--cheap] [--assert] [--max-seconds S] [--verbose]");
+    Console.WriteLine("volley run  [--seeds N] [--instance N] [--challenges a,b,c] [--contenders x,y,z] [--cheap] [--assert] [--max-seconds S] [--verbose]");
+    Console.WriteLine("volley tune [--tune N] [--search-seeds N] [--heldout-seeds N] [--tune-budget N] [--instance N] [--challenges a,b,c] [--contenders x,y,z] [--cheap] [--max-seconds S] [--verbose]");
     return 0;
 }
-if (verb != "run")
+if (verb != "run" && verb != "tune")
 {
-    Console.Error.WriteLine($"Unknown verb '{verb}'. Try: volley run");
+    Console.Error.WriteLine($"Unknown verb '{verb}'. Try: volley run | volley tune");
     return 2;
 }
 
-int seeds = GetInt("--seeds", 5);
 int instance = GetInt("--instance", 0);
-bool doAssert = HasFlag("--assert");
 bool cheap = HasFlag("--cheap");
 bool verbose = HasFlag("--verbose");
 double? maxSeconds = HasOption("--max-seconds") ? GetDouble("--max-seconds", 0) : null;
 
 // Optuna's INFO/WARNING lines (independent-sampling fallbacks, experimental notices) would bury the
-// matrix; silence the default handler unless the user asks for it.
+// output; silence the default handler unless the user asks for it.
 if (!verbose) OptunaLogging.DisableDefaultHandler();
 
 IReadOnlyList<IChallenge> challenges = HasOption("--challenges")
@@ -51,7 +50,38 @@ IReadOnlyList<Contender> contenders =
     : cheap ? ContenderRegistry.Cheap
     : ContenderRegistry.All;
 
+// ---- tune: the nested-hyperopt protocol over every profile ----
+if (verb == "tune")
+{
+    int nTune = GetInt("--tune", 24);
+    int nSearch = GetInt("--search-seeds", 2);
+    int nHeldout = GetInt("--heldout-seeds", 2);
+    int? tuneBudget = HasOption("--tune-budget") ? GetInt("--tune-budget", 0) : null;
+    var searchSeeds = Enumerable.Range(0, nSearch).ToArray();
+    var heldoutSeeds = Enumerable.Range(nSearch, nHeldout).ToArray(); // disjoint by construction
+
+    Console.WriteLine($"VolleyEval tune — {challenges.Count} challenges × {contenders.Count} contenders, "
+                      + $"{nTune} outer trials, search seeds {{{string.Join(",", searchSeeds)}}}, "
+                      + $"held-out {{{string.Join(",", heldoutSeeds)}}}"
+                      + (tuneBudget is int tb ? $", tune-budget {tb}" : ""));
+    Console.WriteLine();
+
+    var optimizer = new HyperOptimizer(searchSeeds, heldoutSeeds, nTune, tuneBudget, maxSeconds);
+    var profiles = optimizer.Run(challenges, contenders, onProfile: p =>
+    {
+        string status = p.Dnf ? "DNF" : !p.Tunable ? "(no knobs)"
+            : $"default {p.DefaultScore:F4} → tuned {p.TunedScore:F4} ({(p.Delta >= 0 ? "+" : "")}{p.Delta:F4})";
+        Console.WriteLine($"  - {p.Challenge,-22} {p.Contender,-8} {status}");
+    });
+
+    Console.WriteLine();
+    Console.WriteLine(TuneReport.Render(profiles));
+    return 0;
+}
+
+int seeds = GetInt("--seeds", 5);
 var seedArray = Enumerable.Range(0, seeds).ToArray();
+bool doAssert = HasFlag("--assert");
 
 Console.WriteLine($"VolleyEval v0 — {challenges.Count} challenges × {contenders.Count} contenders × {seeds} seeds"
                   + (maxSeconds is double s ? $"  (≤{s}s/run)" : ""));
