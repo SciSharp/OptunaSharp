@@ -23,7 +23,8 @@ from pymoo.algorithms.moo.nsga2 import binary_tournament
 from pymoo.core.mating import Mating
 from pymoo.core.duplicate import DefaultDuplicateElimination
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
-from pymoo.algorithms.moo.age import find_corner_solutions, normalize, point_2_line_distance
+from pymoo.algorithms.moo.age import find_corner_solutions, normalize, point_2_line_distance, AGEMOEASurvival
+from pymoo.algorithms.moo.age2 import find_zero, project_on_manifold, AGEMOEA2Survival
 
 
 class Box(Problem):
@@ -147,6 +148,52 @@ def dump_normalize(cases):
     return out
 
 
+def dump_find_zero(cases):
+    out = []
+    for point, n in cases:
+        p = find_zero(np.array(point, float), n, 0.001)
+        out.append(dict(point=point, n=n, p=float(p)))
+    return out
+
+
+def dump_project(cases):
+    out = []
+    for point, p in cases:
+        pr = project_on_manifold(np.array(point, float), p)
+        out.append(dict(point=point, p=p, projected=np.array(pr).tolist()))
+    return out
+
+
+def dump_survival_score(cases, survival):
+    out = []
+    for front1 in cases:
+        fa = np.array(front1, float)
+        ideal = np.min(fa, axis=0)
+        cd, p, norm = survival.survival_score(fa.copy(), ideal)
+        out.append(dict(front1=front1, ideal=ideal.tolist(),
+                        crowd_dist=cd.tolist(), p=float(p), normalization=np.array(norm).tolist()))
+    return out
+
+
+def dump_do(cases, survival):
+    out = []
+    for F, n_survive in cases:
+        n_var = 4
+        prob = _mk_problem(n_var, n_obj=len(F[0]))
+        # unique X per individual so survivors can be identified by row identity
+        X = np.arange(len(F) * n_var, dtype=float).reshape(len(F), n_var)
+        pop = Population.new(X=X, F=np.array(F, float))
+        pop.set("CV", np.zeros((len(F), 1)))
+        survivors = survival._do(prob, pop, n_survive=n_survive)
+        out.append(dict(
+            F=F, n_survive=n_survive,
+            rank=np.array(pop.get("rank"), dtype=int).tolist(),
+            crowding=np.array(pop.get("crowding"), dtype=float).tolist(),
+            survivor_F=survivors.get("F").tolist(),
+        ))
+    return out
+
+
 def main():
     rng = np.random.RandomState(12345)
     # fixed random populations/parents for the operator cases
@@ -189,6 +236,20 @@ def main():
     corner_cases.append(rng.random((3, 3)).tolist())
     normalize_cases = [rng.random((n, m)).tolist() for (n, m) in [(8, 2), (10, 3), (12, 3), (15, 4)]]
 
+    # Phase 3: survival geometry (find_zero, project_on_manifold, survival_score, _do).
+    # find_zero / project points are positive vectors (as after shift+normalize).
+    find_zero_cases = [(rng.random(n).tolist(), n) for n in (2, 3, 4)]
+    find_zero_cases += [([0.3, 0.7], 2), ([0.1, 0.5, 0.9], 3), ([1.0, 1.0, 1.0], 3)]
+    project_cases = []
+    for p in (0.5, 1.0, 1.7, 2.5):
+        project_cases.append((rng.random(3).tolist(), p))
+        project_cases.append((rng.random(4).tolist(), p))
+    # survival_score front-0 objectives (2 and 3 objectives), sizes exercising the greedy loop
+    ss_cases = [rng.random((n, m)).tolist() for (n, m) in [(10, 2), (12, 3), (8, 2), (15, 3)]]
+    # full environmental selection on merged populations (2*pop_size rows), 2 and 3 objectives
+    do_cases = [(rng.random((16, m)).tolist(), 8) for m in (2, 3)]
+    do_cases += [(rng.random((20, 3)).tolist(), 10), (rng.random((12, 2)).tolist(), 6)]
+
     corpus = dict(
         pymoo_version=__import__("pymoo").__version__,
         numpy_version=np.__version__,
@@ -200,6 +261,11 @@ def main():
         nds=dump_nds(nds_cases),
         corner=dump_corner(corner_cases),
         normalize=dump_normalize(normalize_cases),
+        find_zero=dump_find_zero(find_zero_cases),
+        project=dump_project(project_cases),
+        survival_score_age2=dump_survival_score(ss_cases, AGEMOEA2Survival()),
+        survival_score_age1=dump_survival_score(ss_cases, AGEMOEASurvival()),
+        do_age2=dump_do(do_cases, AGEMOEA2Survival()),
     )
     import os, math
     def san(o):
@@ -221,7 +287,8 @@ def main():
     with open(path, "w") as f:
         json.dump(san(corpus), f, allow_nan=False)
     print("wrote", path)
-    for k in ("sampling", "crossover", "mutation", "tournament", "mating", "nds", "corner", "normalize"):
+    for k in ("sampling", "crossover", "mutation", "tournament", "mating", "nds", "corner", "normalize",
+              "find_zero", "project", "survival_score_age2", "survival_score_age1", "do_age2"):
         print(f"  {k}: {len(corpus[k])} cases")
 
 
