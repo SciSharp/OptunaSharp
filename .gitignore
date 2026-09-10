@@ -65,7 +65,6 @@ BenchmarkDotNet.Artifacts/
 __pycache__/
 *.py[cod]
 .venv/
-.venv-pymoo/
 venv/
 .mypy_cache/
 .ruff_cache/

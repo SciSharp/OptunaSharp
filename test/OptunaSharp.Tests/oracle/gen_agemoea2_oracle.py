@@ -1,14 +1,19 @@
-"""Generate the AGE-MOEA-2 differential parity corpus from pymoo 0.6.1.3 (numba 0.60.0,
-numpy 2.0.2 — Mimicry's pins). Dumps per-operator input/seed/output so the C# port
-(OptunaSharp.Samplers.AgeMoea) can replay the same seeds with LazyRandomState and assert
-bit-equality with no Python at test time.
+"""Generate the AGE-MOEA-2 differential parity corpus from pymoo 0.6.1.3. Dumps per-operator
+input/seed/output so the C# port (OptunaSharp.Samplers.AgeMoea) can replay the same seeds with
+LazyRandomState and assert bit-equality with no Python at test time.
 
-Run in the isolated oracle venv:
-    K:/source/OptunaSharp/.venv-pymoo/Scripts/python test/oracle/gen_agemoea2_oracle.py
+Run in the repo's main Python env (the same interpreter the interop suite uses):
+    python test/OptunaSharp.Tests/oracle/gen_agemoea2_oracle.py
 
-pymoo runs with numba JIT ON (NUMBA_DISABLE_JIT=1 is broken here: find_corner_solutions uses
-numba.intp as a numpy dtype). JIT-on is what Mimicry runs; the operator code below is not
-jitted, so this only pins the RNG-coupled operator stream (Phase 1)."""
+pymoo 0.6.1.3 requires only numpy>=1.15, so it runs on the interop env's numpy 2.4.2 alongside
+numba 0.65.1 (install once with `pip install pymoo==0.6.1.3 --no-deps autograd alive_progress`;
+numpy/numba/optuna are untouched). The corpus is byte-for-byte IDENTICAL to the original
+numpy-2.0.2 / numba-0.60.0 (Mimicry's pins) run — verified field-by-field, 0 ULP — because the
+MT19937 stream is version-stable, libm is the machine's, and the fastmath kernels reduce over
+2-3 objectives (no reassociation). So no isolated venv is needed.
+
+pymoo runs with numba JIT ON (NUMBA_DISABLE_JIT=1 is broken: find_corner_solutions uses
+numba.intp as a numpy dtype). JIT-on is what Mimicry runs."""
 import json
 import types
 import numpy as np
