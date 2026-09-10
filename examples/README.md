@@ -24,6 +24,9 @@ Each exercises a whole Optuna capability, with a deterministic surrogate objecti
 | [`HyperparameterImportance.cs`](HyperparameterImportance.cs) | `ImportanceFunctions.GetParamImportances` — fANOVA vs PedAnova on an objective rigged so `a ≫ b ≫ c` |
 | [`AutomaticTermination.cs`](AutomaticTermination.cs) | the `Terminator` / `TerminatorCallback` — stop automatically when the search stops paying off |
 | [`ConditionalParameters.cs`](ConditionalParameters.cs) | `ConditionalParams` activation rules (an OptunaSharp extension) — branch-only parameters that `NSGAIIISampler` evolves while active and leaves dormant while not, printed generation by generation against Optuna's plain intersection behavior, where they stay at the random-draw baseline |
+| [`ConditionalModelSelection.cs`](ConditionalModelSelection.cs) | `ConditionalParams` read as code — "pick a model, tune only ITS knobs": the rule block (value-set + a `model → kernel → gamma` chain) sits next to a branching objective that mirrors it one-for-one |
+| [`ConditionalNeuralArchitecture.cs`](ConditionalNeuralArchitecture.cs) | `ConditionalParams` with **numeric-predicate** activators (`n_layers >= i` gates each layer's width) and a **two-level chain** (`use_scheduler → scheduler → warmup_frac`), on a Pareto front where each depth carries exactly its own widths |
+| [`ConditionalTrainingSchedule.cs`](ConditionalTrainingSchedule.cs) | `ConditionalParams` **combining rules** — `warmup_epochs` declared under two activators (a scheduler value **AND** `n_epochs >= 30`), the example to read for how OR / AND / predicate rules compose |
 
 ## Redis storage
 
