@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <Platforms>AnyCPU;x64</Platforms>
+    <RootNamespace>OptunaSharp.Benchmark.VolleyEval</RootNamespace>
+    <AssemblyName>OptunaSharp.Benchmark.VolleyEval</AssemblyName>
+    <!-- Strong-naming is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Core carries every native sampler, Study/Trial/Optuna, hypervolume, and the mandated
+         LazyRandomState RNG. VolleyEval is pure glue over these — no other dependency. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+</Project>

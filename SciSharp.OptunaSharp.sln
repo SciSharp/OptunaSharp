@@ -67,6 +67,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Visualization.P
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Interop.PyCma", "src\OptunaSharp.Interop.PyCma\OptunaSharp.Interop.PyCma.csproj", "{C968D953-F559-4CF9-A67A-4794792181C1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Benchmark.VolleyEval", "test\OptunaSharp.Benchmark.VolleyEval\OptunaSharp.Benchmark.VolleyEval.csproj", "{FD935334-9295-4867-85C7-42EC206D5689}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Tests.Benchmark.VolleyEval", "test\OptunaSharp.Tests.Benchmark.VolleyEval\OptunaSharp.Tests.Benchmark.VolleyEval.csproj", "{7352E87D-A1D4-4103-B5B6-9CC0887816CA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -437,6 +441,30 @@ Global
 		{C968D953-F559-4CF9-A67A-4794792181C1}.Release|x64.Build.0 = Release|Any CPU
 		{C968D953-F559-4CF9-A67A-4794792181C1}.Release|x86.ActiveCfg = Release|Any CPU
 		{C968D953-F559-4CF9-A67A-4794792181C1}.Release|x86.Build.0 = Release|Any CPU
+		{FD935334-9295-4867-85C7-42EC206D5689}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FD935334-9295-4867-85C7-42EC206D5689}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FD935334-9295-4867-85C7-42EC206D5689}.Debug|x64.ActiveCfg = Debug|x64
+		{FD935334-9295-4867-85C7-42EC206D5689}.Debug|x64.Build.0 = Debug|x64
+		{FD935334-9295-4867-85C7-42EC206D5689}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FD935334-9295-4867-85C7-42EC206D5689}.Debug|x86.Build.0 = Debug|Any CPU
+		{FD935334-9295-4867-85C7-42EC206D5689}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FD935334-9295-4867-85C7-42EC206D5689}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FD935334-9295-4867-85C7-42EC206D5689}.Release|x64.ActiveCfg = Release|x64
+		{FD935334-9295-4867-85C7-42EC206D5689}.Release|x64.Build.0 = Release|x64
+		{FD935334-9295-4867-85C7-42EC206D5689}.Release|x86.ActiveCfg = Release|Any CPU
+		{FD935334-9295-4867-85C7-42EC206D5689}.Release|x86.Build.0 = Release|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Debug|x64.Build.0 = Debug|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Debug|x86.Build.0 = Debug|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Release|x64.ActiveCfg = Release|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Release|x64.Build.0 = Release|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Release|x86.ActiveCfg = Release|Any CPU
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -472,5 +500,7 @@ Global
 		{9ADAF651-04B7-45E1-950C-673654FE077C} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{CC518820-7B80-4B5C-836A-C57AA99761F8} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{C968D953-F559-4CF9-A67A-4794792181C1} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{FD935334-9295-4867-85C7-42EC206D5689} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
+		{7352E87D-A1D4-4103-B5B6-9CC0887816CA} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 	EndGlobalSection
 EndGlobal
