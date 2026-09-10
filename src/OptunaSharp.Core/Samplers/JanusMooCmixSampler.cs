@@ -11,8 +11,10 @@
 // owns Pareto selection; CMIX is a small, conservative candidate-generation nudge. Because OptunaSharp's
 // `NSGAIISampler` is a bit-exact port and this subclass ALWAYS calls `base.SampleRelative` (advancing
 // NSGA-II's MT19937 stream identically) before consulting a SEPARATE CMIX RNG, the NSGA-II trajectory is
-// untouched — CMIX only substitutes the returned params on the fraction of trials where it fires. See
-// JanusMooCmix.cs / JanusMooMetric.cs for the metric geometry and the documented RNG divergence.
+// untouched — CMIX only substitutes the returned params on the fraction of trials where it fires. The
+// CMIX stream is the reference's exact PCG64 (`np.random.default_rng`) and its Gaussian draw is numpy's
+// SVD `multivariate_normal` via OpenBLAS gesdd, so the injection is byte-identical to the reference (not
+// merely behavioral) — see JanusMooCmix.cs / JanusMooMetric.cs for the metric geometry and the RNG parity.
 
 using System;
 using System.Collections.Generic;

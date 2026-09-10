@@ -13,6 +13,7 @@
 // symmetrizes its output (`0.5*(M+Mᵀ)`). Ported here as a distinct MOO variant, per Plan 05.
 
 using System;
+using NumSharp;
 using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.Janus;
@@ -195,6 +196,30 @@ internal static class JanusMooMetric
                 dist[order[t]] += (values[order[t + 1]][j] - values[order[t - 1]][j]) / span;
         }
         return dist;
+    }
+
+    /// <summary>
+    ///     numpy's <c>Generator.multivariate_normal(mean, cov, method="svd")</c> transform for a
+    ///     PRE-DRAWN standard-normal vector <paramref name="z" />: factor <c>(U, s, Vh) = svd(cov)</c>
+    ///     through the OpenBLAS <c>gesdd</c> NumPy itself calls (byte-exact vs numpy at ANY size, so this
+    ///     is not limited to NumSharp's own 4×4 Jacobi <c>multivariate_normal</c>) and return
+    ///     <c>mean_j + Σ_i z_i·√s_i·Vh_{ij}</c>. Separating the transform from the PCG64 draw makes it a
+    ///     single source of truth shared by <see cref="JanusMooCmix" /> and its byte-parity interop test.
+    /// </summary>
+    internal static double[] MultivariateNormalSvd(double[] z, double[] mean, double[,] cov)
+    {
+        int d = mean.Length;
+        var (_, s, vh) = np.linalg.svd(np.array(cov));   // cov = U·diag(s)·Vh
+        double[] sv = s.ToArray<double>();
+        double[] vhf = vh.ToArray<double>();             // row-major (d×d)
+        var sample = new double[d];
+        for (int j = 0; j < d; j++)
+        {
+            double acc = mean[j];
+            for (int i = 0; i < d; i++) acc += z[i] * Math.Sqrt(sv[i]) * vhf[i * d + j];
+            sample[j] = acc;
+        }
+        return sample;
     }
 
     // ---- helpers ---------------------------------------------------------------------------------

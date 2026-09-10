@@ -6,14 +6,19 @@
 //
 // Reference: JANUS — arXiv:2608.22862 (2026); https://github.com/hongyuanyu/JANUS (Apache-2.0).
 //
-// Documented divergences (principled, none change the geometry):
-//   • RNG = NumSharp MT19937 `RandomState`, not the reference's numpy `default_rng` (PCG64) — the
-//     project's "never System.Random" discipline. So the CMIX fire decision and the Gaussian draw are
-//     behaviorally faithful but not byte-identical to the reference; a PCG64/`multivariate_normal`
-//     byte-match is a deferred stretch goal (Plan 05). The pure-numpy metric fits ARE byte-comparable
-//     (see `JanusMooMetric` / `JanusMooMetricParityTests`).
-//   • `multivariate_normal(center, cov)` = `center + L·z`, `L = chol(cov)` (the covariance is SPD after
-//     the reference's `+1e-8·I` floor), not numpy's default SVD factorization.
+// RNG parity (the Plan-05 stretch goal, now realized):
+//   • The CMIX stream is NumSharp's **PCG64 `Generator`** (`np.random.default_rng(seed)`), the SAME bit
+//     generator the reference's `self._cmix_rng = np.random.default_rng(seed)` uses — NOT MT19937. This
+//     is not a breach of the "never System.Random" discipline (it is a NumSharp PRNG), and it is the one
+//     place the plan calls for PCG64 because it makes the injection byte-comparable to the reference.
+//   • The fire decision is `Generator.random()`; the Gaussian draw is numpy's default
+//     `Generator.multivariate_normal(center, cov, method="svd")` ported verbatim — `standard_normal(d)`
+//     off the SAME PCG64 stream, then the SVD transform `mean + z·(√s·Vh)` with `(U,s,Vh)=svd(cov)`
+//     factored through the OpenBLAS `gesdd` NumPy itself calls. That `gesdd` is byte-exact vs numpy at
+//     ANY size (the same host-pinned x64 / threads=1 OpenBLAS-parity condition as the rest of the linalg
+//     stack), so — unlike NumSharp's own 4×4-limited Jacobi `multivariate_normal` — the CMIX draw is
+//     byte-identical to the reference for a relative search space of ANY number of float/int parameters.
+//     The pure-numpy metric fits are byte-exact too (see `JanusMooMetric` / `JanusMooMetricParityTests`).
 
 using System;
 using System.Collections.Generic;
@@ -43,7 +48,7 @@ internal sealed class JanusMooCmix
     private readonly int _cmixStartTrial;
     private readonly string _componentAttr;
     private readonly string _scalarFallback;
-    private readonly NumPyRandom _rng;
+    private readonly Generator _rng;   // PCG64 — the reference's np.random.default_rng(seed) stream
 
     private string _lastMode = "none";
 
@@ -65,17 +70,17 @@ internal sealed class JanusMooCmix
         _componentAttr = componentAttr;
         _scalarFallback = (scalarFallback ?? "diag_quadratic").ToLowerInvariant();
 
-        _rng = np.random.RandomState();
-        // Seed the CMIX stream from the given seed (a separate MT19937 from the host's, so the host's
-        // bit-exact trajectory is untouched); an absent seed draws one from MT19937 (never System.Random).
-        _rng.seed((uint)(seed ?? (int)new LazyRandomState().Rng.randint(1, int.MaxValue)));
+        // The CMIX stream is the reference's exact bit generator — numpy's default_rng (PCG64) — seeded
+        // from the SAME seed passed to NSGA-II, in a SEPARATE Generator so the host's bit-exact NSGA-II
+        // trajectory is untouched. An absent seed draws a fresh SeedSequence, as numpy's default_rng() does.
+        _rng = seed is null ? np.random.default_rng() : np.random.default_rng((long)seed.Value);
     }
 
     internal int StartTrial => _cmixStartTrial;
     internal string LastMode => _lastMode;
 
-    /// <summary>The reference's per-trial fire decision: <c>cmix_rng.random() &lt; cmix_prob</c>.</summary>
-    internal bool DecideFire() => _rng.uniform(0.0, 1.0).ToArray<double>()[0] < _cmixProb;
+    /// <summary>The reference's per-trial fire decision: <c>cmix_rng.random() &lt; cmix_prob</c> (one PCG64 draw).</summary>
+    internal bool DecideFire() => _rng.random().ToArray<double>()[0] < _cmixProb;
 
     /// <summary>
     ///     The host-agnostic CMIX gate (the reference's <c>sample_relative</c> tail): past the warm-up, and
@@ -156,8 +161,7 @@ internal sealed class JanusMooCmix
 
         for (int attempt = 0; attempt < 8; attempt++)
         {
-            double[]? sample = MultivariateNormal(center, cov);
-            if (sample is null) return null;
+            double[] sample = MultivariateNormal(center, cov);
             for (int i = 0; i < dim; i++) sample[i] = Math.Min(Math.Max(sample[i], 0.0), 1.0);
             var pars = FromNormVector(sample, searchSpace, paramNames, transforms);
             if (pars is not null) return pars;
@@ -309,22 +313,12 @@ internal sealed class JanusMooCmix
         return sym;
     }
 
-    private double[]? MultivariateNormal(double[] mean, double[,] cov)
-    {
-        int d = mean.Length;
-        double[,] l;
-        try { l = LinAlg.Cholesky(cov); }
-        catch (Exception) { return null; }
-        double[] z = _rng.randn(d).ToArray<double>();
-        var sample = new double[d];
-        for (int i = 0; i < d; i++)
-        {
-            double s = mean[i];
-            for (int j = 0; j <= i; j++) s += l[i, j] * z[j];   // lower-triangular L
-            sample[i] = s;
-        }
-        return sample;
-    }
+    /// <summary>The reference's <c>cmix_rng.multivariate_normal(center, cov)</c>: draw
+    ///     <c>z ~ standard_normal(d)</c> from the SAME PCG64 stream, then apply numpy's default
+    ///     <c>method="svd"</c> transform (<see cref="JanusMooMetric.MultivariateNormalSvd" />).</summary>
+    private double[] MultivariateNormal(double[] mean, double[,] cov)
+        => JanusMooMetric.MultivariateNormalSvd(
+            _rng.standard_normal(new Shape(mean.Length)).ToArray<double>(), mean, cov);
 
     // ---- small helpers ---------------------------------------------------------------------------
 
