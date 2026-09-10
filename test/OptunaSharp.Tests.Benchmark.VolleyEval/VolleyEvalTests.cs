@@ -31,6 +31,9 @@ public sealed class VolleyEvalTests
     [DataRow(14, 2)]
     [DataRow(12, 3)]
     [DataRow(16, 1)]
+    [DataRow(14, 4)]
+    [DataRow(12, 4)]
+    [DataRow(10, 3)]
     public void NkLandscape_DpOptimum_MatchesBruteForce(int n, int k)
     {
         var nk = new NkLandscape(n: n, k: k, instanceId: 3);
@@ -90,6 +93,34 @@ public sealed class VolleyEvalTests
         o[1].Should().BeApproximately(1.0, 1e-12);
     }
 
+    [TestMethod]
+    public void Zdt1_Ceiling_MatchesTheScorersHypervolumeOnTheTrueFront()
+    {
+        // Feeding the analytic true front (f2 = 1 - sqrt(f1) at g = 1) through the SAME hypervolume
+        // machinery the scorer uses must reproduce the analytic ceiling. This pins numerator and
+        // denominator to one HV convention — otherwise the ratio score would be miscalibrated.
+        var z = new Zdt1(dimension: 30, instanceId: 0);
+        const int nPts = 400;
+
+        var study = OptunaSharp.Optuna.CreateStudy(
+            sampler: new RandomSampler(0),
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+        study.Optimize(t =>
+        {
+            _ = t.SuggestFloat("d", 0, 1);                 // give the sampler a parameter to suggest
+            double f1 = t.Number / (double)(nPts - 1);     // exact true-front point for this trial
+            double f2 = 1.0 - Math.Sqrt(f1);
+            return (System.Collections.Generic.IReadOnlyList<double>)new[] { f1, f2 };
+        }, nTrials: nPts);
+
+        double scorerHv = OptunaSharp.Visualization.HypervolumeHistory
+            .GetInfo(study, z.ReferencePoint).Values.Max();
+
+        scorerHv.Should().BeApproximately(z.TrueFrontHypervolume(), 3e-3);
+        scorerHv.Should().BeLessThanOrEqualTo(z.TrueFrontHypervolume() + 1e-9,
+            "no achievable front can exceed the analytic ceiling");
+    }
+
     // ---- Inert & DNF are first-class results ----
 
     [TestMethod]
@@ -138,6 +169,20 @@ public sealed class VolleyEvalTests
         gp.Median.Should().BeGreaterThan(0.2, "GP is a strong low-D optimizer and must clear the random baseline");
     }
 
+    [TestMethod]
+    public void Evaluator_IsDeterministic_ForFixedSeeds()
+    {
+        // Reproducibility (Best-Practice §9): the same seeds must reproduce the same scores exactly.
+        var challenge = new NkLandscape(n: 24, k: 2, instanceId: 0, budget: 120);
+        var tpe = ContenderRegistry.Select(new[] { "tpe" })[0];
+
+        var a = new Evaluator(new[] { 0, 1 }).EvaluateCell(challenge, tpe);
+        var b = new Evaluator(new[] { 0, 1 }).EvaluateCell(challenge, tpe);
+
+        a.SeedScores.Should().Equal(b.SeedScores, "fixed seeds are bit-reproducible");
+        a.Median.Should().Be(b.Median);
+    }
+
     // ---- The three-radical thesis (the headline DoD) ----
 
     [TestMethod]
@@ -153,6 +198,10 @@ public sealed class VolleyEvalTests
         var ev = new Evaluator(new[] { 0, 1, 2 });
 
         var matrix = ev.Run(challenges, ContenderRegistry.Cheap);
+
+        // Normalized scores are bounded: nothing finishing may beat the optimum (score > 1).
+        matrix.Cells.Where(c => !c.Dnf).Should().OnlyContain(c => c.Median <= 1.0 + 1e-6,
+            "a normalized score above 1 would mean beating the exact optimum / true-front hypervolume");
 
         // Central claim: no two radicals share a champion.
         matrix.WinnersDistinct().Should().BeTrue(
