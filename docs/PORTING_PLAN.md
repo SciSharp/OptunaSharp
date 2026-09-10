@@ -720,6 +720,11 @@ moment OptunaSharp.Core loads. Keep it.
   sits at the random-draw level) and the unconditional parameters converge either way; a deactivated
   parameter leaves the child and the RNG state bit-identical to a world without it (300 seeds, uniform and
   SBX). `examples/ConditionalParameters.cs` prints the with/without comparison generation by generation.
+  `ConditionalParamsGateTests` is the null control — the effect is gated behind explicit activation: no
+  rules / an empty `ConditionalParams` / always-admitting rules reproduce the real-Optuna baseline
+  bit-for-bit (an empty rule set is a bit-exact no-op even on a branchy study, both samplers × uniform/SBX ×
+  3 seeds), and activation is per-parameter (declaring one branch-only parameter leaves an undeclared
+  sibling at its no-rules random-draw level while the declared one is learned).
 - ✅ **2.15** — `feat(linalg): Phase 2.15 — OpenBLAS-backed linalg primitives (LinAlg) for CMA-ES/GP`.
   **Redirected mid-flight by the maintainer** from hand-rolled managed primitives to
   **`NumSharp.Interop.OpenBLAS`** (*"use NumSharp + OpenBLAS any time Optuna uses NumPy"*). Core's csproj
