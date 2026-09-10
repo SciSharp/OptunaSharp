@@ -56,6 +56,19 @@ public abstract class BaseTrial
 
     public abstract void SetUserAttr(string key, object? value);
 
+    /// <summary>
+    ///     Expose this trial's observed-components vector — the per-trial residual terms
+    ///     <c>r = (r_1, …, r_m)</c> of an objective that decomposes as <c>f(x) = mean_i r_i(x)</c> — on
+    ///     the <see cref="ComponentLosses.Key" /> user attribute. Samplers that exploit residual
+    ///     structure (notably <see cref="Samplers.JanusSampler" /> in its recommended component mode)
+    ///     read it back through <see cref="FrozenTrial.TryGetComponentLosses" />. The vector must be
+    ///     non-empty and all-finite (a non-finite entry raises <c>ValueError</c>); see
+    ///     <see cref="ComponentLosses" /> for the full contract.
+    /// </summary>
+    /// <param name="components">The residual vector; use a length consistent across trials.</param>
+    public void SetComponentLosses(ReadOnlySpan<double> components)
+        => SetUserAttr(ComponentLosses.Key, ComponentLosses.Validate(components));
+
     [Obsolete("Deprecated in v3.1.0. This feature will be removed in v5.0.0.")]
     public abstract void SetSystemAttr(string key, object? value);
 

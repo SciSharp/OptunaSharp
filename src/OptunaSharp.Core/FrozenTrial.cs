@@ -115,6 +115,16 @@ public class FrozenTrial : BaseTrial
 
     public override void SetUserAttr(string key, object? value) => _userAttrs[key] = value;
 
+    /// <summary>
+    ///     Read this trial's observed-components vector (the residual terms written with
+    ///     <see cref="BaseTrial.SetComponentLosses" />) from its user attributes. Returns <c>false</c>
+    ///     when the trial carries no valid component vector — see <see cref="ComponentLosses" /> for the
+    ///     contract (list-or-array tolerant, non-finite / empty rejected). On success
+    ///     <paramref name="components" /> is a fresh, caller-owned copy.
+    /// </summary>
+    public bool TryGetComponentLosses(out double[] components)
+        => ComponentLosses.TryRead(UserAttrs, out components);
+
     [Obsolete("Deprecated in v3.1.0. This feature will be removed in v5.0.0.")]
     public override void SetSystemAttr(string key, object? value) => SystemAttrsDict[key] = value;
 
