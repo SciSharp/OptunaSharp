@@ -21,6 +21,15 @@ internal partial class AgeMoeaSurvival
     ///     and writes each individual's <see cref="Population.Rank" /> and <see cref="Population.Crowding" />.
     /// </summary>
     public Population Do(Population pop, int nSurvive)
+        => pop.Subset(SelectMask(pop, nSurvive));
+
+    /// <summary>
+    ///     The environmental-selection survivor mask over <paramref name="pop" /> (which is also
+    ///     assigned <see cref="Population.Rank" /> and <see cref="Population.Crowding" /> as a side
+    ///     effect). Exposed for Layer 2's elite selection, which needs the survivors' ranks/crowding to
+    ///     order the parent population; <see cref="Do" /> is the plain subset.
+    /// </summary>
+    public bool[] SelectMask(Population pop, int nSurvive)
     {
         double[][] f = pop.F!;
         int nInd = f.Length;
@@ -76,7 +85,7 @@ internal partial class AgeMoeaSurvival
             selected[last[order[k]]] = true;
 
         pop.Crowding = crowdDist;
-        return pop.Subset(selected);
+        return selected;
     }
 
     /// <summary>
