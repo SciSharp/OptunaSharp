@@ -42,6 +42,7 @@ public class NSGAIIISampler : BaseGASampler
     private readonly RandomSampler _randomSampler;
     private readonly LazyRandomState _rng;
     private readonly IntersectionSearchSpace _searchSpace;
+    private readonly ConditionalParams? _conditionalParams;
 
     private readonly Func<Study, List<FrozenTrial>, List<FrozenTrial>> _elitePopulationSelectionStrategy;
     private readonly Func<Study, OrderedDict<string, BaseDistribution>, List<FrozenTrial>, OrderedDict<string, object?>>
@@ -138,6 +139,7 @@ public class NSGAIIISampler : BaseGASampler
         _randomSampler = new RandomSampler(seed);
         _rng = new LazyRandomState(seed);
         _searchSpace = new IntersectionSearchSpace(conditionalParams: conditionalParams);
+        _conditionalParams = conditionalParams;
 
         _elitePopulationSelectionStrategy = elitePopulationSelectionStrategy
             ?? new NSGAIIIElitePopulationSelectionStrategy(
@@ -187,7 +189,12 @@ public class NSGAIIISampler : BaseGASampler
         var parentPopulation = GetParentPopulation(study, generation);
         if (parentPopulation.Count == 0)
             return new OrderedDict<string, object?>();
-        return _childGenerationStrategy(study, searchSpace, parentPopulation);
+        var child = _childGenerationStrategy(study, searchSpace, parentPopulation);
+        // OptunaSharp extension: opt-in, off unless ConditionalParams.PreserveDormantValues is set. Parks
+        // inactive conditional values out of the equations and resumes reactivating ones from their latent
+        // value instead of a random draw. No-op otherwise, so the parity path is untouched.
+        _conditionalParams?.ApplyDormantCarry(study, trial, child, parentPopulation, searchSpace);
+        return child;
     }
 
     public override object? SampleIndependent(

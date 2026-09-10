@@ -725,6 +725,14 @@ moment OptunaSharp.Core loads. Keep it.
   bit-for-bit (an empty rule set is a bit-exact no-op even on a branchy study, both samplers × uniform/SBX ×
   3 seeds), and activation is per-parameter (declaring one branch-only parameter leaves an undeclared
   sibling at its no-rules random-draw level while the declared one is learned).
+  **Dormant-value memory** (`ConditionalParams.PreserveDormantValues`, opt-in, a deliberate divergence —
+  Optuna re-samples): an inactive conditional parameter's last value is parked in a trial system attribute
+  (`ConditionalParams:dormant`) — out of every equation: not suggested/scored/crossed/mutated — and a
+  reactivating branch resumes from it instead of a random draw (`ApplyDormantCarry` in `SampleRelative`,
+  consuming no sampler RNG). `ConditionalParamsDormantMemoryTests` pins resume/park/no-op at the unit level
+  (driving `ApplyDormantCarry` directly) and, end-to-end, that it parks on most trials, keeps both branches
+  learning, is a bit-exact no-op with the flag off, and removes 40-60% of random reactivations on a
+  256-trial two-branch study (NSGA-II fresh (50,50)→(20,34); NSGA-III (51,58)→(31,27)).
 - ✅ **2.15** — `feat(linalg): Phase 2.15 — OpenBLAS-backed linalg primitives (LinAlg) for CMA-ES/GP`.
   **Redirected mid-flight by the maintainer** from hand-rolled managed primitives to
   **`NumSharp.Interop.OpenBLAS`** (*"use NumSharp + OpenBLAS any time Optuna uses NumPy"*). Core's csproj

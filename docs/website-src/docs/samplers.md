@@ -152,6 +152,26 @@ baseline (an empty rule set is a bit-exact no-op even on a branchy study, both s
 arithmetic crossover); and activation is per-parameter — declaring one branch-only parameter leaves an
 undeclared sibling exactly at its no-rules random-draw level.
 
+##### Dormant-value memory (opt-in)
+
+By default a reactivating branch is re-sampled from scratch: when `optimizer` flips back to `adam` and no
+selected parent happened to carry `beta1`, `beta1` is drawn at random and everything learned about it last
+time is lost. Set `PreserveDormantValues = true` on the rule set to keep it instead:
+
+```csharp
+var rules = new ConditionalParams { PreserveDormantValues = true }
+    .When("optimizer", "adam").Activates("beta1")
+    .When("optimizer", "sgd").Activates("momentum");
+```
+
+While a branch is inactive its parameter's last value is parked in a latent side channel (a trial system
+attribute) — never suggested, never scored, never crossed or mutated, so it stays out of every equation
+and does not change while dormant — and a reactivating branch **resumes from that value instead of a random
+draw**, then evolves normally from there. The hyperparameter list stays fluid, but toggling a branch off
+and on no longer throws its tuning away. This is a genuine divergence (Optuna re-samples), so it is off
+unless you ask for it. Measured on a 256-trial two-branch study, it removes 40–60% of the random
+reactivations; `ConditionalParamsDormantMemoryTests` pins the resume/park/no-op behavior and that effect.
+
 ### GridSampler and BruteForceSampler
 
 `GridSampler` enumerates an explicit grid you provide and stops when it is exhausted
@@ -209,6 +229,9 @@ These are the documented, tested differences from Optuna:
 - **GridSampler** may order not-yet-visited grid points differently under concurrency (cosmetic).
 - **NSGAIIISampler** can differ on near-tie reference-point selection; **UNDXCrossover** uses a managed
   QR and diverges for 1-D search spaces.
+- **ConditionalParams** (NSGA-II/III) is an OptunaSharp extension with no Optuna analog, off by default;
+  its `PreserveDormantValues` mode is a deliberate divergence — a reactivating conditional branch resumes
+  its parked value instead of the random re-sample Optuna would do.
 
 All are marked in the source and pinned by tests.
 

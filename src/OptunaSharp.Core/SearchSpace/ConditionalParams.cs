@@ -68,6 +68,27 @@ public sealed class ConditionalParams
     private readonly OrderedDict<string, OrderedDict<string, List<Condition>>> _rules = new();
     private List<string>? _order;
 
+    /// <summary>Trial system-attribute key under which a trial's dormant (latent) conditional values live.</summary>
+    internal const string DormantAttrKey = "ConditionalParams:dormant";
+
+    /// <summary>
+    ///     <b>Opt-in divergence from Optuna (off by default).</b> When <c>true</c>, a conditional parameter
+    ///     that is <i>inactive</i> for a trial does not vanish: its last active value is parked in a latent
+    ///     side channel (a trial system attribute — never suggested, never scored, never crossed or
+    ///     mutated, so still out of every equation), and when the parameter's branch reactivates it
+    ///     <b>resumes from that preserved value instead of a fresh random draw</b>. The hyperparameter list
+    ///     stays fluid — genes move between the active genome and the dormant channel — but the fluidity is
+    ///     non-destructive: a branch toggling off and on again does not throw away what was learned about
+    ///     it. Optuna always re-samples, so this only takes effect when you ask for it.
+    ///
+    ///     <para>A resumed gene is an ordinary active gene again from that point (free to be crossed and
+    ///     mutated); dormancy freezes the value only while the branch is off. A gene that has never been
+    ///     active has no latent value to resume, so its first activation is still a normal draw. Requires
+    ///     the chosen storage to round-trip a <c>{name: value}</c> map through trial system attributes
+    ///     (in-memory and JSON storages do).</para>
+    /// </summary>
+    public bool PreserveDormantValues { get; init; }
+
     /// <summary>
     ///     Starts a rule: the parameters named by the following <see cref="ActivationBuilder.Activates" />
     ///     are active only while <paramref name="activator" /> holds one of <paramref name="values" />.
@@ -175,6 +196,137 @@ public sealed class ConditionalParams
         => !_rules.TryGetValue(name, out var byActivator)
            || !byActivator.TryGetValue(activator, out var conditions)
            || Admits(conditions, value);
+
+    /// <summary>
+    ///     Tri-state activity of <paramref name="name" /> against a <i>partial</i> assignment (a sampler's
+    ///     in-progress proposal): <c>true</c>/<c>false</c> as <see cref="IsActive" />, or <c>null</c> when an
+    ///     activator it depends on is not present in <paramref name="assignment" /> yet (e.g. dropped for
+    ///     mutation and still to be drawn), so activity cannot be decided here.
+    /// </summary>
+    internal bool? ResolveActive(string name, IReadOnlyDictionary<string, object?> assignment)
+    {
+        if (!_rules.TryGetValue(name, out var byActivator))
+            return true;
+        foreach (var (activator, conditions) in byActivator)
+        {
+            if (!assignment.TryGetValue(activator, out var value))
+                return null;
+            if (!Admits(conditions, value))
+                return false;
+            bool? activatorActive = ResolveActive(activator, assignment);
+            if (activatorActive is false)
+                return false;
+            if (activatorActive is null)
+                return null;
+        }
+        return true;
+    }
+
+    /// <summary>
+    ///     The dormant-value carry (only runs when <see cref="PreserveDormantValues" />). See that
+    ///     property: parks the value of every conditional parameter inactive for <paramref name="child" />
+    ///     in the trial's <see cref="DormantAttrKey" /> system attribute (out of every equation), and
+    ///     seeds any parameter active for <paramref name="child" /> that no parent supplied from the
+    ///     latest latent value — so a reactivating branch resumes instead of drawing at random. Consumes
+    ///     no sampler RNG; mutates <paramref name="child" /> in place and writes at most one system attr.
+    /// </summary>
+    internal void ApplyDormantCarry(
+        Study study,
+        FrozenTrial trial,
+        OrderedDict<string, object?> child,
+        IReadOnlyList<FrozenTrial> parentPopulation,
+        IReadOnlyDictionary<string, BaseDistribution> searchSpace)
+    {
+        if (!PreserveDormantValues)
+            return;
+
+        var latent = GatherLatent(parentPopulation);
+        if (latent.Count == 0)
+            return;   // nothing learned on any branch yet (e.g. generation 0): nothing to carry.
+
+        var dormant = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var name in Order)
+        {
+            bool? active = ResolveActive(name, child);
+            if (active is null)
+                continue;   // an activator is still undecided for this child: leave it to independent sampling.
+
+            if (active is true)
+            {
+                // The branch is on but no selected parent carried the gene: resume the latent value instead
+                // of letting it fall through to a fresh random draw, provided it is still in range.
+                if (!child.ContainsKey(name) && latent.TryGetValue(name, out var value) && InRange(searchSpace, name, value))
+                    child[name] = value;
+            }
+            else if (latent.TryGetValue(name, out var value))
+            {
+                // The branch is off: park the value, untouched, out of the active genome.
+                dormant[name] = value;
+            }
+        }
+
+        if (dormant.Count > 0)
+            study.Storage.SetTrialSystemAttr(trial.TrialId, DormantAttrKey, dormant);
+    }
+
+    /// <summary>
+    ///     The latest latent value of each conditional parameter across <paramref name="parentPopulation" />
+    ///     — a parent's own recorded value where the branch was active, or the value it had parked while
+    ///     dormant — with the most recent parent (by trial number) winning.
+    /// </summary>
+    private Dictionary<string, object?> GatherLatent(IReadOnlyList<FrozenTrial> parentPopulation)
+    {
+        var latent = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var trial in parentPopulation.OrderBy(t => t.Number))
+        {
+            foreach (var name in _rules.Keys)
+            {
+                if (trial.ParamsDict.TryGetValue(name, out var active))
+                    latent[name] = active;
+            }
+            if (trial.SystemAttrsDict.TryGetValue(DormantAttrKey, out var raw) && raw is not null)
+            {
+                foreach (var (name, value) in CoerceDormant(raw))
+                {
+                    if (_rules.ContainsKey(name))
+                        latent[name] = value;
+                }
+            }
+        }
+        return latent;
+    }
+
+    /// <summary>Whether <paramref name="value" /> is a legal value of <paramref name="name" />'s distribution.</summary>
+    private static bool InRange(IReadOnlyDictionary<string, BaseDistribution> searchSpace, string name, object? value)
+    {
+        if (!searchSpace.TryGetValue(name, out var distribution))
+            return false;
+        try
+        {
+            return distribution.Contains(distribution.ToInternalRepr(value));
+        }
+        catch (Exception)
+        {
+            return false;   // a value no longer representable in this distribution is not resumable.
+        }
+    }
+
+    /// <summary>Reads back a stored dormant map regardless of how the storage round-tripped it.</summary>
+    private static IEnumerable<KeyValuePair<string, object?>> CoerceDormant(object raw)
+    {
+        switch (raw)
+        {
+            case IReadOnlyDictionary<string, object?> typed:
+                return typed;
+            case System.Collections.IDictionary dict:
+                var pairs = new List<KeyValuePair<string, object?>>(dict.Count);
+                foreach (System.Collections.DictionaryEntry entry in dict)
+                    pairs.Add(new KeyValuePair<string, object?>(entry.Key?.ToString() ?? "", entry.Value));
+                return pairs;
+            default:
+                return Array.Empty<KeyValuePair<string, object?>>();
+        }
+    }
 
     /// <summary>Conditional parameter names ordered so that every activator precedes what it activates.</summary>
     internal IReadOnlyList<string> Order => _order ??= ComputeOrder();
