@@ -161,4 +161,61 @@ public class AgeMoea2OperatorParityTests
             BitEqual(got, Rows(c.GetProperty("off_X")), $"mating seed={seed}");
         }
     }
+
+    // ---- Phase 2: non-dominated sort ranks, corner solutions, normalization ----
+
+    [TestMethod]
+    public void NonDominatedSorting_RanksMatch()
+    {
+        int cs = 0;
+        foreach (var c in _oracle.GetProperty("nds").EnumerateArray())
+        {
+            double[][] f = Rows(c.GetProperty("F"));
+            var fronts = NonDominatedSorting.Do(f);
+
+            var rank = Enumerable.Repeat(-1, f.Length).ToArray();
+            for (int i = 0; i < fronts.Count; i++)
+                foreach (int idx in fronts[i])
+                    rank[idx] = i;
+
+            int[] exp = c.GetProperty("rank").EnumerateArray().Select(v => v.GetInt32()).ToArray();
+            rank.Should().Equal(exp, $"NDS ranks must match pymoo (case {cs})");
+            cs++;
+        }
+    }
+
+    [TestMethod]
+    public void FindCornerSolutions_MatchesExtremeIndices()
+    {
+        int cs = 0;
+        foreach (var c in _oracle.GetProperty("corner").EnumerateArray())
+        {
+            double[][] front = Rows(c.GetProperty("front"));
+            int[] got = AgeMoeaSurvival.FindCornerSolutions(front);
+            int[] exp = c.GetProperty("extreme").EnumerateArray().Select(v => v.GetInt32()).ToArray();
+            got.Should().Equal(exp, $"corner indices must match pymoo (case {cs})");
+            cs++;
+        }
+    }
+
+    [TestMethod]
+    public void Normalize_IsBitExact()
+    {
+        int cs = 0;
+        foreach (var c in _oracle.GetProperty("normalize").EnumerateArray())
+        {
+            double[][] front = Rows(c.GetProperty("front"));
+            int[] extreme = c.GetProperty("extreme").EnumerateArray().Select(v => v.GetInt32()).ToArray();
+            var (normFront, normalization) = AgeMoeaSurvival.Normalize(front, extreme);
+
+            double[] expNorm = c.GetProperty("normalization").EnumerateArray().Select(Num).ToArray();
+            for (int j = 0; j < normalization.Length; j++)
+                BitConverter.DoubleToInt64Bits(normalization[j])
+                    .Should().Be(BitConverter.DoubleToInt64Bits(expNorm[j]),
+                        $"normalization[{j}] must be bit-identical to pymoo (case {cs})");
+
+            BitEqual(normFront, Rows(c.GetProperty("norm_front")), $"normalize front (case {cs})");
+            cs++;
+        }
+    }
 }

@@ -22,6 +22,8 @@ from pymoo.operators.selection.tournament import TournamentSelection
 from pymoo.algorithms.moo.nsga2 import binary_tournament
 from pymoo.core.mating import Mating
 from pymoo.core.duplicate import DefaultDuplicateElimination
+from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
+from pymoo.algorithms.moo.age import find_corner_solutions, normalize, point_2_line_distance
 
 
 class Box(Problem):
@@ -113,6 +115,38 @@ def dump_mating(cases):
     return out
 
 
+def dump_nds(cases):
+    out = []
+    for F in cases:
+        Fa = np.array(F, float)
+        fronts = NonDominatedSorting().do(Fa)  # full ranking (n_stop = 1e8)
+        rank = np.full(len(F), -1, dtype=int)
+        for i, fr in enumerate(fronts):
+            rank[fr] = i
+        out.append(dict(F=F, rank=rank.tolist(),
+                        fronts=[np.array(fr).tolist() for fr in fronts]))
+    return out
+
+
+def dump_corner(cases):
+    out = []
+    for front in cases:
+        idx = find_corner_solutions(np.array(front, float))
+        out.append(dict(front=front, extreme=np.array(idx).tolist()))
+    return out
+
+
+def dump_normalize(cases):
+    out = []
+    for front in cases:
+        fa = np.array(front, float)
+        extreme = find_corner_solutions(fa)
+        nf, norm = normalize(fa.copy(), extreme)
+        out.append(dict(front=front, extreme=np.array(extreme).tolist(),
+                        norm_front=nf.tolist(), normalization=norm.tolist()))
+    return out
+
+
 def main():
     rng = np.random.RandomState(12345)
     # fixed random populations/parents for the operator cases
@@ -148,6 +182,13 @@ def main():
         crowd = rng.random(8).tolist()
         mating_cases.append((seed, pop, ranks, crowd, 8))
 
+    # Phase 2: non-dominated sort, corner solutions, normalization (deterministic given inputs).
+    nds_cases = [rng.random((n, m)).tolist() for (n, m) in [(10, 2), (12, 3), (8, 2), (20, 3), (6, 4)]]
+    corner_cases = [rng.random((n, m)).tolist() for (n, m) in [(8, 2), (10, 3), (12, 3), (15, 4)]]
+    # include a degenerate m<=n case (returns arange) and the normalize duplicate-extreme fallback path
+    corner_cases.append(rng.random((3, 3)).tolist())
+    normalize_cases = [rng.random((n, m)).tolist() for (n, m) in [(8, 2), (10, 3), (12, 3), (15, 4)]]
+
     corpus = dict(
         pymoo_version=__import__("pymoo").__version__,
         numpy_version=np.__version__,
@@ -156,6 +197,9 @@ def main():
         mutation=dump_mutation(mutation_cases),
         tournament=dump_tournament(tournament_cases),
         mating=dump_mating(mating_cases),
+        nds=dump_nds(nds_cases),
+        corner=dump_corner(corner_cases),
+        normalize=dump_normalize(normalize_cases),
     )
     import os, math
     def san(o):
@@ -177,7 +221,7 @@ def main():
     with open(path, "w") as f:
         json.dump(san(corpus), f, allow_nan=False)
     print("wrote", path)
-    for k in ("sampling", "crossover", "mutation", "tournament", "mating"):
+    for k in ("sampling", "crossover", "mutation", "tournament", "mating", "nds", "corner", "normalize"):
         print(f"  {k}: {len(corpus[k])} cases")
 
 
