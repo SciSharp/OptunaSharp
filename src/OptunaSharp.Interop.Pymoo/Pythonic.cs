@@ -52,15 +52,46 @@ internal static class Python
         ///     the operators sample and the survival reads is needed. Dispose the returned problem.
         ///     Under the GIL.
         /// </summary>
-        internal static PyObject Problem(int nVar, int nObj, PyObject xl, PyObject xu)
+        internal static PyObject Problem(int nVar, int nObj, int nIeqConstr, PyObject xl, PyObject xu)
         {
             PyObject module = PythonRuntime.Import("pymoo.core.problem");
             using PyObject ctor = module.GetAttr("Problem");
             using var kwargs = new PyDict();
             using (PyObject nv = new PyInt(nVar)) kwargs["n_var"] = nv;
             using (PyObject no = new PyInt(nObj)) kwargs["n_obj"] = no;
+            using (PyObject nc = new PyInt(nIeqConstr)) kwargs["n_ieq_constr"] = nc;
             kwargs["xl"] = xl;
             kwargs["xu"] = xu;
+            return ctor.Invoke(Array.Empty<PyObject>(), kwargs);
+        }
+
+        /// <summary><c>pymoo.operators.crossover.sbx.SBX(prob=…, eta=…)</c> — the simulated-binary
+        /// crossover operator. A <c>null</c> argument is omitted so pymoo's own default fills in. Dispose
+        /// the returned operator. Under the GIL.</summary>
+        internal static PyObject SBX(double? eta, double? prob)
+        {
+            PyObject module = PythonRuntime.Import("pymoo.operators.crossover.sbx");
+            using PyObject ctor = module.GetAttr("SBX");
+            using var kwargs = new PyDict();
+            if (eta is { } etaValue)
+                using (PyObject e = etaValue.ToPython()) kwargs["eta"] = e;
+            if (prob is { } probValue)
+                using (PyObject p = probValue.ToPython()) kwargs["prob"] = p;
+            return ctor.Invoke(Array.Empty<PyObject>(), kwargs);
+        }
+
+        /// <summary><c>pymoo.operators.mutation.pm.PM(prob=…, eta=…)</c> — the polynomial mutation
+        /// operator. A <c>null</c> argument is omitted so pymoo's own default fills in. Dispose the
+        /// returned operator. Under the GIL.</summary>
+        internal static PyObject PM(double? eta, double? prob)
+        {
+            PyObject module = PythonRuntime.Import("pymoo.operators.mutation.pm");
+            using PyObject ctor = module.GetAttr("PM");
+            using var kwargs = new PyDict();
+            if (eta is { } etaValue)
+                using (PyObject e = etaValue.ToPython()) kwargs["eta"] = e;
+            if (prob is { } probValue)
+                using (PyObject p = probValue.ToPython()) kwargs["prob"] = p;
             return ctor.Invoke(Array.Empty<PyObject>(), kwargs);
         }
 

@@ -102,31 +102,78 @@ var sampler = new PymooSampler(
     });
 ```
 
+Custom genetic operators (SBX crossover + PM mutation), honored by every algorithm:
+
+```csharp
+var sampler = new PymooSampler(
+    PymooAlgorithm.Nsga2,
+    populationSize: 40,
+    seed: 0,
+    options: new PymooAlgorithmOptions
+    {
+        CrossoverEta = 30, CrossoverProbability = 0.9,   // SBX
+        MutationEta = 20,  MutationProbability = 0.1,    // PM
+        EliminateDuplicates = true,
+    });
+```
+
+Constrained optimization (pymoo's `G ≤ 0`, matching Optuna's constraint sign) — either call
+`Trial.SetConstraint(...)` in the objective, or pass a `constraintsFunc`:
+
+```csharp
+var sampler = new PymooSampler(
+    PymooAlgorithm.Nsga2, populationSize: 40, seed: 0,
+    constraintsFunc: t => new[] { Convert.ToDouble(t.Params["x"]) - 0.5 });   // feasible when x <= 0.5
+```
+
+## Configuration (`PymooAlgorithmOptions`)
+
+- **Genetic operators (all algorithms):** `CrossoverEta` / `CrossoverProbability` (SBX),
+  `MutationEta` / `MutationProbability` (PM), `EliminateDuplicates`. A `null` eta/prob keeps pymoo's
+  own default.
+- **RVEA:** `RveaAlpha`, `RveaAdaptFrequency`.
+- **Reference directions (NSGA-III, U-NSGA-III, RVEA, C-TAEA):** `ReferenceDirectionsMethod`
+  (Das–Dennis / Riesz energy), `NumberOfPartitions`, `NumberOfReferenceDirections`.
+- **Reference points (R-NSGA-II, R-NSGA-III):** `ReferencePoints`, and R-NSGA-II's `Epsilon` /
+  `Weights` / `ExtremePointsAsReferencePoints`, R-NSGA-III's `PopulationPerReferencePoint` / `Mu`.
+
+> pymoo's `n_offsprings` is deliberately **not** exposed: setting it below `pop_size` makes an `ask()`
+> return fewer than a full population, which is incompatible with the bridge's uniform full-population
+> generation replay.
+
 ## How it works
 
 pymoo has a native `ask()` / `tell()` interface, so `PymooSampler` uses the same
 **reconstruct-from-trials** bridge as `PyCmaSampler`: inside each `SampleRelative`, it builds the
 pymoo algorithm fresh, seeds it, **replays** the study's completed trials generation by generation
-(`ask()` the infill population → stamp its objectives `F` from the trials' stored values →
-`tell()`), then `ask()`s once more and hands out one individual's parameters for the current trial —
-the same one-row-per-trial doling as the native `NSGAIISampler` / `AgeMoea2Sampler`. Nothing
-pymoo-side persists between trials; the study storage is the single source of truth, which keeps the
-sampler correct under resumption and reproducible under a fixed seed.
+(`ask()` the infill population → stamp its objectives `F` (and constraints `G`) from the trials'
+stored values → `tell()`), then `ask()`s once more and hands out one individual's parameters for the
+current trial — the same one-row-per-trial doling as the native `NSGAIISampler` / `AgeMoea2Sampler`.
+Nothing pymoo-side persists between trials; the study storage is the single source of truth, which
+keeps the sampler correct under resumption and reproducible under a fixed seed.
 
-pymoo owns **every** generation (including generation 0, its initial sampling); there is no
-random-startup phase. The independent sampler is used only for parameters *outside* the relative
-search space (single-value distributions and conditional/dynamic parameters). Parameters cross to
-pymoo's continuous unit-cube via the bit-exact one-hot `SearchSpaceTransform` (float/int with
-log/step scale to `[0,1]`; categoricals are one-hot encoded).
+Like every relative sampler under Optuna's define-by-run model (and the native `NSGAIISampler` /
+`AgeMoea2Sampler`), the first `population_size` trials — **generation 0** — are sampled by the
+independent sampler (a `RandomSampler` by default), because the search space is not known until a
+trial has completed. Once generation 0 is complete, pymoo takes over: it is rebuilt with that
+generation **injected as its initial population** (`sampling=`), so the tell-replay is coherent and
+every later generation is pymoo's genuine offspring. The independent sampler also covers parameters
+*outside* the relative search space (single-value distributions and conditional/dynamic parameters).
+Parameters cross to pymoo's continuous unit cube via the bit-exact one-hot `SearchSpaceTransform`
+(float/int with log/step scale to `[0,1]`; categoricals are one-hot encoded), and the `X`/`F`/`G`
+matrices cross zero-copy through NumSharp's `NDArray` ⇄ numpy interop.
 
 ## Scope of the parity guarantee
 
-Validated **behaviorally** (every algorithm completes a seeded study, drives a spreading front, and
-reproduces across runs) and by **value-parity vs live `pymoo.minimize`** (the achieved front matches
-a monolithic minimize run on the same seed on a plain continuous box). It is **not** bit-exact with
-`pymoo.minimize` through the sampler — the Optuna ask/tell path and the search-space transform differ
-from a monolithic run. Bit-exactness is the job of the *native* Layer-1 optimizers (e.g.
-`AgeMoea2Optimizer`).
+Validated **behaviorally** (every algorithm completes a seeded study across 1-, 2- and 3-objective
+problems and Optuna's full parameter space — float/int with log/step, categoricals, dynamic spaces —
+drives a spreading front, and reproduces across runs) and by **value-parity vs a direct live pymoo
+`ask`/`tell` run** seeded with the same generation 0 (including custom operators and constraints): the
+bridge reproduces that run to `< 1e-9` on every trial's params and objectives — effectively bit-exact
+for a unit-cube float space, the only seam being the high-boundary clip of Optuna's half-open float
+interval. It is **not** bit-exact with a monolithic `pymoo.minimize` through the sampler, because
+generation 0 uses OptunaSharp's RNG rather than pymoo's own initial sampling. Bit-exactness against a
+monolithic run is the job of the *native* Layer-1 optimizers (e.g. `AgeMoea2Optimizer`).
 
 ---
 

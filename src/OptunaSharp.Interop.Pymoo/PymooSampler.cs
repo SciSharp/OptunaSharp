@@ -20,6 +20,17 @@ namespace OptunaSharp.Interop.Pymoo;
 ///     ask/tell, search space, direction flipping, seeding — is native OptunaSharp; the operators,
 ///     reference-direction machinery and hypervolume/decomposition survival are genuine pymoo.
 ///
+///     <para><b>Configurable surface.</b> <see cref="PymooAlgorithmOptions" /> exposes the genetic
+///     operators every algorithm honors — SBX crossover (<c>CrossoverEta</c>/<c>CrossoverProbability</c>),
+///     PM mutation (<c>MutationEta</c>/<c>MutationProbability</c>), <c>EliminateDuplicates</c> — plus the
+///     per-family knobs (reference directions / points, RVEA's <c>alpha</c>/<c>adapt_freq</c>, R-NSGA's
+///     <c>weights</c>/<c>mu</c>/<c>epsilon</c>). Constrained optimization (pymoo's <c>G ≤ 0</c>, matching
+///     Optuna's constraint sign) is driven by <c>Trial.SetConstraint</c> or the
+///     <paramref name="constraintsFunc" /> — pymoo then optimizes with feasibility-first survival, and
+///     C-TAEA becomes meaningful. Single- <b>and</b> multi-objective studies (1, 2, 3+ objectives) and
+///     Optuna's full parameter space (float / int with log / step, categoricals, dynamic spaces) are all
+///     supported.</para>
+///
 ///     <para><b>How it works — the reconstruct-from-trials bridge.</b> pymoo exposes a native
 ///     <c>ask()</c>/<c>tell()</c> interface, so — exactly like <c>OptunaSharp.Interop.PyCma</c>'s
 ///     <c>PyCmaSampler</c> — the pymoo <c>Algorithm</c> lives <b>only</b> inside a single
@@ -81,6 +92,7 @@ public sealed class PymooSampler : BaseSampler
     private readonly PymooAlgorithmOptions _options;
     private readonly int _populationSize;
     private readonly BaseSampler _independentSampler;
+    private readonly Func<FrozenTrial, IEnumerable<double>>? _constraintsFunc;
     private readonly IntersectionSearchSpace _searchSpace = new();
     private int _seed;
 
@@ -99,12 +111,22 @@ public sealed class PymooSampler : BaseSampler
     /// content depends on <paramref name="algorithm" /> — see <see cref="PymooAlgorithmOptions" />.</param>
     /// <param name="independentSampler">Sampler for the initial generation and for parameters outside the
     /// relative search space (default <see cref="RandomSampler" /> with the same <paramref name="seed" />).</param>
+    /// <param name="constraintsFunc">
+    ///     Optional function computing the inequality constraints of a completed <see cref="FrozenTrial" />
+    ///     — pymoo's <c>G ≤ 0</c> convention (a value &gt; 0 marks a violated constraint, ≤ 0 feasible),
+    ///     which matches Optuna's own constraint sign. When supplied (or when the objective calls
+    ///     <c>Trial.SetConstraint</c>), pymoo optimizes with feasibility-first (constrained-domination)
+    ///     survival, and C-TAEA (the constrained two-archive EA) becomes meaningful. The constraint count
+    ///     is fixed by the first completed trial. The sampler is then stateful — do not reuse it across
+    ///     studies.
+    /// </param>
     public PymooSampler(
         PymooAlgorithm algorithm = PymooAlgorithm.Nsga2,
         int populationSize = 50,
         int? seed = null,
         PymooAlgorithmOptions? options = null,
-        BaseSampler? independentSampler = null)
+        BaseSampler? independentSampler = null,
+        Func<FrozenTrial, IEnumerable<double>>? constraintsFunc = null)
     {
         if (populationSize < 2)
             throw new NumSharp.ValueError("`population_size` must be greater than or equal to 2.");
@@ -122,6 +144,7 @@ public sealed class PymooSampler : BaseSampler
         _options = options ?? new PymooAlgorithmOptions();
         _seed = resolvedSeed;
         _independentSampler = independentSampler ?? new RandomSampler(resolvedSeed);
+        _constraintsFunc = constraintsFunc;
     }
 
     public override void ReseedRng()
@@ -157,12 +180,13 @@ public sealed class PymooSampler : BaseSampler
         // population; the any-state count after the last told generation gives the current trial's index
         // within its generation.
         List<FrozenTrial> trials = study.GetTrialsInternal(deepcopy: false, states: null, useCache: false);
+        IReadOnlyList<string> constraintKeys = FirstCompleteConstraintKeys(trials);
 
         // The pymoo optimizer lives ONLY inside this GIL scope: built, replayed (tell), asked, disposed.
         return PythonRuntime.Run(() =>
         {
             using var optimizer = new Optimizer(
-                _algorithm, _options, _populationSize, _seed, trans, searchSpace, directions);
+                _algorithm, _options, _populationSize, _seed, trans, searchSpace, directions, constraintKeys);
 
             List<FrozenTrial> complete = optimizer.CollectComplete(trials);
             // Generation 0 is not complete yet — defer to the independent sampler (the house pattern:
@@ -187,7 +211,23 @@ public sealed class PymooSampler : BaseSampler
         => _independentSampler.BeforeTrial(study, trial);
 
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
-        => _independentSampler.AfterTrial(study, trial, state, values);
+    {
+        // Compute + store the constraintsFunc values (into system_attrs, read back as FrozenTrial.Constraints),
+        // then delegate — the same after_trial path as BoTorchSampler.
+        if (_constraintsFunc is not null)
+            SamplerHelpers.ProcessConstraintsAfterTrial(_constraintsFunc, study, trial, state);
+        _independentSampler.AfterTrial(study, trial, state, values);
+    }
+
+    /// <summary>The constraint key set, fixed by the first completed trial (Optuna's convention, as in
+    /// BoTorchSampler). Empty when the study is unconstrained.</summary>
+    private static IReadOnlyList<string> FirstCompleteConstraintKeys(IReadOnlyList<FrozenTrial> trials)
+    {
+        foreach (FrozenTrial t in trials)
+            if (t.State == TrialState.Complete)
+                return new List<string>(t.Constraints.Keys);
+        return Array.Empty<string>();
+    }
 
     // ------------------------------------------------------------------------------------------------
     //  Builds the real pymoo Problem + Algorithm and drives its native ask/tell. Every member touches
@@ -205,6 +245,7 @@ public sealed class PymooSampler : BaseSampler
         private readonly SearchSpaceTransform _trans;
         private readonly OrderedDict<string, BaseDistribution> _searchSpace;
         private readonly IReadOnlyList<StudyDirection> _directions;
+        private readonly IReadOnlyList<string> _constraintKeys;
         private readonly int _nBounds;
         private readonly int _nObj;
 
@@ -221,7 +262,8 @@ public sealed class PymooSampler : BaseSampler
             int seed,
             SearchSpaceTransform trans,
             OrderedDict<string, BaseDistribution> searchSpace,
-            IReadOnlyList<StudyDirection> directions)
+            IReadOnlyList<StudyDirection> directions,
+            IReadOnlyList<string> constraintKeys)
         {
             _algorithm = algorithm;
             _options = options;
@@ -230,13 +272,15 @@ public sealed class PymooSampler : BaseSampler
             _trans = trans;
             _searchSpace = searchSpace;
             _directions = directions;
+            _constraintKeys = constraintKeys;
             _nObj = directions.Count;
             _nBounds = trans.RawBounds.GetLength(0);
 
             // Under transform01 the parameters live in the unit cube, so the pymoo box is [0,1]^n.
+            // n_ieq_constr wires Optuna's constraints into pymoo's G ≤ 0 feasibility survival.
             using (PyObject xlPy = PymooInterop.ToNumpy(np.zeros(_nBounds)))
             using (PyObject xuPy = PymooInterop.ToNumpy(np.ones(_nBounds)))
-                _problem = Python.pymoo.Problem(_nBounds, _nObj, xlPy, xuPy);
+                _problem = Python.pymoo.Problem(_nBounds, _nObj, _constraintKeys.Count, xlPy, xuPy);
 
             // Phase 1: build without an injected initial population, only to read pymoo's authoritative
             // population size (derived, for the reference-direction / reference-point algorithms — it is
@@ -280,10 +324,12 @@ public sealed class PymooSampler : BaseSampler
         internal int Tell(IReadOnlyList<FrozenTrial> complete)
         {
             int generation = complete.Count / _popsize;
+            int nConstraints = _constraintKeys.Count;
             int lastToldTrialNumber = -1;
             for (int g = 0; g < generation; g++)
             {
                 var f = new double[_popsize, _nObj];
+                var gMatrix = nConstraints > 0 ? new double[_popsize, nConstraints] : null;
                 for (int k = 0; k < _popsize; k++)
                 {
                     FrozenTrial t = complete[g * _popsize + k];
@@ -291,6 +337,18 @@ public sealed class PymooSampler : BaseSampler
                     for (int j = 0; j < _nObj; j++)
                         // pymoo MINIMIZES every objective; a MAXIMIZE direction flips the sign.
                         f[k, j] = _directions[j] == StudyDirection.Maximize ? -values[j] : values[j];
+
+                    if (gMatrix is not null)
+                    {
+                        OrderedDict<string, double> constraints = t.Constraints;
+                        for (int c = 0; c < nConstraints; c++)
+                            // Optuna's constraint sign (> 0 violated, ≤ 0 feasible) IS pymoo's G ≤ 0.
+                            gMatrix[k, c] = constraints.TryGetValue(_constraintKeys[c], out double cv)
+                                ? cv
+                                : throw new RuntimeError(
+                                    $"Trial#{t.Number} is missing constraint '{_constraintKeys[c]}'; every " +
+                                    "trial must carry the same constraints as the first completed trial.");
+                    }
                     if (t.Number > lastToldTrialNumber)
                         lastToldTrialNumber = t.Number;
                 }
@@ -298,6 +356,11 @@ public sealed class PymooSampler : BaseSampler
                 using PyObject pop = Python.pymoo.Algorithm.ask(_algo);
                 using PyObject fNumpy = PymooInterop.ToNumpy(np.array(f));   // (pop_size, n_obj) objectives
                 Python.pymoo.Population.set(pop, "F", fNumpy);
+                if (gMatrix is not null)
+                {
+                    using PyObject gNumpy = PymooInterop.ToNumpy(np.array(gMatrix));   // (pop_size, n_constr)
+                    Python.pymoo.Population.set(pop, "G", gNumpy);
+                }
                 Python.pymoo.Algorithm.tell(_algo, pop);
             }
             return lastToldTrialNumber;
@@ -340,11 +403,13 @@ public sealed class PymooSampler : BaseSampler
         }
 
         /// <summary>
-        ///     Build the family-specific keyword arguments for the pymoo algorithm constructor: a
-        ///     <c>pop_size</c> for the population-size algorithms; <c>ref_dirs</c> (Das–Dennis or Riesz
-        ///     energy) for the reference-direction algorithms; <c>ref_points</c> (+ <c>epsilon</c> /
-        ///     <c>pop_size</c> or <c>pop_per_ref_point</c>) for the reference-point algorithms. The caller
-        ///     disposes the returned dict. Under the GIL.
+        ///     Build the keyword arguments for the pymoo algorithm constructor: the shared genetic
+        ///     operators (SBX crossover / PM mutation / duplicate elimination, accepted by every family),
+        ///     then the family-specific arguments — a <c>pop_size</c> for the population-size algorithms;
+        ///     <c>ref_dirs</c> (Das–Dennis or Riesz energy) + RVEA's <c>alpha</c>/<c>adapt_freq</c> for the
+        ///     reference-direction algorithms; <c>ref_points</c> (+ <c>epsilon</c>/<c>weights</c>/
+        ///     <c>extreme_points_as_reference_points</c>, or <c>pop_per_ref_point</c>/<c>mu</c>) for the
+        ///     reference-point algorithms. The caller disposes the returned dict. Under the GIL.
         /// </summary>
         private static PyDict BuildAlgorithmKwargs(
             PymooAlgorithm algorithm, PymooAlgorithmOptions options, int populationSize, int nObj, int seed,
@@ -353,10 +418,36 @@ public sealed class PymooSampler : BaseSampler
             var kwargs = new PyDict();
             try
             {
+                // Genetic operators — every algorithm accepts these. A null eta/prob keeps pymoo's own
+                // default operator; eliminate_duplicates is sent ONLY when turned off (True is pymoo's
+                // default across these algorithms), so the default path stays byte-identical to a stock
+                // pymoo run. (PyFloat is ambiguous with OptunaSharp.Distributions.PyFloat and the root
+                // `Python` class shadows the Python.Runtime namespace here — scalars cross via ToPython.)
+                if (options.CrossoverEta is not null || options.CrossoverProbability is not null)
+                {
+                    using PyObject sbx = Python.pymoo.SBX(options.CrossoverEta, options.CrossoverProbability);
+                    kwargs["crossover"] = sbx;
+                }
+                if (options.MutationEta is not null || options.MutationProbability is not null)
+                {
+                    using PyObject pm = Python.pymoo.PM(options.MutationEta, options.MutationProbability);
+                    kwargs["mutation"] = pm;
+                }
+                if (!options.EliminateDuplicates)
+                    using (PyObject elim = false.ToPython())
+                        kwargs["eliminate_duplicates"] = elim;
+
                 if (PymooAlgorithmMap.UsesReferenceDirections(algorithm))
                 {
                     using PyObject refDirs = BuildReferenceDirections(options, nObj, populationSize, seed);
                     kwargs["ref_dirs"] = refDirs;
+                    if (algorithm == PymooAlgorithm.Rvea)
+                    {
+                        using (PyObject alpha = options.RveaAlpha.ToPython())
+                            kwargs["alpha"] = alpha;
+                        using (PyObject adaptFreq = options.RveaAdaptFrequency.ToPython())
+                            kwargs["adapt_freq"] = adaptFreq;
+                    }
                 }
                 else if (PymooAlgorithmMap.UsesReferencePoints(algorithm))
                 {
@@ -367,17 +458,23 @@ public sealed class PymooSampler : BaseSampler
                     kwargs["ref_points"] = refPoints;
                     if (algorithm == PymooAlgorithm.RNsga3)
                     {
-                        using PyObject popPerRef = new PyInt(options.PopulationPerReferencePoint);
-                        kwargs["pop_per_ref_point"] = popPerRef;
+                        using (PyObject popPerRef = new PyInt(options.PopulationPerReferencePoint))
+                            kwargs["pop_per_ref_point"] = popPerRef;
+                        using (PyObject mu = options.Mu.ToPython())
+                            kwargs["mu"] = mu;
                     }
                     else // RNsga2
                     {
                         using (PyObject popSize = new PyInt(populationSize))
                             kwargs["pop_size"] = popSize;
-                        // (PyFloat is ambiguous with OptunaSharp.Distributions.PyFloat, and the root
-                        //  `Python` class shadows the Python.Runtime namespace here — cross via ToPython.)
                         using (PyObject epsilon = options.Epsilon.ToPython())
                             kwargs["epsilon"] = epsilon;
+                        if (options.ExtremePointsAsReferencePoints)
+                            using (PyObject extreme = true.ToPython())
+                                kwargs["extreme_points_as_reference_points"] = extreme;
+                        if (options.Weights is not null)
+                            using (PyObject weights = PymooInterop.ToNumpy(np.array(options.Weights)))
+                                kwargs["weights"] = weights;
                     }
                 }
                 else // population-size family

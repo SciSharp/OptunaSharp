@@ -98,6 +98,38 @@ public enum PymooReferenceDirections
 /// </summary>
 public sealed class PymooAlgorithmOptions
 {
+    // --- genetic operators (all algorithms) ---
+
+    /// <summary>Simulated-binary-crossover (SBX) distribution index <c>eta</c>. <c>null</c> ⇒ pymoo's
+    /// default (15). Higher values keep offspring closer to the parents.</summary>
+    public double? CrossoverEta { get; init; }
+
+    /// <summary>The probability that crossover is applied (SBX <c>prob</c>). <c>null</c> ⇒ pymoo's
+    /// default (0.9).</summary>
+    public double? CrossoverProbability { get; init; }
+
+    /// <summary>Polynomial-mutation (PM) distribution index <c>eta</c>. <c>null</c> ⇒ pymoo's default
+    /// (20).</summary>
+    public double? MutationEta { get; init; }
+
+    /// <summary>The per-variable mutation probability (PM <c>prob</c>). <c>null</c> ⇒ pymoo's default
+    /// (which is <c>1 / n_var</c> inside PM).</summary>
+    public double? MutationProbability { get; init; }
+
+    /// <summary>Whether pymoo eliminates duplicate individuals during mating. Default <c>true</c> (pymoo's
+    /// default across these algorithms); set <c>false</c> to allow duplicates.</summary>
+    public bool EliminateDuplicates { get; init; } = true;
+
+    // --- RVEA (reference-vector-guided EA) ---
+
+    /// <summary>RVEA's penalty-parameter growth rate <c>alpha</c> (used only for
+    /// <see cref="PymooAlgorithm.Rvea" />). pymoo's default is <c>2.0</c>.</summary>
+    public double RveaAlpha { get; init; } = 2.0;
+
+    /// <summary>RVEA's reference-vector adaptation frequency <c>adapt_freq</c> (used only for
+    /// <see cref="PymooAlgorithm.Rvea" />). pymoo's default is <c>0.1</c>.</summary>
+    public double RveaAdaptFrequency { get; init; } = 0.1;
+
     // --- reference-direction algorithms (NSGA-III, U-NSGA-III, RVEA, C-TAEA) ---
 
     /// <summary>How the reference directions are generated. Default <see cref="PymooReferenceDirections.DasDennis" />.</summary>
@@ -126,13 +158,25 @@ public sealed class PymooAlgorithmOptions
     /// </summary>
     public double[][]? ReferencePoints { get; init; }
 
-    /// <summary>R-NSGA-II / R-NSGA-III <c>epsilon</c> (the niche radius around each reference point).
-    /// pymoo's default is <c>0.001</c>.</summary>
+    /// <summary>R-NSGA-II <c>epsilon</c> (the niche radius around each reference point). pymoo's default
+    /// is <c>0.001</c>. (R-NSGA-III uses <see cref="Mu" /> instead.)</summary>
     public double Epsilon { get; init; } = 0.001;
+
+    /// <summary>R-NSGA-II per-objective weights for the achievement-scalarizing distance
+    /// (its <c>weights</c>). <c>null</c> ⇒ pymoo's default (uniform).</summary>
+    public double[]? Weights { get; init; }
+
+    /// <summary>R-NSGA-II: whether the current extreme points are added as extra reference points each
+    /// generation (its <c>extreme_points_as_reference_points</c>). Default <c>false</c>.</summary>
+    public bool ExtremePointsAsReferencePoints { get; init; }
 
     /// <summary>R-NSGA-III individuals allocated per reference point (its <c>pop_per_ref_point</c>).
     /// Default 1.</summary>
     public int PopulationPerReferencePoint { get; init; } = 1;
+
+    /// <summary>R-NSGA-III spread control <c>mu</c> (the fraction of reference directions kept near each
+    /// reference point). pymoo's default is <c>0.05</c>.</summary>
+    public double Mu { get; init; } = 0.05;
 }
 
 /// <summary>Maps a <see cref="PymooAlgorithm" /> to its pymoo module + class name and the construction
