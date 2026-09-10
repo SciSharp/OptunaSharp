@@ -70,4 +70,19 @@ internal interface IPopulationHost
     ///     unclipped (still box-clamped).
     /// </summary>
     double WhitenedStepNorm(double[] diff);
+
+    /// <summary>
+    ///     The host's current proposal covariance <c>C</c> (a fresh copy), or <c>null</c> if it exposes
+    ///     none. Only meaningful when <see cref="HasProposalCovariance" /> is <c>true</c>; used by JANUS's
+    ///     <c>cmix_mode="reshape"</c> to mix an inverse-curvature term into it.
+    /// </summary>
+    double[,]? GetProposalCovariance();
+
+    /// <summary>
+    ///     Replace the host's proposal covariance with <paramref name="c" /> (the host re-derives any
+    ///     cached decomposition). Returns <c>false</c> for a covariance-free host (DE), which has none to
+    ///     set — the reshape mode is then a no-op there. Only called when <see cref="HasProposalCovariance" />
+    ///     is <c>true</c>.
+    /// </summary>
+    bool TrySetProposalCovariance(double[,] c);
 }

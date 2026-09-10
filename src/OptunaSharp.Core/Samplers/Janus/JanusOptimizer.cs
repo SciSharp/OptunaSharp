@@ -24,8 +24,9 @@
 //   • The reference gates its window on trials carrying a `component_losses` residual vector; we ALSO
 //     harvest scalar-only trials and drive JANUS from the scalar `pseudo_metric` (the paper's BBOB
 //     "scalar linear/quadratic residual coordinate" mode — machinery already present in the reference).
-//   • cmix_mode "reshape" (in-place host-covariance mixing) is deferred; the reference DEFAULT is
-//     "portfolio" (CMIX candidates in tail slots), which needs no host-covariance mutation.
+//   • cmix_mode "reshape" (in-place host-covariance mixing, `CmixShapeC`) and cmix_candidate_center
+//     "archive" (`ArchiveCenters`) are both ported; a covariance-free host (DE) makes reshape a no-op.
+//     The reference DEFAULT stays "portfolio" (CMIX candidates in tail slots) + center "mean".
 
 using System;
 using System.Collections.Generic;
@@ -92,6 +93,7 @@ internal sealed class JanusOptimizer
     private double[][]? _pending;
     private double[,]? _lastJtJ;
     private double? _cmixWEff;
+    private int _archiveCursor;   // round-robins the archive centers across generations (cmix_candidate_center="archive")
 
     private List<FrozenTrial> _completedTrials;
 
@@ -454,6 +456,57 @@ internal sealed class JanusOptimizer
         return (eigvecs, eigvals);
     }
 
+    // ---- cmix_mode "reshape": in-place host-covariance mixing ------------------------------------
+
+    /// <summary>
+    ///     Port of the reference <c>_cmix_shape_C</c>: mix a trace-matched inverse-curvature term into the
+    ///     host's proposal covariance, <c>C ← (1−w)·C + w·(tr(C)/tr(T))·T</c> with <c>T = (JᵀJ + λ_mix I)⁻¹</c>.
+    ///     No-op unless the effective CMIX weight <c>w</c> is set (component mode) and the host exposes a
+    ///     covariance (a covariance-free DE host makes this inert). The host re-derives its decomposition.
+    /// </summary>
+    private void CmixShapeC()
+    {
+        double? w = _cmixWEff;
+        if (_lastJtJ is null || w is null || w.Value <= 0.0) return;
+        if (!_host.HasProposalCovariance) return;
+
+        int d = _d;
+        var a = (double[,])_lastJtJ.Clone();     // JᵀJ + λ_mix I
+        for (int i = 0; i < d; i++) a[i, i] += _cmixLambda;
+        double[,]? t = InvertMatrix(a);          // T = inv(JᵀJ + λ_mix I)
+        if (t is null || !AllFinite(t)) return;
+        for (int i = 0; i < d; i++)               // symmetrize T
+            for (int k = i + 1; k < d; k++) { double v = 0.5 * (t[i, k] + t[k, i]); t[i, k] = v; t[k, i] = v; }
+
+        double[,]? c = _host.GetProposalCovariance();
+        if (c is null) return;
+        double trC = 0, trT = 0;
+        for (int i = 0; i < d; i++) { trC += c[i, i]; trT += t[i, i]; }
+        if (trT <= 1e-30 || !IsFinite(trC)) return;
+
+        double scale = trC / trT;
+        double wv = w.Value;
+        var cNew = new double[d, d];
+        for (int i = 0; i < d; i++)
+            for (int k = 0; k < d; k++)
+                cNew[i, k] = (1.0 - wv) * c[i, k] + wv * (t[i, k] * scale);
+        var sym = new double[d, d];               // symmetrize C_new
+        for (int i = 0; i < d; i++)
+            for (int k = 0; k < d; k++)
+                sym[i, k] = 0.5 * (cNew[i, k] + cNew[k, i]);
+        _host.TrySetProposalCovariance(sym);
+    }
+
+    private static double[,]? InvertMatrix(double[,] a)
+    {
+        int n = a.GetLength(0);
+        var id = new double[n, n];
+        for (int i = 0; i < n; i++) id[i, i] = 1.0;
+        return SolveMatrix(a, id);
+    }
+
+    // ---- CMIX candidate metric + samples ---------------------------------------------------------
+
     private double[][]? CmixCandidateSamples(int count, double[]? elite)
     {
         // A host without a proposal covariance offers no CMIX candidates (the paper's GN-only infill).
@@ -461,6 +514,33 @@ internal sealed class JanusOptimizer
         var metric = CandidateMetric();
         if (metric is null) return null;
         var (eigvecs, eigvals) = metric.Value;
+
+        var sqrtEig = new double[_d];
+        for (int i = 0; i < _d; i++) sqrtEig[i] = Math.Sqrt(eigvals[i]);
+
+        // cmix_candidate_center="archive": one sample per Pareto-archive center (round-robined via
+        // _archiveCursor), rather than `count` samples around one center — the reference
+        // `_cmix_candidate_samples` archive branch. Empty archive ⇒ fall through to the single-center path.
+        if (_cmixCandidateCenter == "archive")
+        {
+            var centers = ArchiveCenters(count);
+            if (centers.Count > 0)
+            {
+                double sig = Math.Max(_host.Sigma, 1e-10);
+                var archived = new double[centers.Count][];
+                for (int k = 0; k < centers.Count; k++)
+                {
+                    double[] zk = _rng.randn(_d).ToArray<double>();
+                    var nk = new double[_d];
+                    for (int i = 0; i < _d; i++) nk[i] = zk[i] * sqrtEig[i] * sig;   // normal · √eig · σ
+                    double[] y = MatVec(eigvecs, nk);                                // eigvecs @ noise
+                    var s = new double[_d];
+                    for (int i = 0; i < _d; i++) s[i] = Clip(centers[k][i] + y[i], _lo[i], _hi[i]);
+                    archived[k] = s;
+                }
+                return archived;
+            }
+        }
 
         double[] center;
         if (_cmixCandidateCenter == "best" && _winX.Count > 0)
@@ -471,8 +551,6 @@ internal sealed class JanusOptimizer
             center = (double[])_host.Mean.Clone();
 
         double sigScale = _host.Sigma;
-        var sqrtEig = new double[_d];
-        for (int i = 0; i < _d; i++) sqrtEig[i] = Math.Sqrt(eigvals[i]);
 
         var samples = new double[count][];
         for (int k = 0; k < count; k++)
@@ -486,6 +564,125 @@ internal sealed class JanusOptimizer
             samples[k] = s;
         }
         return samples;
+    }
+
+    /// <summary>
+    ///     Port of the reference <c>_archive_centers</c>: from the residual-component window take the
+    ///     best-by-mean-residual slice (truncated to <c>max(200, 8·count)</c>), keep its dominance-filtered
+    ///     set, farthest-point-sample a diverse subset in normalized-residual space, and round-robin
+    ///     <paramref name="count" /> centers through <see cref="_archiveCursor" />. Requires every window row
+    ///     to carry components (else an empty list). NOTE: as with <c>_nondominated_indices</c> in the MOO
+    ///     file, the dominance filter keeps the DOMINATED points — ported verbatim.
+    /// </summary>
+    private List<double[]> ArchiveCenters(int count)
+    {
+        var empty = new List<double[]>();
+        if (count <= 0 || _winX.Count == 0) return empty;
+
+        int m = -1;
+        foreach (var r in _winR)
+        {
+            if (r is null) return empty;
+            if (m < 0) m = r.Length;
+            else if (r.Length != m) return empty;
+        }
+        if (m <= 0) return empty;
+
+        var finite = new List<int>();
+        for (int i = 0; i < _winX.Count; i++)
+        {
+            bool ok = true;
+            for (int j = 0; ok && j < _d; j++) ok = IsFinite(_winX[i][j]);
+            for (int c = 0; ok && c < m; c++) ok = IsFinite(_winR[i]![c]);
+            if (ok) finite.Add(i);
+        }
+        if (finite.Count == 0) return empty;
+
+        double MeanR(int i) { double s = 0; for (int c = 0; c < m; c++) s += _winR[i]![c]; return s / m; }
+        var order = finite.OrderBy(MeanR).ToList();   // LINQ OrderBy is stable ⇒ mergesort-equivalent
+        int trunc = Math.Min(order.Count, Math.Max(200, 8 * count));
+        order = order.Take(trunc).ToList();
+
+        int nt = order.Count;
+        var rMat = new double[nt][];
+        var xMat = new double[nt][];
+        for (int k = 0; k < nt; k++) { rMat[k] = _winR[order[k]]!; xMat[k] = _winX[order[k]]; }
+
+        // reference-quirk "non-dominated" filter (keeps the DOMINATED points; see _nondominated_indices)
+        var keep = new bool[nt];
+        for (int k = 0; k < nt; k++) keep[k] = true;
+        for (int i = 0; i < nt; i++)
+        {
+            if (!keep[i]) continue;
+            for (int j = 0; j < nt; j++)
+            {
+                bool allLe = true, anyLt = false;
+                for (int c = 0; c < m; c++)
+                {
+                    if (rMat[j][c] > rMat[i][c]) { allLe = false; break; }
+                    if (rMat[j][c] < rMat[i][c]) anyLt = true;
+                }
+                if (allLe && anyLt && j != i) keep[j] = false;
+            }
+        }
+        var archiveX = new List<double[]>();
+        var archiveR = new List<double[]>();
+        for (int k = 0; k < nt; k++) if (keep[k]) { archiveX.Add(xMat[k]); archiveR.Add(rMat[k]); }
+        if (archiveX.Count == 0) return empty;
+
+        if (archiveX.Count > 1)
+        {
+            int na = archiveX.Count;
+            var lo = new double[m];
+            var hi = new double[m];
+            for (int c = 0; c < m; c++) { lo[c] = double.PositiveInfinity; hi[c] = double.NegativeInfinity; }
+            foreach (var r in archiveR)
+                for (int c = 0; c < m; c++) { if (r[c] < lo[c]) lo[c] = r[c]; if (r[c] > hi[c]) hi[c] = r[c]; }
+            var normR = new double[na][];
+            for (int k = 0; k < na; k++)
+            {
+                normR[k] = new double[m];
+                for (int c = 0; c < m; c++) normR[k][c] = (archiveR[k][c] - lo[c]) / Math.Max(hi[c] - lo[c], 1e-12);
+            }
+            // farthest-point sampling seeded by the min-mean-normalized point
+            int first = 0; double best = double.PositiveInfinity;
+            for (int k = 0; k < na; k++)
+            {
+                double s = 0; for (int c = 0; c < m; c++) s += normR[k][c]; s /= m;
+                if (s < best) { best = s; first = k; }
+            }
+            var selected = new List<int> { first };
+            var isSel = new bool[na]; isSel[first] = true;
+            int need = Math.Min(count, na);
+            while (selected.Count < need)
+            {
+                int bestK = -1; double bestDist = double.NegativeInfinity;
+                for (int k = 0; k < na; k++)
+                {
+                    if (isSel[k]) continue;
+                    double dmin = double.PositiveInfinity;
+                    foreach (int sIdx in selected)
+                    {
+                        double dd = 0;
+                        for (int c = 0; c < m; c++) { double diff = normR[k][c] - normR[sIdx][c]; dd += diff * diff; }
+                        dd = Math.Sqrt(dd);
+                        if (dd < dmin) dmin = dd;
+                    }
+                    if (dmin > bestDist) { bestDist = dmin; bestK = k; }
+                }
+                if (bestK < 0) break;
+                selected.Add(bestK); isSel[bestK] = true;
+            }
+            var sel = new List<double[]>();
+            foreach (int s in selected) sel.Add(archiveX[s]);
+            archiveX = sel;
+        }
+
+        int len = archiveX.Count;
+        var centers = new List<double[]>();
+        for (int i = 0; i < count; i++) centers.Add((double[])archiveX[(_archiveCursor + i) % len].Clone());
+        _archiveCursor = (_archiveCursor + count) % Math.Max(1, len);
+        return centers;
     }
 
     // ---- bounded injection (square-root-invariant Mahalanobis clip) ------------------------------
@@ -522,7 +719,10 @@ internal sealed class JanusOptimizer
         if (_generation % _fuseEvery == 0)
         {
             elite = AssembleGn();
-            // cmix_mode "reshape" (in-place host covariance mixing) is deferred — see file header.
+            // cmix_mode "reshape": mix the inverse-curvature term into the host covariance in place
+            // (the reference's `_cmix_shape_C`, called right after `_assemble_gn`). A covariance-free host
+            // (DE) makes this a no-op.
+            if (_cmixMode == "reshape") CmixShapeC();
         }
 
         // Native candidates use the host's own feasibility handling (Cma.Ask = resample-then-repair),

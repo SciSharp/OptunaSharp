@@ -138,4 +138,9 @@ internal sealed class DePopulationHost : IPopulationHost
         }
         return Math.Sqrt(Math.Max(s, 0.0));
     }
+
+    // DE has no Gaussian proposal covariance, so the reshape mode is a no-op here.
+    public double[,]? GetProposalCovariance() => null;
+
+    public bool TrySetProposalCovariance(double[,] c) => false;
 }

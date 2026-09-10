@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using AwesomeAssertions;
 using OptunaSharp.Samplers;
+using OptunaSharp.Samplers.CmaEs;
 using OptunaSharp.Samplers.Janus;
 
 namespace OptunaSharp.Tests.Samplers;
@@ -117,6 +118,65 @@ public class JanusSamplerTests
         }, nTrials: 600);
 
         study.BestValue.Should().BeLessThan(1e-2, "JANUS-GN (GN injection only) still converges");
+    }
+
+    // ---- deferred Phase-1 cmix options: reshape + archive ----------------------------------------
+
+    [TestMethod]
+    public void Sampler_ReshapeMode_MinimizesShiftedSphere()
+    {
+        // cmix_mode="reshape" mixes the inverse-curvature metric into the CMA-ES host covariance in place
+        // (C ← (1-w)C + w·tr(C)/tr(T)·T) via Cma.SetCovariance, instead of injecting tail candidates.
+        var study = Optuna.CreateStudy(
+            sampler: new JanusSampler(seed: 0, nStartupTrials: 16, cmixMode: "reshape"));
+        study.Optimize(t =>
+        {
+            var x = new double[10];
+            for (int i = 0; i < 10; i++) x[i] = t.SuggestFloat($"x{i}", -5, 5);
+            double v = ShiftedSphere(x, 0.5, out double[] r);
+            t.SetUserAttr("component_losses", r);
+            return v;
+        }, nTrials: 600);
+
+        study.BestValue.Should().BeLessThan(1e-2, "reshape-mode JANUS converges (host-covariance mixing)");
+    }
+
+    [TestMethod]
+    public void Sampler_ArchiveCenter_Converges()
+    {
+        // cmix_candidate_center="archive" centers the CMIX samples on a diverse Pareto-archive of
+        // residual-window points (round-robined). It is more exploratory than "mean", so the gate is
+        // "clearly improves from random" (~85 on this box), not tight convergence.
+        var study = Optuna.CreateStudy(
+            sampler: new JanusSampler(seed: 0, nStartupTrials: 16, cmixCandidateCenter: "archive"));
+        study.Optimize(t =>
+        {
+            var x = new double[10];
+            for (int i = 0; i < 10; i++) x[i] = t.SuggestFloat($"x{i}", -5, 5);
+            double v = ShiftedSphere(x, 0.5, out double[] r);
+            t.SetUserAttr("component_losses", r);
+            return v;
+        }, nTrials: 600);
+
+        study.BestValue.Should().BeLessThan(1.0, "archive-center JANUS still drives the host well below random");
+    }
+
+    [TestMethod]
+    public void Optimizer_Cma_SetCovariance_RoundTripsAndReDecomposes()
+    {
+        // The reshape hook: setting C must be reflected in Cov and must invalidate the cached
+        // eigendecomposition so the next Ask re-derives it and still yields a finite sample.
+        var cma = new Cma(new double[] { 0, 0, 0 }, sigma: 1.0, seed: 1);
+        var c = new double[3, 3] { { 4, 0, 0 }, { 0, 1, 0 }, { 0, 0, 0.25 } };
+        cma.SetCovariance(c);
+
+        cma.Cov[0, 0].Should().Be(4.0);
+        cma.Cov[1, 1].Should().Be(1.0);
+        cma.Cov[2, 2].Should().Be(0.25);
+
+        double[] x = cma.Ask();   // re-derives B/D from the new C
+        x.Length.Should().Be(3);
+        x.All(v => !double.IsNaN(v) && !double.IsInfinity(v)).Should().BeTrue("re-decomposition yields a finite sample");
     }
 
     // ---- determinism -----------------------------------------------------------------------------

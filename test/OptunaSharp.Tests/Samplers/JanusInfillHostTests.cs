@@ -227,6 +227,8 @@ public class JanusInfillHostTests
         public bool HasProposalCovariance => false;   // GN-only host: CMIX must be gated off
         public double ProposalCovarianceTrace => throw new NotSupportedException("no proposal covariance");
         public double WhitenedStepNorm(double[] diff) => 0.0;   // DE-style degradation: inject unclipped
+        public double[,]? GetProposalCovariance() => null;      // no covariance ⇒ reshape is a no-op
+        public bool TrySetProposalCovariance(double[,] c) => false;
 
         private static uint Mix(uint x)   // xorshift so successive indices spread across [0,1]
         {

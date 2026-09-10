@@ -114,9 +114,9 @@ public sealed class JanusSampler : BaseSampler
     /// <param name="cmixPseudoMode">Override <paramref name="pseudoMode" /> for the CMIX metric (<c>null</c> = same).</param>
     /// <param name="pseudoTarget">Scalar-value transform for the fit: <c>raw</c> (default), <c>rank</c>, or <c>log</c>.</param>
     /// <param name="pcaK">PCA rank for the <c>pca_quadratic</c> fit (<c>auto</c> or an integer string).</param>
-    /// <param name="cmixMode"><c>portfolio</c> (default) / <c>candidates</c> draw CMIX samples into tail slots; <c>none</c> disables CMIX (JANUS-GN). (<c>reshape</c> is not yet supported.)</param>
+    /// <param name="cmixMode"><c>portfolio</c> (default) / <c>candidates</c> draw CMIX samples into tail slots; <c>reshape</c> mixes the inverse-curvature metric into the host covariance in place (component mode; no-op on a covariance-free host); <c>none</c> disables CMIX (JANUS-GN).</param>
     /// <param name="cmixCandidateFrac">Fraction of offspring drawn from the JANUS exploration metric (default 0.4). Set to 0 for JANUS-GN.</param>
-    /// <param name="cmixCandidateCenter">Center of the CMIX samples: <c>mean</c> (default), <c>best</c>, or <c>elite</c>.</param>
+    /// <param name="cmixCandidateCenter">Center of the CMIX samples: <c>mean</c> (default), <c>best</c>, <c>elite</c>, or <c>archive</c> (a diverse Pareto-archive of residual-window points, round-robined).</param>
     public JanusSampler(
         double? sigma0 = null,
         int? seed = null,

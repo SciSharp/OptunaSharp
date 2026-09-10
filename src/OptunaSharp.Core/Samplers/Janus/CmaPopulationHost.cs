@@ -99,4 +99,12 @@ internal sealed class CmaPopulationHost : IPopulationHost
             return 0.0;   // no whitening — the driver injects unclipped (then box-clamped)
         }
     }
+
+    public double[,]? GetProposalCovariance() => (double[,])_cma.Cov.Clone();
+
+    public bool TrySetProposalCovariance(double[,] c)
+    {
+        _cma.SetCovariance(c);   // resets the cached eigendecomposition; next Ask re-derives it
+        return true;
+    }
 }

@@ -196,6 +196,22 @@ internal class Cma : ICmaOptimizer
     internal double[] Mean => _mean;
     internal double Sigma => _sigma;
     internal double[,] Cov => _c;
+
+    /// <summary>
+    ///     Replace the covariance matrix and invalidate the cached eigendecomposition (<c>B</c>/<c>D</c>),
+    ///     so the next <see cref="Ask" /> re-derives it from the new <c>C</c> (which
+    ///     <see cref="EigenDecomposition" /> also re-symmetrizes and reconstructs). This is the
+    ///     <c>es.C = …; safe_decompose()</c> hook JANUS's <c>cmix_mode="reshape"</c> uses to mix an
+    ///     inverse-curvature term into the proposal covariance; it is not part of the ordinary CMA-ES loop
+    ///     (a seeded ask/tell run that never calls it is byte-for-byte unchanged).
+    /// </summary>
+    internal void SetCovariance(double[,] c)
+    {
+        _c = (double[,])c.Clone();
+        _b = null;
+        _d = null;
+    }
+
     internal double[,]? Bounds => _bounds;      // needed by CmaWm to rebuild its decomposition on restore
     internal int NMaxResampling => _nMaxResampling;
     internal double[] PSigma => _pSigma;
