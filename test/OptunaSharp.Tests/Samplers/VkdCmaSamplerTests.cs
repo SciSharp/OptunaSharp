@@ -218,4 +218,164 @@ public class VkdCmaSamplerTests
 
         study.BestValue.Should().BeLessThan(25.0, "the fallback sampler still explores the 1-D space");
     }
+
+    // ---- edge cases: optimizer --------------------------------------------------------------------
+
+    [TestMethod]
+    public void Optimizer_MinimalDimension_N2_Converges()
+    {
+        double best = Drive(new VkdCma(Filled(2, 3.0), sigma: 2.0, seed: 7), Sphere, generations: 300);
+        best.Should().BeLessThan(1e-8, "VkD-CMA works at the minimum dimension n=2");
+    }
+
+    [TestMethod]
+    public void Optimizer_FixedFullRank_SolvesRotated()
+    {
+        // kInit = N−1 with adaptation OFF: a fixed (near-)full-rank covariance, no k-adaptation. It must
+        // still learn the rotation and descend the ill-conditioned valley — proving the fixed-rank path.
+        var opt = new VkdCma(Filled(6, 3.0), sigma: 2.0, seed: 3, kInit: 5, kAdapt: false);
+        double best = Drive(opt, RotatedEllipsoid, generations: 3000);
+        opt.K.Should().Be(5, "k is fixed when kAdapt is off");
+        best.Should().BeLessThan(1e-4, "a fixed full-rank covariance solves the rotated ellipsoid");
+    }
+
+    [TestMethod]
+    public void Optimizer_ConstantObjective_StaysFinite()
+    {
+        // No fitness signal: selection is arbitrary, but the natural-gradient update must never NaN/Inf.
+        var opt = new VkdCma(Filled(6, 1.0), sigma: 1.5, seed: 9);
+        double best = Drive(opt, _ => 42.0, generations: 200);
+        best.Should().Be(42.0);
+        foreach (double m in opt.Mean) double.IsFinite(m).Should().BeTrue("mean stays finite under a flat objective");
+        double.IsFinite(opt.Sigma).Should().BeTrue("sigma stays finite under a flat objective");
+    }
+
+    [TestMethod]
+    public void Optimizer_Constructor_RejectsInvalidArguments()
+    {
+        ((Action)(() => new VkdCma(Filled(4, 0.0), 0.0, seed: 1)))
+            .Should().Throw<ArgumentException>("sigma must be positive");
+        ((Action)(() => new VkdCma(new double[1], 1.0, seed: 1)))
+            .Should().Throw<ArgumentException>("dimension must be > 1");
+        ((Action)(() => new VkdCma(Filled(4, 0.0), 1.0, seed: 1, populationSize: 0)))
+            .Should().Throw<ArgumentException>("popsize must be positive");
+        ((Action)(() => new VkdCma(Filled(4, 0.0), 1.0, seed: 1, kAdapt: true, kmin: 3, kmax: 2)))
+            .Should().Throw<ArgumentException>("kmin must be <= kmax");
+        ((Action)(() => new VkdCma(Filled(4, 0.0), 1.0, seed: 1, kAdapt: true, kmax: 4)))
+            .Should().Throw<ArgumentException>("kmax must be < N");
+    }
+
+    [TestMethod]
+    public void Optimizer_Tell_RejectsWrongSolutionCount()
+    {
+        var opt = new VkdCma(Filled(4, 1.0), 1.0, seed: 1);
+        var sols = new List<(double[] X, double Value)> { (new double[4], 1.0) };   // too few
+        ((Action)(() => opt.Tell(sols))).Should().Throw<ArgumentException>("Tell requires exactly popsize solutions");
+    }
+
+    [TestMethod]
+    public void Optimizer_DifferentSeed_DivergesTrajectory()
+    {
+        double a = Drive(new VkdCma(Filled(8, 2.0), 1.5, seed: 1), Sphere, generations: 30);
+        double b = Drive(new VkdCma(Filled(8, 2.0), 1.5, seed: 2), Sphere, generations: 30);
+        b.Should().NotBe(a, "different seeds explore differently");
+    }
+
+    // ---- edge cases: sampler ----------------------------------------------------------------------
+
+    [TestMethod]
+    public void Sampler_IntParameters_Minimize()
+    {
+        var study = Optuna.CreateStudy(sampler: new VkdCmaSampler(seed: 1, nStartupTrials: 5));
+        study.Optimize(t =>
+        {
+            double s = 0;
+            for (int i = 0; i < 6; i++) { long x = t.SuggestInt($"n{i}", -10, 10); s += x * x; }
+            return s;
+        }, nTrials: 400);
+        study.BestValue.Should().BeLessThan(5.0, "VkD-CMA optimizes an all-integer space");
+    }
+
+    [TestMethod]
+    public void Sampler_MixedIntFloatStepLog_Works()
+    {
+        var study = Optuna.CreateStudy(sampler: new VkdCmaSampler(seed: 2, nStartupTrials: 5));
+        study.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            long b = t.SuggestInt("b", -8, 8);
+            double c = t.SuggestFloat("c", -4, 4, step: 0.5);
+            double d = t.SuggestFloat("d", 1e-3, 1e3, log: true);
+            double logd = Math.Log10(d);
+            return a * a + b * b + c * c + logd * logd;
+        }, nTrials: 500);
+        study.BestValue.Should().BeLessThan(5.0, "a mixed int/float/step/log space is handled by the transform");
+    }
+
+    [TestMethod]
+    public void Sampler_CategoricalParameter_FallsBackToIndependent()
+    {
+        // Categorical params are outside the relative space → sampled independently, while the continuous
+        // params drive VkD-CMA. The study must run and the continuous coordinates must converge.
+        var study = Optuna.CreateStudy(sampler: new VkdCmaSampler(seed: 3, nStartupTrials: 5));
+        study.Optimize(t =>
+        {
+            string pick = t.SuggestCategorical("mode", new[] { "u", "v", "w" });
+            double bonus = pick == "v" ? 0.0 : 1.0;
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return x * x + y * y + bonus;
+        }, nTrials: 400);
+        study.BestValue.Should().BeLessThan(1.5, "continuous params converge while the categorical is independent");
+    }
+
+    [TestMethod]
+    public void Sampler_CustomIndependentSampler_Respected()
+    {
+        var study = Optuna.CreateStudy(
+            sampler: new VkdCmaSampler(seed: 5, nStartupTrials: 3, independentSampler: new RandomSampler(123)));
+        study.Optimize(t =>
+        {
+            double s = 0;
+            for (int i = 0; i < 4; i++) { double x = t.SuggestFloat($"x{i}", -5, 5); s += x * x; }
+            return s;
+        }, nTrials: 200);
+        study.BestValue.Should().BeLessThan(1e-1);
+    }
+
+    [TestMethod]
+    public void Sampler_HighDimension_ChunksOptimizerState()
+    {
+        // A high-dimensional optimizer serializes to > 2045 chars, so its state is split across multiple
+        // `vkdcma:optimizer:i` system-attrs and must round-trip through them each generation.
+        var study = Optuna.CreateStudy(sampler: new VkdCmaSampler(seed: 4, nStartupTrials: 1));
+        study.Optimize(t =>
+        {
+            double s = 0;
+            for (int i = 0; i < 18; i++) { double x = t.SuggestFloat($"x{i}", -5, 5); s += x * x; }
+            return s;
+        }, nTrials: 300);
+
+        study.Trials.Any(tr => tr.SystemAttrs.ContainsKey("vkdcma:optimizer:1"))
+            .Should().BeTrue("an 18-D optimizer state exceeds the 2045-char attr limit and is chunked");
+        study.BestValue.Should().BeLessThan(5.0, "the chunked state round-trips and the sampler still converges");
+    }
+
+    [TestMethod]
+    public void Sampler_SameSeed_ReproducesBest()
+    {
+        double Run()
+        {
+            var study = Optuna.CreateStudy(sampler: new VkdCmaSampler(seed: 77, nStartupTrials: 5));
+            study.Optimize(t =>
+            {
+                double s = 0;
+                for (int i = 0; i < 6; i++) { double x = t.SuggestFloat($"x{i}", -5, 5); s += x * x; }
+                return s;
+            }, nTrials: 150);
+            return study.BestValue;
+        }
+
+        Run().Should().Be(Run(), "same seed ⇒ identical sampler run");
+    }
 }

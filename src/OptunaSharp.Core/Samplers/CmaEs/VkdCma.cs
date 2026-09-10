@@ -235,6 +235,11 @@ internal sealed class VkdCma : ICmaOptimizer
 
     public void ReseedRng(int seed) => _rng.seed((uint)seed);
 
+    // Whitening functions exposed for the live pycma parity gate (VkdCmaSamplerParityTests): the sampled
+    // step for a standard normal, and its inverse. Internal — the sampler drives these through Ask/Tell.
+    internal double[] TransformForParity(double[] z) => Transform(z);
+    internal double[] TransformInverseForParity(double[] x) => TransformInverse(x);
+
     // ---- Ask (GaussVkDSampler.sample) ---------------------------------------------------------
 
     /// <summary>
