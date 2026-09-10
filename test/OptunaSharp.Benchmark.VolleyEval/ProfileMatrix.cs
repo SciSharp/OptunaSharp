@@ -84,7 +84,7 @@ public sealed class ProfileMatrix
     {
         var sb = new StringBuilder();
         int nameWidth = Math.Max(9, Contenders.Max(c => c.Name.Length));
-        int colWidth = 16;
+        int colWidth = Math.Max(16, Challenges.Max(c => c.Name.Length));
 
         // Header.
         sb.Append("contender".PadRight(nameWidth));
@@ -122,7 +122,6 @@ public sealed class ProfileMatrix
         sb.Append("winners: ");
         sb.AppendLine(string.Join("  ",
             Challenges.Select(c => $"{c.Name}={ColumnWinner(c.Name)}")));
-        sb.AppendLine($"column winners distinct: {WinnersDistinct()}");
         sb.AppendLine("legend: value = median normalized score over seeds (1 = optimum, 0 = random baseline); " +
                       "* = column winner; inert = trajectory == RandomSampler; [n] = trial-capped to n; DNF = could not run.");
         return sb.ToString();

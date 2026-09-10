@@ -121,6 +121,91 @@ public sealed class VolleyEvalTests
             "no achievable front can exceed the analytic ceiling");
     }
 
+    // ---- The two further radicals: noise (stochastic) and constraints (feasibility) ----
+
+    [TestMethod]
+    public void NoisySphere_OptimumIsReachable_AndBaselineIsLarge()
+    {
+        var ns = new NoisySphere(dimension: 10, sigma: 8.0, instanceId: 0);
+        ns.TrueValue(ns.OptimumLocation()).Should().BeApproximately(0.0, 1e-9,
+            "the noise-free sphere is exactly 0 at its centre");
+        ns.Optimum.Should().Be(0.0);
+        ns.RandomBaseline.Should().BeGreaterThan(10.0, "the uniform mean of the sphere is well above 0");
+    }
+
+    [TestMethod]
+    public void NoisySphere_IsReproducible_PerSeed()
+    {
+        // Reset(seed) ties the noise realization to the seed, so repeated runs reproduce exactly.
+        var ns = new NoisySphere(dimension: 10, sigma: 8.0, instanceId: 0, budget: 120);
+        var cmaes = ContenderRegistry.Select(new[] { "cmaes" })[0];
+
+        var a = new Evaluator(new[] { 0, 1 }).EvaluateCell(ns, cmaes);
+        var b = new Evaluator(new[] { 0, 1 }).EvaluateCell(ns, cmaes);
+        a.SeedScores.Should().Equal(b.SeedScores, "a stochastic challenge must still be bit-reproducible per seed");
+    }
+
+    [TestMethod]
+    public void ConstrainedQuadratic_OptimumOnBoundary_AndTargetInfeasible()
+    {
+        var cq = new ConstrainedQuadratic(dimension: 4, radius: 2.5, target: 3.5);
+        var xStar = cq.OptimumLocation();
+
+        cq.Constraint(xStar).Should().BeApproximately(0.0, 1e-9, "the constrained optimum sits on the boundary");
+        cq.Objective(xStar).Should().BeApproximately(cq.Optimum, 1e-9,
+            "the boundary point nearest the target attains the analytic optimum (‖t‖ − R)²");
+        // The unconstrained optimum (the target) must be infeasible, else the constraint would not bind.
+        var target = Enumerable.Repeat(3.5, 4).ToArray();
+        cq.Constraint(target).Should().BeGreaterThan(0.0);
+    }
+
+    [TestMethod]
+    public void ConstrainedQuadratic_Score_CountsOnlyFeasibleTrials()
+    {
+        // f = ‖x − t‖² is lowest near the infeasible target, so unfiltered "best" would be infeasible and
+        // score above 1. The feasibility filter must keep the score ≤ 1, and infeasible-but-lower trials
+        // must actually exist (otherwise the test proves nothing).
+        var cq = new ConstrainedQuadratic(dimension: 4, radius: 2.5, target: 3.5, budget: 300);
+        var study = OptunaSharp.Optuna.CreateStudy(sampler: new RandomSampler(0), direction: StudyDirection.Minimize);
+        study.Optimize(t => cq.Evaluate(t)[0], nTrials: 300);
+
+        bool someInfeasibleBeatsOptimum = study.Trials.Any(
+            t => t.Value is double v && v < cq.Optimum && t.Constraints.Values.Any(c => c > 0));
+        someInfeasibleBeatsOptimum.Should().BeTrue("infeasible points near the target undercut the constrained optimum");
+
+        cq.Score(study).Should().BeLessThanOrEqualTo(1.0 + 1e-9,
+            "no feasible point can beat the constrained optimum, so a feasibility-aware score never exceeds 1");
+    }
+
+    [TestMethod]
+    public void NoiseAndConstraints_PassTheirDodGates_AndPickTheRightHomes()
+    {
+        var challenges = new IChallenge[]
+        {
+            new NoisySphere(dimension: 10, sigma: 8.0, instanceId: 0, budget: 300),
+            new ConstrainedQuadratic(dimension: 4, radius: 2.5, target: 3.5, instanceId: 0, budget: 300),
+        };
+        var matrix = new Evaluator(new[] { 0, 1, 2 }).Run(challenges, ContenderRegistry.Cheap);
+
+        matrix.ColumnWinner("noisy_sphere").Should().BeOneOf("cmaes", "lmcma",
+            "rank-based selection is the noise-robust home");
+
+        var gates = DodGate.Evaluate(matrix);
+        gates.Should().OnlyContain(g => g.Passed,
+            "gates: {0}", string.Join("; ", gates.Select(g => $"{g.Name}={(g.Passed ? "PASS" : "FAIL")}")));
+    }
+
+    [TestMethod]
+    public void Gp_IsTheConstrainedChampion()
+    {
+        // GP's constrained Bayesian optimization wins even trial-capped at 80 — its one clear home.
+        var challenge = new ConstrainedQuadratic(dimension: 4, radius: 2.5, target: 3.5, budget: 300);
+        var matrix = new Evaluator(new[] { 0, 1 }).Run(new IChallenge[] { challenge }, ContenderRegistry.All);
+
+        matrix.ColumnWinner("constrained_quadratic").Should().Be("gp");
+        matrix.Cell("constrained_quadratic", "gp").Median.Should().BeGreaterThan(0.95);
+    }
+
     // ---- Inert & DNF are first-class results ----
 
     [TestMethod]

@@ -83,6 +83,7 @@ public sealed class Evaluator
 
         foreach (int seed in _seeds)
         {
+            challenge.Reset(seed); // re-seed a stochastic challenge's noise realization (no-op otherwise)
             Study study;
             try
             {

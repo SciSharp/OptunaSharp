@@ -81,6 +81,15 @@ public interface IChallenge
     bool IsMultiObjective => NumObjectives > 1;
 
     /// <summary>
+    ///     Re-seed any per-run stochastic state before a run with the given run seed. Deterministic
+    ///     challenges (the default) do nothing; a <b>stochastic</b> challenge (e.g. a noisy objective)
+    ///     overrides this to draw a fresh, reproducible noise realization tied to <paramref name="seed" />
+    ///     — so each seed averages over an independent noise draw yet every run stays bit-reproducible.
+    ///     The <see cref="Evaluator" /> calls this before every (contender, seed) run.
+    /// </summary>
+    void Reset(int seed) { }
+
+    /// <summary>
     ///     The define-by-run objective (COCO <c>evaluate_function</c> / plan <c>BuildObjective</c>).
     ///     Suggests this challenge's parameters from <paramref name="trial" /> and returns the objective
     ///     vector (length <see cref="NumObjectives" />).
