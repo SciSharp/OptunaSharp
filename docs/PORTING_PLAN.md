@@ -742,7 +742,10 @@ moment OptunaSharp.Core loads. Keep it.
   already 0. `ConditionalParamsMathNeutralityTests` asserts 0 for those five. Documented residual: the
   conditional crossover's out-of-box reject-and-redraw lets a box-overshooting operator (**vSBX**, 5/264)
   couple via a param that is *active on a rejected attempt* — not a deactivated-param effect; the default
-  UniformCrossover never overshoots and is exactly neutral.
+  UniformCrossover never overshoots and is exactly neutral. **Design note / paper seed:**
+  `docs/NSGA-III-DCPARA.md` (DCPARA — Dynamic Conditional PARAmeterization) writes all of the above up in
+  paper form (motivation, the activation algebra, the three seams, the math-neutrality theorem-to-be, the
+  dynamic dormant-memory mode, evidence, and open questions).
 - ✅ **2.15** — `feat(linalg): Phase 2.15 — OpenBLAS-backed linalg primitives (LinAlg) for CMA-ES/GP`.
   **Redirected mid-flight by the maintainer** from hand-rolled managed primitives to
   **`NumSharp.Interop.OpenBLAS`** (*"use NumSharp + OpenBLAS any time Optuna uses NumPy"*). Core's csproj

@@ -172,6 +172,9 @@ and on no longer throws its tuning away. This is a genuine divergence (Optuna re
 unless you ask for it. Measured on a 256-trial two-branch study, it removes 40–60% of the random
 reactivations; `ConditionalParamsDormantMemoryTests` pins the resume/park/no-op behavior and that effect.
 
+The design, the math-neutrality guarantee, and the paper-oriented write-up of all of this live in
+[`docs/NSGA-III-DCPARA.md`](../../NSGA-III-DCPARA.md).
+
 ### GridSampler and BruteForceSampler
 
 `GridSampler` enumerates an explicit grid you provide and stops when it is exhausted
