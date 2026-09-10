@@ -32,8 +32,10 @@ class Box(Problem):
         super().__init__(n_var=n_var, n_obj=n_obj, xl=np.array(xl, float), xu=np.array(xu, float))
 
     def _evaluate(self, X, out, *args, **kwargs):
-        # a simple, deterministic multi-objective map (only used where F is needed)
-        out["F"] = np.column_stack([np.sum(X ** 2, axis=1)] + [np.sum((X - 1.0) ** 2, axis=1)] * (self.n_obj - 1))
+        # distinct polynomial objectives — no transcendentals, so C# reproduces them bit-for-bit
+        # (numpy X**2 == x*x; np.sum over n_var<128 is sequential). Used only by the driver (minimize).
+        cols = [np.sum(X ** 2, axis=1), np.sum((X - 1.0) ** 2, axis=1), np.sum((X - 0.5) ** 2, axis=1)]
+        out["F"] = np.column_stack(cols[:self.n_obj])
 
 
 def _mk_problem(n_var, n_obj=2):
@@ -194,6 +196,22 @@ def dump_do(cases, survival):
     return out
 
 
+def dump_driver(cases):
+    from pymoo.algorithms.moo.age2 import AGEMOEA2
+    out = []
+    for seed, n_var, n_obj, pop_size, n_gen in cases:
+        prob = _mk_problem(n_var, n_obj)
+        algo = AGEMOEA2(pop_size=pop_size)
+        algo.setup(prob, termination=("n_gen", n_gen), seed=seed, verbose=False)
+        gens = []
+        while algo.has_next():
+            algo.next()
+            gens.append(dict(X=algo.pop.get("X").tolist(), F=algo.pop.get("F").tolist()))
+        out.append(dict(seed=seed, n_var=n_var, n_obj=n_obj, pop_size=pop_size,
+                        n_gen=n_gen, n_gens_captured=len(gens), gens=gens))
+    return out
+
+
 def main():
     rng = np.random.RandomState(12345)
     # fixed random populations/parents for the operator cases
@@ -250,6 +268,14 @@ def main():
     do_cases = [(rng.random((16, m)).tolist(), 8) for m in (2, 3)]
     do_cases += [(rng.random((20, 3)).tolist(), 10), (rng.random((12, 2)).tolist(), 6)]
 
+    # Phase 4: full minimize()-shaped driver — (seed, n_var, n_obj, pop_size, n_gen).
+    driver_cases = [
+        (42, 6, 2, 8, 5),
+        (7, 5, 2, 10, 6),
+        (0, 4, 3, 12, 5),
+        (2024, 8, 2, 16, 4),
+    ]
+
     corpus = dict(
         pymoo_version=__import__("pymoo").__version__,
         numpy_version=np.__version__,
@@ -266,6 +292,7 @@ def main():
         survival_score_age2=dump_survival_score(ss_cases, AGEMOEA2Survival()),
         survival_score_age1=dump_survival_score(ss_cases, AGEMOEASurvival()),
         do_age2=dump_do(do_cases, AGEMOEA2Survival()),
+        driver=dump_driver(driver_cases),
     )
     import os, math
     def san(o):
@@ -288,7 +315,7 @@ def main():
         json.dump(san(corpus), f, allow_nan=False)
     print("wrote", path)
     for k in ("sampling", "crossover", "mutation", "tournament", "mating", "nds", "corner", "normalize",
-              "find_zero", "project", "survival_score_age2", "survival_score_age1", "do_age2"):
+              "find_zero", "project", "survival_score_age2", "survival_score_age1", "do_age2", "driver"):
         print(f"  {k}: {len(corpus[k])} cases")
 
 

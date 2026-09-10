@@ -324,4 +324,56 @@ public class AgeMoea2OperatorParityTests
             cs++;
         }
     }
+
+    // ---- Phase 4: full minimize()-shaped driver, generation-by-generation ----
+
+    /// <summary>The oracle's Box objective: distinct polynomial objectives, bit-exact across numpy/C#.</summary>
+    private static AgeMoeaProblem BoxDriver(int nVar, int nObj)
+    {
+        var xl = new double[nVar];
+        var xu = Enumerable.Repeat(1.0, nVar).ToArray();
+        return new FunctionProblem(nVar, nObj, xl, xu, x =>
+        {
+            // np.sum(X**2, axis=1) etc. — element squares then numpy's PAIRWISE reduction
+            // (8-way unrolled for n>=8), so C# matches numpy bit-for-bit at any n_var.
+            var sq0 = new double[x.Length];
+            var sq1 = new double[x.Length];
+            var sq2 = new double[x.Length];
+            for (int k = 0; k < x.Length; k++)
+            {
+                sq0[k] = x[k] * x[k];
+                double d1 = x[k] - 1.0; sq1[k] = d1 * d1;
+                double d2 = x[k] - 0.5; sq2[k] = d2 * d2;
+            }
+            double s0 = OptunaSharp.Internal.MathUtil.PairwiseSum(sq0);
+            double s1 = OptunaSharp.Internal.MathUtil.PairwiseSum(sq1);
+            double s2 = OptunaSharp.Internal.MathUtil.PairwiseSum(sq2);
+            return nObj == 2 ? new[] { s0, s1 } : new[] { s0, s1, s2 };
+        });
+    }
+
+    [TestMethod]
+    public void Driver_IsGenerationByGenerationBitExact()
+    {
+        foreach (var c in _oracle.GetProperty("driver").EnumerateArray())
+        {
+            int seed = c.GetProperty("seed").GetInt32();
+            int nVar = c.GetProperty("n_var").GetInt32();
+            int nObj = c.GetProperty("n_obj").GetInt32();
+            int popSize = c.GetProperty("pop_size").GetInt32();
+            int nGen = c.GetProperty("n_gen").GetInt32();
+
+            var optimizer = new AgeMoea2Optimizer(BoxDriver(nVar, nObj), popSize, nGen, seed);
+            List<Population> history = optimizer.Run();
+
+            var gens = c.GetProperty("gens").EnumerateArray().ToList();
+            history.Count.Should().Be(gens.Count, $"driver seed={seed}: generation count");
+
+            for (int g = 0; g < gens.Count; g++)
+            {
+                BitEqual(history[g].X, Rows(gens[g].GetProperty("X")), $"driver seed={seed} gen {g + 1} X");
+                BitEqual(history[g].F!, Rows(gens[g].GetProperty("F")), $"driver seed={seed} gen {g + 1} F");
+            }
+        }
+    }
 }
