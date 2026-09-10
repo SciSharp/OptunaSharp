@@ -27,6 +27,7 @@ Each exercises a whole Optuna capability, with a deterministic surrogate objecti
 | [`ConditionalModelSelection.cs`](ConditionalModelSelection.cs) | `ConditionalParams` read as code — "pick a model, tune only ITS knobs": the rule block (value-set + a `model → kernel → gamma` chain) sits next to a branching objective that mirrors it one-for-one |
 | [`ConditionalNeuralArchitecture.cs`](ConditionalNeuralArchitecture.cs) | `ConditionalParams` with **numeric-predicate** activators (`n_layers >= i` gates each layer's width) and a **two-level chain** (`use_scheduler → scheduler → warmup_frac`), on a Pareto front where each depth carries exactly its own widths |
 | [`ConditionalTrainingSchedule.cs`](ConditionalTrainingSchedule.cs) | `ConditionalParams` **combining rules** — `warmup_epochs` declared under two activators (a scheduler value **AND** `n_epochs >= 30`), the example to read for how OR / AND / predicate rules compose |
+| [`ConditionalPipelineChain.cs`](ConditionalPipelineChain.cs) | `ConditionalParams` as an **optional chain over an array of enum stages** — each `Op` stage (Conv/Pool/Dense/Stop) gates the next, so the pipeline's length is discovered; the rules are built in a loop and `PreserveDormantValues` keeps a stage's width when it toggles off and on |
 
 ## Redis storage
 
