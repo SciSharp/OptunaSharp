@@ -194,10 +194,20 @@ jobs:
         # find_libpython locates the loadable libpython across framework/venv/manylinux builds — the
         # macOS framework build's INSTSONAME is a framework path that a naive LIBDIR join misses.
         python -m pip install find_libpython
-        # Re-pin numpy last: torch/optuna resolution can drag in a different numpy.
+        # pymoo 0.6.1.3 — Mimicry's pin and the exact oracle the native AgeMoea2Optimizer reproduces
+        # generation-by-generation (OptunaSharp.Interop.Pymoo → AgeMoea2ParityTests + PymooSamplerParityTests /
+        # PymooApiUnitTests). --no-deps keeps pymoo from dragging its own numpy/scipy; its AGE-MOEA-2 survival
+        # kernels JIT through numba (llvmlite comes with it), and autograd/alive_progress are import-time deps
+        # (scipy/matplotlib are already installed above). The "Re-pin numpy last" below keeps numpy on 2.4.2 so
+        # the byte-exact BLAS oracles stay identical; numba 0.65+ supports numpy 2.4.2. AGE-MOEA-2 parity is
+        # host-pinned to x64 (AgeMoea2ParityTests self-skips on the macOS arm64 runner, like CMA-ES/linalg).
+        python -m pip install pymoo==0.6.1.3 --no-deps
+        python -m pip install autograd alive_progress numba
+        # Re-pin numpy last: torch/optuna/numba resolution can drag in a different numpy.
         python -m pip install "numpy==2.4.2"
         python -c "import numpy, optuna; print('optuna', optuna.__version__, '| numpy', numpy.__version__)"
         python -c "import numpy; assert numpy.__version__ == '2.4.2', 'numpy must be 2.4.2 for byte-exact BLAS parity'"
+        python -c "from pymoo.algorithms.moo.age2 import AGEMOEA2; import pymoo, numba; print('pymoo', pymoo.__version__, '| numba', numba.__version__)"
 
     # Compute the libpython path and export it so pythonnet binds deterministically (PythonSession
     # honors PYTHONNET_PYDLL before its own probe). Works on all three OSes via the runner's python.
