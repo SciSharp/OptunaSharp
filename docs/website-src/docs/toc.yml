@@ -42,3 +42,5 @@
       href: algorithms/age-moea.md
     - name: NSGA-II (2002)
       href: algorithms/nsga-ii.md
+    - name: NSGA-III (2014)
+      href: algorithms/nsga-iii.md
