@@ -34,6 +34,10 @@ public static class OptunaHub
     /// <param name="gitRef">The git reference — branch, tag, or SHA (default <c>"main"</c>). Passed as Python <c>ref</c>.</param>
     /// <param name="forceReload">If <c>true</c>, re-download instead of using the local cache.</param>
     /// <param name="baseUrl">Optional base URL for a third-party registry (GitHub API/SSH/GHE/GitLab).</param>
+    /// <returns>An owned module wrapper; dispose it when package access is no longer needed.</returns>
+    /// <exception cref="ArgumentException"><paramref name="package" /> is empty or whitespace.</exception>
+    /// <exception cref="PythonInteropException">CPython or a required module cannot be initialized.</exception>
+    /// <exception cref="OptunaHubInteropException">The Python registry download or module load fails.</exception>
     public static OptunaHubModule LoadModule(
         string package,
         string repoOwner = "optuna",
@@ -47,20 +51,10 @@ public static class OptunaHub
 
         return PythonRuntime.Run(() =>
         {
-            using var loadModule = OptunaHubRuntime.OptunaHub.GetAttr("load_module");
-            using var kwargs = new PyDict();
-            kwargs["repo_owner"] = repoOwner.ToPython();
-            kwargs["repo_name"] = repoName.ToPython();
-            kwargs["ref"] = gitRef.ToPython();
-            kwargs["force_reload"] = forceReload.ToPython();
-            if (baseUrl is not null)
-                kwargs["base_url"] = baseUrl.ToPython();
-
-            using var pkg = package.ToPython();
             PyObject module;
             try
             {
-                module = loadModule.Invoke(new[] { pkg }, kwargs);
+                module = Python.optunahub.load_module(package, repoOwner, repoName, gitRef, forceReload, baseUrl);
             }
             catch (PythonException ex)
             {
@@ -81,6 +75,10 @@ public static class OptunaHub
     /// </summary>
     /// <param name="package">The package name, e.g. <c>"samplers/simple"</c>.</param>
     /// <param name="registryRoot">The registry root directory that contains the <c>package/</c> tree.</param>
+    /// <returns>An owned wrapper around the locally loaded Python module.</returns>
+    /// <exception cref="ArgumentException"><paramref name="package" /> or <paramref name="registryRoot" /> is empty or whitespace.</exception>
+    /// <exception cref="PythonInteropException">CPython or a required module cannot be initialized.</exception>
+    /// <exception cref="OptunaHubInteropException">Python cannot load the requested local package.</exception>
     public static OptunaHubModule LoadLocalModule(string package, string registryRoot)
     {
         if (string.IsNullOrWhiteSpace(package))
@@ -90,14 +88,10 @@ public static class OptunaHub
 
         return PythonRuntime.Run(() =>
         {
-            using var loadLocal = OptunaHubRuntime.OptunaHub.GetAttr("load_local_module");
-            using var kwargs = new PyDict();
-            kwargs["registry_root"] = registryRoot.ToPython();
-            using var pkg = package.ToPython();
             PyObject module;
             try
             {
-                module = loadLocal.Invoke(new[] { pkg }, kwargs);
+                module = Python.optunahub.load_local_module(package, registryRoot);
             }
             catch (PythonException ex)
             {

@@ -58,7 +58,7 @@ public static class OptunaHubRuntime
         try
         {
             using (Py.GIL())
-                PythonEngine.Exec("import optuna\noptuna.logging.set_verbosity(optuna.logging.WARNING)\n");
+                Python.optuna.logging.set_verbosity_warning();
         }
         catch
         {
@@ -83,6 +83,11 @@ public static class OptunaHubRuntime
 /// <summary>Raised when the OptunaHub bridge cannot be initialized or an OptunaHub Python call fails.</summary>
 public sealed class OptunaHubInteropException : PythonInteropException
 {
+    /// <summary>Creates an OptunaHub bridge failure with a diagnostic message.</summary>
+    /// <param name="message">The explanation of the failure.</param>
     public OptunaHubInteropException(string message) : base(message) { }
+    /// <summary>Creates an OptunaHub bridge failure preserving the Python cause.</summary>
+    /// <param name="message">The explanation of the failure.</param>
+    /// <param name="inner">The underlying Python or runtime exception.</param>
     public OptunaHubInteropException(string message, System.Exception inner) : base(message, inner) { }
 }

@@ -3,6 +3,9 @@ using AwesomeAssertions;
 using Python.Runtime;
 using OptunaSharp.Interop.BoTorch;
 using OptunaSharp.Interop.PythonNet;
+// `using Python.Runtime;` makes the bare `Python` resolve to that namespace, so the bridge's pythonic
+// surface (the `OptunaSharp.Interop.BoTorch.Python` static class) needs an explicit alias here.
+using PyBridge = OptunaSharp.Interop.BoTorch.Python;
 
 namespace OptunaSharp.Tests.Interop;
 
@@ -347,7 +350,7 @@ public class BoTorchApiParityTests : OptunaInteropTestBase
                 // C# side — the ported candidates_func over these tensors under manual_seed.
                 double[] cs;
                 PyObject csCand;
-                using (Python.botorch.manual_seed(seed))
+                using (PyBridge.botorch.manual_seed(seed))
                     csCand = csFunc(tx, to, tc, bd, pd);
                 using (csCand)
                     cs = Flatten(csCand);

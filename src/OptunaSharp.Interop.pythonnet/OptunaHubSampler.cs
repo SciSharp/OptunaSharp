@@ -44,10 +44,12 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
         _sampler = sampler;
     }
 
+    /// <inheritdoc />
     public override string ToString() => _name;
 
     private PyObject Sampler => _sampler ?? throw new ObjectDisposedException(nameof(OptunaHubSampler));
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
         => PythonRuntime.Run(() =>
         {
@@ -55,11 +57,11 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
             if (!Sampler.HasAttr("infer_relative_search_space"))
                 return new OrderedDict<string, BaseDistribution>();
 
-            using var infer = Sampler.GetAttr("infer_relative_search_space");
-            using PyObject result = infer.Invoke(pystudy, pyfrozen);
+            using PyObject result = Python.optuna.samplers.BaseSampler.infer_relative_search_space(Sampler, pystudy, pyfrozen);
             return ToClrDistributionDict(result);
         });
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
         => PythonRuntime.Run(() =>
@@ -69,23 +71,23 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
             foreach (var (name, dist) in searchSpace)
                 pySearchSpace[name] = PyConvert.ToPy(dist);
 
-            using var sampleRelative = Sampler.GetAttr("sample_relative");
-            using PyObject result = sampleRelative.Invoke(new[] { pystudy, pyfrozen, (PyObject)pySearchSpace });
+            using PyObject result = Python.optuna.samplers.BaseSampler.sample_relative(Sampler, pystudy, pyfrozen, pySearchSpace);
             return ToClrValueDict(result);
         });
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
         => PythonRuntime.Run(() =>
         {
             var (pystudy, pyfrozen) = EnsureShadow(study, trial);
-            using var sampleIndependent = Sampler.GetAttr("sample_independent");
             using var name = paramName.ToPython();
             using var dist = PyConvert.ToPy(paramDistribution);
-            using PyObject result = sampleIndependent.Invoke(new[] { pystudy, pyfrozen, name, dist });
+            using PyObject result = Python.optuna.samplers.BaseSampler.sample_independent(Sampler, pystudy, pyfrozen, name, dist);
             return PyConvert.ToClr(result);
         });
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         if (_sampler is null)
@@ -93,8 +95,7 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
         PythonRuntime.Run(() =>
         {
             if (Sampler.HasAttr("reseed_rng"))
-                using (var reseed = Sampler.GetAttr("reseed_rng"))
-                    reseed.Invoke();
+                Python.optuna.samplers.BaseSampler.reseed_rng(Sampler);
         });
     }
 
@@ -123,24 +124,14 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
     private static PyObject BuildStudy(Study study, int currentNumber)
     {
         OptunaHubRuntime.EnsureQuiet(); // re-assert right before create_study (Optuna re-configures logging lazily)
-        using var createStudy = OptunaHubRuntime.Optuna.GetAttr("create_study");
-        using var kwargs = new PyDict();
-        var dirItems = new List<PyObject>();
-        foreach (var d in study.Directions)
-            dirItems.Add((d == StudyDirection.Maximize ? "maximize" : "minimize").ToPython());
-        using (var directions = new PyList(dirItems.ToArray()))
-            kwargs["directions"] = directions;
-        foreach (var it in dirItems) it.Dispose();
+        PyObject pystudy = Python.optuna.create_study(study.Directions);
 
-        var pystudy = createStudy.Invoke(Array.Empty<PyObject>(), kwargs);
-
-        using var addTrial = pystudy.GetAttr("add_trial");
         foreach (var ft in study.GetTrials(deepcopy: false, states: null))
         {
             if (ft.Number >= currentNumber || !ft.State.IsFinished())
                 continue;
-            using var pyTrial = CreateFrozenTrial(ft);
-            addTrial.Invoke(pyTrial);
+            using var pyTrial = Python.optuna.trial.create_trial(ft.State, ft.Values, ft.Params, ft.Distributions);
+            Python.optuna.Study.add_trial(pystudy, pyTrial);
         }
 
         return pystudy;
@@ -149,63 +140,11 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
     private static PyObject OpenRunningTrial(PyObject pystudy, int number)
     {
         // ask() adds a RUNNING trial (no params sampled without fixed distributions); fetch its frozen form.
-        using var ask = pystudy.GetAttr("ask");
-        using PyObject running = ask.Invoke();
-        int askedNumber = running.GetAttr("number").As<int>();
-        using var getTrials = pystudy.GetAttr("get_trials");
-        using var kwargs = new PyDict();
-        kwargs["deepcopy"] = false.ToPython();
-        using PyObject trials = getTrials.Invoke(Array.Empty<PyObject>(), kwargs);
+        using PyObject running = Python.optuna.Study.ask(pystudy);
+        int askedNumber = Python.optuna.Trial.number_t(running);
+        using PyObject trials = Python.optuna.Study.get_trials(pystudy, deepcopy: false);
         // Index by the asked number so it lines up even if numbering diverged.
         return trials[new PyInt(askedNumber)];
-    }
-
-    private static PyObject CreateFrozenTrial(FrozenTrial ft)
-    {
-        using var trialModule = OptunaHubRuntime.Optuna.GetAttr("trial");
-        using var createTrial = trialModule.GetAttr("create_trial");
-        using var kwargs = new PyDict();
-
-        kwargs["state"] = PyTrialState(ft.State);
-
-        if (ft.Values is { Count: > 0 } vals)
-        {
-            var items = new PyObject[vals.Count];
-            for (int k = 0; k < vals.Count; k++)
-                items[k] = vals[k].ToPython();
-            using (var pyValues = new PyList(items))
-                kwargs["values"] = pyValues;
-            foreach (var it in items) it.Dispose();
-        }
-
-        using (var pyParams = new PyDict())
-        {
-            foreach (var (name, value) in ft.Params)
-                pyParams[name] = PyConvert.ToPy(value);
-            kwargs["params"] = pyParams;
-
-            using var pyDists = new PyDict();
-            foreach (var (name, dist) in ft.Distributions)
-                pyDists[name] = PyConvert.ToPy(dist);
-            kwargs["distributions"] = pyDists;
-
-            return createTrial.Invoke(Array.Empty<PyObject>(), kwargs);
-        }
-    }
-
-    private static PyObject PyTrialState(TrialState state)
-    {
-        string name = state switch
-        {
-            TrialState.Complete => "COMPLETE",
-            TrialState.Pruned => "PRUNED",
-            TrialState.Fail => "FAIL",
-            TrialState.Waiting => "WAITING",
-            _ => "RUNNING",
-        };
-        using var trialModule = OptunaHubRuntime.Optuna.GetAttr("trial");
-        using var stateEnum = trialModule.GetAttr("TrialState");
-        return stateEnum.GetAttr(name);
     }
 
     // ---- result conversion ----------------------------------------------------------------------

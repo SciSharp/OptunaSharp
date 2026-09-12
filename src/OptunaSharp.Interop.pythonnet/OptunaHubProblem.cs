@@ -74,8 +74,7 @@ public sealed class OptunaHubProblem : IDisposable
             foreach (var (name, value) in values)
                 pyParams[name] = PyConvert.ToPy(value);
 
-            using var evaluate = Problem.GetAttr("evaluate");
-            using PyObject result = evaluate.Invoke(pyParams);
+            using PyObject result = Python.optunahub.benchmarks.BaseProblem.evaluate(Problem, pyParams);
             return ReadValues(result);
         });
     }
@@ -90,7 +89,7 @@ public sealed class OptunaHubProblem : IDisposable
 
     private static IReadOnlyList<StudyDirection> ReadDirections(PyObject problem)
     {
-        using var directions = problem.GetAttr("directions");
+        using var directions = Python.optunahub.benchmarks.BaseProblem.directions(problem);
         long n = directions.Length();
         var result = new List<StudyDirection>((int)n);
         for (long k = 0; k < n; k++)
@@ -121,7 +120,7 @@ public sealed class OptunaHubProblem : IDisposable
 
     private static OrderedDict<string, BaseDistribution> ReadSearchSpace(PyObject problem)
     {
-        using var searchSpace = problem.GetAttr("search_space");
+        using var searchSpace = Python.optunahub.benchmarks.BaseProblem.search_space(problem);
         using var items = searchSpace.GetAttr("items").Invoke();
         using var iter = PyIter.GetIter(items);
         var result = new OrderedDict<string, BaseDistribution>();

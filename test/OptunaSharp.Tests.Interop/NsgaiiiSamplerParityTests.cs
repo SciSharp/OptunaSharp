@@ -10,11 +10,11 @@ namespace OptunaSharp.Tests.Interop;
 /// <summary>
 ///     Full-state bit-parity of <see cref="NSGAIIISampler" /> against live Optuna (PORTING_PLAN Phase
 ///     2.14). NSGA-III reuses the NSGA-II genetic machinery and swaps in reference-point niching. The
-///     niching pipeline (filter-inf, ideal-point normalization, ASF extreme points, reference-point
-///     association, and the survivor <c>rng.shuffle</c>) is bit-exact except for a ~1-ULP
-///     managed-vs-LAPACK drift in the hyperplane-fit solve, which only changes selection when it flips
-///     a niche decision within ULPs of a tie — so every trial's params/values/distributions plus the
-///     per-trial generation and the study parent-cache trial-id lists agree bit-for-bit here.
+///     whole niching pipeline (filter-inf, ideal-point normalization, ASF extreme points, reference-point
+///     association, and the survivor <c>rng.shuffle</c>) is bit-exact — the hyperplane-fit
+///     <c>matrix_rank</c>/<c>solve</c> route through NumSharp's OpenBLAS LAPACK backend (byte-identical to
+///     NumPy), resolving the earlier ~1-ULP managed-LU drift — so every trial's params/values/distributions
+///     plus the per-trial generation and the study parent-cache trial-id lists agree bit-for-bit here.
 /// </summary>
 [TestClass]
 public class NsgaiiiSamplerParityTests : OptunaInteropTestBase

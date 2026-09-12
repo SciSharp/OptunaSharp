@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using NumSharp;
-using Python;
 using Python.Runtime;
 using OptunaSharp;
 using OptunaSharp.Collections;
@@ -105,13 +104,12 @@ public sealed class BoTorchSampler : BaseSampler
         int? seed = null,
         string? device = null)
     {
-        // @experimental_class("2.4.0") — the whole sampler is experimental.
-        OptunaWarnings.Warn(
-            "BoTorchSampler is experimental (supported from v2.4.0). The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
+        // Optuna decorates BoTorchSampler with @experimental_class("2.4.0"), which raises an
+        // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats
+        // this sampler as stable, so that warning is intentionally omitted (deliberate divergence).
 
         // botorch.py's `_imports.check()` — fail fast with a helpful message if BoTorch is missing.
-        PythonRuntime.Run(botorch.check);
+        PythonRuntime.Run(Python.botorch.check);
 
         // `constraints_func` is deprecated in v5.0.0 (removal 7.0.0) — mirror Optuna's FutureWarning.
         if (constraintsFunc != null)
@@ -129,6 +127,7 @@ public sealed class BoTorchSampler : BaseSampler
         _device = device;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         if (_studyId is null)
@@ -149,6 +148,7 @@ public sealed class BoTorchSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -268,7 +268,7 @@ public sealed class BoTorchSampler : BaseSampler
             {
                 // Each acquisition optimization runs inside BoTorch's manual_seed(seed) scope.
                 PyObject cand;
-                using (botorch.manual_seed(_seed))
+                using (Python.botorch.manual_seed(_seed))
                     cand = _candidatesFunc!(trainX, trainObj, conTensor, boundsTensor, pendingTensor);
                 // Advance the seed per trial (Optuna does `self._seed += 1` inside the manual_seed scope).
                 if (_seed is { } seedValue)
@@ -302,27 +302,27 @@ public sealed class BoTorchSampler : BaseSampler
         if (!candidates.HasAttr("dim"))
             throw new TypeError("Candidates must be a torch.Tensor.");
 
-        long dim = candidates.dim();
+        long dim = Python.torch.Tensor.dim_t(candidates);
         PyObject work = candidates;
         bool disposeWork = false;
         try
         {
             if (dim == 2)
             {
-                if (candidates.size(0) != 1)
+                if (Python.torch.Tensor.size_t(candidates, 0) != 1)
                 {
-                    using PyObject shape = candidates.size();
+                    using PyObject shape = Python.torch.Tensor.size(candidates);
                     throw new ValueError(
                         "Candidates batch optimization is not supported and the first dimension must " +
                         $"have size 1 if candidates is a two-dimensional tensor. Actual: {shape}.");
                 }
-                work = candidates.squeeze(0);
+                work = Python.torch.Tensor.squeeze(candidates, 0);
                 disposeWork = true;
             }
 
-            if (work.dim() != 1)
+            if (Python.torch.Tensor.dim_t(work) != 1)
                 throw new ValueError("Candidates must be one or two-dimensional.");
-            long candSize = work.size(0);
+            long candSize = Python.torch.Tensor.size_t(work, 0);
             if (candSize != nBounds)
                 throw new ValueError(
                     "Candidates size must match with the given bounds. Actual candidates: " +
@@ -337,10 +337,12 @@ public sealed class BoTorchSampler : BaseSampler
         }
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
         => _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         _independentSampler.ReseedRng();
@@ -354,9 +356,11 @@ public sealed class BoTorchSampler : BaseSampler
         }
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _independentSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         // botorch.py's after_trial: compute + store the deprecated constraints_func's values, then delegate.

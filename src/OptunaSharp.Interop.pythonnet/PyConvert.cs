@@ -14,8 +14,6 @@ namespace OptunaSharp.Interop.PythonNet;
 /// </summary>
 public static class PyConvert
 {
-    private static PyObject Distributions => OptunaHubRuntime.Optuna.GetAttr("distributions");
-
     // ---- values ---------------------------------------------------------------------------------
 
     /// <summary>CLR parameter value (from a suggest call / <see cref="CategoricalChoice" />) → Python object.</summary>
@@ -80,48 +78,17 @@ public static class PyConvert
 
     // ---- distributions --------------------------------------------------------------------------
 
-    /// <summary>OptunaSharp distribution → a live <c>optuna.distributions.*</c> object.</summary>
-    public static PyObject ToPy(BaseDistribution dist)
+    /// <summary>OptunaSharp distribution → a live <c>optuna.distributions.*</c> object (constructed
+    /// through the <c>Python.optuna.distributions</c> facade).</summary>
+    public static PyObject ToPy(BaseDistribution dist) => dist switch
     {
-        var dists = Distributions;
-        switch (dist)
-        {
-            case FloatDistribution f:
-            {
-                using var ctor = dists.GetAttr("FloatDistribution");
-                using var kwargs = new PyDict();
-                kwargs["low"] = f.Low.ToPython();
-                kwargs["high"] = f.High.ToPython();
-                kwargs["log"] = f.Log.ToPython();
-                kwargs["step"] = f.Step is { } s ? s.ToPython() : ((object?)null).ToPython();
-                return ctor.Invoke(Array.Empty<PyObject>(), kwargs);
-            }
-            case IntDistribution i:
-            {
-                using var ctor = dists.GetAttr("IntDistribution");
-                using var kwargs = new PyDict();
-                kwargs["low"] = i.Low.ToPython();
-                kwargs["high"] = i.High.ToPython();
-                kwargs["log"] = i.Log.ToPython();
-                kwargs["step"] = i.Step.ToPython();
-                return ctor.Invoke(Array.Empty<PyObject>(), kwargs);
-            }
-            case CategoricalDistribution c:
-            {
-                using var ctor = dists.GetAttr("CategoricalDistribution");
-                var items = new PyObject[c.Choices.Count];
-                for (int k = 0; k < items.Length; k++)
-                    items[k] = ToPy(c.Choices[k].Value);
-                using var choices = new PyList(items);
-                foreach (var it in items) it.Dispose();
-                return ctor.Invoke(choices);
-            }
-            default:
-                throw new OptunaHubInteropException(
-                    $"Cannot marshal distribution of type {dist.GetType().Name} to Python (supported: " +
-                    "FloatDistribution, IntDistribution, CategoricalDistribution).");
-        }
-    }
+        FloatDistribution f => Python.optuna.distributions.FloatDistribution(f.Low, f.High, f.Log, f.Step),
+        IntDistribution i => Python.optuna.distributions.IntDistribution(i.Low, i.High, i.Log, i.Step),
+        CategoricalDistribution c => Python.optuna.distributions.CategoricalDistribution(c.Choices),
+        _ => throw new OptunaHubInteropException(
+            $"Cannot marshal distribution of type {dist.GetType().Name} to Python (supported: " +
+            "FloatDistribution, IntDistribution, CategoricalDistribution)."),
+    };
 
     /// <summary>A live <c>optuna.distributions.*</c> object → the matching OptunaSharp distribution.</summary>
     public static BaseDistribution ToClrDistribution(PyObject dist)

@@ -1,5 +1,4 @@
 using System;
-using Python;
 using Python.Runtime;
 
 namespace OptunaSharp.Interop.BoTorch;
@@ -123,7 +122,7 @@ internal static class BoTorchCandidates
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
         RequireSingleObjective(trainObj, "logEI");
-        return botorch.evalStmts(LogEiBody, "result",
+        return Python.botorch.evalStmts(LogEiBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("train_con", trainCon ?? PyObject.None),
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
@@ -133,7 +132,7 @@ internal static class BoTorchCandidates
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
         RequireSingleObjective(trainObj, "qEI");
-        return botorch.evalStmts(QeiBody, "result",
+        return Python.botorch.evalStmts(QeiBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("train_con", trainCon ?? PyObject.None),
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
@@ -143,7 +142,7 @@ internal static class BoTorchCandidates
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
         RequireSingleObjective(trainObj, "qLogEI");
-        return botorch.evalStmts(QLogEiBody, "result",
+        return Python.botorch.evalStmts(QLogEiBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("train_con", trainCon ?? PyObject.None),
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
@@ -153,7 +152,7 @@ internal static class BoTorchCandidates
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
         RequireSingleObjective(trainObj, "qNEI");
-        return botorch.evalStmts(QNeiBody, "result",
+        return Python.botorch.evalStmts(QNeiBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("train_con", trainCon ?? PyObject.None),
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
@@ -163,7 +162,7 @@ internal static class BoTorchCandidates
     /// <summary>Quasi-MC batch Expected Hypervolume Improvement (qEHVI). Port of <c>qehvi_candidates_func</c>.</summary>
     internal static PyObject Qehvi(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
-        => botorch.evalStmts(QehviBody, "result",
+        => Python.botorch.evalStmts(QehviBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("train_con", trainCon ?? PyObject.None),
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
 
@@ -173,28 +172,28 @@ internal static class BoTorchCandidates
     {
         if (trainCon is not null)
             throw new NumSharp.ValueError("Constraints are not supported with ehvi_candidates_func.");
-        return botorch.evalStmts(EhviBody, "result",
+        return Python.botorch.evalStmts(EhviBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("bounds", bounds));
     }
 
     /// <summary>Quasi-MC batch Noisy Expected Hypervolume Improvement (qNEHVI). Port of <c>qnehvi_candidates_func</c>.</summary>
     internal static PyObject Qnehvi(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
-        => botorch.evalStmts(QnehviBody, "result",
+        => Python.botorch.evalStmts(QnehviBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("train_con", trainCon ?? PyObject.None),
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
 
     /// <summary>Quasi-MC extended ParEGO (qParEGO). Port of <c>qparego_candidates_func</c>.</summary>
     internal static PyObject QParEgo(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
-        => botorch.evalStmts(QParEgoBody, "result",
+        => Python.botorch.evalStmts(QParEgoBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("train_con", trainCon ?? PyObject.None),
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
 
     /// <summary>Quasi-MC extended ParEGO backed by qLogEI (qLogEI-ParEGO). Port of <c>qlogei_parego_candidates_func</c>.</summary>
     internal static PyObject QLogEiParEgo(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
-        => botorch.evalStmts(QLogEiParEgoBody, "result",
+        => Python.botorch.evalStmts(QLogEiParEgoBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("train_con", trainCon ?? PyObject.None),
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
 
@@ -205,7 +204,7 @@ internal static class BoTorchCandidates
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
         RequireSingleObjective(trainObj, "qKG");
-        return botorch.evalStmts(QkgBody, "result",
+        return Python.botorch.evalStmts(QkgBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("train_con", trainCon ?? PyObject.None),
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
     }
@@ -213,7 +212,7 @@ internal static class BoTorchCandidates
     /// <summary>Quasi-MC batch Hypervolume Knowledge Gradient (qHVKG). Port of <c>qhvkg_candidates_func</c>.</summary>
     internal static PyObject Qhvkg(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
-        => botorch.evalStmts(QhvkgBody, "result",
+        => Python.botorch.evalStmts(QhvkgBody, "result",
             ("train_x", trainX), ("train_obj", trainObj), ("train_con", trainCon ?? PyObject.None),
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
 
@@ -511,7 +510,7 @@ internal static class BoTorchCandidates
 
     private static void RequireSingleObjective(PyObject trainObj, string name)
     {
-        if (trainObj.size(-1) != 1)
+        if (Python.torch.Tensor.size_t(trainObj, -1) != 1)
             throw new NumSharp.ValueError($"Objective may only contain single values with {name}.");
     }
 }
