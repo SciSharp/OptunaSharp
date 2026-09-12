@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101823">
+  <meta name="description" content="An interactive NSGA-III algorithm atlas. Run OptunaSharp, explore objective geometry, and follow the source behind each stage.">
+  <link rel="icon" href="data:,">
+  <title>NSGA / III · Algorithm atlas</title>
+  <link rel="stylesheet" href="/nsga3-atlas/atlas.css">
+  <script type="importmap">{"imports":{"three":"/vendor/three/three.module.js","three/addons/":"/vendor/three/addons/"}}</script>
+</head>
+<body data-view="all">
+  <a class="skip-link" href="#scene-container">Skip to the objective space</a>
+
+  <header class="atlas-header">
+    <div class="atlas-identity">
+      <a class="brand-mark" href="/nsga3-atlas/" aria-label="NSGA-III algorithm atlas home"><span>NSGA</span><i>/</i><strong>III</strong></a>
+      <div class="identity-copy"><h1>Algorithm atlas</h1><p>Geometry, evolution, and the source beneath.</p></div>
+    </div>
+    <div class="header-right">
+      <nav class="header-links" aria-label="Related presentations">
+        <a href="/nsga3/">Visual guide <span aria-hidden="true">↗</span></a>
+        <a href="/nsga3-atlas/sourcebook.html">Sourcebook <span aria-hidden="true">↗</span></a>
+      </nav>
+      <div class="header-actions">
+        <button id="present-mode" class="quiet-button" type="button" aria-pressed="false">Focus mode</button>
+        <button id="full-screen" class="icon-button" type="button" aria-label="Toggle full screen" title="Toggle full screen"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4M3 13v4h4m10-4v4h-4"/></svg></button>
+      </div>
+    </div>
+  </header>
+
+  <div class="workspace-bar">
+    <div class="connection-strip" role="status" aria-live="polite" aria-atomic="false">
+      <span id="engine-status" class="status-pill">OptunaSharp · connecting</span>
+      <span id="source-status" class="status-pill">Source · loading</span>
+      <span id="renderer-status" class="status-pill">Three.js · initializing</span>
+    </div>
+    <nav class="view-switcher" aria-label="Workbench panels">
+      <button type="button" data-view="all" aria-pressed="true">All</button>
+      <button type="button" data-view="math" aria-pressed="false">Math</button>
+      <button type="button" data-view="scene" aria-pressed="false">Scene</button>
+      <button type="button" data-view="code" aria-pressed="false">Code</button>
+    </nav>
+  </div>
+
+  <main class="workbench" id="workbench">
+    <aside class="panel math-panel" id="math-panel" aria-labelledby="math-heading" data-panel="math">
+      <div class="panel-heading"><span class="section-number">01</span><div><p class="eyebrow">Expression rail</p><h2 id="math-heading">The mathematics</h2></div></div>
+      <div class="rail-scroll">
+        <details class="rail-section settings-section" open>
+          <summary><span>Study parameters</span><span class="summary-note">DTLZ2 · 3 objectives</span></summary>
+          <form id="settings-form" class="settings-form">
+            <div class="field-pair">
+              <label for="population-size">Population <span class="field-symbol">N</span><select id="population-size" name="populationSize"><option value="12">12</option><option value="24">24</option><option value="36" selected>36</option><option value="60">60</option></select></label>
+              <label for="divisions">Divisions <span class="field-symbol">p</span><input id="divisions" name="divisions" type="number" min="1" max="16" value="6" required></label>
+            </div>
+            <div class="field-pair">
+              <label for="seed">Random seed<input id="seed" name="seed" type="number" min="0" max="2147483647" value="42" required></label>
+              <label for="mutation">Mutation <span class="field-symbol">pₘ</span><input id="mutation" name="mutationProbability" type="number" min="0" max="1" step="0.01" value="0.15" required></label>
+            </div>
+            <button id="new-run" class="primary-button" type="submit"><span aria-hidden="true">↻</span> Start a new study</button>
+            <p class="field-note">Twelve decision variables. Three objectives to minimize. Every generation runs in OptunaSharp.</p>
+          </form>
+        </details>
+
+        <section class="expression-section" aria-label="Source-linked algorithm expressions">
+          <div class="section-label"><span>Eight expressions</span><span class="muted">Select to inspect</span></div>
+          <div id="expression-list" class="expression-list"><p class="loading-copy">Loading the algorithm’s expressions…</p></div>
+        </section>
+
+        <details class="rail-section vector-section">
+          <summary><span>Reference vector lab</span><span class="summary-note">Explore association</span></summary>
+          <div class="section-content">
+            <label class="check-control" for="ref-mode"><input id="ref-mode" type="checkbox"><span>Show the laboratory vector</span></label>
+            <p class="field-note">Move a normalized objective vector and examine its closest reference ray.</p>
+            <label class="range-control axis-one" for="ref-f1"><span><i>f</i>₁ <span class="range-unit">normalized objective</span></span><input id="ref-f1" type="range" min="0" max="1" step="0.01" value="0.45"></label>
+            <label class="range-control axis-two" for="ref-f2"><span><i>f</i>₂ <span class="range-unit">normalized objective</span></span><input id="ref-f2" type="range" min="0" max="1" step="0.01" value="0.35"></label>
+            <label class="range-control axis-three" for="ref-f3"><span><i>f</i>₃ <span class="range-unit">normalized objective</span></span><input id="ref-f3" type="range" min="0" max="1" step="0.01" value="0.20"></label>
+            <label class="inline-field" for="ref-divisions"><span>Reference divisions</span><input id="ref-divisions" type="number" min="1" max="16" value="6"></label>
+            <div id="ref-result" class="lab-result" aria-live="polite">Enable the vector to explore perpendicular distance.</div>
+          </div>
+        </details>
+
+        <details class="rail-section display-section">
+          <summary><span>Scene layers</span><span class="summary-note">Visibility &amp; scale</span></summary>
+          <div class="section-content">
+            <label class="check-control" for="show-surface"><input id="show-surface" type="checkbox" checked><span>True DTLZ2 Pareto surface</span></label>
+            <label class="check-control" for="show-references"><input id="show-references" type="checkbox" checked><span>Reference directions</span></label>
+            <label class="check-control" for="show-grid"><input id="show-grid" type="checkbox" checked><span>Coordinate grid</span></label>
+            <label class="range-control" for="point-scale"><span>Point size</span><input id="point-scale" type="range" min="0.5" max="2" step="0.05" value="1"></label>
+            <label class="range-control" for="objective-scale"><span>Objective scale</span><input id="objective-scale" type="range" min="0.5" max="2" step="0.05" value="1"></label>
+          </div>
+        </details>
+      </div>
+      <p class="rail-footnote"><span class="tiny-rule" aria-hidden="true"></span>One population. Many valid trade-offs.</p>
+    </aside>
+
+    <section class="panel scene-panel" id="scene-panel" aria-labelledby="scene-heading" data-panel="scene">
+      <div class="scene-heading panel-heading">
+        <div class="heading-group"><span class="section-number">02</span><div><p class="eyebrow">Objective space</p><h2 id="scene-heading">Watch selection take shape</h2></div></div>
+        <div class="camera-switcher" role="group" aria-label="Camera orientation"><button type="button" data-camera="isometric" aria-pressed="true">3D</button><button type="button" data-camera="top" aria-pressed="false">Top</button><button type="button" data-camera="front" aria-pressed="false">Front</button></div>
+      </div>
+
+      <div class="scene-stage">
+        <div id="scene-container" class="scene-container" tabindex="0" role="region" aria-label="Interactive three-dimensional objective space. Drag to orbit, scroll to zoom, and select a trial to inspect it."></div>
+        <div id="scene-empty" class="scene-empty"><span class="orbit-glyph" aria-hidden="true">◌</span><h3>Preparing the objective space</h3><p>The population, reference rays, and true Pareto surface will appear here.</p><button id="retry-renderer" class="quiet-button" type="button">Retry renderer</button></div>
+        <div class="scene-axis-key" aria-hidden="true"><span class="axis-one">f₁</span><span class="axis-two">f₂</span><span class="axis-three">f₃</span><span class="axis-note">minimize all three</span></div>
+      </div>
+
+      <div class="scene-reading">
+        <p id="scene-caption" class="scene-caption" aria-live="polite">Start a study to follow a population through the eight stages of NSGA-III.</p>
+        <div class="scene-legend" aria-label="Scene legend"><span><i class="legend-dot offspring-dot"></i>Offspring</span><span><i class="legend-dot parent-dot"></i>Parents</span><span><i class="legend-dot survivor-dot"></i>Survivors</span><span><i class="legend-line"></i>Reference ray</span></div>
+      </div>
+
+      <dl class="metrics-grid" aria-label="Current study metrics">
+        <div><dt>Generation</dt><dd id="metric-generation">—</dd></div>
+        <div><dt>Evaluations</dt><dd id="metric-evaluations">—</dd></div>
+        <div><dt>Mean radial gap</dt><dd id="metric-gap">—</dd></div>
+        <div><dt>Direction coverage</dt><dd id="metric-coverage">—</dd></div>
+      </dl>
+
+      <div class="trial-section"><div class="section-label"><span>Trial inspection</span><span class="muted">Select a point</span></div><div id="selected-trial" class="selected-trial" aria-live="polite">A trial is one evaluated design. Select a point to inspect its objectives, rank, and reference association.</div></div>
+      <p class="semantic-note"><span aria-hidden="true">↳</span> Semantic source-linked replay. The stages explain real sampler results; they are not an instruction-by-instruction execution trace.</p>
+    </section>
+
+    <aside class="panel code-panel" id="code-panel" aria-labelledby="code-heading" data-panel="code">
+      <div class="panel-heading code-heading"><span class="section-number">03</span><div><p class="eyebrow">Implementation</p><h2 id="code-heading">Read the machinery</h2></div><span class="language-tag">C#</span></div>
+      <div class="inspector-tabs" role="group" aria-label="Source inspector mode"><button type="button" data-inspector="source" aria-pressed="true">Source listing</button><button type="button" data-inspector="flow" aria-pressed="false">Call flow</button></div>
+      <div class="source-selectors">
+        <label for="source-file">Source file<select id="source-file"><option value="">Loading source files…</option></select></label>
+        <label for="source-symbol">Symbol<select id="source-symbol"><option value="">Select a symbol</option></select></label>
+        <div class="source-search-row"><label class="search-field" for="source-search"><span class="visually-hidden">Search source code</span><svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><circle cx="7.5" cy="7.5" r="4.5"/><path d="m11 11 4 4"/></svg><input id="source-search" type="search" placeholder="Find in source…" autocomplete="off" spellcheck="false"></label><button id="source-next-match" class="icon-button" type="button" aria-label="Go to next source match" title="Next source match">↓</button><span id="source-counter" class="source-counter" aria-live="polite">0 / 0</span></div>
+      </div>
+      <div id="source-pane" class="inspector-pane source-pane">
+        <div id="source-breadcrumb" class="source-breadcrumb">OptunaSharp / Samplers / NSGAIII</div>
+        <div id="source-code" class="source-code" tabindex="0" role="region" aria-label="Complete source listing with line explanations"><p class="loading-copy">Loading the full source and line annotations…</p></div>
+      </div>
+      <div id="flow-pane" class="inspector-pane flow-pane" hidden><p class="flow-note">Select a node to inspect the method that implements it.</p><svg id="flow-graph" class="flow-graph" viewBox="0 0 760 620" role="img" aria-label="NSGA-III source call flow"></svg></div>
+      <section class="symbol-inspection" aria-label="Selected symbol explanation"><div class="section-label"><span>Symbol notes</span><span class="muted">Why this exists</span></div><div id="symbol-description" class="symbol-description">Choose an expression, stage, or source symbol to connect the mathematics to its implementation.</div><div id="cross-references" class="cross-references" aria-label="Related source symbols"></div></section>
+      <div id="source-provenance" class="source-provenance">Source provenance is loading. The sourcebook contains the complete documented listings.</div>
+    </aside>
+  </main>
+
+  <div id="run-error" class="run-error" role="alert" hidden></div>
+
+  <footer class="playback-dock" aria-label="Algorithm replay controls">
+    <div class="transport-row">
+      <div class="transport-actions"><button id="play" class="primary-button play-button" type="button"><span aria-hidden="true">▶</span> Play</button><button id="step-stage" class="quiet-button" type="button">Next stage <span aria-hidden="true">→</span></button><button id="step-generation" class="quiet-button" type="button">Next generation <span aria-hidden="true">↗</span></button></div>
+      <label class="speed-control" for="speed"><span>Playback speed</span><input id="speed" type="range" min="0.5" max="3" step="0.25" value="1"></label>
+      <div class="history-control"><label for="history">Generation history <span id="history-label">0 / 0</span></label><input id="history" type="range" min="0" max="0" step="1" value="0" disabled></div>
+    </div>
+    <div id="timeline" class="timeline" role="group" aria-label="Eight algorithm stages"></div>
+    <div class="niche-control"><label for="niche-step">Niching decisions</label><input id="niche-step" type="range" min="0" max="0" step="1" value="0" disabled><span id="niche-label">Select the niching stage to inspect survivor choices.</span></div>
+  </footer>
+
+  <script type="module" src="/nsga3-atlas/app.js"></script>
+</body>
+</html>

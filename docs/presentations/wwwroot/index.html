@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Interactive algorithm presentations powered by OptunaSharp.">
+  <link rel="icon" href="data:,">
+  <title>OptunaSharp · Interactive field guides</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; color: #ececde; background: #11150f; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { width: min(1120px, 90%); margin: auto; padding: 4rem 0; }
+    header { display: flex; justify-content: space-between; gap: 1rem; padding-bottom: 2rem; border-bottom: 1px solid #353a30; }
+    header span, .eyebrow { font: 12px/1.5 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .1em; }
+    header strong { font-size: 20px; letter-spacing: -.03em; }
+    h1 { margin: 5rem 0 1.5rem; font: 400 clamp(3.5rem, 8vw, 7rem)/1 Georgia, serif; max-width: 13ch; letter-spacing: -.04em; }
+    h1 em { color: #d5f783; }
+    .intro { max-width: 55ch; color: #b8bcb0; font-size: 18px; line-height: 1.7; }
+    .feature { display: grid; grid-template-columns: 70px 1fr auto; gap: 2rem; padding: 3rem 0; border-bottom: 1px solid #353a30; }
+    .number { font: 32px Georgia, serif; color: #d5f783; }
+    h2 { font: 400 clamp(1.8rem, 3vw, 2.7rem)/1.15 Georgia, serif; margin: 0 0 1rem; }
+    .feature p { max-width: 55ch; margin: 0; color: #b8bcb0; line-height: 1.7; }
+    a { color: #d5f783; text-decoration-thickness: 1px; text-underline-offset: 5px; }
+    a:focus-visible { outline: 2px solid #d5f783; outline-offset: 6px; }
+    .feature > a { align-self: center; white-space: nowrap; }
+    footer { padding-top: 3rem; color: #a5ad9d; line-height: 1.8; }
+    code { font-size: 13px; color: #ececde; overflow-wrap: anywhere; }
+    @media(max-width:600px) { header { flex-direction: column; } h1 { margin-top: 3rem; } .feature { grid-template-columns: 32px 1fr; gap: 1rem; } .feature > a { grid-column: 2; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><strong>OptunaSharp.</strong><span>Interactive field guides / presentation library</span></header>
+    <h1>Algorithms,<br>made <em>visible.</em></h1>
+    <p class="intro">Explore an idea with your hands, then watch the real algorithm work. These field guides connect interactive HTML to the OptunaSharp engine.</p>
+    <article class="feature">
+      <span class="number">01</span>
+      <div><p class="eyebrow">Three.js / mathematics / source</p><h2>NSGA-III · Algorithm atlas</h2><p>A mathematical workbench and source explorer with a real 3D population. Follow the algorithm into every method, inspect its call graph, and read all 8,378 lines of the complete sourcebook.</p></div>
+      <a href="/nsga3-atlas/">Open the atlas ↗</a>
+    </article>
+    <article class="feature">
+      <span class="number">02</span>
+      <div><p class="eyebrow">Many-objective optimization</p><h2>NSGA-III · The geometry of better</h2><p>Two interactive laboratories and an end-to-end animation of a live, seeded C# study. Explore dominance, reference directions, and generations of evolution.</p></div>
+      <a href="/nsga3/">Open the field guide ↗</a>
+    </article>
+    <article class="feature">
+      <span class="number">+</span>
+      <div><p class="eyebrow">For the next idea</p><h2>A presentation starter</h2><p>A minimal HTML deck with section navigation, presenter notes, keyboard controls, and fullscreen support.</p></div>
+      <a href="/template/">Open the starter ↗</a>
+    </article>
+    <footer>Create a deck from the repository root:<br><code>./docs/presentations/new-presentation.ps1 -Name my-algorithm</code><br>See <code>docs/presentations/README.md</code> for hosting, API, and verification instructions.</footer>
+  </main>
+</body>
+</html>

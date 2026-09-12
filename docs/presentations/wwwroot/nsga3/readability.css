@@ -1,0 +1,76 @@
+/* Keep the editorial hierarchy while making controls and scaled SVGs readable. */
+.section-category, .connection-status, .selected-readout > .eyebrow,
+.coordinate-pair small, .readout-description, .plot-heading, .plot-legend,
+.plot-footnote, .range-endpoints, .reference-numbers small, .config-field label,
+.config-note, .stage-heading, .view-controls, .text-button, .runner-legend,
+.camera-control, .phase-topline, .phase-number, .phase-explanation .eyebrow,
+.niche-detail, .next-generation, .speed-control label, .speed-control output,
+.reconstruction-note, .run-metrics > div > span, .history-copy .eyebrow,
+.history-visual .plot-heading, .history-scrub label, .history-scrub p,
+.site-footer p, .site-footer > div { font-size: 11px; }
+.phase-explanation p, .history-copy p, .run-details p, .instruction p { font-size: 12px; }
+.fine-print { font-size: 11px !important; }
+.chart-corner { font-size: 10px; }
+.plot-heading { flex-wrap: wrap; }
+.phase-topline { gap: 12px; }
+.phase-explanation { min-height: 185px; }
+.run-metrics > div > span { min-height: 2.9em; }
+.run-metrics > div:last-child > span { max-width: 100%; }
+.section-category { line-height: 1.7; }
+.reference-numbers { flex-wrap: wrap; gap: 22px 35px; }
+.runner-legend { gap: 12px; }
+.history-visual .plot-heading { letter-spacing: 0; }
+#pareto-plot text, #reference-plot text { font-size: 16px; }
+#evolution-plot text { font-size: 17px; }
+#convergence-plot text { font-size: 15px; }
+#pareto-plot text[fill="#727d63"],
+#reference-plot text[fill="#5f6b51"],
+#evolution-plot text[fill="#657154"],
+#evolution-plot text[fill="#667353"] { fill: #a0aa94; }
+
+@media (max-width: 900px) {
+  .runner-layout { grid-template-columns: 1fr; }
+  .runner-stage { border-right: 0; padding-right: 0; }
+  .phase-panel { display: grid; grid-template-columns: 1fr 1.2fr; gap: 0 24px; }
+  .phase-topline { grid-column: 1 / -1; }
+  .phase-list { grid-column: 1; grid-row: 2 / span 2; }
+  .phase-explanation { grid-column: 2; grid-row: 2; min-height: 0; border-top: 0; }
+  .niche-detail { grid-column: 2; grid-row: 3; }
+  .playback-controls, .next-generation, .speed-control { grid-column: 1 / -1; }
+  .phase-list li { font-size: 12px; padding: 7px 0; }
+  .playback-controls button { font-size: 12px; min-height: 44px; }
+  .run-metrics { grid-template-columns: repeat(3, 1fr); }
+  .run-metrics > div { padding: 20px 12px; }
+  .run-metrics > div > span { min-height: 2.9em; }
+  #pareto-plot text, #reference-plot text { font-size: 20px; }
+  #evolution-plot text { font-size: 19px; }
+  #convergence-plot text { font-size: 20px; }
+}
+@media (max-width: 580px) {
+  .section-top { flex-wrap: wrap; }
+  .section-category { max-width: 100%; text-align: left; }
+  .hero-copy > .eyebrow { font-size: 10px; max-width: 30ch; }
+  .hero-bottom > div { font-size: 10px; }
+  .hero-art { top: 390px; }
+  .hero { min-height: 850px; }
+  .section-top > .eyebrow { font-size: 10px; }
+  .config-field input, .config-field select { font-size: 14px; min-height: 40px; }
+  .config-field label { font-size: 11px; }
+  .range-control label, .range-control output { font-size: 12px; }
+  .phase-explanation .eyebrow { font-size: 10px; letter-spacing: 0; }
+  .phase-explanation h3 { font-size: 25px; }
+  .phase-explanation p { font-size: 12px; }
+  .phase-panel { grid-template-columns: 1fr 1.15fr; gap: 0 18px; }
+  .phase-list li { font-size: 11px; }
+  .phase-number { font-size: 10px; }
+  .view-controls > span { display: none; }
+  .plot-footnote, .algorithm-note, .run-details p { font-size: 12px; }
+  .run-metrics { grid-template-columns: 1fr 1fr; }
+  .run-metrics > div > span { min-height: 2.9em; }
+  .run-metrics > div:last-child > span { min-height: 0; max-width: 65%; }
+  #pareto-plot text { font-size: 26px; }
+  #reference-plot text { font-size: 28px; }
+  #evolution-plot text { font-size: 29px; }
+  #convergence-plot text { font-size: 25px; }
+  .plot-annotation { display: none; }
+}

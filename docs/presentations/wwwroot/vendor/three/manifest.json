@@ -1,0 +1,29 @@
+{
+  "package": "three",
+  "version": "0.183.2",
+  "license": "MIT",
+  "source": "https://registry.npmjs.org/three/-/three-0.183.2.tgz",
+  "integrity": "sha512-di3BsL2FEQ1PA7Hcvn4fyJOlxRRgFYBpMTcyOgkwJIaDOdJMebEFPA+t98EvjuljDx4hNulAGwF6KIjtwI5jgQ==",
+  "files": [
+    {
+      "path": "LICENSE",
+      "bytes": 1081,
+      "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc"
+    },
+    {
+      "path": "addons/controls/OrbitControls.js",
+      "bytes": 40484,
+      "sha256": "09673b997864b8091943d2673637c0f31f7cf67daeddd0902fce9bf098a8d093"
+    },
+    {
+      "path": "three.core.js",
+      "bytes": 1421746,
+      "sha256": "6a7fc83437818534d5e30ce8c8e0ce76230ca2245446ea24744bb3d88c436583"
+    },
+    {
+      "path": "three.module.js",
+      "bytes": 639046,
+      "sha256": "e8ac51bc2f6b7eb17bc88c6540eb0a1fee872f848949373de39d55f34b5c5a8f"
+    }
+  ]
+}
