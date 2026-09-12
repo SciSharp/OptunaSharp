@@ -9,4 +9,5 @@
 #   # Apply repo-wide dotnet format
 #   0000000000000000000000000000000000000000
 #
-# (none yet)
+# Rename docs/algorithms -> docs/methods (pure R100 move, no content change)
+9c01b34bd41a7d57dda734968fba33d0528bd6b1
