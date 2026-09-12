@@ -34,13 +34,17 @@
       href: logging.md
     - name: Command-Line Interface
       href: cli.md
-- name: Algorithms
+- name: Methods
   items:
+    - name: Overview
+      href: methods/index.md
     - name: AGE-MOEA-2 (2022)
-      href: algorithms/age-moea-2.md
+      href: methods/age-moea-2.md
     - name: AGE-MOEA (2019)
-      href: algorithms/age-moea.md
+      href: methods/age-moea.md
     - name: NSGA-II (2002)
-      href: algorithms/nsga-ii.md
+      href: methods/nsga-ii.md
     - name: NSGA-III (2014)
-      href: algorithms/nsga-iii.md
+      href: methods/nsga-iii.md
+    - name: SMS-EMOA (2007)
+      href: methods/sms-emoa.md
