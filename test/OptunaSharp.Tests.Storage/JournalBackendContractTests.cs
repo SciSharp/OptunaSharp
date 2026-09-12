@@ -26,9 +26,6 @@ public abstract class JournalBackendContractTests
     /// <summary>Builds the backend under test, bound to the shared test Redis under <paramref name="prefix" />.</summary>
     protected abstract BaseJournalBackend Create(string prefix, bool useCluster = false);
 
-    /// <summary>The backend's type name — used to assert its experimental-warning message.</summary>
-    protected abstract string ExperimentalTypeName { get; }
-
     private IBaseJournalSnapshot Snapshot(string prefix) => (IBaseJournalSnapshot)Create(prefix);
 
     private static OrderedDict<string, object?> Log(long op, string worker) =>
@@ -321,13 +318,21 @@ public abstract class JournalBackendContractTests
 
     // ----------------------------------------------------------------- experimental warning
 
+    // [Misaligned] Optuna decorates JournalRedisBackend with @experimental_class("3.1.0"), which raises
+    // an ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats it
+    // as stable, so no ExperimentalWarning is emitted — this guards that deliberate divergence.
     [TestMethod]
     [TestCategory("Integration")]
-    public void Constructor_RaisesExperimentalWarning()
+    [TestCategory("Misaligned")]
+    public void Constructor_DoesNotRaiseExperimentalWarning()
     {
         RedisSession.EnsureReachable();
         (string Message, WarningCategory Category)? captured = null;
-        void Handler(string m, WarningCategory c) => captured = (m, c);
+        void Handler(string m, WarningCategory c)
+        {
+            if (c == WarningCategory.ExperimentalWarning)
+                captured = (m, c);
+        }
 
         OptunaWarnings.WarningRaised += Handler;
         try
@@ -339,9 +344,7 @@ public abstract class JournalBackendContractTests
             OptunaWarnings.WarningRaised -= Handler;
         }
 
-        captured.Should().NotBeNull();
-        captured!.Value.Category.Should().Be(WarningCategory.ExperimentalWarning);
-        captured.Value.Message.Should().Be(RedisJournalProtocol.ExperimentalWarning(ExperimentalTypeName));
+        captured.Should().BeNull();
     }
 
     // ----------------------------------------------------------------- study replay

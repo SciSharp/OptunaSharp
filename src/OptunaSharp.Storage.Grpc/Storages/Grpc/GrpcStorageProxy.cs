@@ -101,12 +101,12 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
     {
     }
 
-    /// <summary>Shared core: every public constructor funnels here (so all raise the experimental warning).</summary>
+    /// <summary>Shared core: every public constructor funnels here.</summary>
     private GrpcStorageProxy(GrpcChannel channel, bool ownsChannel)
     {
-        OptunaWarnings.Warn(
-            GrpcProto.ExperimentalMessage(nameof(GrpcStorageProxy), "4.2.0"),
-            WarningCategory.ExperimentalWarning);
+        // Optuna decorates GrpcStorageProxy with @experimental_class("4.2.0"), which raises an
+        // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats
+        // it as stable, so that warning is intentionally omitted (deliberate divergence).
         _channel = channel;
         _ownsChannel = ownsChannel;
         _stub = new ProtoApi.StorageService.StorageServiceClient(_channel);

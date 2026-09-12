@@ -213,14 +213,16 @@ public class NsgaiiiSamplerTests
 
     // ---- warnings -----------------------------------------------------------------------------
 
+    // [Misaligned] Optuna decorates NSGAIIISampler with @experimental_class("3.2.0"), which raises an
+    // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats this
+    // sampler as stable, so no ExperimentalWarning is emitted — this guards that deliberate divergence.
     [TestMethod]
-    public void Constructor_EmitsExperimentalWarning()
+    [Misaligned]
+    public void Constructor_DoesNotEmitExperimentalWarning()
     {
         string? captured = CaptureWarning(
             WarningCategory.ExperimentalWarning, () => new NSGAIIISampler(populationSize: 5));
-        captured.Should().NotBeNull();
-        captured.Should().Contain("NSGAIIISampler is experimental");
-        captured.Should().Contain("3.2.0");
+        captured.Should().BeNull();
     }
 
     [TestMethod]

@@ -129,9 +129,8 @@ public class TPESampler : BaseSampler
             if (multivariate == false)
                 throw new ValueError(
                     "``group`` option can only be enabled when ``multivariate`` is enabled.");
-            OptunaWarnings.Warn(
-                "Argument ``group`` is an experimental feature. The interface can change in the future.",
-                WarningCategory.ExperimentalWarning);
+            // Optuna raises an ExperimentalWarning (warn_experimental_argument) for the group option.
+            // OptunaSharp targets the Optuna 5.x surface and treats it as stable, so it is omitted.
             _groupDecomposedSearchSpace = new GroupDecomposedSearchSpace(includePruned: true);
         }
 

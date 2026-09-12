@@ -108,8 +108,6 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         _f = f;
         _cr = cr;
         _strategy = ParseStrategy(strategy);
-
-        WarnExperimentalArgument("DifferentialEvolutionSampler");
     }
 
     private static DeStrategy ParseStrategy(string strategy)
@@ -356,9 +354,4 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
                 WarningCategory.UserWarning);
         _independentSampler.AfterTrial(study, trial, state, values);
     }
-
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 }

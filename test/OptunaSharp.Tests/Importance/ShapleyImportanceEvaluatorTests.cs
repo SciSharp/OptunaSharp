@@ -109,10 +109,13 @@ public class ShapleyImportanceEvaluatorTests
         importances.Should().BeEmpty();
     }
 
+    // [Misaligned] Optuna decorates the class with @experimental_class("3.0.0"), which raises an
+    // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats this
+    // evaluator as stable, so no ExperimentalWarning is emitted — this guards that divergence.
     [TestMethod]
-    public void Constructor_RaisesExperimentalWarning()
+    [Misaligned]
+    public void Constructor_DoesNotRaiseExperimentalWarning()
     {
-        // Optuna decorates the class with @experimental_class("3.0.0").
         var raised = new List<(string Message, WarningCategory Category)>();
         void Handler(string m, WarningCategory c) => raised.Add((m, c));
 
@@ -126,10 +129,7 @@ public class ShapleyImportanceEvaluatorTests
             OptunaWarnings.WarningRaised -= Handler;
         }
 
-        raised.Should().ContainSingle(w =>
-            w.Category == WarningCategory.ExperimentalWarning &&
-            w.Message == "ShapleyImportanceEvaluator is experimental (supported from v3.0.0). " +
-                         "The interface can change in the future.");
+        raised.Should().NotContain(w => w.Category == WarningCategory.ExperimentalWarning);
     }
 
     [TestMethod]

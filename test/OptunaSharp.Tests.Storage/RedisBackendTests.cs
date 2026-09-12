@@ -15,8 +15,6 @@ namespace OptunaSharp.Tests.Storage;
 [TestCategory("Integration")]
 public class StackExchangeBackendTests : JournalBackendContractTests
 {
-    protected override string ExperimentalTypeName => "StackExchangeJournalRedisBackend";
-
     protected override BaseJournalBackend Create(string prefix, bool useCluster = false)
         => new StackExchangeJournalRedisBackend(RedisSession.Url, useCluster, prefix);
 
@@ -63,8 +61,6 @@ public class StackExchangeBackendTests : JournalBackendContractTests
 [TestCategory("Integration")]
 public class NRedisStackBackendTests : JournalBackendContractTests
 {
-    protected override string ExperimentalTypeName => "NRedisStackJournalRedisBackend";
-
     protected override BaseJournalBackend Create(string prefix, bool useCluster = false)
         => new NRedisStackJournalRedisBackend(RedisSession.Url, useCluster, prefix);
 
@@ -111,8 +107,6 @@ public class NRedisStackBackendTests : JournalBackendContractTests
 [TestCategory("Integration")]
 public class ServiceStackBackendTests : JournalBackendContractTests
 {
-    protected override string ExperimentalTypeName => "ServiceStackJournalRedisBackend";
-
     protected override BaseJournalBackend Create(string prefix, bool useCluster = false)
         => new ServiceStackJournalRedisBackend(RedisSession.Url, useCluster, prefix);
 

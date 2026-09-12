@@ -101,9 +101,9 @@ public class NRedisStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSn
     /// <summary>Shared core: every public constructor funnels here (so all raise the experimental warning).</summary>
     private NRedisStackJournalRedisBackend(IConnectionMultiplexer connection, string url, bool useCluster, string prefix)
     {
-        OptunaWarnings.Warn(
-            RedisJournalProtocol.ExperimentalWarning(nameof(NRedisStackJournalRedisBackend)),
-            WarningCategory.ExperimentalWarning);
+        // Optuna decorates JournalRedisBackend with @experimental_class("3.1.0"), which raises an
+        // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats
+        // it as stable, so that warning is intentionally omitted (deliberate divergence).
         _url = url;
         _connection = connection;
         _useCluster = useCluster;

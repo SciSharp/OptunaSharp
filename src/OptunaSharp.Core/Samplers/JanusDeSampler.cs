@@ -148,8 +148,6 @@ public sealed class JanusDeSampler : BaseSampler
         _gnPseudoMode = gnPseudoMode ?? pseudoMode;
         _pseudoTarget = pseudoTarget;
         _pcaK = pcaK;
-
-        WarnExperimentalArgument("JanusDeSampler");
     }
 
     private static DeStrategy ParseStrategy(string strategy)
@@ -247,9 +245,4 @@ public sealed class JanusDeSampler : BaseSampler
                 result.Add(t);
         return result;
     }
-
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 }

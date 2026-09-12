@@ -136,13 +136,4 @@ internal static class GrpcProto
             trialId: (int)trial.TrialId,
             values: trial.Values.Count > 0 ? trial.Values.ToList() : null);
     }
-
-    // ---------------------------------------------------------------- experimental warning text
-
-    /// <summary>
-    ///     The verbatim <c>@experimental_class</c>/<c>@experimental_func</c> message text from
-    ///     <c>optuna/_experimental.py</c> (gRPC storage proxy is experimental since Optuna v4.2.0).
-    /// </summary>
-    internal static string ExperimentalMessage(string name, string version)
-        => $"{name} is experimental (supported from v{version}). The interface can change in the future.";
 }

@@ -720,18 +720,20 @@ public abstract class EFCoreRdbStorageTestsBase
             .WithMessage("Specify only one of `heartbeat_stale_trial_callback` and `failed_trial_callback`.");
     }
 
+    // [Misaligned] Optuna raises an ExperimentalWarning (warn_experimental_argument) for
+    // heartbeat_interval. OptunaSharp targets the Optuna 5.x surface and treats it as stable, so no
+    // ExperimentalWarning is emitted — this guards that deliberate divergence.
     [TestMethod]
     [TestCategory("Integration")]
-    public void Heartbeat_Interval_EmitsExperimentalWarning()
+    [TestCategory("Misaligned")]
+    public void Heartbeat_Interval_DoesNotEmitExperimentalWarning()
     {
         var warnings = CaptureWarnings(() =>
         {
             using var _ = new RDBStorage(Provider, ConnectionString, new EFCoreRdbOptions { HeartbeatInterval = 2 });
         });
 
-        warnings.Should().Contain(w =>
-            w.Category == WarningCategory.ExperimentalWarning &&
-            w.Message.Contains("heartbeat_interval") && w.Message.Contains("experimental feature"));
+        warnings.Should().NotContain(w => w.Category == WarningCategory.ExperimentalWarning);
     }
 
     [TestMethod]

@@ -175,8 +175,6 @@ public sealed class JanusSampler : BaseSampler
         _cmixMode = cmixMode;
         _cmixCandidateFrac = cmixCandidateFrac;
         _cmixCandidateCenter = cmixCandidateCenter;
-
-        WarnExperimentalArgument("JanusSampler");
     }
 
     public override void ReseedRng()
@@ -276,9 +274,4 @@ public sealed class JanusSampler : BaseSampler
 
     /// <summary>Number of encoded (transformed) dimensions — Float/Int each encode to one column.</summary>
     private static int CountEncodedDims(OrderedDict<string, BaseDistribution> searchSpace) => searchSpace.Count;
-
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 }

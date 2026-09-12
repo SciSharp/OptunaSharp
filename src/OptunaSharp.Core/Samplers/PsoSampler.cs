@@ -129,8 +129,6 @@ public sealed class PsoSampler : BaseSampler
         _c1 = c1;
         _c2 = c2;
         _maxVelocityRate = maxVelocityRate;
-
-        WarnExperimentalArgument("PsoSampler");
     }
 
     public override void ReseedRng()
@@ -370,9 +368,4 @@ public sealed class PsoSampler : BaseSampler
                 WarningCategory.UserWarning);
         _independentSampler.AfterTrial(study, trial, state, values);
     }
-
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 }

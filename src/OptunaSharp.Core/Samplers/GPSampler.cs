@@ -110,8 +110,8 @@ public class GPSampler : BaseSampler
                 string.Format(Deprecations.Template, "`constraints_func`", "5.0.0", "7.0.0")
                 + " Use `optuna.trial.Trial.set_constraint` instead.",
                 WarningCategory.FutureWarning);
-        if (deterministicObjective)
-            WarnExperimentalArgument("deterministic_objective");
+        // Optuna raises an ExperimentalWarning (warn_experimental_argument) for deterministic_objective.
+        // OptunaSharp targets the Optuna 5.x surface and treats it as stable, so it is omitted.
     }
 
     public override void ReseedRng()
@@ -623,10 +623,4 @@ public class GPSampler : BaseSampler
             };
         return dict;
     }
-
-    /// <summary>Python <c>optuna._experimental.warn_experimental_argument</c>.</summary>
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 }

@@ -25,9 +25,10 @@ namespace OptunaSharp.Samplers;
 ///
 ///     <para><b>Parity.</b> The default path stays in exact MT19937 lock-step with Optuna (generation
 ///     attribution, parent cache, tournament/crossover/mutation draws, and the niching
-///     <c>rng.shuffle</c>). Objective-value niching is bit-exact except for a ~1-ULP managed-vs-LAPACK
-///     drift in the hyperplane-fit solve, which only changes selection when it flips a niche decision
-///     within ULPs of a tie — see the <c>[Misaligned]</c> note on
+///     <c>rng.shuffle</c>), and objective-value niching is bit-exact: the hyperplane-fit
+///     <c>matrix_rank</c>/<c>solve</c> route through NumSharp's OpenBLAS LAPACK backend (byte-identical
+///     to NumPy), so the earlier ~1-ULP managed-LU drift is gone. Confirmed byte-for-byte over a
+///     400-config differential plus the live parity seeds — see
 ///     <see cref="NSGAIIIElitePopulationSelectionStrategy" />.</para>
 ///
 ///     <para><b>Conditional parameters (OptunaSharp extension).</b> Optuna's GA samplers evolve only the
@@ -112,10 +113,9 @@ public class NSGAIIISampler : BaseGASampler
         ConditionalParams? conditionalParams = null)
         : base(populationSize)
     {
-        // @experimental_class("3.2.0") wraps __init__ and warns before any validation runs.
-        OptunaWarnings.Warn(
-            "NSGAIIISampler is experimental (supported from v3.2.0). The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
+        // Optuna decorates NSGAIIISampler with @experimental_class("3.2.0"), which raises an
+        // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats
+        // this sampler as stable, so that warning is intentionally omitted (deliberate divergence).
 
         // TODO(ohta): Reconsider the default value of each parameter.
         if (populationSize < 2)

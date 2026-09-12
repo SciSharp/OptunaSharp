@@ -53,9 +53,9 @@ public class QMCSampler : BaseSampler
         bool warnAsynchronousSeeding = true,
         bool warnIndependentSampling = true)
     {
-        OptunaWarnings.Warn(
-            "QMCSampler is experimental (supported from v3.0.0). The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
+        // Optuna decorates QMCSampler with @experimental_class("3.0.0"), which raises an
+        // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats
+        // this sampler as stable, so that warning is intentionally omitted (deliberate divergence).
 
         if (qmcType is "halton" or "sobol")
             _qmcType = qmcType;

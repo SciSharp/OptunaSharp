@@ -69,10 +69,6 @@ public sealed class JanusAgeMoea2CmixSampler : AgeMoea2Sampler
         _cmix = new Janus.JanusMooCmix(
             populationSize, seed, cmixProb, cmixWindow, cmixRidge, cmixLambda, cmixSigma,
             cmixStartGeneration, cmixStartTrial, componentAttr, scalarFallback);
-
-        OptunaWarnings.Warn(
-            "Argument ``JanusAgeMoea2CmixSampler`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
     }
 
     public override OrderedDict<string, object?> SampleRelative(

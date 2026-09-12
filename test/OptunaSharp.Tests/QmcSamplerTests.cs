@@ -231,8 +231,12 @@ public class QmcSamplerTests
         act.Should().Throw<ValueError>().WithMessage("*halton*sobol*");
     }
 
+    // [Misaligned] Optuna decorates QMCSampler with @experimental_class("3.0.0"), which raises an
+    // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats this
+    // sampler as stable, so no ExperimentalWarning is emitted — this guards that deliberate divergence.
     [TestMethod]
-    public void Construction_EmitsExperimentalWarning()
+    [Misaligned]
+    public void Construction_DoesNotEmitExperimentalWarning()
     {
         string? captured = null;
         void Handler(string msg, WarningCategory cat)
@@ -251,8 +255,7 @@ public class QmcSamplerTests
             OptunaWarnings.WarningRaised -= Handler;
         }
 
-        captured.Should().NotBeNull();
-        captured.Should().Contain("experimental");
+        captured.Should().BeNull();
     }
 
     [DataTestMethod]

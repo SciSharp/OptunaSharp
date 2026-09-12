@@ -100,8 +100,6 @@ public class JanusMooCmixSampler : NSGAIISampler
         _cmix = new Janus.JanusMooCmix(
             populationSize, seed, cmixProb, cmixWindow, cmixRidge, cmixLambda, cmixSigma,
             cmixStartGeneration, cmixStartTrial, componentAttr, scalarFallback);
-
-        WarnExperimentalArgument("JanusMooCmixSampler");
     }
 
     public override OrderedDict<string, object?> SampleRelative(
@@ -112,9 +110,4 @@ public class JanusMooCmixSampler : NSGAIISampler
         var nsgaParams = base.SampleRelative(study, trial, searchSpace);
         return _cmix.Apply(study, trial, searchSpace, nsgaParams);
     }
-
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 }

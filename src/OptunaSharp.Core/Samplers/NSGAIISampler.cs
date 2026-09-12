@@ -105,12 +105,9 @@ public class NSGAIISampler : BaseGASampler
             OptunaWarnings.Warn(
                 $"{msg} Use `optuna.trial.Trial.set_constraint` instead.", WarningCategory.FutureWarning);
         }
-        if (afterTrialStrategy is not null)
-            WarnExperimentalArgument("after_trial_strategy");
-        if (childGenerationStrategy is not null)
-            WarnExperimentalArgument("child_generation_strategy");
-        if (elitePopulationSelectionStrategy is not null)
-            WarnExperimentalArgument("elite_population_selection_strategy");
+        // Optuna raises an ExperimentalWarning (warn_experimental_argument) for after_trial_strategy,
+        // child_generation_strategy and elite_population_selection_strategy. OptunaSharp targets the
+        // Optuna 5.x surface and treats these as stable, so those warnings are intentionally omitted.
 
         crossover ??= new UniformCrossover(swappingProb);
 
@@ -200,10 +197,4 @@ public class NSGAIISampler : BaseGASampler
         _afterTrialStrategy(study, trial, state, values);
         _randomSampler.AfterTrial(study, trial, state, values);
     }
-
-    /// <summary>Python <c>optuna._experimental.warn_experimental_argument</c>.</summary>
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 }

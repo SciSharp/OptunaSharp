@@ -138,10 +138,9 @@ public class RveaSampler : BaseGASampler
         if (nMaxGenerations < 1)
             throw new ValueError("`n_max_generations` must be greater than or equal to 1.");
 
-        if (afterTrialStrategy is not null)
-            WarnExperimentalArgument("after_trial_strategy");
-        if (childGenerationStrategy is not null)
-            WarnExperimentalArgument("child_generation_strategy");
+        // Optuna raises ExperimentalWarnings for after_trial_strategy / child_generation_strategy and
+        // for RveaSampler itself; OptunaSharp targets the Optuna 5.x surface and treats them as stable,
+        // so those warnings are intentionally omitted (deliberate divergence).
 
         // RVEA's classic operators (pymoo defaults): SBX(eta=30) + polynomial mutation(eta=20).
         crossover ??= new SBXCrossover(eta: 30.0);
@@ -171,8 +170,6 @@ public class RveaSampler : BaseGASampler
                 conditionalParams).Generate;
         _afterTrialStrategy = afterTrialStrategy
             ?? new NSGAIIAfterTrialStrategy(null).Call;
-
-        WarnExperimentalArgument("RveaSampler");
     }
 
     public override void ReseedRng()
@@ -288,9 +285,4 @@ public class RveaSampler : BaseGASampler
         _apdSurvival = new RveaApdSurvival(referenceVectors, _alpha, _adaptFreq, _nMaxGenerations);
         PopulationSize = _apdSurvival.RefCount;
     }
-
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 }

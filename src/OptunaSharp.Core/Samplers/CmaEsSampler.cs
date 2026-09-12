@@ -121,11 +121,9 @@ public class CmaEsSampler : BaseSampler
 
         _attrPrefix = useSeparableCma ? "sepcma:" : withMargin ? "cmawm:" : "cma:";
 
-        if (considerPrunedTrials) WarnExperimentalArgument("consider_pruned_trials");
-        if (useSeparableCma) WarnExperimentalArgument("use_separable_cma");
-        if (sourceTrials != null) WarnExperimentalArgument("source_trials");
-        if (withMargin) WarnExperimentalArgument("with_margin");
-        if (lrAdapt) WarnExperimentalArgument("lr_adapt");
+        // Optuna raises an ExperimentalWarning (warn_experimental_argument) for consider_pruned_trials,
+        // use_separable_cma, source_trials, with_margin and lr_adapt. OptunaSharp targets the Optuna 5.x
+        // surface and treats these as stable, so those warnings are intentionally omitted.
 
         if (sourceTrials != null && (x0 != null || sigma0 != null))
             throw new ValueError(
@@ -541,10 +539,4 @@ public class CmaEsSampler : BaseSampler
                 WarningCategory.UserWarning);
         _independentSampler.AfterTrial(study, trial, state, values);
     }
-
-    /// <summary>Python <c>optuna._experimental.warn_experimental_argument</c>.</summary>
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 }

@@ -179,14 +179,17 @@ public class NsgaiiSamplerTests
         captured.Should().Contain("constraints_func");
     }
 
+    // [Misaligned] Optuna raises an ExperimentalWarning (warn_experimental_argument) for
+    // after_trial_strategy. OptunaSharp targets the Optuna 5.x surface and treats it as stable, so no
+    // ExperimentalWarning is emitted — this guards that deliberate divergence.
     [TestMethod]
-    public void ExperimentalAfterTrialStrategy_EmitsExperimentalWarning()
+    [Misaligned]
+    public void ExperimentalAfterTrialStrategy_DoesNotEmitExperimentalWarning()
     {
         string? captured = CaptureWarning(
             WarningCategory.ExperimentalWarning,
             () => new NSGAIISampler(afterTrialStrategy: (_, _, _, _) => { }));
-        captured.Should().NotBeNull();
-        captured.Should().Contain("after_trial_strategy");
+        captured.Should().BeNull();
     }
 
     // ---- polynomial mutation degenerate case --------------------------------------------------

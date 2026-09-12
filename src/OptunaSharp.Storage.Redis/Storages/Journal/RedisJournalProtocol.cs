@@ -30,11 +30,4 @@ public static class RedisJournalProtocol
     public const string AppendLogScript =
         "local i = redis.call('incr', string.format('%s:log_number', ARGV[1])) " +
         "redis.call('set', string.format('%s:log:%d', ARGV[1], i), ARGV[2])";
-
-    /// <summary>
-    ///     The Optuna <c>@experimental_class("3.1.0")</c> warning message for a given backend type
-    ///     name (each client backend passes its own class name).
-    /// </summary>
-    public static string ExperimentalWarning(string typeName) =>
-        $"{typeName} is experimental (supported from v3.1.0). The interface can change in the future.";
 }

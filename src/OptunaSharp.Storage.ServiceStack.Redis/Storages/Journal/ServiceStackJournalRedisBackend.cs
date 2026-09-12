@@ -120,9 +120,9 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// <summary>Shared core: every public constructor funnels here (so all raise the experimental warning).</summary>
     private ServiceStackJournalRedisBackend(IRedisClientsManager manager, string url, bool useCluster, string prefix)
     {
-        OptunaWarnings.Warn(
-            RedisJournalProtocol.ExperimentalWarning(nameof(ServiceStackJournalRedisBackend)),
-            WarningCategory.ExperimentalWarning);
+        // Optuna decorates JournalRedisBackend with @experimental_class("3.1.0"), which raises an
+        // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats
+        // it as stable, so that warning is intentionally omitted (deliberate divergence).
         _url = url;
         _manager = manager;
         _useCluster = useCluster;

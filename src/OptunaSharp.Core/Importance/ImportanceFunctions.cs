@@ -78,9 +78,9 @@ public static class ImportanceFunctions
             return result;
         }
 
-        OptunaWarnings.Warn(
-            "Argument ``normalize`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
+        // Optuna raises an ExperimentalWarning (warn_experimental_argument) on the non-default
+        // normalize=false path. OptunaSharp targets the Optuna 5.x surface and treats it as stable,
+        // so that warning is intentionally omitted (deliberate divergence).
         return res;
     }
 }

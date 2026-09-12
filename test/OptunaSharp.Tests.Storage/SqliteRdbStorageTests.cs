@@ -486,17 +486,19 @@ public class SqliteRdbStorageTests
             .WithMessage("The value of `grace_period` should be a positive integer.");
     }
 
+    // [Misaligned] Optuna raises an ExperimentalWarning (warn_experimental_argument) for
+    // heartbeat_interval. OptunaSharp targets the Optuna 5.x surface and treats it as stable, so no
+    // ExperimentalWarning is emitted — this guards that deliberate divergence.
     [TestMethod]
-    public void Heartbeat_Interval_EmitsExperimentalWarning()
+    [TestCategory("Misaligned")]
+    public void Heartbeat_Interval_DoesNotEmitExperimentalWarning()
     {
         var warnings = CaptureWarnings(() =>
         {
             using var _ = new RDBStorage("sqlite:///:memory:", new SqliteRdbOptions { HeartbeatInterval = 2 });
         });
 
-        warnings.Should().Contain(w =>
-            w.Category == WarningCategory.ExperimentalWarning &&
-            w.Message.Contains("heartbeat_interval") && w.Message.Contains("experimental feature"));
+        warnings.Should().NotContain(w => w.Category == WarningCategory.ExperimentalWarning);
     }
 
     [TestMethod]

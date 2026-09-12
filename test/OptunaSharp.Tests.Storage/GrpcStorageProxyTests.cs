@@ -202,8 +202,12 @@ public class GrpcStorageProxyTests
         _proxy.GetAllTrials(sid, states: new[] { TrialState.Complete }).Should().HaveCount(1);
     }
 
+    // [Misaligned] Optuna decorates GrpcStorageProxy with @experimental_class("4.2.0"), which raises an
+    // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats it as
+    // stable, so no ExperimentalWarning is emitted — this guards that deliberate divergence.
     [TestMethod]
-    public void Constructor_RaisesExperimentalWarning()
+    [TestCategory("Misaligned")]
+    public void Constructor_DoesNotRaiseExperimentalWarning()
     {
         var raised = new List<(string Message, WarningCategory Category)>();
         void Handler(string m, WarningCategory c) => raised.Add((m, c));
@@ -218,9 +222,7 @@ public class GrpcStorageProxyTests
             OptunaWarnings.WarningRaised -= Handler;
         }
 
-        raised.Should().ContainSingle(x =>
-            x.Category == WarningCategory.ExperimentalWarning &&
-            x.Message.Contains("GrpcStorageProxy is experimental (supported from v4.2.0)"));
+        raised.Should().NotContain(x => x.Category == WarningCategory.ExperimentalWarning);
     }
 
     [TestMethod]

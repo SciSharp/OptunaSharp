@@ -242,7 +242,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         {
             if (options.HeartbeatInterval <= 0)
                 throw new ValueError("The value of `heartbeat_interval` should be a positive integer.");
-            WarnExperimentalArgument("heartbeat_interval");
+            // Optuna raises an ExperimentalWarning (warn_experimental_argument) for heartbeat_interval.
+            // OptunaSharp targets the Optuna 5.x surface and treats it as stable, so it is omitted.
         }
         if (options.GracePeriod is not null and <= 0)
             throw new ValueError("The value of `grace_period` should be a positive integer.");
@@ -256,12 +257,6 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
                 "Use `heartbeat_stale_trial_callback` instead.",
                 WarningCategory.FutureWarning);
     }
-
-    /// <summary>Python <c>optuna._experimental.warn_experimental_argument</c>.</summary>
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 
     private static string FillStorageUrlTemplate(string template)
         => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(RdbModels.Inv));

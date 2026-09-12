@@ -42,11 +42,9 @@ public sealed class ShapleyImportanceEvaluator : BaseImportanceEvaluator
     /// <param name="seed">Seed for the random forest.</param>
     public ShapleyImportanceEvaluator(int nTrees = 64, int maxDepth = 64, int? seed = null)
     {
-        // Optuna decorates the class with @experimental_class("3.0.0").
-        OptunaWarnings.Warn(
-            "ShapleyImportanceEvaluator is experimental (supported from v3.0.0). " +
-            "The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
+        // Optuna decorates the class with @experimental_class("3.0.0"), which raises an
+        // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats
+        // this evaluator as stable, so that warning is intentionally omitted (deliberate divergence).
 
         _nTrees = nTrees;
         _maxDepth = maxDepth;

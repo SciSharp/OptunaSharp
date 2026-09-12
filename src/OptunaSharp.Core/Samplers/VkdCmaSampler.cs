@@ -113,9 +113,6 @@ public sealed class VkdCmaSampler : BaseSampler
         _popsize = popsize;
         _kInit = kInit;
         _kAdapt = kAdapt;
-
-        WarnExperimentalArgument("VkdCmaSampler");
-        if (considerPrunedTrials) WarnExperimentalArgument("consider_pruned_trials");
     }
 
     public override void ReseedRng()
@@ -355,9 +352,4 @@ public sealed class VkdCmaSampler : BaseSampler
                 WarningCategory.UserWarning);
         _independentSampler.AfterTrial(study, trial, state, values);
     }
-
-    private static void WarnExperimentalArgument(string name)
-        => OptunaWarnings.Warn(
-            $"Argument ``{name}`` is an experimental feature. The interface can change in the future.",
-            WarningCategory.ExperimentalWarning);
 }

@@ -98,10 +98,9 @@ public static class GrpcProxyServer
         Action<GrpcServiceOptions>? configureGrpc = null,
         Action<WebApplicationBuilder>? configureBuilder = null)
     {
-        OptunaWarnings.Warn(
-            GrpcProto.ExperimentalMessage(nameof(RunGrpcProxyServer), "4.2.0"),
-            WarningCategory.ExperimentalWarning);
-
+        // Optuna decorates run_grpc_proxy_server with @experimental_func("4.2.0"), which raises an
+        // ExperimentalWarning on call. OptunaSharp targets the Optuna 5.x surface and treats it as
+        // stable, so that warning is intentionally omitted (deliberate divergence).
         var app = MakeServer(storage, host, port, configureGrpc, configureBuilder);
         app.Start();
         _logger.Info($"Server started at {host}:{port}");
