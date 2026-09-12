@@ -2,8 +2,8 @@ namespace OptunaSharp;
 
 /// <summary>
 ///     Version metadata for OptunaSharp — the .NET port of Optuna. This mirrors Optuna's
-///     <c>optuna/version.py</c> (<c>__version__</c>) and is deliberately the only symbol in the
-///     scaffolding: no Optuna algorithms are ported yet.
+///     <c>optuna/version.py</c> (<c>__version__</c>): the package version and the Optuna release
+///     this port tracks as its behavioral source of truth.
 /// </summary>
 public static class OptunaSharpVersion
 {

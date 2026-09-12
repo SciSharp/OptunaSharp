@@ -5,10 +5,15 @@ hyperparameter-optimization framework — targeting **1-to-1 API and behavioral 
 Optuna 5.x**. It is a [SciSharp STACK](https://github.com/SciSharp) project and builds on
 [NumSharp](https://github.com/SciSharp/NumSharp) for numerical work.
 
-> **Status: scaffolding.** This repository currently contains the *infrastructure* only — solution,
-> projects, strong-naming, tests, pythonnet interop harness, benchmark harness, packaging, DocFX
-> docs, and CI/CD. **No Optuna algorithms are ported yet.** The pipeline is green from day one so the
-> port can grow incrementally against it.
+> **Status: core surface ported.** The build/test/package/CI pipeline has been green from day one, and
+> the port has grown well past scaffolding: the define-by-run core (Study / Trial / Distributions /
+> Storages), the sampler suite (Random / Grid / TPE / CMA-ES / GP / QMC / BruteForce / NSGA-II / III,
+> plus beyond-Optuna AGE-MOEA-2 / SMS-EMOA / LM-CMA / JANUS), all pruners, importance (fANOVA / MDI /
+> PED-ANOVA / SHAP), terminator, the visualization data layer, and optional satellite packages
+> (SQLite / EF Core / gRPC / Redis storage, cloud artifacts, Plotly viz, LightGBM / ML.NET / sklearn
+> integration, an `optunasharp` CLI, and pythonnet bridges to OptunaHub / BoTorch / PyCma). This file
+> (`CLAUDE.md`) still documents the **infrastructure**; see [`docs/PORTING_PLAN.md`](../docs/PORTING_PLAN.md)
+> for the phase-by-phase algorithm status.
 
 **The port is governed by [`docs/PORTING_PLAN.md`](../docs/PORTING_PLAN.md)** — the authoritative
 roadmap (phases, package map, per-phase gates, timeline, risk register). Read it before porting any
@@ -20,9 +25,9 @@ to build and in what order**.
 ## Reference sources
 
 - **Optuna (the source of truth):** a full clone lives at `K:/source/optuna` (pinned in the plan) and
-  is **vendored in-repo as a pinned git submodule at `src/optuna`** (`github.com/optuna/optuna` @
-  `f6898da`, v5.0.0.dev) — mirrors NumSharp's `src/numpy`, so the reference source restores
-  reproducibly from a clean checkout (`git submodule update --init src/optuna`). Use it as the
+  is **vendored in-repo as a pinned git submodule at `refs/optuna`** (`github.com/optuna/optuna` @
+  `f6898da`, v5.0.0.dev) — alongside the other reference-only submodules, so the reference source restores
+  reproducibly from a clean checkout (`git submodule update --init refs/optuna`). Use it as the
   authoritative reference for API behavior, edge cases, defaults, and error messages. **Run actual
   Python/Optuna first, observe, then replicate in C#.**
 - **rustuna (accelerator reference):** `K:/source/rustuna` — a Rust Optuna port, useful for the
@@ -79,13 +84,13 @@ Four load-bearing rules from the plan that infra must respect (full detail in
 ```
 OptunaSharp/
 ├── src/
-│   ├── OptunaSharp.Core/            # THE package — OptunaSharp (net8.0;net10.0). Empty scaffolding today.
+│   ├── OptunaSharp.Core/            # THE package — OptunaSharp (net8.0;net10.0). The pure-managed library.
 │   │   ├── OptunaSharp.Core.csproj  #   packable; PackageIcon; NuGet NumSharp + OpenBLAS reference
 │   │   ├── Assembly/Properties.cs   #   InternalsVisibleTo (must carry PublicKey) + friend-key const
-│   │   ├── Version.cs               #   OptunaSharp.OptunaSharpVersion (the only public symbol so far)
+│   │   ├── Version.cs               #   OptunaSharp.OptunaSharpVersion (the version constant)
 │   │   └── README.md                #   packed into the .nupkg
-│   └── optuna/                      # pinned git submodule — Optuna @ f6898da (v5.0.0.dev), the porting reference
-├── refs/                            # reference-only pinned submodules (NOT built) — NumSharp @ v0.70.0, optunahub, optuna-integration, shap, scikit-learn
+│   └── OptunaSharp.*/               # optional satellite packages — Storage.{Sqlite,EFCore,Grpc,Redis,…}, Visualization.Plotly, Integration.{LightGbm,ML.NET}, Interop.{pythonnet,BoTorch,PyCma}, Artifacts.{S3,Gcs,AzureBlob,R2}, Cli
+├── refs/                            # reference-only pinned submodules (NOT built) — optuna @ f6898da (v5.0.0.dev, the porting reference), NumSharp @ v0.70.0, optunahub, optuna-integration, shap, scikit-learn
 ├── test/
 │   ├── OptunaSharp.Tests/           # unit tests — MSTest v3 + AwesomeAssertions
 │   ├── OptunaSharp.Tests.Interop/   # LIVE-Optuna parity harness (pythonnet)
@@ -218,9 +223,12 @@ reference it) uses the string form `[TestCategory("RequiresPython")]`.
 
 ### Unit tests (`OptunaSharp.Tests`)
 
-Smoke tests today (`ScaffoldingTests.cs`): the assembly loads and is strong-named with token
-`cc7b13ffcd2ddd51`, the version metadata is present, and the NumSharp dependency resolves and runs
-(`np.arange(6).reshape(2,3)`). As modules land, add tests derived from real Optuna output.
+The suite now spans distributions, samplers, pruners, storages, importance, terminator, visualization
+data, and the sklearn integration — all asserted against values produced by real Optuna. The original
+`ScaffoldingTests.cs` remains as the assembly-identity smoke test: the assembly loads and is
+strong-named with token `cc7b13ffcd2ddd51`, the version metadata is present, and the NumSharp
+dependency resolves and runs (`np.arange(6).reshape(2,3)`). Keep adding tests derived from real Optuna
+output as modules land.
 
 ### Live-Optuna interop (`OptunaSharp.Tests.Interop`)
 
