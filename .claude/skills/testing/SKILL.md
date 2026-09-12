@@ -136,7 +136,7 @@ container across the 3-OS matrix.
 
 ## 8. Adding a test — Definition of Done
 
-1. **Read the Optuna source** (`src/optuna`) and **run it** to capture exact behavior — tests assert
+1. **Read the Optuna source** (`refs/optuna`) and **run it** to capture exact behavior — tests assert
    against real Optuna output, ideally live.
 2. Match signatures/names/order/defaults, edge cases (NaN, single-value dists, dynamic spaces,
    None/categorical), and **verbatim error messages/types**.

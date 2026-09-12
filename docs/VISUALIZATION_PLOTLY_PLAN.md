@@ -21,7 +21,7 @@
 > [Plotly.NET](https://plotly.net/), driven from **raw C#** (bare `Trace`/`Layout` objects + the
 > `DynamicObj` escape hatch — not the F# DSL, not the `Chart2D` sugar). One Tier X satellite package,
 > pure managed. Port target: `optuna.visualization` (the plotly backend), Optuna @ `f6898da`
-> (v5.0.0.dev, vendored at `src/optuna`).
+> (v5.0.0.dev, vendored at `refs/optuna`).
 
 ---
 

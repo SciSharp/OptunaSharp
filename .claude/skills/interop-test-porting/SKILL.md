@@ -21,8 +21,8 @@ pinning the specific patterns battle-tested code depends on.
 
 - `gh` is authed via keyring — always call it with ambient tokens unset:
   `env -u GH_TOKEN -u GITHUB_TOKEN gh …` (the helper script does this for you).
-- Live Optuna: `python` → optuna **5.0.0.dev** (must match the vendored `src/optuna` submodule; the
-  interop suite installs `pip install -e src/optuna`). libpython for pythonnet:
+- Live Optuna: `python` → optuna **5.0.0.dev** (must match the vendored `refs/optuna` submodule; the
+  interop suite installs `pip install -e refs/optuna`). libpython for pythonnet:
   `PYTHONNET_PYDLL=C:/Users/ELI/.claude/python/python312.dll`.
 - Core principle: **run real Optuna first, observe, then replicate.** Reproducibility under a fixed
   seed must be bit-identical (that's the whole point of the MT19937 RNG discipline).

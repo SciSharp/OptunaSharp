@@ -158,14 +158,14 @@ jobs:
     - name: Install vendored Optuna (5.0.0.dev) + live-oracle deps
       shell: bash
       run: |
-        # The C# port is validated against the VENDORED optuna (src/optuna submodule, 5.0.0.dev), NOT
+        # The C# port is validated against the VENDORED optuna (refs/optuna submodule, 5.0.0.dev), NOT
         # PyPI optuna — a version mismatch makes the differential oracle assert against the wrong impl.
-        git submodule update --init src/optuna
+        git submodule update --init refs/optuna
         python -m pip install --upgrade pip
         # Pin numpy to 2.4.2: its wheel bundles the exact scipy-openblas the NumSharp OpenBLAS natives
         # mirror, so BLAS-backed oracles (np.linalg / CMA-ES eigh) stay byte-identical to C#.
         python -m pip install "numpy==2.4.2"
-        python -m pip install -e src/optuna
+        python -m pip install -e refs/optuna
         # Backends the parity tests drive LIVE: torch (GPSampler), cmaes (CmaEsSampler), scikit-learn
         # (fANOVA / importance), matplotlib (visualization). CPU-only torch on Linux keeps the download
         # small. scikit-learn is PINNED to 1.8.0: the native fANOVA/MDI forests are a byte-for-byte port
@@ -185,7 +185,7 @@ jobs:
         # compared against the exact optuna_integration source it ports. Linux-only: byte-parity is the SAME
         # botorch driven on both sides and is CPU-deterministic / OS-independent, so one OS gates it — macOS
         # (10x runner minutes) and Windows self-skip (RequireBoTorchOrInconclusive → Inconclusive). --no-deps
-        # keeps the vendored optuna (src/optuna, 5.0.0.dev) from being replaced by a PyPI optuna.
+        # keeps the vendored optuna (refs/optuna, 5.0.0.dev) from being replaced by a PyPI optuna.
         if [ "$RUNNER_OS" = "Linux" ]; then
           git submodule update --init refs/optuna-integration
           python -m pip install botorch

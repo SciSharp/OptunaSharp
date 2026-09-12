@@ -14,7 +14,7 @@ namespace OptunaSharp.Tests.Storage;
 ///     Schema-migration tests for the SQLite <see cref="RDBStorage" /> (Phase 4.1 deferred sub-item:
 ///     the alembic upgrade chain). These are the OptunaSharp analogue of Optuna's own
 ///     <c>tests/storages_tests/rdb_tests/test_storage.py</c> upgrade tests: they replay each committed
-///     per-version database asset (<c>src/optuna/.../test_upgrade_assets/{version}.db</c>) through
+///     per-version database asset (<c>refs/optuna/.../test_upgrade_assets/{version}.db</c>) through
 ///     <see cref="RDBStorage.Upgrade" /> and assert it lands at head and reads back correctly. No
 ///     Python is needed — the assets are checked into the vendored Optuna submodule, and
 ///     <c>Microsoft.Data.Sqlite</c> bundles the engine.
@@ -214,6 +214,6 @@ public class SqliteRdbUpgradeTests
         if (dir is null)
             throw new DirectoryNotFoundException("Could not locate the repository root (SciSharp.OptunaSharp.sln).");
         return Path.Combine(
-            dir, "src", "optuna", "tests", "storages_tests", "rdb_tests", "test_upgrade_assets");
+            dir, "refs", "optuna", "tests", "storages_tests", "rdb_tests", "test_upgrade_assets");
     }
 }

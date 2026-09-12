@@ -6,7 +6,7 @@ Runs real Optuna + the actual optuna_integration.shap.ShapleyImportanceEvaluator
 resulting importances as raw IEEE-754 bits so OptunaSharp.Tests.Integration.Shap can assert
 bit-for-bit equality with NO Python at test time.
 
-Pinned reference: optuna 5.0.0.dev (vendored, `pip install -e src/optuna`), optuna_integration
+Pinned reference: optuna 5.0.0.dev (vendored, `pip install -e refs/optuna`), optuna_integration
 5.1.0.dev, shap 0.52.0, scikit-learn 1.8.0, numpy 2.4.2 (x64). Rerun after bumping any of those:
 
     python test/OptunaSharp.Tests.Integration.Shap/oracle/gen_shap_oracle.py

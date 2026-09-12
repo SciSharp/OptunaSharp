@@ -9,7 +9,7 @@ namespace OptunaSharp.Tests.Interop;
 ///     The differential gate for the SQLite schema-migration chain (Phase 4.1's deferred alembic
 ///     upgrade): OptunaSharp's <see cref="RDBStorage.Upgrade" /> must transform an old database into
 ///     <b>byte-for-byte the same file</b> that Python Optuna's <c>alembic upgrade head</c> produces.
-///     For every committed per-version asset (<c>src/optuna/.../test_upgrade_assets/{version}.db</c>)
+///     For every committed per-version asset (<c>refs/optuna/.../test_upgrade_assets/{version}.db</c>)
 ///     each side upgrades its own copy and the two results are compared table-by-table — column
 ///     layout (<c>PRAGMA table_info</c>), indexes, foreign keys and every row — the only excused
 ///     divergence being <c>version_info.library_version</c> (OptunaSharp self-identifies there, as it
@@ -135,7 +135,7 @@ public class SqliteRdbUpgradeInteropParityTests : OptunaInteropTestBase
         if (dir is null)
             throw new DirectoryNotFoundException("Could not locate the repository root (SciSharp.OptunaSharp.sln).");
         return Path.Combine(
-            dir, "src", "optuna", "tests", "storages_tests", "rdb_tests", "test_upgrade_assets");
+            dir, "refs", "optuna", "tests", "storages_tests", "rdb_tests", "test_upgrade_assets");
     }
 
     // Python: dump a SQLite database's structure (table_info / index_list+info / foreign_key_list) and

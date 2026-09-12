@@ -1,5 +1,5 @@
-[submodule "src/optuna"]
-	path = src/optuna
+[submodule "refs/optuna"]
+	path = refs/optuna
 	url = https://github.com/optuna/optuna.git
 [submodule "refs/NumSharp"]
 	path = refs/NumSharp

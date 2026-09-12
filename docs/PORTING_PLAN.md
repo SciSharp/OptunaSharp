@@ -1,6 +1,6 @@
 # OptunaSharp — Optuna → C# Conversion Plan
 
-**Source of truth:** `optuna/optuna` @ `f6898da` (v5.0.0.dev, cloned at `K:/source/optuna`, vendored as a pinned submodule at `src/optuna`) — 24,474 core SLOC
+**Source of truth:** `optuna/optuna` @ `f6898da` (v5.0.0.dev, cloned at `K:/source/optuna`, vendored as a pinned submodule at `refs/optuna`) — 24,474 core SLOC
 (tokenizer-counted, comments/docstrings excluded). Secondary reference: `optuna/rustuna` @ `8acb2dd`
 (`K:/source/rustuna`) — used ONLY where it accelerates (SQLite schema, Sobol tables, static-type designs);
 Optuna's Python behavior always wins on conflict.
@@ -946,7 +946,7 @@ moment OptunaSharp.Core loads. Keep it.
   6 unit tests (fixed-datetime bars, exact indented-JSON+`<br>` hovertext, `n_recent_trials` slice,
   non-positive `ValueError`, running-trial `complete>start`, empty study) + 2 live parity (hovertext + n_recent
   slice). Suite: **465 unit + 205 interop**, both TFMs, none skipped. **Phase 3.1 done — 13/13 viz builders.**
-- ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `src/optuna` @ `f6898da`.
+- ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `refs/optuna` @ `f6898da`.
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
 ### 🟩 Byproducts already landed that later items depend on (don't re-port these)
@@ -1094,7 +1094,7 @@ moment OptunaSharp.Core loads. Keep it.
   `dotnet test test/OptunaSharp.Tests.Interop/...` (151 live-Optuna tests; self-skip Inconclusive
   without a discoverable Python+optuna). All green on net8.0 + net10.0 as of this ledger.
 - **Interop Python is pinned to the vendored reference.** The live-interop suite runs against the
-  submodule's Optuna **5.0.0.dev** (`pip install -e src/optuna --no-deps`), not the stale PyPI build.
+  submodule's Optuna **5.0.0.dev** (`pip install -e refs/optuna --no-deps`), not the stale PyPI build.
   This matters from 2.5 on: `_brute_force.py` was rewritten between the last PyPI release (4.6.0) and
   5.0.0.dev (α-blended `sample_child`, the `_is_nan` fix), so an interop diff against 4.6.0 would
   validate the wrong implementation. All 76 tests — including the pre-existing 67 — pass against
@@ -1321,7 +1321,7 @@ goal is an idiomatic, API-recognizable bridge, shipped per-framework only where 
 exists. Validated by usage/example tests, **not** bit-parity. This is the intended, documented departure
 from the rest of the plan.
 
-> **Source is a *different* repo.** In Optuna 5.x, `optuna.integration.*` inside the pinned `src/optuna`
+> **Source is a *different* repo.** In Optuna 5.x, `optuna.integration.*` inside the pinned `refs/optuna`
 > submodule is only 20 deprecation shims (`FutureWarning`, removal targeted Optuna 6.0.0) that re-export
 > the separate **`optuna/optuna-integration`** distribution (`pip install optuna-integration`). That repo
 > is **not vendored** — Phase 6 requires cloning it as an additional reference (**cloned to

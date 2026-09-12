@@ -45,7 +45,7 @@
     </PackageReference>
   </ItemGroup>
 
-  <!-- Optuna's api.proto, vendored VERBATIM from src/optuna/optuna/storages/_grpc/api.proto (identical
+  <!-- Optuna's api.proto, vendored VERBATIM from refs/optuna/optuna/storages/_grpc/api.proto (identical
        sha256). GrpcServices="Both" generates the client stub AND the server base from the one contract,
        so both sides speak the exact wire format Python Optuna's grpcio-generated code does. The proto's
        `package optuna;` lands the generated types in the C# namespace `Optuna` (aliased `Pb` in code). -->

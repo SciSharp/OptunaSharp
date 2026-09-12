@@ -104,6 +104,6 @@ public class CliStorageUpgradeTests
         if (dir is null)
             throw new DirectoryNotFoundException("Could not locate the repository root (SciSharp.OptunaSharp.sln).");
         return Path.Combine(
-            dir, "src", "optuna", "tests", "storages_tests", "rdb_tests", "test_upgrade_assets");
+            dir, "refs", "optuna", "tests", "storages_tests", "rdb_tests", "test_upgrade_assets");
     }
 }
