@@ -1,0 +1,23 @@
+/*
+ * OptunaSharp DocFX theme overrides (layered on top of the `default` + `modern` templates).
+ *
+ * DocFX concatenates every template's `public/main.css` after the base `docfx.min.css`, in the
+ * order the templates are listed in docfx.json, so anything here wins over the stock theme.
+ *
+ * WHY THIS FILE EXISTS — the navbar logo size fix:
+ *   The `modern` template renders the header brand as `<img id="logo" class="svg" ...>` inside
+ *   `.navbar-brand` (see modern/layout/_master.tmpl) but ships NO height/width rule for it — the
+ *   `class="svg"` only matters for scalable SVG logos. With a raster PNG logo the browser therefore
+ *   draws it at its intrinsic pixel size, which made our logo tower over the header. Constrain it to
+ *   the navbar's natural line height so it reads as a proper brand mark next to the app name.
+ */
+
+/* Constrain the navbar brand logo to a tidy, navbar-height mark (was rendering at intrinsic size). */
+#logo,
+.navbar-brand > img {
+  height: 30px;      /* ~ the navbar-brand line height (1.25rem text + .3125rem padding) */
+  width: auto;       /* preserve the wordmark's aspect ratio */
+  max-height: 30px;  /* belt-and-suspenders against any theme that sets a larger height */
+  margin-right: 0.5rem;  /* breathing room before the "OptunaSharp" app name text */
+  object-fit: contain;
+}
