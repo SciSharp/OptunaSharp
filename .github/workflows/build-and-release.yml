@@ -10,6 +10,14 @@ on:
 
 permissions: write-all
 
+# Cancel an in-flight run when a newer commit lands on the SAME ref (branch or PR). Pushing three
+# commits to a PR used to launch three full 6-job matrices that all ran to completion; now only the
+# newest survives. Tags are exempt (cancel-in-progress=false) so a release build is never aborted
+# mid-flight by another tag.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 env:
   # Suppress noisy XML-doc build warnings that clutter CI annotations. %3B is a URL-encoded
   # semicolon because the MSBuild CLI treats a raw ; as a property separator.
@@ -17,20 +25,75 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------------------------
-  # Build + unit tests across the three OSes. OptunaSharp.Core resolves NumSharp +
+  # Decide how wide to fan the matrix, per trigger — the single biggest lever on Actions minutes.
+  # Emitted as job outputs the `test` / `interop-test` matrices consume:
+  #   oses        JSON array of runner OSes
+  #   tfms_space  space-separated TFM list, for the `for TFM in ...` test loop
+  #   tfms_semi   ;-separated TFM list, for the `-p:TargetFrameworks=...` build override
+  #
+  # Policy (why each tier):
+  #   * v* tag / manual dispatch -> all 3 OSes + both TFMs. Release confidence and the only place the
+  #                                 macOS-specific paths (framework libpython resolution, brew libomp)
+  #                                 are exercised.
+  #   * push to master           -> x64 OSes (ubuntu + windows) + both TFMs. macOS on GitHub is arm64
+  #                                 and SELF-SKIPS ~60% of the byte-exact parity suite (CMA-ES / linalg /
+  #                                 AGE-MOEA-2 are x64-pinned), so its 10x-billed minutes buy almost no
+  #                                 unique coverage — it is covered on tags/dispatch instead.
+  #   * pull_request             -> x64 OSes + the modern TFM only (net10.0). net8.0 is a
+  #                                 compatibility leg re-checked on the post-merge master push.
+  # ---------------------------------------------------------------------------------------------
+  setup:
+    name: Decide CI scope
+    runs-on: ubuntu-latest
+    outputs:
+      oses: ${{ steps.scope.outputs.oses }}
+      tfms_space: ${{ steps.scope.outputs.tfms_space }}
+      tfms_semi: ${{ steps.scope.outputs.tfms_semi }}
+    steps:
+      - id: scope
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo 'oses=["ubuntu-latest","windows-latest","macos-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'tfms_space=net8.0 net10.0'                             >> "$GITHUB_OUTPUT"
+            echo 'tfms_semi=net8.0;net10.0'                              >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            echo 'oses=["ubuntu-latest","windows-latest"]'              >> "$GITHUB_OUTPUT"
+            echo 'tfms_space=net8.0 net10.0'                             >> "$GITHUB_OUTPUT"
+            echo 'tfms_semi=net8.0;net10.0'                              >> "$GITHUB_OUTPUT"
+          else
+            echo 'oses=["ubuntu-latest","windows-latest"]'              >> "$GITHUB_OUTPUT"
+            echo 'tfms_space=net10.0'                                    >> "$GITHUB_OUTPUT"
+            echo 'tfms_semi=net10.0'                                     >> "$GITHUB_OUTPUT"
+          fi
+          echo "Resolved CI scope:"; cat "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------------------------
+  # Build + unit tests across the selected OSes. OptunaSharp.Core resolves NumSharp +
   # NumSharp.Interop.OpenBLAS from NuGet (nuget.org); the OpenBLAS package carries the native
   # LAPACK/CBLAS binaries in runtimes/<rid>/native, so there is no submodule init or native staging.
   # ---------------------------------------------------------------------------------------------
   test:
+    needs: setup
     strategy:
       fail-fast: false
       matrix:
-        os: [ windows-latest, ubuntu-latest, macos-latest ]
+        os: ${{ fromJSON(needs.setup.outputs.oses) }}
 
     runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
+
+    # Cache the global NuGet package folder so NumSharp/OpenBLAS/MSTest/etc. are not re-downloaded
+    # every run. Key on the project/props files (no lock files in this repo) so it invalidates when a
+    # dependency version changes; the OS-scoped restore-key still gives a warm partial cache otherwise.
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
+        restore-keys: nuget-${{ runner.os }}-
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -40,36 +103,35 @@ jobs:
           10.0.x
         dotnet-quality: 'preview'
 
+    # Build only the TFM(s) this trigger will test (PRs build net10.0 only). The multi-target
+    # <TargetFrameworks> is overridden per run so a PR does not compile the net8.0 leg it will not run.
     - name: Build
-      run: dotnet build test/OptunaSharp.Tests/OptunaSharp.Tests.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
+      shell: bash
+      run: |
+        dotnet build test/OptunaSharp.Tests/OptunaSharp.Tests.csproj --configuration Release \
+          -p:TargetFrameworks="${{ needs.setup.outputs.tfms_semi }}" \
+          -p:NoWarn=${{ env.DOTNET_NOWARN }}
 
     # Filtering:
     #   - OpenBugs / HighMemory: excluded (known-failing / resource-heavy)
     #   - WindowsOnly: excluded on non-Windows runners
     #   - RequiresPython: excluded here — the live-Optuna suite is its own job below
-    - name: Test (net8.0)
+    # Both TFMs (push/tag) or just net10.0 (PR) run from the single build above, --no-build.
+    - name: Test
       shell: bash
-      timeout-minutes: 10
+      timeout-minutes: 15
       run: |
         FILTER="TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython"
         if [[ "$RUNNER_OS" != "Windows" ]]; then
           FILTER="$FILTER&TestCategory!=WindowsOnly"
         fi
-        dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj \
-          --configuration Release --no-build --framework net8.0 \
-          --filter "$FILTER" --logger "trx"
-
-    - name: Test (net10.0)
-      shell: bash
-      timeout-minutes: 10
-      run: |
-        FILTER="TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython"
-        if [[ "$RUNNER_OS" != "Windows" ]]; then
-          FILTER="$FILTER&TestCategory!=WindowsOnly"
-        fi
-        dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj \
-          --configuration Release --no-build --framework net10.0 \
-          --filter "$FILTER" --logger "trx"
+        for TFM in ${{ needs.setup.outputs.tfms_space }}; do
+          echo "::group::Unit tests ($TFM)"
+          dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj \
+            --configuration Release --no-build --framework "$TFM" \
+            --filter "$FILTER" --logger "trx"
+          echo "::endgroup::"
+        done
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
@@ -90,6 +152,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
+        restore-keys: nuget-${{ runner.os }}-
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -126,10 +195,11 @@ jobs:
   # Building is itself a gate — this is the only place CI compiles OptunaSharp.Tests.Interop.
   # ---------------------------------------------------------------------------------------------
   interop-test:
+    needs: setup
     strategy:
       fail-fast: false
       matrix:
-        os: [ windows-latest, ubuntu-latest, macos-latest ]
+        os: ${{ fromJSON(needs.setup.outputs.oses) }}
 
     runs-on: ${{ matrix.os }}
 
@@ -137,9 +207,28 @@ jobs:
     # discovery break red instead of green-by-skipping.
     env:
       OPTUNASHARP_PYTHONNET_REQUIRE_ENGINE: '1'
+      # Fixed, OS-agnostic pip download cache so the heavy wheels (torch, numpy, scipy, sklearn, …)
+      # are fetched once and reused across runs. Cached by the step below.
+      PIP_CACHE_DIR: ${{ github.workspace }}/.pip-cache
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
+        restore-keys: nuget-${{ runner.os }}-
+
+    # Cache pip's wheel downloads (torch alone is ~127 MB; the full stack was re-downloaded every run).
+    # Keyed on this workflow file because the pip install list lives here, not in a requirements file.
+    - name: Cache pip downloads
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/.pip-cache
+        key: pip-${{ runner.os }}-${{ hashFiles('.github/workflows/build-and-release.yml') }}
+        restore-keys: pip-${{ runner.os }}-
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -167,13 +256,16 @@ jobs:
         python -m pip install "numpy==2.4.2"
         python -m pip install -e src/optuna
         # Backends the parity tests drive LIVE: torch (GPSampler), cmaes (CmaEsSampler), scikit-learn
-        # (fANOVA / importance), matplotlib (visualization). CPU-only torch on Linux keeps the download
-        # small. scikit-learn is PINNED to 1.8.0: the native fANOVA/MDI forests are a byte-for-byte port
-        # of that release's RandomForestRegressor, so a newer sklearn (1.9.0) builds slightly different
+        # (fANOVA / importance), matplotlib (visualization). Use the CPU-only PyTorch wheels on Linux AND
+        # Windows: the runners have no GPU, GPSampler parity is CPU-deterministic, and the default Windows
+        # wheel is a multi-GB CUDA build — the CPU wheel is a fraction of the size and installs far faster.
+        # macOS wheels are CPU/MPS-only already and are not published on the cpu index, so macOS uses the
+        # default index. scikit-learn is PINNED to 1.8.0: the native fANOVA/MDI forests are a byte-for-byte
+        # port of that release's RandomForestRegressor, so a newer sklearn (1.9.0) builds slightly different
         # trees and breaks the 1e-12 value parity. redis-py is deliberately NOT installed here so the
         # JournalRedis interop test self-skips (no server in this job; Redis is covered by the
         # docker-compose Storage suite instead).
-        if [ "$RUNNER_OS" = "Linux" ]; then
+        if [ "$RUNNER_OS" = "Linux" ] || [ "$RUNNER_OS" = "Windows" ]; then
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
         else
           python -m pip install torch
@@ -232,22 +324,24 @@ jobs:
         echo "PYTHONNET_PYDLL=$PYDLL" >> "$GITHUB_ENV"
         echo "PYTHONNET_PYDLL resolved to: $PYDLL"
 
+    # Build only the TFM(s) this trigger will test (PRs build net10.0 only), same rationale as `test`.
     - name: Build
-      run: dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
-
-    - name: Test (net8.0)
-      timeout-minutes: 10
       shell: bash
       run: |
-        dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
-          --configuration Release --no-build --framework net8.0 --logger "trx"
+        dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj --configuration Release \
+          -p:TargetFrameworks="${{ needs.setup.outputs.tfms_semi }}" \
+          -p:NoWarn=${{ env.DOTNET_NOWARN }}
 
-    - name: Test (net10.0)
-      timeout-minutes: 10
+    - name: Test
+      timeout-minutes: 20
       shell: bash
       run: |
-        dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
-          --configuration Release --no-build --framework net10.0 --logger "trx"
+        for TFM in ${{ needs.setup.outputs.tfms_space }}; do
+          echo "::group::Interop tests ($TFM)"
+          dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
+            --configuration Release --no-build --framework "$TFM" --logger "trx"
+          echo "::endgroup::"
+        done
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
@@ -295,6 +389,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
+        restore-keys: nuget-${{ runner.os }}-
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
