@@ -30,6 +30,7 @@ public sealed class FastForestFanovaImportanceEvaluator : BaseImportanceEvaluato
     /// <param name="nTrees">The number of trees in the forest.</param>
     /// <param name="maxDepth">The maximum depth of the trees in the forest.</param>
     /// <param name="seed">Controls the randomness of the forest. Specify a value for determinism.</param>
+    /// <summary>Creates the FastForest fANOVA evaluator with the requested tree count, depth, and random seed.</summary>
     public FastForestFanovaImportanceEvaluator(int nTrees = 64, int maxDepth = 64, int? seed = null)
     {
         _nTrees = nTrees;
@@ -50,6 +51,7 @@ public sealed class FastForestFanovaImportanceEvaluator : BaseImportanceEvaluato
     ///     other field is used as given. For a reproducible result set <c>Seed</c> and
     ///     <c>NumberOfThreads = 1</c>.
     /// </param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="options" /> is null.</exception>
     public FastForestFanovaImportanceEvaluator(FastForestRegressionTrainer.Options options)
         => _options = options ?? throw new ArgumentNullException(nameof(options));
 
@@ -63,6 +65,7 @@ public sealed class FastForestFanovaImportanceEvaluator : BaseImportanceEvaluato
     /// <param name="nTrees">The number of trees in the forest (the options baseline).</param>
     /// <param name="maxDepth">The maximum depth of the trees (derives the baseline leaf count).</param>
     /// <param name="seed">Baseline seed; may be overridden inside <paramref name="configure" />.</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="configure" /> is null.</exception>
     public FastForestFanovaImportanceEvaluator(
         Action<FastForestRegressionTrainer.Options> configure, int nTrees = 64, int maxDepth = 64, int? seed = null)
     {

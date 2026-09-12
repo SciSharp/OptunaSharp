@@ -18,6 +18,8 @@ public abstract class BaseGASampler : BaseSampler
 {
     private int? _populationSize;
 
+    /// <summary>Initializes generation bookkeeping with the requested number of completed individuals per generation.</summary>
+    /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
     protected BaseGASampler(int? populationSize)
     {
         _populationSize = populationSize;
@@ -25,7 +27,9 @@ public abstract class BaseGASampler : BaseSampler
 
     // Python __init_subclass__ sets these per subclass to f"{cls.__name__}:...". GetType().Name at
     // runtime is the concrete subclass name, so "NSGAIISampler:generation" etc. — byte-identical.
+    /// <summary>Trial system-attribute key namespaced by the concrete sampler type.</summary>
     internal string GenerationKey => $"{GetType().Name}:generation";
+    /// <summary>Study system-attribute prefix used to cache parents by generation.</summary>
     internal string ParentCacheKeyPrefix => $"{GetType().Name}:parent:";
 
     /// <summary>Number of individuals (trials) in a generation.</summary>
@@ -39,12 +43,22 @@ public abstract class BaseGASampler : BaseSampler
     ///     Select parent trials from the population for the given generation. Called once per
     ///     generation; the result is cached in the study system attributes.
     /// </summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="generation">Zero-based generation whose individuals or optimizer state are requested.</param>
+    /// <returns>The selected parent trials for the requested generation.</returns>
     public abstract List<FrozenTrial> SelectParent(Study study, int generation);
 
     /// <summary>
     ///     Get the generation number of the given trial. If not already set in the trial's system
     ///     attributes, it is calculated (from the max generation of all completed trials) and stored.
     /// </summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <returns>The stored or newly assigned zero-based generation.</returns>
+    /// <exception cref="System.FormatException">A stored generation string cannot be parsed as an integer.</exception>
+    /// <exception cref="System.InvalidCastException">A stored generation value does not support integer conversion.</exception>
+    /// <exception cref="System.OverflowException">A stored generation value exceeds Int32.</exception>
+    /// <exception cref="System.Exception">The configured storage provider fails; its exception propagates.</exception>
     public int GetTrialGeneration(Study study, FrozenTrial trial)
     {
         var stored = trial.SystemAttrsDict.GetValueOrDefault(GenerationKey);
@@ -80,6 +94,12 @@ public abstract class BaseGASampler : BaseSampler
     }
 
     /// <summary>Get the population (completed trials) of the given generation.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="generation">Zero-based generation whose individuals or optimizer state are requested.</param>
+    /// <returns>Completed trial snapshots belonging to the requested generation.</returns>
+    /// <exception cref="System.FormatException">A stored generation string cannot be parsed as an integer.</exception>
+    /// <exception cref="System.InvalidCastException">A stored generation value does not support integer conversion.</exception>
+    /// <exception cref="System.OverflowException">A stored generation value exceeds Int32.</exception>
     public List<FrozenTrial> GetPopulation(Study study, int generation)
     {
         var result = new List<FrozenTrial>();
@@ -97,6 +117,13 @@ public abstract class BaseGASampler : BaseSampler
     ///     Get the parent population of the given generation (cached in the study system attributes).
     ///     Returns an empty list when <paramref name="generation" /> is 0.
     /// </summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="generation">Zero-based generation whose individuals or optimizer state are requested.</param>
+    /// <returns>Selected parents, or an empty list for generation zero.</returns>
+    /// <exception cref="System.FormatException">A cached parent identifier string cannot be parsed as an integer.</exception>
+    /// <exception cref="System.InvalidCastException">Cached parent metadata has an unexpected collection or identifier representation.</exception>
+    /// <exception cref="System.OverflowException">A cached parent identifier exceeds Int32.</exception>
+    /// <exception cref="System.Exception">The configured parent-selection strategy or storage provider fails; its exception propagates.</exception>
     public List<FrozenTrial> GetParentPopulation(Study study, int generation)
     {
         if (generation == 0)

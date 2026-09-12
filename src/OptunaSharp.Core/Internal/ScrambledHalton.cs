@@ -31,6 +31,10 @@ internal static class ScrambledHalton
     ///     dimension's coordinate depends on the earlier dimensions' permutation draws exactly as scipy's
     ///     single <c>self.rng</c> makes it (verified bit-exact vs scipy).
     /// </summary>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <param name="n">The zero-based sequence index of the scrambled Halton point.</param>
+    /// <param name="seed">The seed controlling the reproducible random stream.</param>
+    /// <returns>The requested reproducibly scrambled Halton point.</returns>
     internal static double[] Point(int dim, ulong n, int seed)
     {
         int[] primes = QuasiMonteCarlo.HaltonPrimes(dim);

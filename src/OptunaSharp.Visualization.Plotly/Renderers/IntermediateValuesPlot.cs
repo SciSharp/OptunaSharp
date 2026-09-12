@@ -13,6 +13,9 @@ namespace OptunaSharp.Visualization.Plotly.Renderers;
 /// </summary>
 internal static class IntermediateValuesPlot
 {
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(IntermediatePlotInfo info)
     {
         var layout = Fig.Layout(

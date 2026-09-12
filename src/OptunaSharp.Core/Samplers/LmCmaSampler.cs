@@ -86,6 +86,7 @@ public sealed class LmCmaSampler : BaseSampler
     /// <param name="considerPrunedTrials">If <c>true</c>, PRUNED trials are considered for sampling (experimental).</param>
     /// <param name="popsize">Population size λ (default <c>4 + ⌊3 ln n⌋</c>, the paper's value).</param>
     /// <param name="nVectors">Number of stored direction vectors m (default <c>4 + ⌊3 ln n⌋</c>; the paper notes ≈√n can do better when memory allows).</param>
+    /// <summary>Configures limited-memory covariance adaptation for a fixed numerical search space.</summary>
     public LmCmaSampler(
         int nStartupTrials = 1,
         BaseSampler? independentSampler = null,
@@ -105,12 +106,14 @@ public sealed class LmCmaSampler : BaseSampler
         _nVectors = nVectors;
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         // _cmaRng needs no reseed here: relative sampling reseeds per trial (see SampleRelative).
         _independentSampler.ReseedRng();
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -124,6 +127,8 @@ public sealed class LmCmaSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -212,10 +217,16 @@ public sealed class LmCmaSampler : BaseSampler
     private static string AttrKeyGeneration => AttrPrefix + "generation";
     private static string AttrKeyOptimizer => AttrPrefix + "optimizer";
 
+    /// <summary>Reassembles serialized optimizer chunks in numeric chunk order.</summary>
+    /// <param name="optimizerAttrs">Stored serialized optimizer chunks keyed by chunk identifier.</param>
+    /// <returns>The full serialized optimizer string in chunk-index order.</returns>
     private static string ConcatOptimizerAttrs(IReadOnlyDictionary<string, string> optimizerAttrs)
         => string.Concat(Enumerable.Range(0, optimizerAttrs.Count)
             .Select(i => optimizerAttrs[$"{AttrKeyOptimizer}:{i}"]));
 
+    /// <summary>Splits a serialized optimizer into storage-sized system-attribute chunks.</summary>
+    /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
+    /// <returns>Chunk-indexed system attributes within the storage string-length limit.</returns>
     private static Dictionary<string, string> SplitOptimizerStr(string optimizerStr)
     {
         int optimizerLen = optimizerStr.Length;
@@ -230,9 +241,18 @@ public sealed class LmCmaSampler : BaseSampler
         return attrs;
     }
 
+    /// <summary>Encodes the optimizer type and serializable state for storage on a trial.</summary>
+    /// <param name="optimizer">Optimizer whose proposal and adaptation state are persisted.</param>
+    /// <returns>A tagged JSON representation of the optimizer state.</returns>
     private static string SerializeOptimizer(LmCma optimizer)
         => "lmcma\n" + JsonSerializer.Serialize(optimizer.ToState());
 
+    /// <summary>Decodes a persisted optimizer tag and reconstructs its matching state type.</summary>
+    /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
+    /// <returns>The optimizer reconstructed from the tagged state.</returns>
+    /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type.</exception>
+    /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
     private static LmCma DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
@@ -243,6 +263,9 @@ public sealed class LmCmaSampler : BaseSampler
         return LmCma.FromState(JsonSerializer.Deserialize<LmCmaState>(json)!);
     }
 
+    /// <summary>Finds the newest stored optimizer snapshot in completed trial history.</summary>
+    /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
+    /// <returns>The newest available optimizer, or null when no stored snapshot exists.</returns>
     private static LmCma? RestoreOptimizer(List<FrozenTrial> completedTrials)
     {
         for (int idx = completedTrials.Count - 1; idx >= 0; idx--)
@@ -257,6 +280,10 @@ public sealed class LmCmaSampler : BaseSampler
         return null;
     }
 
+    /// <summary>Creates the initial optimizer in the transformed numerical box.</summary>
+    /// <param name="lower">Lower bound of each transformed numerical coordinate.</param>
+    /// <param name="upper">Upper bound of each transformed numerical coordinate.</param>
+    /// <returns>The initialized proposal optimizer.</returns>
     private LmCma InitOptimizer(double[] lower, double[] upper)
     {
         int nDim = lower.Length;
@@ -271,6 +298,8 @@ public sealed class LmCmaSampler : BaseSampler
         return new LmCma(mean, sigma0, seed: seed, populationSize: _popsize, nVectors: _nVectors);
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -286,6 +315,9 @@ public sealed class LmCmaSampler : BaseSampler
         return _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
     }
 
+    /// <summary>Explains why the current parameter is delegated to the independent sampler.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="paramName">Name of the parameter being suggested or looked up.</param>
     private void LogIndependentSampling(FrozenTrial trial, string paramName)
     {
         Logger.Warning(string.Format(
@@ -297,6 +329,9 @@ public sealed class LmCmaSampler : BaseSampler
             "dynamic search space and `CategoricalDistribution` are not supported by `LmCmaSampler`"));
     }
 
+    /// <summary>Collects historical trials eligible for this sampler, applying its completed/pruned-trial policy.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>Trial snapshots eligible for the sampler history.</returns>
     private List<FrozenTrial> GetTrials(Study study)
     {
         var completeTrials = new List<FrozenTrial>();
@@ -320,6 +355,10 @@ public sealed class LmCmaSampler : BaseSampler
         return completeTrials;
     }
 
+    /// <summary>Selects trials belonging to one optimizer generation so adaptation uses a coherent population.</summary>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <param name="generation">Zero-based generation whose individuals or optimizer state are requested.</param>
+    /// <returns>Trials from the requested optimizer generation.</returns>
     private static List<FrozenTrial> GetSolutionTrials(List<FrozenTrial> trials, int generation)
     {
         var result = new List<FrozenTrial>();
@@ -331,9 +370,11 @@ public sealed class LmCmaSampler : BaseSampler
         return result;
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _independentSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         if (trial.Constraints != null)

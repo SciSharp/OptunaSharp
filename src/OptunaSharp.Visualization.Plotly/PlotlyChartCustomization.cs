@@ -27,19 +27,19 @@ namespace OptunaSharp.Visualization.Plotly;
 public sealed record PlotlyChartCustomization
 {
     /// <summary>
-    ///     plotly.js <see cref="Plotly.NET.Config" /> — mode bar, static export, responsiveness,
+    ///     plotly.js <see cref="global::Plotly.NET.Config" /> — mode bar, static export, responsiveness,
     ///     scroll-zoom, edit mode, image-export options, …
     /// </summary>
     public Config? Config { get; init; }
 
     /// <summary>
-    ///     A plotly <see cref="Plotly.NET.Layout" /> <b>merged</b> onto the chart's layout (Optuna's
+    ///     A plotly <see cref="global::Plotly.NET.Layout" /> <b>merged</b> onto the chart's layout (Optuna's
     ///     title/axis titles are preserved) — size, template, colorway, legend, margins, …
     /// </summary>
     public Layout? Layout { get; init; }
 
     /// <summary>
-    ///     HTML <see cref="Plotly.NET.DisplayOptions" /> for the rendered page — document title, extra
+    ///     HTML <see cref="global::Plotly.NET.DisplayOptions" /> for the rendered page — document title, extra
     ///     head tags, description, chart-config display, …
     /// </summary>
     public DisplayOptions? DisplayOptions { get; init; }

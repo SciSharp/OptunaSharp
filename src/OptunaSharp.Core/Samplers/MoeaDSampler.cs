@@ -117,6 +117,8 @@ public class MoeaDSampler : BaseSampler
     ///     (MOEA/D's classic SBX). <see cref="UniformCrossover" />-style crossover is always applied to categorical parameters.</param>
     /// <param name="swappingProb">Probability of swapping each categorical parameter of the parents during crossover.</param>
     /// <param name="seed">Seed for the random number generator.</param>
+    /// <summary>Configures decomposition weights, neighborhood mating, and bounded incumbent replacement.</summary>
+    /// <exception cref="NumSharp.ValueError">Population size is below two or the crossover parent count, neighborhood/replacement counts are below one, or neighborhood-selection probability is outside [0, 1].</exception>
     public MoeaDSampler(
         int populationSize = 50,
         int nNeighbors = 20,
@@ -161,6 +163,7 @@ public class MoeaDSampler : BaseSampler
         _searchSpace = new IntersectionSearchSpace();
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         _randomSampler.ReseedRng();
@@ -169,6 +172,7 @@ public class MoeaDSampler : BaseSampler
         _rng.Rng.seed(BitConverter.ToUInt32(buffer));
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -182,6 +186,7 @@ public class MoeaDSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -242,13 +247,16 @@ public class MoeaDSampler : BaseSampler
         return child;
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
         => _randomSampler.SampleIndependent(study, trial, paramName, paramDistribution);
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _randomSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
         => _randomSampler.AfterTrial(study, trial, state, values);
 
@@ -256,6 +264,7 @@ public class MoeaDSampler : BaseSampler
 
     /// <summary>Build the Das-Dennis weight vectors and their neighborhoods on first use, deriving the
     ///     effective population size N from the target and the objective count.</summary>
+    /// <param name="m">Number of objective or residual components.</param>
     private void EnsureWeights(int m)
     {
         if (_weights is not null)
@@ -272,6 +281,9 @@ public class MoeaDSampler : BaseSampler
     /// <summary>For each weight vector, the indices of its <paramref name="t" /> nearest weight vectors by
     ///     Euclidean distance (including itself, which sorts first at distance 0) — the mating/replacement
     ///     neighborhood B[i], mirroring pymoo's <c>argsort(cdist(ref_dirs, ref_dirs))[:, :n_neighbors]</c>.</summary>
+    /// <param name="weights">Decomposition weight vectors, one row per subproblem.</param>
+    /// <param name="t">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>Neighbor weight indices for each decomposition subproblem.</returns>
     private static int[][] ComputeNeighbors(double[][] weights, int t)
     {
         int n = weights.Length;
@@ -312,6 +324,10 @@ public class MoeaDSampler : BaseSampler
     ///     folded once, in trial-number order: it updates the ideal point and replaces up to
     ///     <see cref="_nReplacements" /> neighbors whose scalarized fitness it improves.
     /// </summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="completed">Completed trial snapshots available for harvesting.</param>
+    /// <param name="signs">One multiplier per objective: +1 for minimization and -1 for maximization.</param>
+    /// <returns>The incumbent trial population reconstructed from persisted replacement history.</returns>
     private List<FrozenTrial> ReconstructPopulation(Study study, List<FrozenTrial> completed, double[] signs)
     {
         var byId = new Dictionary<int, FrozenTrial>(completed.Count);
@@ -381,6 +397,8 @@ public class MoeaDSampler : BaseSampler
     }
 
     /// <summary>Per-objective sign so every objective becomes a minimization (Optuna internal convention).</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>One multiplier per objective: plus one for minimization and minus one for maximization.</returns>
     private static double[] DirectionSigns(Study study)
     {
         var directions = study.Directions;
@@ -390,6 +408,10 @@ public class MoeaDSampler : BaseSampler
         return signs;
     }
 
+    /// <summary>Converts objective values into minimization-oriented losses using one sign per objective.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="signs">One multiplier per objective: +1 for minimization and -1 for maximization.</param>
+    /// <returns>Minimization-oriented objective values in study objective order.</returns>
     private static double[] Loss(FrozenTrial trial, double[] signs)
     {
         var values = trial.Values!;

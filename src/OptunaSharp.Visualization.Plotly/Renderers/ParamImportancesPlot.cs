@@ -16,6 +16,10 @@ namespace OptunaSharp.Visualization.Plotly.Renderers;
 /// </summary>
 internal static class ParamImportancesPlot
 {
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="infos">Importance results in objective order.</param>
+    /// <param name="study">Study whose recorded trials are visualized.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(IReadOnlyList<ImportancesInfo> infos, Study study)
     {
         var layout = Fig.Layout(
@@ -43,6 +47,11 @@ internal static class ParamImportancesPlot
         return Fig.Figure(traces, layout);
     }
 
+    /// <summary>Builds per-parameter hover text including distribution class and importance.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <param name="study">Study whose recorded trials are visualized.</param>
+    /// <returns>Hover templates aligned with the importance parameter names.</returns>
+    /// <exception cref="System.InvalidOperationException">A parameter has no distribution in the study history.</exception>
     private static string[] HoverTemplate(ImportancesInfo info, Study study)
     {
         var result = new string[info.ParamNames.Count];
@@ -57,6 +66,10 @@ internal static class ParamImportancesPlot
     }
 
     /// <summary>Python <c>_get_distribution(param_name, study)</c> — the first trial that carries it.</summary>
+    /// <param name="paramName">Parameter whose first recorded distribution supplies hover metadata.</param>
+    /// <param name="study">Study whose recorded trials are visualized.</param>
+    /// <returns>The first distribution recorded under this parameter name.</returns>
+    /// <exception cref="System.InvalidOperationException">No trial records the requested parameter.</exception>
     private static BaseDistribution GetDistribution(string paramName, Study study)
     {
         foreach (var trial in study.GetTrials(deepcopy: false))

@@ -8,6 +8,9 @@ namespace OptunaSharp.Visualization;
 ///     One trial's intermediate-value curve. Port of <c>_TrialInfo</c> in
 ///     <c>optuna/visualization/_intermediate_values.py</c>.
 /// </summary>
+/// <param name="TrialNumber">The study-local trial number identifying this intermediate-value curve.</param>
+/// <param name="SortedIntermediateValues">The reported (step, value) pairs sorted by ascending step.</param>
+/// <param name="Feasible">Whether every recorded constraint of this trial is satisfied.</param>
 public sealed record TrialInfo(
     int TrialNumber,
     IReadOnlyList<(int Step, double Value)> SortedIntermediateValues,
@@ -16,6 +19,7 @@ public sealed record TrialInfo(
 /// <summary>
 ///     The data backing an intermediate-values plot. Port of <c>_IntermediatePlotInfo</c>.
 /// </summary>
+/// <param name="TrialInfos">One curve descriptor for each included trial.</param>
 public sealed record IntermediatePlotInfo(IReadOnlyList<TrialInfo> TrialInfos);
 
 /// <summary>
@@ -29,6 +33,8 @@ public static class IntermediateValues
         OptunaLogging.GetLogger("optuna.visualization._intermediate_values");
 
     /// <summary>Python <c>_get_intermediate_plot_info(study)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <returns>The ordered intermediate-value curves and feasibility state for the included trials.</returns>
     public static IntermediatePlotInfo GetPlotInfo(Study study)
     {
         var trials = study.GetTrials(

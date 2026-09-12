@@ -19,6 +19,11 @@ internal sealed class Mating
     private readonly DuplicateElimination? _eliminateDuplicates;
     private const int NMaxIterations = 100;
 
+    /// <summary>Connects tournament selection, crossover, mutation, and optional duplicate filtering.</summary>
+    /// <param name="selection">Tournament strategy used to choose mating parents.</param>
+    /// <param name="crossover">Operator combining the selected numerical parent vectors.</param>
+    /// <param name="mutation">Numerical mutation operator used when an offspring coordinate is selected for mutation.</param>
+    /// <param name="eliminateDuplicates">Duplicate filter or flag controlling whether duplicate offspring are removed.</param>
     public Mating(TournamentSelection selection, SimulatedBinaryCrossover crossover, PolynomialMutation mutation,
         DuplicateElimination? eliminateDuplicates)
     {
@@ -29,6 +34,11 @@ internal sealed class Mating
     }
 
     /// <summary>One mating step (<c>Mating._do</c>): select parents, cross, mutate — offspring X only.</summary>
+    /// <param name="problem">Decision bounds and objective/constraint evaluation surface.</param>
+    /// <param name="pop">Population whose decision and evaluation columns are consumed or updated.</param>
+    /// <param name="nOffsprings">Number of offspring requested.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>Offspring after one selection, crossover, and mutation pass.</returns>
     public Population MatingStep(AgeMoeaProblem problem, Population pop, int nOffsprings, NumPyRandom rng)
     {
         int nMatings = (int)Math.Ceiling((double)nOffsprings / _crossover.NOffsprings);
@@ -39,6 +49,11 @@ internal sealed class Mating
     }
 
     /// <summary><c>InfillCriterion.do</c>: the duplicate-eliminating retry loop.</summary>
+    /// <param name="problem">Decision bounds and objective/constraint evaluation surface.</param>
+    /// <param name="pop">Population whose decision and evaluation columns are consumed or updated.</param>
+    /// <param name="nOffsprings">Number of offspring requested.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>A population of offspring after bounded duplicate-removal retries.</returns>
     public Population Do(AgeMoeaProblem problem, Population pop, int nOffsprings, NumPyRandom rng)
     {
         Population off = Population.Empty();

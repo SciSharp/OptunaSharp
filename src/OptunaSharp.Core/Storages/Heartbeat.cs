@@ -16,15 +16,21 @@ namespace OptunaSharp.Storages;
 public interface IBaseHeartbeat
 {
     /// <summary>Record the heartbeat of the trial.</summary>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <exception cref="System.Exception">The heartbeat storage provider fails.</exception>
     void RecordHeartbeat(int trialId);
 
     /// <summary>Get the stale trial ids of the study (Python: <c>_get_stale_trial_ids</c>).</summary>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <returns>Identifiers of running trials considered stale by the backend.</returns>
     List<int> GetStaleTrialIds(int studyId);
 
     /// <summary>Get the heartbeat interval if it is set, otherwise <c>null</c>.</summary>
+    /// <returns>Heartbeat interval in seconds, or null when disabled.</returns>
     int? GetHeartbeatInterval();
 
     /// <summary>Get the heartbeat-stale trial callback function if it is set, otherwise <c>null</c>.</summary>
+    /// <returns>Configured callback, or null if no stale-trial callback is registered.</returns>
     Action<Study, FrozenTrial>? GetHeartbeatStaleTrialCallback();
 
     /// <summary>
@@ -34,6 +40,7 @@ public interface IBaseHeartbeat
     ///     a default interface method so every heartbeat backend inherits it, exactly as the Python
     ///     base class does.
     /// </summary>
+    /// <returns>The same callback returned by GetHeartbeatStaleTrialCallback.</returns>
     [Obsolete("Deprecated in v4.9.0. This feature will be removed in v6.0.0. " +
               "Use GetHeartbeatStaleTrialCallback instead.")]
     Action<Study, FrozenTrial>? GetFailedTrialCallback()
@@ -50,25 +57,31 @@ public interface IBaseHeartbeat
 /// <summary>Python <c>BaseHeartbeatThread</c> (context manager → <see cref="IDisposable" />).</summary>
 public abstract class BaseHeartbeatThread : IDisposable
 {
+    /// <summary>Starts the periodic heartbeat worker; the null implementation performs no work.</summary>
     public abstract void Start();
 
+    /// <summary>Signals the worker to stop and waits for it; the null implementation performs no work.</summary>
     public abstract void Join();
 
     /// <summary>Python <c>__exit__</c>: join on scope exit.</summary>
     public void Dispose() => Join();
 }
 
+/// <summary>No-op heartbeat worker used when the storage has heartbeats disabled.</summary>
 public sealed class NullHeartbeatThread : BaseHeartbeatThread
 {
+    /// <summary>Starts the periodic heartbeat worker; the null implementation performs no work.</summary>
     public override void Start()
     {
     }
 
+    /// <summary>Signals the worker to stop and waits for it; the null implementation performs no work.</summary>
     public override void Join()
     {
     }
 }
 
+/// <summary>Background thread that records liveness until the owning optimization scope ends.</summary>
 public sealed class HeartbeatThread : BaseHeartbeatThread
 {
     private readonly int _trialId;
@@ -76,12 +89,16 @@ public sealed class HeartbeatThread : BaseHeartbeatThread
     private Thread? _thread;
     private ManualResetEventSlim? _stopEvent;
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <summary>Binds a heartbeat worker to an existing trial.</summary>
+    /// <param name="heartbeat">Shared heartbeat backend with a non-null interval; this worker does not own the backend.</param>
     public HeartbeatThread(int trialId, IBaseHeartbeat heartbeat)
     {
         _trialId = trialId;
         _heartbeat = heartbeat;
     }
 
+    /// <summary>Starts the periodic heartbeat worker; the null implementation performs no work.</summary>
     public override void Start()
     {
         _stopEvent = new ManualResetEventSlim(false);
@@ -90,6 +107,9 @@ public sealed class HeartbeatThread : BaseHeartbeatThread
         _thread.Start();
     }
 
+    /// <summary>Stops a started worker and blocks until its thread exits.</summary>
+    /// <exception cref="System.NullReferenceException">Start has not initialized the worker.</exception>
+    /// <exception cref="System.Threading.ThreadInterruptedException">The calling thread is interrupted while joining.</exception>
     public override void Join()
     {
         System.Diagnostics.Debug.Assert(_stopEvent is not null);
@@ -98,6 +118,11 @@ public sealed class HeartbeatThread : BaseHeartbeatThread
         _thread!.Join();
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <summary>Records liveness repeatedly, using an interruptible wait so shutdown need not wait a full interval.</summary>
+    /// <param name="heartbeat">Backend used to persist each heartbeat.</param>
+    /// <param name="stopEvent">Signal owned by this worker; setting it ends the recording loop.</param>
+    /// <exception cref="System.Exception">The backend rejects a heartbeat or the configured interval is invalid; this executes on the heartbeat thread.</exception>
     private static void RecordHeartbeat(int trialId, IBaseHeartbeat heartbeat, ManualResetEventSlim stopEvent)
     {
         int? heartbeatInterval = heartbeat.GetHeartbeatInterval();
@@ -115,6 +140,9 @@ public sealed class HeartbeatThread : BaseHeartbeatThread
 public static class HeartbeatHelpers
 {
     /// <summary>Python <c>get_heartbeat_thread(trial_id, storage)</c>.</summary>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="storage">Storage backend holding study and trial records.</param>
+    /// <returns>An unstarted real or no-op worker; call Start before disposing the returned scope.</returns>
     public static BaseHeartbeatThread GetHeartbeatThread(int trialId, BaseStorage storage)
     {
         if (IsHeartbeatEnabled(storage))
@@ -129,6 +157,8 @@ public static class HeartbeatHelpers
     ///     The running trials whose heartbeat has not been updated for a long time will be
     ///     failed, that is, those states will be changed to <see cref="TrialState.Fail" />.
     /// </summary>
+    /// <param name="study">Study whose history and storage are used by the operation.</param>
+    /// <exception cref="System.Exception">The storage or stale-trial callback fails; already-finished races are ignored.</exception>
     public static void FailStaleTrials(Study study)
     {
         var storage = study.Storage;
@@ -169,6 +199,8 @@ public static class HeartbeatHelpers
     ///     <see cref="IBaseHeartbeat" /> and <see cref="IBaseHeartbeat.GetHeartbeatInterval" />
     ///     returns an integer.
     /// </summary>
+    /// <param name="storage">Storage backend holding study and trial records.</param>
+    /// <returns>True when storage implements the heartbeat protocol and has a non-null interval.</returns>
     public static bool IsHeartbeatEnabled(BaseStorage storage)
         => storage is IBaseHeartbeat heartbeat && heartbeat.GetHeartbeatInterval() is not null;
 }

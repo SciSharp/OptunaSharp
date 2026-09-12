@@ -15,13 +15,16 @@ public class BLXAlphaCrossover : BaseCrossover
     private readonly double _alpha;
 
     /// <param name="alpha">Parametrizes blend operation.</param>
+    /// <summary>Configures how far uniform offspring intervals extend beyond the two parent coordinates.</summary>
     public BLXAlphaCrossover(double alpha = 0.5)
     {
         _alpha = alpha;
     }
 
+    /// <inheritdoc />
     public override int NParents => 2;
 
+    /// <inheritdoc />
     public override double[] Crossover(
         double[][] parentsParams, NumPyRandom rng, Study study, double[,] searchSpaceBounds)
     {

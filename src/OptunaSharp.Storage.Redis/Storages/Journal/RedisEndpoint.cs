@@ -43,6 +43,10 @@ public sealed record RedisEndpoint
 /// </summary>
 public static class RedisUrl
 {
+    /// <summary>Parses a redis-py-style URL, preserving credential and database-query precedence.</summary>
+    /// <param name="url">The database connection URL to resolve.</param>
+    /// <returns>The decoded Redis endpoint, including TLS, optional credentials, and database selection.</returns>
+    /// <exception cref="NumSharp.ValueError">The URL is malformed or its scheme is not redis, rediss, or unix.</exception>
     public static RedisEndpoint Parse(string url)
     {
         Uri uri;
@@ -109,6 +113,11 @@ public static class RedisUrl
         };
     }
 
+    /// <summary>Decodes URI credentials while preserving fallback values for omitted components.</summary>
+    /// <param name="uri">The parsed URI containing percent-encoded user information.</param>
+    /// <param name="user">The decoded username, or null when credentials are not supplied.</param>
+    /// <param name="password">The decoded password, or null when credentials are not supplied.</param>
+    /// <returns>The decoded username and password, retaining fallbacks for omitted values.</returns>
     private static (string? User, string? Password) ApplyUserInfo(Uri uri, string? user, string? password)
     {
         if (string.IsNullOrEmpty(uri.UserInfo))
@@ -121,6 +130,9 @@ public static class RedisUrl
         return (string.IsNullOrEmpty(u) ? user : u, string.IsNullOrEmpty(p) ? password : p);
     }
 
+    /// <summary>Parses an optional Redis database index from the URL path.</summary>
+    /// <param name="absolutePath">The URL path from which an optional Redis database index is read.</param>
+    /// <returns>The parsed database index, or null when the path does not contain an integer.</returns>
     private static int? DbFromPath(string absolutePath)
     {
         string path = absolutePath.Trim('/');
@@ -128,6 +140,8 @@ public static class RedisUrl
     }
 
     /// <summary>Parses a <c>?a=b&amp;c=d</c> query string into a case-sensitive map (last value wins).</summary>
+    /// <param name="query">The URL query string whose decoded entries override connection options.</param>
+    /// <returns>Decoded, case-sensitive query entries; the final repeated key wins.</returns>
     private static Dictionary<string, string> ParseQuery(string query)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);

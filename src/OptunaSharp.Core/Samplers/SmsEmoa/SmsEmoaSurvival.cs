@@ -35,6 +35,12 @@ internal static class SmsEmoaSurvival
     ///     from the pre-merge parent population, as pymoo's <c>_advance</c> does). Returns the surviving
     ///     row indices, best fronts first, in ascending-index order within a front.
     /// </summary>
+    /// <param name="mergedLoss">Minimization-oriented objective rows of the merged parent and offspring population.</param>
+    /// <param name="nSurvive">Maximum number of individuals to retain.</param>
+    /// <param name="ideal">Ideal objective vector used as the normalization origin.</param>
+    /// <param name="nadir">Upper objective normalization reference.</param>
+    /// <param name="eps">Positive padding used to place the hypervolume reference beyond the observed front.</param>
+    /// <returns>Indices of the surviving rows in the merged objective matrix.</returns>
     internal static int[] Select(
         double[][] mergedLoss, int nSurvive, double[] ideal, double[] nadir, double eps = DefaultEps)
     {
@@ -80,6 +86,14 @@ internal static class SmsEmoaSurvival
     ///     hv.delete(k)</c>). One objective has no hypervolume, so there the worst-value points are
     ///     dropped directly.
     /// </summary>
+    /// <param name="front">Objective vectors of one nondominated front.</param>
+    /// <param name="loss">Minimization-oriented objective coordinate values.</param>
+    /// <param name="ideal">Ideal objective vector used as the normalization origin.</param>
+    /// <param name="nadir">Upper objective normalization reference.</param>
+    /// <param name="m">Number of objective or residual components.</param>
+    /// <param name="eps">Positive padding used to place the hypervolume reference beyond the observed front.</param>
+    /// <param name="keep">Number of split-front individuals to retain.</param>
+    /// <returns>Indices retained after repeatedly removing the least hypervolume contributor.</returns>
     private static List<int> TrimByHypervolume(
         List<int> front, double[][] loss, double[] ideal, double[] nadir, int m, double eps, int keep)
     {
@@ -123,6 +137,11 @@ internal static class SmsEmoaSurvival
     ///     to the reference point so a point outside the reference region satisfies the hypervolume
     ///     module's "all points dominate the reference" contract and simply contributes nothing there.
     /// </summary>
+    /// <param name="loss">Minimization-oriented objective coordinate values.</param>
+    /// <param name="ideal">Ideal objective vector used as the normalization origin.</param>
+    /// <param name="nadir">Upper objective normalization reference.</param>
+    /// <param name="refPoint">Hypervolume reference coordinates used for normalization.</param>
+    /// <returns>The objective loss normalized between the ideal and reference points.</returns>
     private static double[] Normalize(double[] loss, double[] ideal, double[] nadir, double[] refPoint)
     {
         var r = new double[loss.Length];
@@ -135,6 +154,10 @@ internal static class SmsEmoaSurvival
         return r;
     }
 
+    /// <summary>Copies all row references except the row being excluded from a hypervolume calculation.</summary>
+    /// <param name="rows">Observation rows to copy into the result.</param>
+    /// <param name="skip">Zero-based row omitted from the result.</param>
+    /// <returns>The retained row references in their original order.</returns>
     private static double[][] Without(double[][] rows, int skip)
     {
         var result = new double[rows.Length - 1][];

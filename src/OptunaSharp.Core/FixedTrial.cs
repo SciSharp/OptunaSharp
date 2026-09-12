@@ -29,6 +29,7 @@ namespace OptunaSharp;
 ///     var result = Objective(new FixedTrial(new() { ["x"] = 1.0, ["y"] = 0L }));  // == 1
 ///     </code>
 /// </example>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.trial.FixedTrial.html">Official Optuna fixed-trial contract.</seealso>
 public class FixedTrial : BaseTrial
 {
     private readonly OrderedDict<string, object?> _params;
@@ -39,17 +40,45 @@ public class FixedTrial : BaseTrial
     private readonly DateTime? _datetimeStart = DateTime.Now;
     private readonly int _number;
 
+    /// <param name="params">Parameter names mapped to their external values.</param>
+    /// <summary>Creates an objective replay using the supplied parameter dictionary by reference.</summary>
+    /// <param name="number">Trial number exposed to the objective; defaults to zero.</param>
+    /// <remarks>Params contains only parameters that have been requested, not every value supplied to the constructor.</remarks>
     public FixedTrial(OrderedDict<string, object?> @params, int number = 0)
     {
         _params = @params;
         _number = number;
     }
 
+    /// <param name="name">Parameter name; repeated suggestions refer to the same parameter.</param>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <param name="step">Positive float grid spacing, or null for a continuous range; cannot be combined with log.</param>
+    /// <param name="log">Whether to sample in the logarithmic domain, which requires a strictly positive lower endpoint.</param>
+    /// <summary>Replays a stored floating-point parameter value for the objective.</summary>
+    /// <returns>The stored floating-point value.</returns>
+    /// <exception cref="NumSharp.ValueError">The distribution is invalid, a required stored parameter is missing, or a repeated suggestion changes its distribution kind, logarithmic scale, or categorical choices.</exception>
+    /// <exception cref="NumSharp.TypeError">The stored or sampled value cannot be converted to a float.</exception>
+    /// <remarks>Numeric values outside the requested range are returned with a warning when replaying stored parameters.</remarks>
+    /// <exception cref="System.FormatException">A stepped bound or step is nonfinite and cannot be parsed as a decimal.</exception>
+    /// <exception cref="System.DivideByZeroException">The positive step rounds to zero in decimal arithmetic while aligning the upper endpoint.</exception>
     public override double SuggestFloat(string name, double low, double high, double? step = null, bool log = false)
         => PyFloat.TryConvert(Suggest(name, new FloatDistribution(low, high, log: log, step: step)), out double v)
             ? v
             : throw new TypeError("float-castable value is expected.");
 
+    /// <param name="name">Parameter name; repeated suggestions refer to the same parameter.</param>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <param name="step">Positive integer grid spacing; must be one for logarithmic sampling.</param>
+    /// <param name="log">Whether to sample in the logarithmic domain, which requires a strictly positive lower endpoint.</param>
+    /// <summary>Replays a stored integer parameter value for the objective.</summary>
+    /// <returns>The stored integer value.</returns>
+    /// <exception cref="NumSharp.ValueError">The distribution is invalid, a required stored parameter is missing, or a repeated suggestion changes its distribution kind, logarithmic scale, or categorical choices.</exception>
+    /// <exception cref="System.FormatException">A stored or sampled string is not an integer.</exception>
+    /// <exception cref="System.OverflowException">An integer conversion exceeds Int64.</exception>
+    /// <exception cref="System.InvalidCastException">The value does not support integer conversion.</exception>
+    /// <remarks>Numeric values outside the requested range are returned with a warning when replaying stored parameters.</remarks>
     public override long SuggestInt(string name, long low, long high, long step = 1, bool log = false)
     {
         var value = Suggest(name, new IntDistribution(low, high, log: log, step: step));
@@ -62,17 +91,35 @@ public class FixedTrial : BaseTrial
         };
     }
 
+    /// <param name="name">Parameter name; repeated suggestions refer to the same parameter.</param>
+    /// <param name="choices">Nonempty sequence of categorical candidates; order is retained and determines stored indices.</param>
+    /// <summary>Replays a stored categorical parameter value for the objective.</summary>
+    /// <returns>The stored categorical value.</returns>
+    /// <exception cref="NumSharp.ValueError">The distribution is invalid, a required stored parameter is missing, or a repeated suggestion changes its distribution kind, logarithmic scale, or categorical choices.</exception>
+    /// <exception cref="NumSharp.TypeError">A stored or sampled value is not a supported categorical scalar.</exception>
+    /// <exception cref="System.ArgumentNullException">The choices sequence is null.</exception>
     public override CategoricalChoice SuggestCategorical(string name, IEnumerable<CategoricalChoice> choices)
         => CategoricalChoice.From(Suggest(name, new CategoricalDistribution(choices)));
 
+    /// <param name="value">Intermediate objective value; ignored by replay trials.</param>
+    /// <param name="step">Zero-based reporting step; ignored by replay trials.</param>
+    /// <summary>Accepts an intermediate observation without recording it; replay trials do not prune.</summary>
     public override void Report(double value, int step)
     {
     }
 
+    /// <summary>Returns false because a replay trial does not run a pruning algorithm.</summary>
+    /// <returns>Always false.</returns>
     public override bool ShouldPrune() => false;
 
+    /// <param name="key">Attribute name; an existing attribute is overwritten.</param>
+    /// <param name="value">Value retained in this replay record's local attribute dictionary.</param>
+    /// <summary>Updates the local user attribute by name.</summary>
     public override void SetUserAttr(string key, object? value) => _userAttrs[key] = value;
 
+    /// <param name="key">Attribute name; an existing attribute is overwritten.</param>
+    /// <param name="value">Value retained in this replay record's local internal-attribute dictionary.</param>
+    /// <summary>Updates the local internal attribute by name.</summary>
     [Obsolete(DeprecationMessages.SetSystemAttr)]
     public override void SetSystemAttr(string key, object? value)
     {
@@ -80,6 +127,11 @@ public class FixedTrial : BaseTrial
         _systemAttrs[key] = value;
     }
 
+    /// <param name="name">Parameter name; repeated suggestions refer to the same parameter.</param>
+    /// <param name="distribution">Distribution defining the parameter representation and allowed values.</param>
+    /// <summary>Resolves a parameter through the recorded distribution and caches its external value.</summary>
+    /// <returns>The external parameter value; an out-of-range fixed numeric value may be returned with a warning.</returns>
+    /// <exception cref="NumSharp.ValueError">A required parameter is absent, its representation is invalid, or distributions are incompatible.</exception>
     private object? Suggest(string name, BaseDistribution distribution)
     {
         if (!_params.ContainsKey(name))
@@ -103,16 +155,22 @@ public class FixedTrial : BaseTrial
         return value;
     }
 
+    /// <summary>Gets parameters already suggested through this trial, using their external values.</summary>
     public override IReadOnlyDictionary<string, object?> Params => _suggestedParams;
 
+    /// <summary>Gets the distribution recorded for each suggested parameter.</summary>
     public override IReadOnlyDictionary<string, BaseDistribution> Distributions => _distributions;
 
+    /// <summary>Gets the user metadata attached to this trial.</summary>
     public override IReadOnlyDictionary<string, object?> UserAttrs => _userAttrs;
 
+    /// <summary>Gets the internal metadata used by samplers and storage.</summary>
     public override IReadOnlyDictionary<string, object?> SystemAttrs => _systemAttrs;
 
+    /// <summary>Gets the local time at which this replay trial was constructed.</summary>
     public override DateTime? DatetimeStart => _datetimeStart;
 
+    /// <summary>Gets the zero-based trial number within the study or replay context.</summary>
     public override int Number => _number;
 
     /// <summary>
@@ -126,6 +184,9 @@ public class FixedTrial : BaseTrial
     ///     Set a constraint value for the trial. The trial is considered feasible when all
     ///     constraint values are zero or less.
     /// </summary>
+    /// <param name="key">Constraint name; later writes of the same name are ignored with a warning.</param>
+    /// <param name="value">Constraint value; zero or negative is feasible and NaN is forbidden.</param>
+    /// <exception cref="NumSharp.ValueError">The constraint value is NaN.</exception>
     public override void SetConstraint(string key, double value)
     {
         if (double.IsNaN(value))

@@ -22,6 +22,7 @@ namespace OptunaSharp.Samplers;
 ///     study.Optimize(Objective, nTrials: 10);
 ///     </code>
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.PartialFixedSampler.html">Official Optuna PartialFixedSampler reference.</seealso>
 public class PartialFixedSampler : BaseSampler
 {
     private readonly IReadOnlyDictionary<string, object?> _fixedParams;
@@ -29,14 +30,17 @@ public class PartialFixedSampler : BaseSampler
 
     /// <param name="fixedParams">A dictionary of parameters to be fixed.</param>
     /// <param name="baseSampler">A sampler which samples unfixed parameters.</param>
+    /// <summary>Wraps a sampler and retains the supplied map of parameter values that remain fixed.</summary>
     public PartialFixedSampler(IReadOnlyDictionary<string, object?> fixedParams, BaseSampler baseSampler)
     {
         _fixedParams = fixedParams;
         _baseSampler = baseSampler;
     }
 
+    /// <inheritdoc />
     public override void ReseedRng() => _baseSampler.ReseedRng();
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = _baseSampler.InferRelativeSearchSpace(study, trial);
@@ -51,11 +55,13 @@ public class PartialFixedSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
         // Fixed params are never sampled here.
         => _baseSampler.SampleRelative(study, trial, searchSpace);
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -81,8 +87,10 @@ public class PartialFixedSampler : BaseSampler
         return paramValue;
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial) => _baseSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
         => _baseSampler.AfterTrial(study, trial, state, values);
 }

@@ -20,13 +20,18 @@ namespace OptunaSharp.Collections;
 ///     The shared members (<see cref="GetValueOrDefault" />, <see cref="ShallowClone" />) live
 ///     alongside on both frameworks (see <c>OrderedDict.Custom.cs</c>).
 /// </summary>
+/// <typeparam name="TKey">The non-null key type compared by the dictionary comparer.</typeparam>
+/// <typeparam name="TValue">The type of values stored with each key.</typeparam>
 public sealed partial class OrderedDict<TKey, TValue> : System.Collections.Generic.OrderedDictionary<TKey, TValue>
     where TKey : notnull
 {
+    /// <summary>Creates an insertion-ordered dictionary with the requested initial storage capacity when supplied.</summary>
     public OrderedDict()
     {
     }
 
+    /// <summary>Creates an insertion-ordered dictionary with the requested initial storage capacity when supplied.</summary>
+    /// <param name="capacity">The initial number of entries for which storage should be reserved.</param>
     public OrderedDict(int capacity) : base(capacity)
     {
     }
@@ -37,6 +42,7 @@ public sealed partial class OrderedDict<TKey, TValue> : System.Collections.Gener
     ///     (last value wins, first-occurrence position); the in-box <c>IEnumerable</c> constructor
     ///     throws on duplicate keys instead.
     /// </remarks>
+    /// <param name="source">The source entries copied in enumeration order; repeated keys replace values without changing the first key position.</param>
     public OrderedDict(IEnumerable<KeyValuePair<TKey, TValue>> source)
     {
         foreach (var kv in source)

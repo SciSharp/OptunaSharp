@@ -34,6 +34,9 @@ public class InMemoryStorage : BaseStorage
     private readonly object _lock = new();
     private readonly Dictionary<int, int> _prevWaitingTrialNumber = new();
 
+    /// <param name="directions">Objective directions in the same order as the objective values.</param>
+    /// <param name="studyName">Name identifying the study in the selected storage.</param>
+    /// <inheritdoc />
     public override int CreateNewStudy(IReadOnlyList<StudyDirection> directions, string? studyName = null)
     {
         lock (_lock)
@@ -62,6 +65,8 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override void DeleteStudy(int studyId)
     {
         lock (_lock)
@@ -77,18 +82,28 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
+    /// <inheritdoc />
     public override void SetStudyUserAttr(int studyId, string key, object? value)
     {
         lock (_lock)
         {
             CheckStudyId(studyId);
 
+            // Replace the dictionary instead of mutating it so readers holding an older snapshot
+            // do not observe a write performed after their read.
             var userAttrs = _studies[studyId].UserAttrs.ShallowClone();
             userAttrs[key] = value;
             _studies[studyId].UserAttrs = userAttrs;
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
+    /// <inheritdoc />
     public override void SetStudySystemAttr(int studyId, string key, object? value)
     {
         lock (_lock)
@@ -101,6 +116,8 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyName">Name identifying the study in the selected storage.</param>
+    /// <inheritdoc />
     public override int GetStudyIdFromName(string studyName)
     {
         lock (_lock)
@@ -112,6 +129,8 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override string GetStudyNameFromId(int studyId)
     {
         lock (_lock)
@@ -121,6 +140,8 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override List<StudyDirection> GetStudyDirections(int studyId)
     {
         lock (_lock)
@@ -130,6 +151,8 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override OrderedDict<string, object?> GetStudyUserAttrs(int studyId)
     {
         lock (_lock)
@@ -139,6 +162,8 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override OrderedDict<string, object?> GetStudySystemAttrs(int studyId)
     {
         lock (_lock)
@@ -148,6 +173,7 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <inheritdoc />
     public override List<FrozenStudy> GetAllStudies()
     {
         lock (_lock)
@@ -156,6 +182,9 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <summary>Copies study metadata while the storage lock is held.</summary>
+    /// <returns>A study record with copied attribute containers.</returns>
     private FrozenStudy BuildFrozenStudy(int studyId)
     {
         var study = _studies[studyId];
@@ -170,6 +199,9 @@ public class InMemoryStorage : BaseStorage
             studyId: studyId);
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
+    /// <param name="templateTrial">Optional record to copy; null creates a new running trial with empty observations.</param>
     public override int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null)
     {
         lock (_lock)
@@ -189,6 +221,8 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <summary>Creates an empty running record before storage assigns its identifiers.</summary>
+    /// <returns>A running trial with current start time and placeholder identifiers.</returns>
     private static FrozenTrial CreateRunningTrial() => new(
         trialId: -1,  // dummy value.
         number: -1,  // dummy value.
@@ -202,6 +236,11 @@ public class InMemoryStorage : BaseStorage
         datetimeStart: DateTime.Now,
         datetimeComplete: null);
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="paramName">Parameter name used as the storage and distribution lookup key.</param>
+    /// <param name="distribution">Distribution defining the parameter representation and allowed values.</param>
+    /// <inheritdoc />
+    /// <param name="paramValueInternal">Parameter value in the distribution's internal numeric representation.</param>
     public override void SetTrialParam(
         int trialId, string paramName, double paramValueInternal, BaseDistribution distribution)
     {
@@ -229,6 +268,9 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="trialNumber">Zero-based trial number within the study, not a storage identifier.</param>
+    /// <inheritdoc />
     public override int GetTrialIdFromStudyIdTrialNumber(int studyId, int trialNumber)
     {
         lock (_lock)
@@ -249,6 +291,8 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <inheritdoc />
     public override int GetTrialNumberFromId(int trialId)
     {
         lock (_lock)
@@ -259,6 +303,8 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override FrozenTrial GetBestTrial(int studyId)
     {
         lock (_lock)
@@ -275,6 +321,9 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="paramName">Parameter name used as the storage and distribution lookup key.</param>
+    /// <inheritdoc />
     public override double GetTrialParam(int trialId, string paramName)
     {
         lock (_lock)
@@ -286,6 +335,10 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="state">Trial state to record or inspect.</param>
+    /// <param name="values">Objective values in study direction order, or null when no objective values are recorded.</param>
+    /// <inheritdoc />
     public override bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null)
     {
         lock (_lock)
@@ -293,6 +346,8 @@ public class InMemoryStorage : BaseStorage
             var trial = GetTrialUnlocked(trialId).ShallowCopy();
             CheckTrialIsUpdatable(trialId, trial.State);
 
+            // The lock makes claiming WAITING work atomic: only one worker can transition a queued
+            // trial to RUNNING, and losers can continue searching without evaluating it twice.
             if (state == TrialState.Running && trial.State != TrialState.Waiting)
                 return false;
 
@@ -319,6 +374,9 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <summary>Updates the best-trial identifier after inserting or completing a trial; requires the storage lock.</summary>
     private void UpdateCache(int trialId, int studyId)
     {
         var trial = GetTrialUnlocked(trialId);
@@ -361,6 +419,10 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="step">Reporting step whose intermediate objective observation is stored.</param>
+    /// <inheritdoc />
+    /// <param name="intermediateValue">Intermediate objective observation to store at the reporting step.</param>
     public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
     {
         lock (_lock)
@@ -375,6 +437,10 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
+    /// <inheritdoc />
     public override void SetTrialUserAttr(int trialId, string key, object? value)
     {
         lock (_lock)
@@ -390,6 +456,10 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
+    /// <inheritdoc />
     public override void SetTrialSystemAttr(int trialId, string key, object? value)
     {
         lock (_lock)
@@ -404,6 +474,8 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <inheritdoc />
     public override FrozenTrial GetTrial(int trialId)
     {
         lock (_lock)
@@ -412,6 +484,10 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <summary>Loads the shared trial record while the caller holds the storage lock.</summary>
+    /// <returns>The stored trial instance.</returns>
+    /// <exception cref="NumSharp.KeyError">The identifier does not exist.</exception>
     private FrozenTrial GetTrialUnlocked(int trialId)
     {
         CheckTrialId(trialId);
@@ -419,12 +495,19 @@ public class InMemoryStorage : BaseStorage
         return _studies[studyId].Trials[trialNumber];
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="trial">Trial record or active trial on which the operation acts.</param>
+    /// <summary>Replaces a stored trial snapshot while the caller holds the storage lock.</summary>
     private void SetTrial(int trialId, FrozenTrial trial)
     {
         var (studyId, trialNumber) = _trialIdToStudyIdAndNumber[trialId];
         _studies[studyId].Trials[trialNumber] = trial;
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="deepcopy">Whether to copy trial records; treat records returned with false as read-only.</param>
+    /// <param name="states">States to include; null includes every state.</param>
+    /// <inheritdoc />
     public override List<FrozenTrial> GetAllTrials(
         int studyId, bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
     {
@@ -467,12 +550,18 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <summary>Rejects identifiers that are absent from this storage instance.</summary>
+    /// <exception cref="NumSharp.KeyError">The identifier does not exist.</exception>
     private void CheckStudyId(int studyId)
     {
         if (!_studies.ContainsKey(studyId))
             throw new KeyError($"No study with study_id {studyId} exists.");
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <summary>Rejects identifiers that are absent from this storage instance.</summary>
+    /// <exception cref="NumSharp.KeyError">The identifier does not exist.</exception>
     private void CheckTrialId(int trialId)
     {
         if (!_trialIdToStudyIdAndNumber.ContainsKey(trialId))
@@ -481,18 +570,28 @@ public class InMemoryStorage : BaseStorage
 
     private sealed class StudyInfo
     {
+        /// <param name="name">Study name registered in this storage instance.</param>
+        /// <param name="directions">Objective directions in the same order as the objective values.</param>
+        /// <summary>Initializes the in-memory metadata and empty trial history for a study.</summary>
         internal StudyInfo(string name, List<StudyDirection> directions)
         {
             Name = name;
             Directions = directions;
         }
 
+        /// <summary>Cached trials keyed by their per-study number.</summary>
         internal List<FrozenTrial> Trials { get; } = new();
+        /// <summary>Previously recorded distributions used to validate parameters across trials.</summary>
         internal Dictionary<string, BaseDistribution> ParamDistribution { get; } = new();
+        /// <summary>Copy-on-write user attributes for the study.</summary>
         internal OrderedDict<string, object?> UserAttrs { get; set; } = new();
+        /// <summary>Copy-on-write internal attributes for the study.</summary>
         internal OrderedDict<string, object?> SystemAttrs { get; set; } = new();
+        /// <summary>Registered study name.</summary>
         internal string Name { get; }
+        /// <summary>Study directions in objective order.</summary>
         internal List<StudyDirection> Directions { get; }
+        /// <summary>Identifier of the best completed trial cached for single-objective lookup.</summary>
         internal int? BestTrialId { get; set; }
     }
 }

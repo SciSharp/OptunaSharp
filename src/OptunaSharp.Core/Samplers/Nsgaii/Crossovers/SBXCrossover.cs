@@ -20,6 +20,8 @@ public class SBXCrossover : BaseCrossover
     /// <param name="eta">Distribution index. Defaults to 2 for single-objective, 20 for multi-objective.</param>
     /// <param name="uniformCrossoverProb">Probability of uniform crossover between the two candidate children.</param>
     /// <param name="useChildGeneProb">Per-variable probability of using the generated child value over the parent value.</param>
+    /// <summary>Configures simulated-binary crossover spread and the policy for choosing each child coordinate.</summary>
+    /// <exception cref="NumSharp.ValueError">The distribution index is negative, uniform crossover probability is outside [0, 1], or child-gene probability is outside (0, 1].</exception>
     public SBXCrossover(double? eta = null, double uniformCrossoverProb = 0.5, double useChildGeneProb = 0.5)
     {
         if (eta is not null && eta < 0.0)
@@ -34,8 +36,10 @@ public class SBXCrossover : BaseCrossover
         _useChildGeneProb = useChildGeneProb;
     }
 
+    /// <inheritdoc />
     public override int NParents => 2;
 
+    /// <inheritdoc />
     public override double[] Crossover(
         double[][] parentsParams, NumPyRandom rng, Study study, double[,] searchSpaceBounds)
     {

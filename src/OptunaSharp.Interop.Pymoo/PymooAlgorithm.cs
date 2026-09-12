@@ -184,6 +184,10 @@ public sealed class PymooAlgorithmOptions
 /// agree on the mapping.</summary>
 internal static class PymooAlgorithmMap
 {
+    /// <summary>Resolves an algorithm selection to its runtime implementation.</summary>
+    /// <param name="algorithm">The pymoo algorithm selected by the caller.</param>
+    /// <returns>The Python module import path and class name for the selected pymoo algorithm.</returns>
+    /// <exception cref="System.ArgumentOutOfRangeException">The algorithm enum value has no mapped pymoo implementation.</exception>
     internal static (string Module, string Class) Resolve(PymooAlgorithm algorithm) => algorithm switch
     {
         PymooAlgorithm.Nsga2 => ("pymoo.algorithms.moo.nsga2", "NSGA2"),
@@ -201,15 +205,21 @@ internal static class PymooAlgorithmMap
     };
 
     /// <summary>Algorithms whose population size and survival come from a reference-direction set.</summary>
+    /// <param name="a">The pymoo algorithm whose constructor requirements are queried.</param>
+    /// <returns>Whether this algorithm consumes a ref_dirs array.</returns>
     internal static bool UsesReferenceDirections(PymooAlgorithm a)
         => a is PymooAlgorithm.Nsga3 or PymooAlgorithm.UNsga3 or PymooAlgorithm.Rvea or PymooAlgorithm.Ctaea;
 
     /// <summary>Algorithms steered by user reference points.</summary>
+    /// <param name="a">The pymoo algorithm whose constructor requirements are queried.</param>
+    /// <returns>Whether this algorithm consumes a ref_points array.</returns>
     internal static bool UsesReferencePoints(PymooAlgorithm a)
         => a is PymooAlgorithm.RNsga2 or PymooAlgorithm.RNsga3;
 
     /// <summary>Algorithms whose population size is the sampler's <c>populationSize</c> (a <c>pop_size</c>
     /// constructor argument).</summary>
+    /// <param name="a">The pymoo algorithm whose constructor requirements are queried.</param>
+    /// <returns>Whether this algorithm accepts the explicit population-size option.</returns>
     internal static bool UsesPopulationSize(PymooAlgorithm a)
         => a is PymooAlgorithm.Nsga2 or PymooAlgorithm.RNsga2 or PymooAlgorithm.AgeMoea
             or PymooAlgorithm.AgeMoea2 or PymooAlgorithm.SmsEmoa or PymooAlgorithm.Spea2;

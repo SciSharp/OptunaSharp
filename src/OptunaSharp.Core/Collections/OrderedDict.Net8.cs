@@ -515,6 +515,7 @@ namespace OptunaSharp.Collections
         }
 
         /// <summary>Adds each element of the enumerable to the dictionary.</summary>
+        /// <param name="collection">The entries whose enumeration order is copied.</param>
         private void AddRange(IEnumerable<KeyValuePair<TKey, TValue>> collection)
         {
             Debug.Assert(collection is not null);
@@ -622,6 +623,11 @@ namespace OptunaSharp.Collections
             return IndexOf(key, ref _, ref _);
         }
 
+        /// <summary>Returns the zero-based insertion-order index of the key, or minus one when absent.</summary>
+        /// <param name="key">The key whose associated entry is requested.</param>
+        /// <param name="outHashCode">Receives the hash code computed using the dictionary's comparer.</param>
+        /// <param name="outCollisionCount">Receives the number of bucket-chain entries inspected during lookup.</param>
+        /// <returns>The zero-based insertion-order index of the key, or minus one when absent.</returns>
         private int IndexOf(TKey key, ref uint outHashCode, ref uint outCollisionCount)
         {
             Debug.Assert(key is not null, "Key nullness should have been validated by caller.");
@@ -959,6 +965,8 @@ namespace OptunaSharp.Collections
         /// The new entry's <see cref="Entry.Next"/> is set to the bucket's current
         /// head, and then the new entry is made the new head.
         /// </remarks>
+        /// <param name="entry">The key/value entry whose bucket linkage is updated.</param>
+        /// <param name="entryIndex">The zero-based position of the entry in insertion order.</param>
         private void PushEntryIntoBucket(ref Entry entry, int entryIndex)
         {
             ref int bucket = ref GetBucket(entry.HashCode);
@@ -967,6 +975,7 @@ namespace OptunaSharp.Collections
         }
 
         /// <summary>Removes an entry from its bucket.</summary>
+        /// <param name="entryIndex">The zero-based position of the entry in insertion order.</param>
         private void RemoveEntryFromBucket(int entryIndex)
         {
             // We're only calling this method if there's an entry to be removed, in which case
@@ -1067,6 +1076,8 @@ namespace OptunaSharp.Collections
         /// Checks to see whether the collision count that occurred during lookup warrants upgrading to a non-randomized comparer,
         /// and does so if necessary.
         /// </summary>
+        /// <param name="collisionCount">The number of hash-bucket collisions observed while finding this entry.</param>
+        /// <param name="entries">The backing entry array whose entries are rehashed.</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Is no-op in certain targets")]
         private void RehashIfNecessary(uint collisionCount, Entry[] entries)
@@ -1085,6 +1096,8 @@ namespace OptunaSharp.Collections
         }
 
         /// <summary>Grow or shrink <see cref="_buckets"/> and <see cref="_entries"/> to the specified capacity.</summary>
+        /// <param name="newSize">The new capacity of the backing hash/entry arrays.</param>
+        /// <param name="forceNewHashCodes">Whether rehashing must recompute hashes after switching string comparison strategy.</param>
         [MemberNotNull(nameof(_buckets))]
         [MemberNotNull(nameof(_entries))]
         private void Resize(int newSize, bool forceNewHashCodes = false)
@@ -1146,6 +1159,8 @@ namespace OptunaSharp.Collections
         /// Buckets are 1-based. This is so that the default initialized value of 0
         /// maps to -1 and is usable as a sentinel.
         /// </remarks>
+        /// <param name="hashCode">The comparer-derived hash code used to select a bucket.</param>
+        /// <returns>A reference to the bucket selected by the supplied hash code.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ref int GetBucket(uint hashCode)
         {
@@ -1409,6 +1424,8 @@ namespace OptunaSharp.Collections
             private int _index;
 
             /// <summary>Initialize the enumerator.</summary>
+            /// <param name="dictionary">The owning ordered dictionary whose entries are exposed by this wrapper or enumerator.</param>
+            /// <param name="useDictionaryEntry">Whether nongeneric enumeration exposes DictionaryEntry values rather than KeyValuePair values.</param>
             internal Enumerator(OrderedDict<TKey, TValue> dictionary, bool useDictionaryEntry)
             {
                 _dictionary = dictionary;
@@ -1480,6 +1497,7 @@ namespace OptunaSharp.Collections
             private readonly OrderedDict<TKey, TValue> _dictionary;
 
             /// <summary>Initialize the collection wrapper.</summary>
+            /// <param name="dictionary">The owning ordered dictionary whose entries are exposed by this wrapper or enumerator.</param>
             internal KeyCollection(OrderedDict<TKey, TValue> dictionary) => _dictionary = dictionary;
 
             /// <inheritdoc/>
@@ -1647,6 +1665,7 @@ namespace OptunaSharp.Collections
                 private OrderedDict<TKey, TValue>.Enumerator _enumerator;
 
                 /// <summary>Initialize the enumerator.</summary>
+                /// <param name="dictionary">The owning ordered dictionary whose entries are exposed by this wrapper or enumerator.</param>
                 internal Enumerator(OrderedDict<TKey, TValue> dictionary) => _enumerator = dictionary.GetEnumerator();
 
                 /// <inheritdoc/>
@@ -1674,6 +1693,7 @@ namespace OptunaSharp.Collections
             private readonly OrderedDict<TKey, TValue> _dictionary;
 
             /// <summary>Initialize the collection wrapper.</summary>
+            /// <param name="dictionary">The owning ordered dictionary whose entries are exposed by this wrapper or enumerator.</param>
             internal ValueCollection(OrderedDict<TKey, TValue> dictionary) => _dictionary = dictionary;
 
             /// <inheritdoc/>
@@ -1890,6 +1910,7 @@ namespace OptunaSharp.Collections
                 private OrderedDict<TKey, TValue>.Enumerator _enumerator;
 
                 /// <summary>Initialize the enumerator.</summary>
+                /// <param name="dictionary">The owning ordered dictionary whose entries are exposed by this wrapper or enumerator.</param>
                 internal Enumerator(OrderedDict<TKey, TValue> dictionary) => _enumerator = dictionary.GetEnumerator();
 
                 /// <inheritdoc/>

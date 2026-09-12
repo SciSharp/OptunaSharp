@@ -52,6 +52,18 @@ internal sealed class JanusMooCmix
 
     private string _lastMode = "none";
 
+    /// <summary>Stores the curvature-injection policy and creates its reproducible random stream.</summary>
+    /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
+    /// <param name="seed">Seed for subsequent random draws; null uses the generator default when permitted.</param>
+    /// <param name="cmixProb">Probability of replacing an eligible host child with a curvature-informed sample.</param>
+    /// <param name="cmixWindow">Recent-history length, or auto for three population sizes.</param>
+    /// <param name="cmixRidge">Ridge penalty used to fit the local curvature model.</param>
+    /// <param name="cmixLambda">Regularization strength for inversion of the curvature metric.</param>
+    /// <param name="cmixSigma">Global scale of the normalized curvature-informed Gaussian proposal.</param>
+    /// <param name="cmixStartGeneration">Generation-based warmup used when an explicit start trial is absent.</param>
+    /// <param name="cmixStartTrial">Explicit first eligible trial number, or null for a history/generation-derived threshold.</param>
+    /// <param name="componentAttr">Trial attribute name used to read observed component losses.</param>
+    /// <param name="scalarFallback">Feature family used when component-loss observations are unavailable.</param>
     internal JanusMooCmix(
         int populationSize, int? seed, double cmixProb, string cmixWindow, double cmixRidge,
         double cmixLambda, double cmixSigma, int cmixStartGeneration, int? cmixStartTrial,
@@ -76,10 +88,13 @@ internal sealed class JanusMooCmix
         _rng = seed is null ? np.random.default_rng() : np.random.default_rng((long)seed.Value);
     }
 
+    /// <summary>First trial number at which curvature injection may be attempted.</summary>
     internal int StartTrial => _cmixStartTrial;
+    /// <summary>Most recently used local-model feature family.</summary>
     internal string LastMode => _lastMode;
 
     /// <summary>The reference's per-trial fire decision: <c>cmix_rng.random() &lt; cmix_prob</c> (one PCG64 draw).</summary>
+    /// <returns>True when the curvature-injection probability draw succeeds.</returns>
     internal bool DecideFire() => _rng.random().ToArray<double>()[0] < _cmixProb;
 
     /// <summary>
@@ -88,6 +103,11 @@ internal sealed class JanusMooCmix
     ///     sample with probability <c>cmix_prob</c> (a failed draw keeps the host child). Each MOO host
     ///     sampler calls this with the child its own <c>base.SampleRelative</c> produced.
     /// </summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <param name="hostParams">Native host proposal to retain unless curvature injection replaces it.</param>
+    /// <returns>The injected candidate when available, otherwise the original host proposal.</returns>
     internal OrderedDict<string, object?> Apply(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace,
         OrderedDict<string, object?> hostParams)
@@ -107,6 +127,9 @@ internal sealed class JanusMooCmix
     ///     covariance, and draw a clipped normalized sample decoded back to params. <c>null</c> whenever any
     ///     stage fails (the host child is used instead).
     /// </summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <returns>A curvature-informed proposal, or null when the history or fitted metric is unusable.</returns>
     internal OrderedDict<string, object?>? TrySample(Study study, OrderedDict<string, BaseDistribution> searchSpace)
     {
         var paramNames = searchSpace.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
@@ -173,13 +196,22 @@ internal sealed class JanusMooCmix
 
     private sealed class Transform
     {
+        /// <summary>Lower endpoint of the represented numerical domain.</summary>
         public double Low;
+        /// <summary>Upper endpoint of the represented numerical domain.</summary>
         public double High;
+        /// <summary>Quantization spacing; null or zero denotes an unquantized domain where supported.</summary>
         public double? Step;
+        /// <summary>Whether finite choices are converted back to integer values.</summary>
         public bool IsInt;
+        /// <summary>Original parameter distribution used when converting normalized coordinates back to values.</summary>
         public required BaseDistribution Dist;
     }
 
+    /// <summary>Constructs supported numerical coordinate transforms for curvature fitting and injection.</summary>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <param name="paramNames">Parameter names fixing the vector coordinate order.</param>
+    /// <returns>Transforms keyed by parameter name, or null when the search space is unsupported.</returns>
     private static Dictionary<string, Transform>? BuildTransforms(
         OrderedDict<string, BaseDistribution> searchSpace, List<string> paramNames)
     {
@@ -207,8 +239,18 @@ internal sealed class JanusMooCmix
         return transforms;
     }
 
+    /// <summary>Maps an external parameter value into its normalized numerical coordinate.</summary>
+    /// <param name="value">Input value used by the comparison or compatibility fallback.</param>
+    /// <param name="t">Distribution-specific numerical normalization settings.</param>
+    /// <returns>The normalized numerical coordinate.</returns>
     private static double ToNorm(object? value, Transform t) => (Convert.ToDouble(value) - t.Low) / (t.High - t.Low);
 
+    /// <summary>Maps a normalized candidate back to external distribution values, rejecting unsupported coordinates.</summary>
+    /// <param name="sample">Normalized candidate vector to convert back to parameter values.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <param name="paramNames">Parameter names fixing the vector coordinate order.</param>
+    /// <param name="transforms">Numerical normalization transforms indexed by parameter name.</param>
+    /// <returns>External parameter values, or null when a supported conversion cannot be completed.</returns>
     private static OrderedDict<string, object?>? FromNormVector(
         double[] sample, OrderedDict<string, BaseDistribution> searchSpace, List<string> paramNames,
         Dictionary<string, Transform> transforms)
@@ -243,6 +285,9 @@ internal sealed class JanusMooCmix
 
     // ---- center, covariance, sampling ------------------------------------------------------------
 
+    /// <summary>Extracts the scalar training target used by the local-model fallback.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <returns>The scalar value used for local-model training.</returns>
     private double ScalarValue(FrozenTrial trial)
     {
         var vals = trial.Values!;
@@ -251,6 +296,11 @@ internal sealed class JanusMooCmix
         return s / vals.Count;
     }
 
+    /// <summary>Selects a usable trial parameter vector as the center of curvature-informed proposals.</summary>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <param name="paramNames">Parameter names fixing the vector coordinate order.</param>
+    /// <param name="transforms">Numerical normalization transforms indexed by parameter name.</param>
+    /// <returns>The selected normalized center, or null when no compatible trial exists.</returns>
     private double[]? ChooseCenter(List<FrozenTrial> trials, List<string> paramNames, Dictionary<string, Transform> transforms)
     {
         var complete = trials.Where(t => paramNames.All(n => t.ParamsDict.ContainsKey(n))).ToList();
@@ -296,6 +346,10 @@ internal sealed class JanusMooCmix
         return center;
     }
 
+    /// <summary>Regularizes and inverts a curvature metric to obtain a candidate covariance.</summary>
+    /// <param name="metric">Local curvature matrix used to shape exploration.</param>
+    /// <param name="dim">Number of numerical coordinates.</param>
+    /// <returns>The candidate covariance, or null when regularization/inversion fails.</returns>
     private double[,]? InverseMetricCov(double[,] metric, int dim)
     {
         var a = new double[dim, dim];
@@ -316,12 +370,19 @@ internal sealed class JanusMooCmix
     /// <summary>The reference's <c>cmix_rng.multivariate_normal(center, cov)</c>: draw
     ///     <c>z ~ standard_normal(d)</c> from the SAME PCG64 stream, then apply numpy's default
     ///     <c>method="svd"</c> transform (<see cref="JanusMooMetric.MultivariateNormalSvd" />).</summary>
+    /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
+    /// <param name="cov">Initial covariance matrix, or null for the identity default.</param>
+    /// <returns>One covariance-shaped Gaussian candidate using the shared PCG64 stream.</returns>
     private double[] MultivariateNormal(double[] mean, double[,] cov)
         => JanusMooMetric.MultivariateNormalSvd(
             _rng.standard_normal(new Shape(mean.Length)).ToArray<double>(), mean, cov);
 
     // ---- small helpers ---------------------------------------------------------------------------
 
+    /// <summary>Attempts to read a nonempty numeric component-loss vector from trial attributes.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="components">Component-loss vector read from the trial; this helper does not itself require every entry to be finite.</param>
+    /// <returns>True when a nonempty component-loss vector was read.</returns>
     private static bool TryReadComponents(FrozenTrial trial, out double[] components)
     {
         components = Array.Empty<double>();
@@ -347,6 +408,9 @@ internal sealed class JanusMooCmix
         catch (Exception) { return false; }
     }
 
+    /// <summary>Inverts a square matrix, returning no result when the numerical solve is unusable.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The inverse matrix, or null if inversion fails.</returns>
     private static double[,]? Inverse(double[,] a)
     {
         int n = a.GetLength(0);
@@ -365,6 +429,9 @@ internal sealed class JanusMooCmix
         return inv;
     }
 
+    /// <summary>Copies equally sized row vectors into a rectangular observation matrix.</summary>
+    /// <param name="rows">Observation rows to copy into the result.</param>
+    /// <returns>A rectangular copy with one observation per row.</returns>
     private static double[,] ToMatrix(List<double[]> rows)
     {
         int n = rows.Count, d = rows[0].Length;
@@ -373,6 +440,9 @@ internal sealed class JanusMooCmix
         return m;
     }
 
+    /// <summary>Computes one mean per matrix column.</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>The mean of each observation column.</returns>
     private static double[] ColumnMean(double[,] x)
     {
         int n = x.GetLength(0), d = x.GetLength(1);
@@ -383,6 +453,8 @@ internal sealed class JanusMooCmix
 
     /// <summary>Indices sorted by DESCENDING crowding (numpy <c>argsort(-cd, kind="mergesort")</c>): ascending
     ///     on <c>-cd</c>, ties by original index. <c>+∞</c> crowding (boundaries) sorts first.</summary>
+    /// <param name="cd">Diversity scores used to rank archive centers.</param>
+    /// <returns>Indices ordered by descending value with original-order ties.</returns>
     private static int[] DescendingStableArgSort(double[] cd)
     {
         int n = cd.Length;
@@ -396,5 +468,8 @@ internal sealed class JanusMooCmix
         return idx;
     }
 
+    /// <summary>Tests whether a scalar excludes NaN and both infinities.</summary>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>True for a finite scalar, including zero.</returns>
     private static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
 }

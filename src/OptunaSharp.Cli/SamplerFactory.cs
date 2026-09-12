@@ -18,6 +18,13 @@ namespace OptunaSharp.Cli;
 /// </summary>
 internal static class SamplerFactory
 {
+    /// <summary>Resolves a built-in sampler type and invokes a constructor bound from JSON keyword arguments.</summary>
+    /// <param name="name">The unqualified built-in sampler class name.</param>
+    /// <param name="kwargsJson">An optional JSON object containing sampler constructor arguments.</param>
+    /// <returns>The constructed built-in sampler instance.</returns>
+    /// <exception cref="NumSharp.AttributeError">No concrete built-in sampler has the requested name.</exception>
+    /// <exception cref="NumSharp.ValueError">The keyword JSON is not an object or no constructor can bind all supplied arguments.</exception>
+    /// <exception cref="System.Reflection.TargetInvocationException">The selected sampler constructor throws; its cause is preserved as the inner exception.</exception>
     internal static BaseSampler Create(string name, string? kwargsJson)
     {
         Type? type = typeof(BaseSampler).Assembly.GetType("OptunaSharp.Samplers." + name, throwOnError: false);
@@ -28,6 +35,10 @@ internal static class SamplerFactory
         return (BaseSampler)Construct(type, name, kwargs);
     }
 
+    /// <summary>Decodes the optional JSON object containing sampler constructor arguments.</summary>
+    /// <param name="kwargsJson">An optional JSON object containing sampler constructor arguments.</param>
+    /// <returns>The decoded keyword dictionary, or an empty dictionary when omitted.</returns>
+    /// <exception cref="NumSharp.ValueError">The supplied JSON is malformed or is not an object.</exception>
     private static Dictionary<string, object?> ParseKwargs(string? kwargsJson)
     {
         var result = new Dictionary<string, object?>();
@@ -40,6 +51,13 @@ internal static class SamplerFactory
         return result;
     }
 
+    /// <summary>Selects the widest public constructor that consumes every supplied keyword and can bind every parameter.</summary>
+    /// <param name="type">The concrete sampler type whose public constructors are considered.</param>
+    /// <param name="name">The unqualified built-in sampler class name.</param>
+    /// <param name="kwargs">Decoded constructor arguments, using Python snake_case or CLR parameter names.</param>
+    /// <returns>The sampler instance returned by the matching constructor.</returns>
+    /// <exception cref="NumSharp.ValueError">No public constructor can bind all supplied arguments.</exception>
+    /// <exception cref="System.Reflection.TargetInvocationException">The selected sampler constructor throws.</exception>
     private static object Construct(Type type, string name, Dictionary<string, object?> kwargs)
     {
         // Try constructors widest-first; take the first that binds every parameter AND consumes every
@@ -84,8 +102,16 @@ internal static class SamplerFactory
             + $"({{{string.Join(", ", kwargs.Keys)}}}).");
     }
 
+    /// <summary>Removes underscores and folds case to match Python keyword names to CLR parameter names.</summary>
+    /// <param name="s">The constructor keyword or parameter name to normalize.</param>
+    /// <returns>The lowercase name with underscores removed.</returns>
     private static string Normalize(string s) => s.Replace("_", "").ToLowerInvariant();
 
+    /// <summary>Attempts a supported scalar conversion for a reflected constructor parameter.</summary>
+    /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
+    /// <param name="target">The requested CLR parameter type.</param>
+    /// <param name="result">Receives the converted value on success, or null when conversion fails.</param>
+    /// <returns>Whether conversion succeeded and produced a value acceptable to the target parameter.</returns>
     private static bool TryCoerce(object? value, Type target, out object? result)
     {
         Type t = Nullable.GetUnderlyingType(target) ?? target;

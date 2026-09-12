@@ -31,6 +31,11 @@ internal sealed class SearchSpaceTransform
     private readonly bool _transformLog;
     private readonly bool _transform01;
 
+    /// <summary>Builds the encoded parameter-column layout and transformed bounds for one ordered search space.</summary>
+    /// <param name="searchSpace">The parameter distributions in the column order used by the transform or model.</param>
+    /// <param name="transformLog">Whether logarithmic distributions are mapped through their natural logarithm.</param>
+    /// <param name="transformStep">Whether discrete bounds are expanded by half a step before normalization.</param>
+    /// <param name="transform01">Whether transformed numerical coordinates are rescaled to the unit interval.</param>
     public SearchSpaceTransform(
         OrderedDict<string, BaseDistribution> searchSpace,
         bool transformLog = true,
@@ -179,6 +184,11 @@ internal sealed class SearchSpaceTransform
     }
 
     /// <summary>Python <c>_transform_search_space</c>.</summary>
+    /// <param name="searchSpace">The parameter distributions in the column order used by the transform or model.</param>
+    /// <param name="transformLog">Whether logarithmic distributions are mapped through their natural logarithm.</param>
+    /// <param name="transformStep">Whether discrete bounds are expanded by half a step before normalization.</param>
+    /// <returns>The transformed bounds, original-to-encoded column groups, and encoded-to-original column indices.</returns>
+    /// <exception cref="System.InvalidOperationException">A distribution type other than the supported float, integer, or categorical distributions is encountered.</exception>
     private static (double[,], List<long[]>, long[]) TransformSearchSpace(
         OrderedDict<string, BaseDistribution> searchSpace, bool transformLog, bool transformStep)
     {
@@ -265,6 +275,11 @@ internal sealed class SearchSpaceTransform
     }
 
     /// <summary>Python <c>_transform_numerical_param</c>.</summary>
+    /// <param name="param">The parameter name to look up in trial data.</param>
+    /// <param name="distribution">The distribution defining the external value's numeric support and scale.</param>
+    /// <param name="transformLog">Whether logarithmic distributions are mapped through their natural logarithm.</param>
+    /// <returns>The external numerical value in linear or log-transformed coordinates.</returns>
+    /// <exception cref="System.InvalidOperationException">The distribution is categorical or is not a supported numerical distribution.</exception>
     internal static double TransformNumericalParam(double param, BaseDistribution distribution, bool transformLog)
         => distribution switch
         {
@@ -275,6 +290,11 @@ internal sealed class SearchSpaceTransform
         };
 
     /// <summary>Python <c>_untransform_numerical_param</c>. Returns a boxed double (float) or long (int).</summary>
+    /// <param name="transParam">The scalar coordinate in the transformed numerical space.</param>
+    /// <param name="distribution">The distribution defining the external value's numeric support and scale.</param>
+    /// <param name="transformLog">Whether logarithmic distributions are mapped through their natural logarithm.</param>
+    /// <returns>The external numeric value after inverse scaling, clipping, and grid rounding.</returns>
+    /// <exception cref="System.InvalidOperationException">The distribution is categorical or is not a supported numerical distribution.</exception>
     internal static object UntransformNumericalParam(double transParam, BaseDistribution distribution, bool transformLog)
     {
         switch (distribution)
@@ -334,6 +354,10 @@ internal sealed class SearchSpaceTransform
         }
     }
 
+    /// <summary>Returns the Python-compatible floating-point conversion of the external scalar.</summary>
+    /// <param name="param">The parameter name to look up in trial data.</param>
+    /// <returns>The Python-compatible floating-point conversion of the external scalar.</returns>
+    /// <exception cref="NumSharp.TypeError">The external parameter cannot be converted with Python-compatible floating-point semantics.</exception>
     private static double PyFloatValue(object? param)
     {
         if (!PyFloat.TryConvert(param, out double value))

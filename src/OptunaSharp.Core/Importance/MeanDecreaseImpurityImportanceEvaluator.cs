@@ -31,6 +31,7 @@ public sealed class MeanDecreaseImpurityImportanceEvaluator : BaseImportanceEval
     /// <param name="nTrees">Number of trees in the random forest.</param>
     /// <param name="maxDepth">The maximum depth of each tree in the random forest.</param>
     /// <param name="seed">Seed for the random forest.</param>
+    /// <summary>Configures the regression forest used to estimate importance from split impurity reductions.</summary>
     public MeanDecreaseImpurityImportanceEvaluator(int nTrees = 64, int maxDepth = 64, int? seed = null)
     {
         _nTrees = nTrees;
@@ -39,6 +40,7 @@ public sealed class MeanDecreaseImpurityImportanceEvaluator : BaseImportanceEval
     }
 
     /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The requested parameters lack a consistent completed-trial search space, or a multi-objective study has no scalar target selector.</exception>
     public override OrderedDict<string, double> Evaluate(
         Study study, IReadOnlyList<string>? @params = null, Func<FrozenTrial, double>? target = null)
         => ForestImportance.EvaluateMdi(study, @params, target,

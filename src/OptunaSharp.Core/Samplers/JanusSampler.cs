@@ -117,6 +117,8 @@ public sealed class JanusSampler : BaseSampler
     /// <param name="cmixMode"><c>portfolio</c> (default) / <c>candidates</c> draw CMIX samples into tail slots; <c>reshape</c> mixes the inverse-curvature metric into the host covariance in place (component mode; no-op on a covariance-free host); <c>none</c> disables CMIX (JANUS-GN).</param>
     /// <param name="cmixCandidateFrac">Fraction of offspring drawn from the JANUS exploration metric (default 0.4). Set to 0 for JANUS-GN.</param>
     /// <param name="cmixCandidateCenter">Center of the CMIX samples: <c>mean</c> (default), <c>best</c>, <c>elite</c>, or <c>archive</c> (a diverse Pareto-archive of residual-window points, round-robined).</param>
+    /// <summary>Configures Jacobian-informed candidates injected into a CMA-ES population.</summary>
+    /// <param name="cmixWMin">Compatibility argument retained by the public constructor; currently not used by the driver.</param>
     public JanusSampler(
         double? sigma0 = null,
         int? seed = null,
@@ -177,11 +179,13 @@ public sealed class JanusSampler : BaseSampler
         _cmixCandidateCenter = cmixCandidateCenter;
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         _independentSampler.ReseedRng();
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -196,6 +200,8 @@ public sealed class JanusSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -246,6 +252,8 @@ public sealed class JanusSampler : BaseSampler
         return optimizer.Ask(trial.Number);
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -253,16 +261,21 @@ public sealed class JanusSampler : BaseSampler
         return _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
     {
         _independentSampler.BeforeTrial(study, trial);
     }
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         _independentSampler.AfterTrial(study, trial, state, values);
     }
 
+    /// <summary>Collects historical trials eligible for this sampler, applying its completed/pruned-trial policy.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>Trial snapshots eligible for the sampler history.</returns>
     private List<FrozenTrial> GetTrials(Study study)
     {
         var result = new List<FrozenTrial>();
@@ -273,5 +286,7 @@ public sealed class JanusSampler : BaseSampler
     }
 
     /// <summary>Number of encoded (transformed) dimensions — Float/Int each encode to one column.</summary>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <returns>The number of coordinates produced by the numerical/categorical transform.</returns>
     private static int CountEncodedDims(OrderedDict<string, BaseDistribution> searchSpace) => searchSpace.Count;
 }

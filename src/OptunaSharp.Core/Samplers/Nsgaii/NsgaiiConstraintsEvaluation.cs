@@ -16,6 +16,10 @@ internal static class NsgaiiConstraintsEvaluation
     ///     (1) x is feasible and y is not; (2) both infeasible but x has smaller overall violation;
     ///     or (3) both feasible and x dominates y.
     /// </summary>
+    /// <param name="trial0">First trial in the dominance comparison.</param>
+    /// <param name="trial1">Second trial in the dominance comparison.</param>
+    /// <param name="directions">One optimization direction per objective.</param>
+    /// <returns>True when the first trial dominates under feasibility-first comparison.</returns>
     internal static bool ConstrainedDominates(
         FrozenTrial trial0, FrozenTrial trial1, IReadOnlyList<StudyDirection> directions)
     {
@@ -50,6 +54,9 @@ internal static class NsgaiiConstraintsEvaluation
     }
 
     /// <summary>Python <c>_evaluate_penalty</c>: per-trial sum of positive constraint values.</summary>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <returns>Summed positive constraint violations for each trial.</returns>
+    /// <exception cref="NumSharp.ValueError">A trial constraint is NaN.</exception>
     internal static double[] EvaluatePenalty(IReadOnlyList<FrozenTrial> population)
     {
         var penalty = new double[population.Count];
@@ -59,6 +66,8 @@ internal static class NsgaiiConstraintsEvaluation
     }
 
     /// <summary>Python <c>_validate_constraints</c>.</summary>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <param name="isConstrained">Whether constraint feasibility participates in ranking.</param>
     internal static void ValidateConstraints(IReadOnlyList<FrozenTrial> population, bool isConstrained)
     {
         if (!isConstrained)

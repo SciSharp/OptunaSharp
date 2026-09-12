@@ -15,13 +15,16 @@ public class SPXCrossover : BaseCrossover
     private readonly double? _epsilon;
 
     /// <param name="epsilon">Expansion rate. If unset, defaults to <c>sqrt(len(search_space) + 2)</c>.</param>
+    /// <summary>Configures expansion of the simplex formed by three numerical parent vectors.</summary>
     public SPXCrossover(double? epsilon = null)
     {
         _epsilon = epsilon;
     }
 
+    /// <inheritdoc />
     public override int NParents => 3;
 
+    /// <inheritdoc />
     public override double[] Crossover(
         double[][] parentsParams, NumPyRandom rng, Study study, double[,] searchSpaceBounds)
     {

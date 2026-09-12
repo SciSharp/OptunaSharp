@@ -14,15 +14,25 @@ namespace OptunaSharp.Storages.Journal;
 /// <summary>Journal operation codes — Optuna's on-disk values.</summary>
 public enum JournalOperation
 {
+    /// <summary>Creates study metadata and assigns its replay identifier.</summary>
     CreateStudy = 0,
+    /// <summary>Removes a study from the replayed study registry.</summary>
     DeleteStudy = 1,
+    /// <summary>Updates a study user attribute.</summary>
     SetStudyUserAttr = 2,
+    /// <summary>Updates an internal study attribute.</summary>
     SetStudySystemAttr = 3,
+    /// <summary>Creates a trial and assigns its replay identifier.</summary>
     CreateTrial = 4,
+    /// <summary>Records a parameter and its distribution.</summary>
     SetTrialParam = 5,
+    /// <summary>Changes trial state and objective values.</summary>
     SetTrialStateValues = 6,
+    /// <summary>Records an objective observation at a step.</summary>
     SetTrialIntermediateValue = 7,
+    /// <summary>Updates a trial user attribute.</summary>
     SetTrialUserAttr = 8,
+    /// <summary>Updates an internal trial attribute.</summary>
     SetTrialSystemAttr = 9,
     /// <summary>Only supported (written) by Rustuna; skipped on replay.</summary>
     DiscardTrials = 10,
@@ -52,9 +62,12 @@ public enum JournalOperation
 /// </example>
 public class JournalStorage : BaseStorage
 {
+    /// <summary>Message used when journal replay cannot find a requested record.</summary>
     internal const string NotFoundMsg = "Record does not exist.";
+    /// <summary>Format string used when a finished trial is modified.</summary>
     internal const string UnupdatableMsgFormat = "Trial#{0} has already finished and can not be updated.";
     // A heuristic interval number to dump snapshots.
+    /// <summary>Number of study or trial identifiers between eligible replay snapshots.</summary>
     internal const int SnapshotInterval = 100;
 
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.storages.journal._storage");
@@ -64,6 +77,9 @@ public class JournalStorage : BaseStorage
     private readonly object _threadLock = new();
     private JournalStorageReplayResult _replayResult;
 
+    /// <summary>Restores an optional snapshot and replays the journal to initialize a synchronized storage view.</summary>
+    /// <param name="logStorage">Shared process-safe journal backend; its lifetime belongs to the caller.</param>
+    /// <exception cref="System.Exception">The backend cannot load a snapshot, read records, or replay their contents.</exception>
     public JournalStorage(BaseJournalBackend logStorage)
     {
         _backend = logStorage;
@@ -88,6 +104,7 @@ public class JournalStorage : BaseStorage
     ///     snapshots are a same-process-family acceleration, never a cross-language artifact
     ///     (the file backend has no snapshot support on either side).
     /// </summary>
+    /// <param name="snapshot">OptunaSharp JSON snapshot bytes; incompatible snapshots are ignored with a warning.</param>
     public void RestoreReplayResult(byte[] snapshot)
     {
         var r = JournalStorageReplayResult.TryDeserialize(snapshot);
@@ -100,6 +117,10 @@ public class JournalStorage : BaseStorage
         _replayResult = r;
     }
 
+    /// <summary>Adds the current worker identity and appends one operation to the journal.</summary>
+    /// <param name="opCode">Stable on-disk operation code.</param>
+    /// <param name="extraFields">Operation payload fields merged after the operation code and worker identifier.</param>
+    /// <exception cref="System.Exception">The configured backend cannot append the record.</exception>
     private void WriteLog(JournalOperation opCode, OrderedDict<string, object?> extraFields)
     {
         string workerId = _replayResult.WorkerId;
@@ -113,12 +134,17 @@ public class JournalStorage : BaseStorage
         _backend.AppendLogs(new[] { log });
     }
 
+    /// <summary>Replays records after the current cursor; callers serialize access with the storage lock.</summary>
+    /// <exception cref="System.Exception">Reading or applying a journal record fails.</exception>
     private void SyncWithBackend()
     {
         var logs = _backend.ReadLogs(_replayResult.LogNumberRead);
         _replayResult.ApplyLogs(logs);
     }
 
+    /// <param name="directions">Objective directions in the same order as the objective values.</param>
+    /// <param name="studyName">Name identifying the study in the selected storage.</param>
+    /// <inheritdoc />
     public override int CreateNewStudy(IReadOnlyList<StudyDirection> directions, string? studyName = null)
     {
         studyName ??= DefaultStudyNamePrefix + Guid.NewGuid();
@@ -154,6 +180,8 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override void DeleteStudy(int studyId)
     {
         lock (_threadLock)
@@ -163,6 +191,10 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
+    /// <inheritdoc />
     public override void SetStudyUserAttr(int studyId, string key, object? value)
     {
         var log = new OrderedDict<string, object?>
@@ -177,6 +209,10 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
+    /// <inheritdoc />
     public override void SetStudySystemAttr(int studyId, string key, object? value)
     {
         var log = new OrderedDict<string, object?>
@@ -191,6 +227,8 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyName">Name identifying the study in the selected storage.</param>
+    /// <inheritdoc />
     public override int GetStudyIdFromName(string studyName)
     {
         lock (_threadLock)
@@ -205,6 +243,8 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override string GetStudyNameFromId(int studyId)
     {
         lock (_threadLock)
@@ -214,6 +254,8 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override List<StudyDirection> GetStudyDirections(int studyId)
     {
         lock (_threadLock)
@@ -223,6 +265,8 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override OrderedDict<string, object?> GetStudyUserAttrs(int studyId)
     {
         lock (_threadLock)
@@ -232,6 +276,8 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
     public override OrderedDict<string, object?> GetStudySystemAttrs(int studyId)
     {
         lock (_threadLock)
@@ -241,6 +287,7 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <inheritdoc />
     public override List<FrozenStudy> GetAllStudies()
     {
         lock (_threadLock)
@@ -256,6 +303,10 @@ public class JournalStorage : BaseStorage
     ///     Python's <c>to_internal_repr</c> returns an int for categoricals (the choice index)
     ///     and a float otherwise; the journal preserves that distinction byte-for-byte.
     /// </summary>
+    /// <param name="distribution">Distribution defining the parameter representation and allowed values.</param>
+    /// <param name="externalValue">Parameter value in its external representation.</param>
+    /// <returns>The internal numeric representation used by journal records.</returns>
+    /// <exception cref="NumSharp.ValueError">The external value cannot be represented by the distribution.</exception>
     private static object InternalReprForJournal(BaseDistribution distribution, object? externalValue)
     {
         double internalRepr = distribution.ToInternalRepr(externalValue);
@@ -263,6 +314,9 @@ public class JournalStorage : BaseStorage
         return distribution is CategoricalDistribution ? (object)(long)internalRepr : internalRepr;
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
+    /// <param name="templateTrial">Optional record to copy; null creates a new running trial with empty observations.</param>
     public override int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null)
     {
         var datetimeStart = DateTime.UtcNow;
@@ -324,6 +378,11 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="paramName">Parameter name used as the storage and distribution lookup key.</param>
+    /// <param name="distribution">Distribution defining the parameter representation and allowed values.</param>
+    /// <inheritdoc />
+    /// <param name="paramValueInternal">Parameter value in the distribution's internal numeric representation.</param>
     public override void SetTrialParam(
         int trialId, string paramName, double paramValueInternal, BaseDistribution distribution)
     {
@@ -347,6 +406,9 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="trialNumber">Zero-based trial number within the study, not a storage identifier.</param>
+    /// <inheritdoc />
     public override int GetTrialIdFromStudyIdTrialNumber(int studyId, int trialNumber)
     {
         lock (_threadLock)
@@ -360,6 +422,10 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="state">Trial state to record or inspect.</param>
+    /// <param name="values">Objective values in study direction order, or null when no objective values are recorded.</param>
+    /// <inheritdoc />
     public override bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null)
     {
         var log = new OrderedDict<string, object?>
@@ -400,6 +466,10 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="step">Reporting step whose intermediate objective observation is stored.</param>
+    /// <inheritdoc />
+    /// <param name="intermediateValue">Intermediate objective observation to store at the reporting step.</param>
     public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
     {
         var log = new OrderedDict<string, object?>
@@ -416,6 +486,10 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
+    /// <inheritdoc />
     public override void SetTrialUserAttr(int trialId, string key, object? value)
     {
         var log = new OrderedDict<string, object?>
@@ -431,6 +505,10 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
+    /// <inheritdoc />
     public override void SetTrialSystemAttr(int trialId, string key, object? value)
     {
         var log = new OrderedDict<string, object?>
@@ -446,6 +524,8 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <inheritdoc />
     public override FrozenTrial GetTrial(int trialId)
     {
         lock (_threadLock)
@@ -455,6 +535,10 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="deepcopy">Whether to copy trial records; treat records returned with false as read-only.</param>
+    /// <param name="states">States to include; null includes every state.</param>
+    /// <inheritdoc />
     public override List<FrozenTrial> GetAllTrials(
         int studyId, bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
     {
@@ -473,10 +557,15 @@ public class JournalStorage : BaseStorage
 internal static class JournalDatetime
 {
     /// <summary>Python <c>datetime.now(tz=timezone.utc).isoformat(timespec="microseconds")</c>.</summary>
+    /// <param name="utc">UTC timestamp; the caller must convert to UTC before calling.</param>
+    /// <returns>ISO-8601 timestamp with six fractional digits and an explicit +00:00 suffix.</returns>
     internal static string ToIsoUtc(DateTime utc)
         => utc.ToString("yyyy-MM-dd'T'HH:mm:ss.ffffff", CultureInfo.InvariantCulture) + "+00:00";
 
     /// <summary>Python <c>datetime.fromisoformat(s).astimezone().replace(tzinfo=None)</c>: to naive local time.</summary>
+    /// <param name="iso">ISO-8601 timestamp, normally including an offset.</param>
+    /// <returns>Local wall-clock timestamp with DateTimeKind.Unspecified.</returns>
+    /// <exception cref="System.FormatException">The text is not a supported timestamp.</exception>
     internal static DateTime FromIsoToLocalNaive(string iso)
     {
         var dto = DateTimeOffset.Parse(iso, CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeLocal);
@@ -487,6 +576,7 @@ internal static class JournalDatetime
 /// <summary>Port of <c>JournalStorageReplayResult</c>.</summary>
 internal sealed class JournalStorageReplayResult
 {
+    /// <summary>Number of log records already consumed by replay.</summary>
     internal int LogNumberRead;
     private string _workerIdPrefix;
     private readonly Dictionary<int, FrozenStudy> _studies = new();
@@ -497,13 +587,18 @@ internal sealed class JournalStorageReplayResult
     private int _nextStudyId;
     private Dictionary<string, int> _workerIdToOwnedTrialId = new();
 
+    /// <summary>Last trial created by this process family, or -1 before a local creation.</summary>
     internal int LastCreatedTrialIdByThisProcess = -1;
 
+    /// <summary>Initializes empty replay state for a process identity.</summary>
+    /// <param name="workerIdPrefix">Unique process prefix used to distinguish local and remote journal operations.</param>
     internal JournalStorageReplayResult(string workerIdPrefix)
     {
         _workerIdPrefix = workerIdPrefix;
     }
 
+    /// <summary>Clears process-local trial ownership after loading a reusable snapshot.</summary>
+    /// <param name="workerIdPrefix">New process identity prefix; replayed study/trial records remain available.</param>
     internal void ResetWorkerState(string workerIdPrefix)
     {
         _workerIdPrefix = workerIdPrefix;
@@ -511,10 +606,16 @@ internal sealed class JournalStorageReplayResult
         LastCreatedTrialIdByThisProcess = -1;
     }
 
+    /// <summary>Applies ordered journal operations and advances the consumed-record cursor.</summary>
+    /// <param name="logs">Decoded records beginning at the current replay cursor.</param>
+    /// <exception cref="System.InvalidOperationException">A record uses an unknown operation code.</exception>
+    /// <exception cref="System.Exception">A record is malformed or a local operation violates study/trial state constraints.</exception>
     internal void ApplyLogs(IEnumerable<OrderedDict<string, object?>> logs)
     {
         foreach (var log in logs)
         {
+            // Consume rejected operations too: a local validation failure must not be rethrown
+            // forever on every subsequent synchronization of this append-only journal.
             LogNumberRead += 1;
             var op = (JournalOperation)Convert.ToInt32(log["op_code"], CultureInfo.InvariantCulture);
             switch (op)
@@ -558,6 +659,10 @@ internal sealed class JournalStorageReplayResult
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <summary>Reads records from the current replay state.</summary>
+    /// <returns>The stored study record.</returns>
+    /// <exception cref="NumSharp.KeyError">The requested study or trial does not exist.</exception>
     internal FrozenStudy GetStudy(int studyId)
     {
         if (!_studies.TryGetValue(studyId, out var study))
@@ -565,8 +670,14 @@ internal sealed class JournalStorageReplayResult
         return study;
     }
 
+    /// <summary>Reads records from the current replay state.</summary>
+    /// <returns>A new list containing the current shared study records.</returns>
     internal List<FrozenStudy> GetAllStudies() => _studies.Values.ToList();
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <summary>Reads records from the current replay state.</summary>
+    /// <returns>The shared trial record.</returns>
+    /// <exception cref="NumSharp.KeyError">The requested study or trial does not exist.</exception>
     internal FrozenTrial GetTrial(int trialId)
     {
         if (!_trials.TryGetValue(trialId, out var trial))
@@ -574,8 +685,15 @@ internal sealed class JournalStorageReplayResult
         return trial;
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <summary>Reads records from the current replay state.</summary>
+    /// <returns>The trial record, or null when absent.</returns>
     internal FrozenTrial? TryGetTrial(int trialId) => _trials.GetValueOrDefault(trialId);
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <summary>Reads records from the current replay state.</summary>
+    /// <returns>Shared list of trial identifiers belonging to the study.</returns>
+    /// <exception cref="NumSharp.KeyError">The requested study or trial does not exist.</exception>
     internal List<int> GetStudyTrialIds(int studyId)
     {
         if (!_studyIdToTrialIds.TryGetValue(studyId, out var trialIds))
@@ -583,6 +701,11 @@ internal sealed class JournalStorageReplayResult
         return trialIds;
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="states">States to include; null includes every state.</param>
+    /// <summary>Reads records from the current replay state.</summary>
+    /// <returns>Shared trial records matching the state filter, in journal creation order.</returns>
+    /// <exception cref="NumSharp.KeyError">The requested study or trial does not exist.</exception>
     internal List<FrozenTrial> GetAllTrials(int studyId, IReadOnlyCollection<TrialState>? states)
     {
         if (!_studies.ContainsKey(studyId))
@@ -598,23 +721,41 @@ internal sealed class JournalStorageReplayResult
         return frozenTrials;
     }
 
+    /// <summary>Current process prefix combined with the managed thread identifier.</summary>
     internal string WorkerId => _workerIdPrefix + Environment.CurrentManagedThreadId.ToString(CultureInfo.InvariantCulture);
 
+    /// <summary>Trial claimed by this worker, or null before a successful claim.</summary>
     internal int? OwnedTrialId
         => _workerIdToOwnedTrialId.TryGetValue(WorkerId, out int trialId) ? trialId : null;
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Checks whether this thread originated a journal record.</summary>
+    /// <returns>True when the record worker identifier equals this process/thread identity.</returns>
     private bool IsIssuedByThisWorker(OrderedDict<string, object?> log)
         => (string?)log["worker_id"] == WorkerId;
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Checks study existence while suppressing rejected operations from other workers.</summary>
+    /// <returns>True when the study exists; false for a missing study referenced by another worker.</returns>
+    /// <exception cref="NumSharp.KeyError">This worker issued an operation for a missing study.</exception>
     private bool StudyExists(int studyId, OrderedDict<string, object?> log)
     {
         if (_studies.ContainsKey(studyId))
             return true;
+        // Only the originating worker receives its operation failure. Other workers must keep
+        // replaying past rejected entries to converge on the same accepted storage state.
         if (IsIssuedByThisWorker(log))
             throw new KeyError(JournalStorage.NotFoundMsg);
         return false;
     }
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Creates study metadata and assigns its replay identifier. Applies the entry in journal order.</summary>
+    /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
+    /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
+    /// <exception cref="OptunaSharp.DuplicatedStudyError">This worker attempts to create a study name that already exists.</exception>
     private void ApplyCreateStudy(OrderedDict<string, object?> log)
     {
         string studyName = (string)log["study_name"]!;
@@ -642,6 +783,11 @@ internal sealed class JournalStorageReplayResult
         _studyIdToTrialIds[studyId] = new List<int>();
     }
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Removes a study from the replayed study registry. Applies the entry in journal order.</summary>
+    /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
+    /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
     private void ApplyDeleteStudy(OrderedDict<string, object?> log)
     {
         int studyId = ToInt(log["study_id"]);
@@ -654,6 +800,11 @@ internal sealed class JournalStorageReplayResult
         }
     }
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Updates a study user attribute. Applies the entry in journal order.</summary>
+    /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
+    /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
     private void ApplySetStudyUserAttr(OrderedDict<string, object?> log)
     {
         int studyId = ToInt(log["study_id"]);
@@ -669,6 +820,11 @@ internal sealed class JournalStorageReplayResult
         }
     }
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Updates an internal study attribute. Applies the entry in journal order.</summary>
+    /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
+    /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
     private void ApplySetStudySystemAttr(OrderedDict<string, object?> log)
     {
         int studyId = ToInt(log["study_id"]);
@@ -684,6 +840,11 @@ internal sealed class JournalStorageReplayResult
         }
     }
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Creates a trial and assigns its replay identifier. Applies the entry in journal order.</summary>
+    /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
+    /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
     private void ApplyCreateTrial(OrderedDict<string, object?> log)
     {
         int studyId = ToInt(log["study_id"]);
@@ -755,6 +916,12 @@ internal sealed class JournalStorageReplayResult
         }
     }
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Records a parameter and its distribution. Applies the entry in journal order.</summary>
+    /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
+    /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
+    /// <exception cref="NumSharp.ValueError">The recorded parameter distribution conflicts with its previous distribution.</exception>
     private void ApplySetTrialParam(OrderedDict<string, object?> log)
     {
         int trialId = ToInt(log["trial_id"]);
@@ -798,6 +965,11 @@ internal sealed class JournalStorageReplayResult
         _trials[trialId] = trial;
     }
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Changes trial state and objective values. Applies the entry in journal order.</summary>
+    /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
+    /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
     private void ApplySetTrialStateValues(OrderedDict<string, object?> log)
     {
         int trialId = ToInt(log["trial_id"]);
@@ -828,6 +1000,11 @@ internal sealed class JournalStorageReplayResult
         _trials[trialId] = trial;
     }
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Records an objective observation at a step. Applies the entry in journal order.</summary>
+    /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
+    /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
     private void ApplySetTrialIntermediateValue(OrderedDict<string, object?> log)
     {
         int trialId = ToInt(log["trial_id"]);
@@ -841,6 +1018,11 @@ internal sealed class JournalStorageReplayResult
         }
     }
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Updates a trial user attribute. Applies the entry in journal order.</summary>
+    /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
+    /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
     private void ApplySetTrialUserAttr(OrderedDict<string, object?> log)
     {
         int trialId = ToInt(log["trial_id"]);
@@ -857,6 +1039,11 @@ internal sealed class JournalStorageReplayResult
         }
     }
 
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Updates an internal trial attribute. Applies the entry in journal order.</summary>
+    /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
+    /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
     private void ApplySetTrialSystemAttr(OrderedDict<string, object?> log)
     {
         int trialId = ToInt(log["trial_id"]);
@@ -873,6 +1060,12 @@ internal sealed class JournalStorageReplayResult
         }
     }
 
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="log">Decoded journal operation, including its payload and originating worker identifier.</param>
+    /// <summary>Checks trial existence and completion state before applying a replay mutation.</summary>
+    /// <returns>True when the trial exists and is unfinished; false for rejected remote operations.</returns>
+    /// <exception cref="NumSharp.KeyError">This worker referenced a missing trial.</exception>
+    /// <exception cref="OptunaSharp.UpdateFinishedTrialError">This worker attempted to change a finished trial.</exception>
     private bool TrialExistsAndUpdatable(int trialId, OrderedDict<string, object?> log)
     {
         if (!_trials.ContainsKey(trialId))
@@ -891,8 +1084,20 @@ internal sealed class JournalStorageReplayResult
         return true;
     }
 
+    /// <param name="value">Decoded numeric field from a journal record.</param>
+    /// <summary>Converts a decoded journal scalar using invariant numeric conventions.</summary>
+    /// <returns>The converted scalar.</returns>
+    /// <exception cref="System.FormatException">The scalar text is not numeric.</exception>
+    /// <exception cref="System.OverflowException">The scalar exceeds the conversion range.</exception>
+    /// <exception cref="System.InvalidCastException">The scalar does not support numeric conversion.</exception>
     private static int ToInt(object? value) => Convert.ToInt32(value, CultureInfo.InvariantCulture);
 
+    /// <param name="value">Decoded numeric field from a journal record.</param>
+    /// <summary>Converts a decoded journal scalar using invariant numeric conventions.</summary>
+    /// <returns>The converted scalar.</returns>
+    /// <exception cref="System.FormatException">The scalar text is not numeric.</exception>
+    /// <exception cref="System.OverflowException">The scalar exceeds the conversion range.</exception>
+    /// <exception cref="System.InvalidCastException">The scalar does not support numeric conversion.</exception>
     private static double ToDouble(object? value) => value switch
     {
         double d => d,
@@ -908,6 +1113,7 @@ internal sealed class JournalStorageReplayResult
     ///     [Misaligned] Not pickle bytes (see <see cref="JournalStorage.RestoreReplayResult" />);
     ///     the format is an OptunaSharp-internal JSON dump.
     /// </summary>
+    /// <returns>UTF-8 bytes containing the OptunaSharp versioned replay snapshot.</returns>
     internal byte[] Serialize()
     {
         var studies = new OrderedDict<string, object?>();
@@ -966,6 +1172,8 @@ internal sealed class JournalStorageReplayResult
     }
 
     /// <summary>Deserialize a snapshot produced by <see cref="Serialize" />; <c>null</c> on failure.</summary>
+    /// <param name="snapshot">UTF-8 bytes produced by the OptunaSharp snapshot serializer.</param>
+    /// <returns>Restored replay state, or null for any format or content failure.</returns>
     internal static JournalStorageReplayResult? TryDeserialize(byte[] snapshot)
     {
         try

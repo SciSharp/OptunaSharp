@@ -49,6 +49,7 @@ namespace OptunaSharp.Integration;
 ///     <c>Score</c>.
 ///     </para>
 /// </summary>
+/// <seealso href="https://optuna-integration.readthedocs.io/en/stable/reference/generated/optuna_integration.OptunaSearchCV.html" />
 public class OptunaSearchCV
 {
     private readonly ICrossValidationEstimator _estimator;
@@ -106,6 +107,8 @@ public class OptunaSearchCV
     ///     Exception types for which the study keeps running when a trial raises them. Default (empty) means
     ///     the study stops for any exception except <see cref="TrialPruned" />.
     /// </param>
+    /// <summary>Configures a cross-validation hyperparameter search over the supplied estimator and parameter distributions.</summary>
+    /// <exception cref="System.ArgumentNullException">The estimator or parameter-distribution mapping is null.</exception>
     public OptunaSearchCV(
         ICrossValidationEstimator estimator,
         IReadOnlyDictionary<string, BaseDistribution> paramDistributions,
@@ -215,6 +218,7 @@ public class OptunaSearchCV
     ///     optionally refit the best estimator.
     /// </summary>
     /// <returns>This instance.</returns>
+    /// <remarks>Estimator fitting, scoring, callbacks, and the optional final refit can propagate their own exceptions. Numeric error-score handling applies to cross-validation failures and does not suppress a final-refit failure.</remarks>
     public OptunaSearchCV Fit()
     {
         CheckParams();
@@ -253,6 +257,9 @@ public class OptunaSearchCV
     }
 
     // Port of _Objective.__call__ (the non-pruning path). Returns the mean test score to maximize.
+    /// <summary>Returns the mean validation score of the sampled parameter configuration.</summary>
+    /// <param name="trial">The running search trial that receives sampled estimator parameters and cross-validation statistics.</param>
+    /// <returns>The mean validation score of the sampled parameter configuration.</returns>
     private double Objective(Trial trial)
     {
         var parameters = new Dictionary<string, object?>();
@@ -293,6 +300,12 @@ public class OptunaSearchCV
 
     // Port of _Objective._store_scores. Attribute order follows scikit-learn's cross_validate result dict
     // (fit_time, score_time, test_score[, train_score]) so cv_results_ column order is recognizable.
+    /// <summary>Persists per-fold scores, timings, and their aggregate statistics as trial user attributes.</summary>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <param name="testScore">The validation score returned by each cross-validation fold.</param>
+    /// <param name="fitTime">The elapsed fit time in seconds for each fold.</param>
+    /// <param name="scoreTime">The elapsed scoring time in seconds for each fold.</param>
+    /// <param name="trainScore">The optional training score for each fold.</param>
     private void StoreScores(
         Trial trial, double[] testScore, double[] fitTime, double[] scoreTime, double[]? trainScore)
     {
@@ -316,6 +329,7 @@ public class OptunaSearchCV
         }
     }
 
+    /// <summary>Fits the estimator on all training data with the search's best parameters and records elapsed refit time.</summary>
     private void Refit()
     {
         var stopwatch = Stopwatch.StartNew();
@@ -324,12 +338,16 @@ public class OptunaSearchCV
     }
 
     // Port of _check_params (the parts that survive the adapter): only the study-direction guard remains.
+    /// <summary>Validates the estimator, search-space distributions, and supported cross-validation search options.</summary>
+    /// <exception cref="NumSharp.ValueError">The supplied study does not maximize its objective.</exception>
     private void CheckParams()
     {
         if (_study is not null && _study.Direction != StudyDirection.Maximize)
             throw new ValueError("direction of study must be 'maximize'.");
     }
 
+    /// <summary>Rejects access to fitted-search properties before a study has been created by Fit.</summary>
+    /// <exception cref="System.InvalidOperationException">Fit has not initialized the fitted study.</exception>
     private void CheckIsFitted()
     {
         if (!_isFitted)
@@ -338,6 +356,9 @@ public class OptunaSearchCV
     }
 
     // np.nanmean with numpy's default ddof=0 semantics; NaN entries are ignored, all-NaN -> NaN.
+    /// <summary>Returns the arithmetic mean of non-NaN scores, or NaN when none remain.</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The arithmetic mean of non-NaN scores, or NaN when none remain.</returns>
     private static double NanMean(double[] values)
     {
         double sum = 0.0;
@@ -353,6 +374,9 @@ public class OptunaSearchCV
     }
 
     // np.nanstd (population std, ddof=0), NaN-ignoring.
+    /// <summary>Returns the population standard deviation of non-NaN scores, or NaN when none remain.</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The population standard deviation of non-NaN scores, or NaN when none remain.</returns>
     private static double NanStd(double[] values)
     {
         double mean = NanMean(values);

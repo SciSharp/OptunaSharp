@@ -23,6 +23,11 @@ internal sealed class TournamentSelection
     ///     parents each, returned as an <c>[n_select][n_parents]</c> index array into
     ///     <paramref name="pop" />.
     /// </summary>
+    /// <param name="pop">Population whose decision and evaluation columns are consumed or updated.</param>
+    /// <param name="nSelect">Number of mating groups to select.</param>
+    /// <param name="nParents">Number of parents required for each mating.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>Parent indices grouped by selected mating.</returns>
     public int[][] Do(Population pop, int nSelect, int nParents, NumPyRandom rng)
     {
         int nPop = pop.Count;
@@ -59,6 +64,11 @@ internal sealed class TournamentSelection
     }
 
     /// <summary><c>binary_tournament</c> with tournament_type = <c>comp_by_rank_and_crowding</c>.</summary>
+    /// <param name="pop">Population whose decision and evaluation columns are consumed or updated.</param>
+    /// <param name="a">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <param name="b">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>The selected individual index after rank, feasibility, and diversity comparison.</returns>
     private static int BinaryTournament(Population pop, int a, int b, NumPyRandom rng)
     {
         double aCv = pop.CV![a];
@@ -76,6 +86,14 @@ internal sealed class TournamentSelection
     }
 
     /// <summary><c>compare</c>: pick a/b by the metric; on an exact tie either return null or draw.</summary>
+    /// <param name="a">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <param name="aVal">Selection score of the first individual.</param>
+    /// <param name="b">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <param name="bVal">Selection score of the second individual.</param>
+    /// <param name="smallerIsBetter">Whether smaller selection scores win the comparison.</param>
+    /// <param name="returnRandomIfEqual">Whether ties choose a random individual instead of returning no winner.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>Winning individual index, or null for an unresolved tie when random tie-breaking is disabled.</returns>
     private static int? Compare(int a, double aVal, int b, double bVal, bool smallerIsBetter, bool returnRandomIfEqual, NumPyRandom rng)
     {
         bool aWins = smallerIsBetter ? aVal < bVal : aVal > bVal;

@@ -10,6 +10,10 @@ namespace OptunaSharp.Visualization;
 ///     One axis of a rank subplot. Port of <c>_AxisInfo</c> in <c>optuna/visualization/_rank.py</c>
 ///     (the rank variant has no <c>indices</c>/<c>values</c>, unlike the contour one).
 /// </summary>
+/// <param name="Name">The parameter name identifying this axis.</param>
+/// <param name="Range">The padded minimum and maximum positions used as the axis bounds.</param>
+/// <param name="IsLog">Whether the axis uses logarithmic scaling.</param>
+/// <param name="IsCat">Whether the axis represents discrete categorical labels.</param>
 public sealed record RankAxisInfo(
     string Name,
     (double Min, double Max) Range,
@@ -24,6 +28,14 @@ public sealed record RankAxisInfo(
 ///     infeasible ones), which is the plotly dependency Optuna's own TODO wants removed from the data
 ///     layer.
 /// </summary>
+/// <param name="XAxis">The metadata describing the horizontal parameter axis.</param>
+/// <param name="YAxis">The metadata describing the vertical parameter axis.</param>
+/// <param name="Xs">The horizontal parameter value of each plotted trial.</param>
+/// <param name="Ys">The vertical parameter value of each plotted trial.</param>
+/// <param name="Trials">The trial snapshots aligned with the subplot's coordinate and color arrays.</param>
+/// <param name="Zs">The target values aligned with the plotted trials.</param>
+/// <param name="ColorIdxs">The average-rank color coordinates normalized to the unit interval.</param>
+/// <param name="Infeasible">Flags identifying trials whose constraints are violated.</param>
 public sealed record RankSubplotInfo(
     RankAxisInfo XAxis,
     RankAxisInfo YAxis,
@@ -38,6 +50,12 @@ public sealed record RankSubplotInfo(
 ///     The data backing a rank plot. Port of <c>_RankPlotInfo</c> — with the plotly RGB
 ///     <c>colors</c> replaced by the pure <see cref="ColorIdxs" /> (see <see cref="RankSubplotInfo" />).
 /// </summary>
+/// <param name="Params">The parameter names in subplot-layout order.</param>
+/// <param name="SubPlotInfos">The row/column matrix of pairwise parameter subplot data.</param>
+/// <param name="TargetName">The display label for the selected objective or custom target.</param>
+/// <param name="Zs">The target values aligned with the plotted trials.</param>
+/// <param name="ColorIdxs">The average-rank color coordinates normalized to the unit interval.</param>
+/// <param name="HasCustomTarget">Whether target values came from a caller-supplied selector.</param>
 public sealed record RankPlotInfo(
     IReadOnlyList<string> Params,
     IReadOnlyList<IReadOnlyList<RankSubplotInfo>> SubPlotInfos,
@@ -61,6 +79,12 @@ public static class Rank
     private const double PaddingRatio = 0.05;
 
     /// <summary>Python <c>_get_rank_info(study, params, target, target_name)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="params">Parameter names to include; null selects the parameters supported by this operation.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="targetName">The display label for the selected objective or custom target.</param>
+    /// <returns>The pairwise parameter subplots, target values, and normalized average-rank color coordinates.</returns>
+    /// <exception cref="NumSharp.ValueError">A requested parameter is absent from completed trials, or a multi-objective study has no scalar target selector.</exception>
     public static RankPlotInfo GetInfo(
         Study study,
         IReadOnlyList<string>? @params = null,
@@ -125,6 +149,12 @@ public static class Rank
     }
 
     /// <summary>Python <c>_get_rank_subplot_info(trials, target_values, colors, x_param, y_param)</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="targetValues">The target value associated with each supplied trial.</param>
+    /// <param name="colorIdxs">The normalized rank-color coordinate associated with each trial.</param>
+    /// <param name="xParam">The parameter assigned to the horizontal axis.</param>
+    /// <param name="yParam">The parameter assigned to the vertical axis.</param>
+    /// <returns>The selected parameter pair's coordinates, trials, rank colors, and infeasibility flags.</returns>
     private static RankSubplotInfo GetRankSubplotInfo(
         IReadOnlyList<FrozenTrial> trials,
         double[] targetValues,
@@ -154,6 +184,9 @@ public static class Rank
     }
 
     /// <summary>Python <c>_get_axis_info(trials, param_name)</c> (rank variant, no indices/values).</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="paramName">The parameter name identifying the distribution or values to process.</param>
+    /// <returns>The padded axis bounds and its logarithmic/categorical classification.</returns>
     private static RankAxisInfo GetAxisInfo(IReadOnlyList<FrozenTrial> trials, string paramName)
     {
         bool isNumerical = VisualizationUtils.IsNumerical(trials, paramName);
@@ -207,6 +240,9 @@ public static class Rank
         return new RankAxisInfo(paramName, (minValue, maxValue), isLog, isCat);
     }
 
+    /// <summary>Returns the smallest and largest numeric value in the supplied sequence.</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The smallest and largest numeric value in the supplied sequence.</returns>
     private static (double Min, double Max) NumericMinMax(IReadOnlyList<object?> values)
     {
         double min = double.PositiveInfinity, max = double.NegativeInfinity;
@@ -225,6 +261,8 @@ public static class Rank
     ///     Python <c>_get_order_with_same_order_averaging(data)</c>: each element's rank is the mean
     ///     of the positions its value occupies in the sorted array (ties share the averaged rank).
     /// </summary>
+    /// <param name="data">The target values whose ranks are averaged across ties.</param>
+    /// <returns>The order-based rank of each value, averaged across equal values.</returns>
     private static double[] OrderWithSameOrderAveraging(double[] data)
     {
         var order = new double[data.Length];

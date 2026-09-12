@@ -43,6 +43,7 @@ internal sealed class RveaApdSurvival
     /// <param name="nMaxGenerations">The generation horizon used by the penalty schedule and the adaptation
     ///     period (Optuna is trial-budget-driven and does not expose a maximum generation, so it is set
     ///     explicitly).</param>
+    /// <summary>Initializes reference vectors and the progress schedule for angle-penalized survival.</summary>
     internal RveaApdSurvival(double[][] referenceVectors, double alpha, double adaptFreq, int nMaxGenerations)
     {
         int m = referenceVectors[0].Length;
@@ -66,6 +67,10 @@ internal sealed class RveaApdSurvival
     ///     most one per reference vector. Individuals with a non-finite objective are dropped (they cannot be
     ///     placed on the unit sphere); if that leaves nothing, the population is returned unchanged.
     /// </summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <param name="generation">Zero-based generation whose individuals or optimizer state are requested.</param>
+    /// <returns>The individuals retained by the configured survival rule, in selection order.</returns>
     internal List<FrozenTrial> Select(Study study, List<FrozenTrial> population, int generation)
     {
         var directions = study.Directions;
@@ -204,6 +209,9 @@ internal sealed class RveaApdSurvival
 
     /// <summary>calc_V: normalize each row to unit length. A zero row is replaced by the corresponding
     ///     <paramref name="fallback" /> row (or left zero when no fallback is given).</summary>
+    /// <param name="rows">Observation rows to copy into the result.</param>
+    /// <param name="fallback">Optional unit-vector rows substituted for degenerate directions.</param>
+    /// <returns>Unit-length reference vectors, with configured fallback rows for degenerate inputs.</returns>
     private static double[][] NormalizeRows(double[][] rows, double[][]? fallback = null)
     {
         var result = new double[rows.Length][];
@@ -226,6 +234,8 @@ internal sealed class RveaApdSurvival
 
     /// <summary>calc_gamma: for each reference vector, the smallest angle to any other reference vector
     ///     (pymoo: <c>arccos(-sort(-V@V.T)[:,1])</c>, floored at 1e-64).</summary>
+    /// <param name="v">Vector operand aligned with the matrix coordinates.</param>
+    /// <returns>The smallest inter-vector angle for each reference vector.</returns>
     private static double[] CalcGamma(double[][] v)
     {
         int refCount = v.Length;

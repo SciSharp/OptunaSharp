@@ -15,24 +15,40 @@ namespace OptunaSharp.Storages.EFCore;
 /// </summary>
 internal sealed class OptunaRdbContext : DbContext
 {
+    /// <summary>Creates an operation-scoped context with the configured relational provider.</summary>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
     public OptunaRdbContext(DbContextOptions<OptunaRdbContext> options) : base(options)
     {
     }
 
+    /// <summary>The queryable and tracked set of <see cref="StudyEntity" /> records for this operation.</summary>
     public DbSet<StudyEntity> Studies => Set<StudyEntity>();
+    /// <summary>The queryable and tracked set of <see cref="StudyDirectionEntity" /> records for this operation.</summary>
     public DbSet<StudyDirectionEntity> StudyDirections => Set<StudyDirectionEntity>();
+    /// <summary>The queryable and tracked set of <see cref="StudyUserAttributeEntity" /> records for this operation.</summary>
     public DbSet<StudyUserAttributeEntity> StudyUserAttributes => Set<StudyUserAttributeEntity>();
+    /// <summary>The queryable and tracked set of <see cref="StudySystemAttributeEntity" /> records for this operation.</summary>
     public DbSet<StudySystemAttributeEntity> StudySystemAttributes => Set<StudySystemAttributeEntity>();
+    /// <summary>The queryable and tracked set of <see cref="TrialEntity" /> records for this operation.</summary>
     public DbSet<TrialEntity> Trials => Set<TrialEntity>();
+    /// <summary>The queryable and tracked set of <see cref="TrialUserAttributeEntity" /> records for this operation.</summary>
     public DbSet<TrialUserAttributeEntity> TrialUserAttributes => Set<TrialUserAttributeEntity>();
+    /// <summary>The queryable and tracked set of <see cref="TrialSystemAttributeEntity" /> records for this operation.</summary>
     public DbSet<TrialSystemAttributeEntity> TrialSystemAttributes => Set<TrialSystemAttributeEntity>();
+    /// <summary>The queryable and tracked set of <see cref="TrialParamEntity" /> records for this operation.</summary>
     public DbSet<TrialParamEntity> TrialParams => Set<TrialParamEntity>();
+    /// <summary>The queryable and tracked set of <see cref="TrialValueEntity" /> records for this operation.</summary>
     public DbSet<TrialValueEntity> TrialValues => Set<TrialValueEntity>();
+    /// <summary>The queryable and tracked set of <see cref="TrialIntermediateValueEntity" /> records for this operation.</summary>
     public DbSet<TrialIntermediateValueEntity> TrialIntermediateValues => Set<TrialIntermediateValueEntity>();
+    /// <summary>The queryable and tracked set of <see cref="TrialHeartbeatEntity" /> records for this operation.</summary>
     public DbSet<TrialHeartbeatEntity> TrialHeartbeats => Set<TrialHeartbeatEntity>();
+    /// <summary>The queryable and tracked set of <see cref="VersionInfoEntity" /> records for this operation.</summary>
     public DbSet<VersionInfoEntity> VersionInfos => Set<VersionInfoEntity>();
+    /// <summary>The queryable and tracked set of <see cref="AlembicVersionEntity" /> records for this operation.</summary>
     public DbSet<AlembicVersionEntity> AlembicVersions => Set<AlembicVersionEntity>();
 
+    /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder b)
     {
         // On MySQL each enum column is an inline ENUM('NAME',...) whose *name* is stored, so convert

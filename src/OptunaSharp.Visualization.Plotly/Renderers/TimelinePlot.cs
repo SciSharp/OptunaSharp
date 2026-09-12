@@ -31,6 +31,9 @@ internal static class TimelinePlot
         TrialState.Complete, TrialState.Fail, TrialState.Pruned, TrialState.Running, TrialState.Waiting,
     };
 
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(TimelineInfo info)
     {
         var traces = new List<Trace>();
@@ -60,6 +63,11 @@ internal static class TimelinePlot
         return Fig.Figure(traces, layout);
     }
 
+    /// <summary>Appends a horizontal duration-bar trace for a nonempty state group.</summary>
+    /// <param name="bars">Trial lifetimes sharing one state or feasibility group.</param>
+    /// <param name="color">Plotly marker color for this group.</param>
+    /// <param name="name">State or feasibility label used in the legend and hover text.</param>
+    /// <param name="traces">Destination trace list; appended to only when bars is nonempty.</param>
     private static void PlotBars(IReadOnlyList<TimelineBarInfo> bars, string color, string name, List<Trace> traces)
     {
         if (bars.Count == 0)
@@ -78,11 +86,16 @@ internal static class TimelinePlot
     }
 
     /// <summary>Python <c>datetime.isoformat()</c> — microseconds only when non-zero.</summary>
+    /// <param name="dt">Local wall-clock timestamp for the timeline bar.</param>
+    /// <returns>Offset-free ISO timestamp with microseconds only when nonzero.</returns>
     private static string Iso(DateTime dt)
         => dt.Ticks % TimeSpan.TicksPerSecond == 0
             ? dt.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)
             : dt.ToString("yyyy-MM-ddTHH:mm:ss.ffffff", CultureInfo.InvariantCulture);
 
+    /// <summary>Formats a trial state using the uppercase labels expected by the timeline legend.</summary>
+    /// <param name="state">Trial state associated with the bar group.</param>
+    /// <returns>Uppercase state name.</returns>
     private static string StateName(TrialState state) => state switch
     {
         TrialState.Complete => "COMPLETE",

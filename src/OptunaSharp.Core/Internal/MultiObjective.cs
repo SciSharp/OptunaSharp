@@ -14,6 +14,11 @@ namespace OptunaSharp.Internal;
 internal static class MultiObjective
 {
     /// <summary>Python <c>_get_pareto_front_trials_by_trials</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="directions">The optimization direction of each objective, in objective-column order.</param>
+    /// <param name="considerConstraint">Whether infeasible trials should be excluded before computing the Pareto front.</param>
+    /// <returns>Completed nondominated trials, optionally restricted to feasible trials.</returns>
+    /// <exception cref="NumSharp.ValueError">A completed trial's objective count differs from the supplied direction count.</exception>
     internal static List<FrozenTrial> GetParetoFrontTrialsByTrials(
         IEnumerable<FrozenTrial> trials,
         IReadOnlyList<StudyDirection> directions,
@@ -43,6 +48,9 @@ internal static class MultiObjective
     }
 
     /// <summary>Python <c>_get_pareto_front_trials</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="considerConstraint">Whether infeasible trials should be excluded before computing the Pareto front.</param>
+    /// <returns>The study's completed nondominated trials after the requested feasibility filtering.</returns>
     internal static List<FrozenTrial> GetParetoFrontTrials(Study study, bool considerConstraint = false)
         => GetParetoFrontTrialsByTrials(study.Trials, study.Directions, considerConstraint);
 
@@ -51,6 +59,11 @@ internal static class MultiObjective
     ///     non-dominated sort algorithm of constrained NSGA-II. Correct only up to the
     ///     top-<paramref name="nBelow" /> solutions.
     /// </summary>
+    /// <param name="lossValues">Objective rows converted to minimization, one solution per row.</param>
+    /// <param name="penalty">The aggregated constraint violation for each row, or null for unconstrained ranking.</param>
+    /// <param name="nBelow">The number of trials to assign to the preferred group or to cover by Pareto ranks.</param>
+    /// <returns>The zero-based nondomination rank assigned to each input row.</returns>
+    /// <exception cref="NumSharp.ValueError">The constraint-penalty count differs from the number of objective rows.</exception>
     internal static int[] FastNonDominationRank(double[][] lossValues, double[]? penalty = null, int? nBelow = null)
     {
         if (lossValues.Length == 0)
@@ -100,6 +113,8 @@ internal static class MultiObjective
     }
 
     /// <summary>Python <c>_is_pareto_front_nd</c>.</summary>
+    /// <param name="uniqueLexsortedLossValues">Distinct minimization objective rows sorted lexicographically.</param>
+    /// <returns>A mask identifying nondominated input rows.</returns>
     private static bool[] IsParetoFrontNd(double[][] uniqueLexsortedLossValues)
     {
         // As column 0 is sorted, we do not need it to judge dominance.
@@ -139,6 +154,8 @@ internal static class MultiObjective
     }
 
     /// <summary>Python <c>_is_pareto_front_2d</c>.</summary>
+    /// <param name="uniqueLexsortedLossValues">Distinct minimization objective rows sorted lexicographically.</param>
+    /// <returns>A mask identifying nondominated two-objective rows.</returns>
     private static bool[] IsParetoFront2d(double[][] uniqueLexsortedLossValues)
     {
         int nTrials = uniqueLexsortedLossValues.Length;
@@ -157,6 +174,8 @@ internal static class MultiObjective
     }
 
     /// <summary>Python <c>_is_pareto_front_for_unique_sorted</c>.</summary>
+    /// <param name="uniqueLexsortedLossValues">Distinct minimization objective rows sorted lexicographically.</param>
+    /// <returns>A mask identifying nondominated rows in the supplied sorted sequence.</returns>
     private static bool[] IsParetoFrontForUniqueSorted(double[][] uniqueLexsortedLossValues)
     {
         int nObjectives = uniqueLexsortedLossValues.Length == 0 ? 0 : uniqueLexsortedLossValues[0].Length;
@@ -173,6 +192,9 @@ internal static class MultiObjective
     }
 
     /// <summary>Python <c>_is_pareto_front(loss_values, assume_unique_lexsorted)</c>.</summary>
+    /// <param name="lossValues">Objective rows converted to minimization, one solution per row.</param>
+    /// <param name="assumeUniqueLexsorted">Whether duplicate removal and lexicographic sorting have already been performed.</param>
+    /// <returns>A mask identifying the nondominated input rows.</returns>
     internal static bool[] IsParetoFront(double[][] lossValues, bool assumeUniqueLexsorted)
     {
         if (assumeUniqueLexsorted)
@@ -187,6 +209,9 @@ internal static class MultiObjective
     }
 
     /// <summary>Python <c>_calculate_nondomination_rank</c>.</summary>
+    /// <param name="lossValues">Objective rows converted to minimization, one solution per row.</param>
+    /// <param name="nBelow">The number of trials to assign to the preferred group or to cover by Pareto ranks.</param>
+    /// <returns>The zero-based rank of each objective row; ranking may stop after the requested coverage.</returns>
     internal static int[] CalculateNondominationRank(double[][] lossValues, int? nBelow = null)
     {
         if (lossValues.Length == 0 || (nBelow is not null && nBelow <= 0))
@@ -242,6 +267,11 @@ internal static class MultiObjective
     }
 
     /// <summary>Python <c>_dominates(trial0, trial1, directions)</c>.</summary>
+    /// <param name="trial0">The trial being tested as a possible dominator.</param>
+    /// <param name="trial1">The trial being tested as a possible dominated trial.</param>
+    /// <param name="directions">The optimization direction of each objective, in objective-column order.</param>
+    /// <returns>True when the first trial is no worse in every objective and better in at least one, under the trial-state rules.</returns>
+    /// <exception cref="NumSharp.ValueError">The compared trials or supplied directions have different objective counts.</exception>
     internal static bool Dominates(FrozenTrial trial0, FrozenTrial trial1, IReadOnlyList<StudyDirection> directions)
     {
         var values0 = trial0.Values;
@@ -272,6 +302,9 @@ internal static class MultiObjective
     }
 
     /// <summary>Python <c>_normalize_value</c>.</summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <param name="direction">The direction used to convert this objective to minimization.</param>
+    /// <returns>The minimization-oriented value; missing values map to positive infinity.</returns>
     internal static double NormalizeValue(double? value, StudyDirection direction)
     {
         if (value is null)
@@ -283,6 +316,8 @@ internal static class MultiObjective
     ///     NumPy <c>np.unique(a, axis=0, return_inverse=True)</c>: rows sorted lexicographically
     ///     (leading column first), deduplicated, plus the inverse mapping original-row → unique-row.
     /// </summary>
+    /// <param name="rows">The matrix rows to select or process.</param>
+    /// <returns>Lexicographically sorted distinct rows and indices mapping each input row back to its distinct row.</returns>
     internal static (double[][] UniqueRows, int[] OrderInverse) UniqueRows(double[][] rows)
     {
         int n = rows.Length;
@@ -306,6 +341,8 @@ internal static class MultiObjective
     ///     deduplicated, plus the index of the FIRST occurrence (smallest original index) of each
     ///     unique row.
     /// </summary>
+    /// <param name="rows">The matrix rows to select or process.</param>
+    /// <returns>Lexicographically sorted distinct rows and each row's first original index.</returns>
     internal static (double[][] UniqueRows, int[] FirstIndices) UniqueRowsFirstIndex(double[][] rows)
     {
         int n = rows.Length;
@@ -331,6 +368,10 @@ internal static class MultiObjective
         return (uniqueRows.ToArray(), firstIndices.ToArray());
     }
 
+    /// <summary>Returns the sign of the first unequal coordinate comparison, or zero for equal rows.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <returns>The sign of the first unequal coordinate comparison, or zero for equal rows.</returns>
     private static int CompareRows(double[] a, double[] b)
     {
         for (int i = 0; i < a.Length; i++)

@@ -53,6 +53,8 @@ internal static class RdbModels
     // ------------------------------------------------------------------ enum ↔ stored string
 
     /// <summary>Map a <see cref="StudyDirection" /> to the DB enum (whose name SQLAlchemy stores).</summary>
+    /// <param name="direction">The objective direction used for ordering or representation conversion.</param>
+    /// <returns>The corresponding direction label used by the database schema.</returns>
     internal static DbStudyDirection DirectionToDb(StudyDirection direction) => direction switch
     {
         StudyDirection.Minimize => DbStudyDirection.MINIMIZE,
@@ -61,6 +63,9 @@ internal static class RdbModels
     };
 
     /// <summary>Inverse of <see cref="DirectionToDb" />.</summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The matching OptunaSharp objective direction.</returns>
+    /// <exception cref="NumSharp.ValueError">The stored direction label is unknown.</exception>
     internal static StudyDirection DirectionFromDb(DbStudyDirection value) => value switch
     {
         DbStudyDirection.MINIMIZE => StudyDirection.Minimize,
@@ -70,6 +75,9 @@ internal static class RdbModels
     };
 
     /// <summary>Map a <see cref="TrialState" /> to the DB enum (whose name SQLAlchemy stores).</summary>
+    /// <param name="state">The trial lifecycle state to convert or persist.</param>
+    /// <returns>The corresponding lifecycle-state label used by the database schema.</returns>
+    /// <exception cref="NumSharp.ValueError">The trial-state value has no supported database representation.</exception>
     internal static DbTrialState StateToDb(TrialState state) => state switch
     {
         TrialState.Running => DbTrialState.RUNNING,
@@ -81,6 +89,9 @@ internal static class RdbModels
     };
 
     /// <summary>Inverse of <see cref="StateToDb" />.</summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The matching OptunaSharp trial lifecycle state.</returns>
+    /// <exception cref="NumSharp.ValueError">The stored trial-state label is unknown.</exception>
     internal static TrialState StateFromDb(DbTrialState value) => value switch
     {
         DbTrialState.RUNNING => TrialState.Running,
@@ -97,6 +108,8 @@ internal static class RdbModels
     ///     Python <c>TrialValueModel.value_to_stored_repr</c>: split a value into (stored column,
     ///     value_type tag). ±inf are stored as NULL with a tag so the column stays a plain FLOAT.
     /// </summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The nullable numeric column and a tag preserving finite values or either infinity.</returns>
     internal static (double? Value, DbTrialValueType Type) ValueToStoredRepr(double value)
     {
         if (double.IsPositiveInfinity(value))
@@ -107,6 +120,11 @@ internal static class RdbModels
     }
 
     /// <summary>Python <c>TrialValueModel.stored_repr_to_value</c>.</summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <param name="type">The database tag distinguishing finite values, infinities, and, for intermediate reports, NaN.</param>
+    /// <returns>The objective value reconstructed from its numeric column and type tag.</returns>
+    /// <exception cref="NumSharp.ValueError">The stored objective-value tag is unknown.</exception>
+    /// <exception cref="System.InvalidOperationException">A FINITE tag is paired with a null numeric value.</exception>
     internal static double StoredReprToValue(double? value, DbTrialValueType type) => type switch
     {
         DbTrialValueType.INF_POS => double.PositiveInfinity,
@@ -119,6 +137,8 @@ internal static class RdbModels
     ///     Python <c>TrialIntermediateValueModel.intermediate_value_to_stored_repr</c> — like
     ///     <see cref="ValueToStoredRepr" /> but also carries a NaN tag.
     /// </summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The nullable numeric column and a tag preserving finite values, either infinity, or NaN.</returns>
     internal static (double? Value, DbTrialIntermediateValueType Type) IntermediateValueToStoredRepr(double value)
     {
         if (double.IsNaN(value))
@@ -131,6 +151,11 @@ internal static class RdbModels
     }
 
     /// <summary>Python <c>TrialIntermediateValueModel.stored_repr_to_intermediate_value</c>.</summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <param name="type">The database tag distinguishing finite values, infinities, and, for intermediate reports, NaN.</param>
+    /// <returns>The intermediate value reconstructed from its numeric column and type tag.</returns>
+    /// <exception cref="NumSharp.ValueError">The stored intermediate-value tag is unknown.</exception>
+    /// <exception cref="System.InvalidOperationException">A FINITE tag is paired with a null numeric value.</exception>
     internal static double StoredReprToIntermediateValue(double? value, DbTrialIntermediateValueType type) => type switch
     {
         DbTrialIntermediateValueType.NAN => double.NaN,
@@ -148,6 +173,8 @@ internal static class RdbModels
     ///     <see cref="DateTimeKind.Unspecified" /> so Npgsql/Pomelo map it to
     ///     <c>TIMESTAMP WITHOUT TIME ZONE</c> / <c>DATETIME</c> rather than a tz-aware column.
     /// </summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>A UTC timestamp with unspecified DateTime kind, matching Optuna's timezone-free database column.</returns>
     internal static DateTime ToDbUtc(DateTime value)
     {
         DateTime utc = value.Kind switch
@@ -164,6 +191,8 @@ internal static class RdbModels
     ///     as naive local time — Python's getter does
     ///     <c>value.replace(tzinfo=utc).astimezone().replace(tzinfo=None)</c>.
     /// </summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The local timestamp corresponding to the stored UTC value, or null when absent.</returns>
     internal static DateTime? FromDbUtc(DateTime? value)
     {
         if (value is null)
@@ -172,6 +201,7 @@ internal static class RdbModels
         return DateTime.SpecifyKind(utc.ToLocalTime(), DateTimeKind.Unspecified);
     }
 
+    /// <summary>The invariant culture used for portable database-value formatting.</summary>
     internal static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 }
 
@@ -182,26 +212,37 @@ internal static class RdbModels
 /// </summary>
 internal enum DbStudyDirection
 {
+    /// <summary>No optimization direction has been assigned.</summary>
     NOT_SET,
+    /// <summary>Smaller objective values are preferred.</summary>
     MINIMIZE,
+    /// <summary>Larger objective values are preferred.</summary>
     MAXIMIZE,
 }
 
 /// <summary>The <c>trialstate</c> enum — labels from SQLAlchemy's <c>Enum(TrialState)</c>.</summary>
 internal enum DbTrialState
 {
+    /// <summary>The objective is currently being evaluated.</summary>
     RUNNING,
+    /// <summary>The objective completed successfully.</summary>
     COMPLETE,
+    /// <summary>The trial ended early following a pruning decision.</summary>
     PRUNED,
+    /// <summary>The objective failed before successful completion.</summary>
     FAIL,
+    /// <summary>The trial is queued for a future worker.</summary>
     WAITING,
 }
 
 /// <summary>The <c>trialvaluetype</c> enum — labels from <c>TrialValueModel.TrialValueType</c>.</summary>
 internal enum DbTrialValueType
 {
+    /// <summary>The numeric value is stored in the accompanying value column.</summary>
     FINITE,
+    /// <summary>The value is positive infinity; its numeric column is null.</summary>
     INF_POS,
+    /// <summary>The value is negative infinity; its numeric column is null.</summary>
     INF_NEG,
 }
 
@@ -211,8 +252,12 @@ internal enum DbTrialValueType
 /// </summary>
 internal enum DbTrialIntermediateValueType
 {
+    /// <summary>The numeric value is stored in the accompanying value column.</summary>
     FINITE,
+    /// <summary>The value is positive infinity; its numeric column is null.</summary>
     INF_POS,
+    /// <summary>The value is negative infinity; its numeric column is null.</summary>
     INF_NEG,
+    /// <summary>The intermediate value is NaN; its numeric column is null.</summary>
     NAN,
 }

@@ -11,10 +11,16 @@ namespace OptunaSharp.Artifacts;
 /// </summary>
 public class ArtifactNotFound : OptunaError
 {
+    /// <summary>Creates an artifact lookup failure retaining supplied diagnostic details.</summary>
     public ArtifactNotFound() { }
 
+    /// <param name="message">Error message explaining the failure.</param>
+    /// <summary>Creates an artifact lookup failure retaining supplied diagnostic details.</summary>
     public ArtifactNotFound(string message) : base(message) { }
 
+    /// <param name="message">Error message explaining the failure.</param>
+    /// <param name="innerException">Original failure retained as the cause of this exception.</param>
+    /// <summary>Creates an artifact lookup failure retaining supplied diagnostic details.</summary>
     public ArtifactNotFound(string message, System.Exception innerException) : base(message, innerException) { }
 }
 
@@ -34,14 +40,22 @@ public interface IArtifactStore
     ///     binary stream. If the artifact does not exist, an <see cref="ArtifactNotFound" />
     ///     exception should be raised.
     /// </summary>
+    /// <param name="artifactId">Identifier of the artifact within the configured store.</param>
+    /// <returns>A readable stream owned by the caller; dispose it after reading.</returns>
+    /// <exception cref="System.Exception">The configured store cannot retrieve the artifact.</exception>
     Stream OpenReader(string artifactId);
 
     /// <summary>Save the content to the backend.</summary>
+    /// <param name="artifactId">Identifier of the artifact within the configured store.</param>
+    /// <param name="contentBody">Readable content stream; ownership stays with the caller.</param>
+    /// <exception cref="System.Exception">The backend or input stream fails during the upload.</exception>
     void Write(string artifactId, Stream contentBody);
 
     /// <summary>
     ///     Remove the artifact identified by the <paramref name="artifactId" />. If the artifact
     ///     does not exist, an <see cref="ArtifactNotFound" /> exception may be raised.
     /// </summary>
+    /// <param name="artifactId">Identifier of the artifact within the configured store.</param>
+    /// <exception cref="System.Exception">The backend cannot delete the artifact.</exception>
     void Remove(string artifactId);
 }

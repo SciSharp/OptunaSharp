@@ -22,6 +22,9 @@ internal static class ColorScales
         "#fff5f0", "#fee0d2", "#fcbba1", "#fc9272", "#fb6a4a", "#ef3b2c", "#cb181d", "#a50f15", "#67000d",
     });
 
+    /// <summary>Places hexadecimal colors at evenly spaced positions across a Plotly color scale.</summary>
+    /// <param name="hex">At least two hexadecimal RGB colors in scale order.</param>
+    /// <returns>An array of position and RGB-color pairs.</returns>
     private static object[] Expand(string[] hex)
     {
         var result = new object[hex.Length];
@@ -30,6 +33,11 @@ internal static class ColorScales
         return result;
     }
 
+    /// <summary>Decodes six hexadecimal RGB digits and formats a Plotly color string.</summary>
+    /// <param name="hex">Six hexadecimal digits, optionally prefixed by #.</param>
+    /// <returns>Color text in rgb(r,g,b) notation.</returns>
+    /// <exception cref="System.ArgumentOutOfRangeException">The hexadecimal text has fewer than six digits.</exception>
+    /// <exception cref="System.FormatException">A color component is not valid hexadecimal.</exception>
     private static string HexToRgb(string hex)
     {
         hex = hex.TrimStart('#');

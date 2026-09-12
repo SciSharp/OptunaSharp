@@ -29,6 +29,9 @@ internal static class ImprovementEvaluatorDefaults
 public abstract class BaseImprovementEvaluator
 {
     /// <summary>Evaluate the room left for optimization.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="studyDirection">Whether larger or smaller objective values are preferred.</param>
+    /// <returns>The estimated remaining room for improvement under this evaluator's criterion.</returns>
     public abstract double Evaluate(IReadOnlyList<FrozenTrial> trials, StudyDirection studyDirection);
 }
 
@@ -65,6 +68,7 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
     /// <param name="topTrialsRatio">A ratio of top trials to be considered when estimating the regret.</param>
     /// <param name="minNTrials">A minimum number of complete trials to estimate the regret.</param>
     /// <param name="seed">Seed for random number generator.</param>
+    /// <summary>Configures the best-trial subset and GP settings used to bound remaining regret.</summary>
     public RegretBoundEvaluator(
         double topTrialsRatio = ImprovementEvaluatorDefaults.DefaultTopTrialsRatio,
         int minNTrials = ImprovementEvaluatorDefaults.DefaultMinNTrials,
@@ -83,6 +87,9 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
     ///     <c>(n_trials − top_n)</c>-th order statistic (<c>np.partition</c>), and the mask keeps every
     ///     value at or above it.
     /// </summary>
+    /// <param name="normalizedParams">Normalized coordinates in search-space order.</param>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The parameter rows and objective values retained as the best observations for fitting the regret model.</returns>
     private (double[,] Params, double[] Values) GetTopN(double[,] normalizedParams, double[] values)
     {
         int nTrials = values.Length;
@@ -111,6 +118,11 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
         return (paramsOut, valuesOut);
     }
 
+    /// <summary>Returns the estimated upper confidence bound on remaining regret, in objective-value units.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="studyDirection">Whether larger or smaller objective values are preferred.</param>
+    /// <returns>The estimated upper confidence bound on remaining regret, in objective-value units.</returns>
+    /// <exception cref="NumSharp.ValueError">There are no completed trials, or their common search space is empty.</exception>
     public override double Evaluate(IReadOnlyList<FrozenTrial> trials, StudyDirection studyDirection)
     {
         var optunaSearchSpace = SearchSpaceFunctions.IntersectionSearchSpaceOf(trials);
@@ -148,6 +160,10 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
         return standardizedRegretBound * topNValuesStd;  // regret bound
     }
 
+    /// <summary>Checks the completed-trial and common-search-space prerequisites of the regret model.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="searchSpace">The parameter distributions in the column order used by the transform or model.</param>
+    /// <exception cref="NumSharp.ValueError">There are no completed trials, or their common search space is empty.</exception>
     private static void ValidateInput(
         IReadOnlyList<FrozenTrial> trials, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -165,6 +181,10 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
     ///     <c>_get_beta</c> — the confidence-width coefficient (Srinivas et al. 2010, scaled down by 5
     ///     as in the paper's experiments).
     /// </summary>
+    /// <param name="nParams">The number of modeled parameters.</param>
+    /// <param name="nTrials">The number of observed trials used in the confidence-width calculation.</param>
+    /// <param name="delta">The probability of exceeding the confidence bound.</param>
+    /// <returns>The confidence-width coefficient computed from parameter count, trial count, and confidence level.</returns>
     internal static double GetBeta(int nParams, int nTrials, double delta = 0.1)
     {
         // beta = 2 * log(n_params * n_trials**2 * pi**2 / 6 / delta), then /= 5.
@@ -180,6 +200,14 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
     ///     max(LCB) over the top trials. UCB over the search space is the larger of the UCB at the top
     ///     trials and the UCB found by random search sampling (<see cref="OptimSample" />).
     /// </summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="normalizedTopNParams">The normalized parameter rows retained as the best observations for the regret bound.</param>
+    /// <param name="standardizedTopNValues">The standardized objective values corresponding to the retained parameter rows.</param>
+    /// <param name="delta">The probability of exceeding the confidence bound.</param>
+    /// <param name="optimizeNSamples">The number of candidate samples used when optimizing the regret-bound acquisition functions.</param>
+    /// <param name="rng">The random generator whose state is advanced when drawing samples.</param>
+    /// <returns>The upper confidence bound on regret in standardized objective units.</returns>
     internal static double ComputeStandardizedRegretBound(
         GPRegressor gpr, GpSearchSpace searchSpace, double[,] normalizedTopNParams,
         double[] standardizedTopNValues, double delta = 0.1, int optimizeNSamples = 2048,
@@ -204,6 +232,9 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
         return standardizedUcbValue - standardizedLcbValue;  // standardized regret bound
     }
 
+    /// <summary>Returns the largest value in the supplied sequence.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <returns>The largest value in the supplied sequence.</returns>
     private static double Max(double[] a)
     {
         double m = a[0];
@@ -230,6 +261,8 @@ public class BestValueStagnationEvaluator : BaseImprovementEvaluator
     private readonly int _maxStagnationTrials;
 
     /// <param name="maxStagnationTrials">The maximum number of trials allowed for stagnation.</param>
+    /// <summary>Sets the allowed count of trials without a new best objective value.</summary>
+    /// <exception cref="NumSharp.ValueError">The permitted stagnation count is negative.</exception>
     public BestValueStagnationEvaluator(int maxStagnationTrials = 30)
     {
         if (maxStagnationTrials < 0)
@@ -238,6 +271,11 @@ public class BestValueStagnationEvaluator : BaseImprovementEvaluator
         _maxStagnationTrials = maxStagnationTrials;
     }
 
+    /// <summary>Returns the remaining allowed stagnation count before the configured threshold is exceeded.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="studyDirection">Whether larger or smaller objective values are preferred.</param>
+    /// <returns>The remaining allowed stagnation count before the configured threshold is exceeded.</returns>
+    /// <exception cref="NumSharp.ValueError">The trial list contains no completed trial.</exception>
     public override double Evaluate(IReadOnlyList<FrozenTrial> trials, StudyDirection studyDirection)
     {
         ValidateInput(trials);
@@ -259,6 +297,9 @@ public class BestValueStagnationEvaluator : BaseImprovementEvaluator
         return _maxStagnationTrials - (currentStep - bestStep);
     }
 
+    /// <summary>Ensures that the evaluator has completed objective values from which to measure stagnation.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <exception cref="NumSharp.ValueError">The trial list contains no completed trial.</exception>
     private static void ValidateInput(IReadOnlyList<FrozenTrial> trials)
     {
         if (!trials.Any(t => t.State == TrialState.Complete))

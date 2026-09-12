@@ -27,6 +27,9 @@ internal sealed class FanovaTree
 
     private double? _variance;                     // computed lazily, requires _statistics
 
+    /// <summary>Precomputes split intervals and volume-weighted node statistics for exact tree marginalization.</summary>
+    /// <param name="tree">The fitted tree whose nodes and split statistics are inspected.</param>
+    /// <param name="searchSpaces">The lower and upper bound of each encoded feature, with shape (features, 2).</param>
     internal FanovaTree(SklearnLikeTree tree, double[,] searchSpaces)
     {
         System.Diagnostics.Debug.Assert(searchSpaces.GetLength(0) == tree.NFeatures);
@@ -44,13 +47,24 @@ internal sealed class FanovaTree
     private int NNodes => _tree.NodeCount;
 
     // ---- exposed for the test_tree.py port -------------------------------------------------
+    /// <summary>The cached prediction and integration weight of each tree node.</summary>
     internal double[,] Statistics => _statistics;
+    /// <summary>Returns the cached midpoint of each interval induced by the feature's split thresholds.</summary>
+    /// <param name="feature">The zero-based feature column whose splits or importance are requested.</param>
+    /// <returns>The cached midpoint of each interval induced by the feature's split thresholds.</returns>
     internal double[] SplitMidpoints(int feature) => _splitMidpoints[feature];
+    /// <summary>Returns the cached width of each interval induced by the feature's split thresholds.</summary>
+    /// <param name="feature">The zero-based feature column whose splits or importance are requested.</param>
+    /// <returns>The cached width of each interval induced by the feature's split thresholds.</returns>
     internal double[] SplitSizes(int feature) => _splitSizes[feature];
+    /// <summary>A node-by-feature mask identifying the split features occurring in each subtree.</summary>
     internal bool[,] SubtreeActiveFeatures => _subtreeActiveFeatures;
+    /// <summary>The number of encoded feature dimensions integrated by this tree.</summary>
     internal int NFeaturesInternal => NFeatures;
+    /// <summary>The number of nodes in the flattened regression tree.</summary>
     internal int NNodesInternal => NNodes;
 
+    /// <summary>The integrated total variance of the tree's prediction over the search space.</summary>
     internal double Variance
     {
         get
@@ -77,6 +91,9 @@ internal sealed class FanovaTree
         }
     }
 
+    /// <summary>Returns the variance of the marginalized prediction for the selected feature subset.</summary>
+    /// <param name="features">The encoded feature indices retained while integrating out all other dimensions.</param>
+    /// <returns>The variance of the marginalized prediction for the selected feature subset.</returns>
     internal double GetMarginalVariance(long[] features)
     {
         System.Diagnostics.Debug.Assert(features.Length > 0);
@@ -126,6 +143,9 @@ internal sealed class FanovaTree
         return variance;
     }
 
+    /// <summary>Returns the integrated prediction and search-space volume consistent with the fixed feature values.</summary>
+    /// <param name="featureVector">The feature values to condition on; NaN marks a feature to integrate out.</param>
+    /// <returns>The integrated prediction and search-space volume consistent with the fixed feature values.</returns>
     internal (double Value, double Weight) GetMarginalizedStatistics(double[] featureVector)
     {
         System.Diagnostics.Debug.Assert(featureVector.Length == NFeatures);
@@ -209,6 +229,10 @@ internal sealed class FanovaTree
         return (value, weight);
     }
 
+    /// <summary>Returns true when the subtree splits on at least one of the selected active features.</summary>
+    /// <param name="nodeIndex">The zero-based node index in the flat tree arrays.</param>
+    /// <param name="active">The feature mask specifying which coordinates remain conditioned on.</param>
+    /// <returns>True when the subtree splits on at least one of the selected active features.</returns>
     private bool SubtreeSplitsOnActiveFeature(int nodeIndex, bool[] active)
     {
         for (int i = 0; i < NFeatures; i++)
@@ -219,6 +243,8 @@ internal sealed class FanovaTree
         return false;
     }
 
+    /// <summary>Returns the prediction and search-space weight associated with every tree node.</summary>
+    /// <returns>The prediction and search-space weight associated with every tree node.</returns>
     private double[,] PrecomputeStatistics()
     {
         int nNodes = NNodes;
@@ -271,6 +297,8 @@ internal sealed class FanovaTree
         return statistics;
     }
 
+    /// <summary>Returns the midpoint and width arrays of each feature's split-induced intervals.</summary>
+    /// <returns>The midpoint and width arrays of each feature's split-induced intervals.</returns>
     private (double[][] Midpoints, double[][] Sizes) PrecomputeSplitMidpointsAndSizes()
     {
         var midpoints = new double[NFeatures][];
@@ -301,6 +329,8 @@ internal sealed class FanovaTree
         return (midpoints, sizes);
     }
 
+    /// <summary>Returns the sorted distinct split thresholds for each feature.</summary>
+    /// <returns>The sorted distinct split thresholds for each feature.</returns>
     private double[][] ComputeFeaturesSplitValues()
     {
         var allSplitValues = new SortedSet<double>[NFeatures];
@@ -325,6 +355,8 @@ internal sealed class FanovaTree
         return sorted;
     }
 
+    /// <summary>Returns a node-by-feature mask identifying split features present in each subtree.</summary>
+    /// <returns>A node-by-feature mask identifying split features present in each subtree.</returns>
     private bool[,] PrecomputeSubtreeActiveFeatures()
     {
         var subtreeActiveFeatures = new bool[NNodes, NFeatures];
@@ -353,6 +385,10 @@ internal sealed class FanovaTree
     // ---- node-subspace helpers (ports of the module-level _get_* functions) ----------------
 
     /// <summary>Port of <c>_get_subspaces(search_spaces, search_spaces_column, feature, threshold)</c>.</summary>
+    /// <param name="searchSpaces">The lower and upper bound of each encoded feature, with shape (features, 2).</param>
+    /// <param name="searchSpacesColumn">The interval endpoints for one feature.</param>
+    /// <param name="nodeIndex">The zero-based node index in the flat tree arrays.</param>
+    /// <returns>A copy of the feature bounds restricted to the selected child side.</returns>
     private double[,] GetSubspaces(double[,] searchSpaces, int searchSpacesColumn, int nodeIndex)
     {
         var subspace = (double[,])searchSpaces.Clone();
@@ -361,13 +397,23 @@ internal sealed class FanovaTree
     }
 
     // Exposed for the test_tree.py port (test_tree_get_node_subspaces).
+    /// <summary>Returns the feature bounds after restricting the split feature to the left child.</summary>
+    /// <param name="nodeIndex">The zero-based node index in the flat tree arrays.</param>
+    /// <param name="searchSpaces">The lower and upper bound of each encoded feature, with shape (features, 2).</param>
+    /// <returns>The feature bounds after restricting the split feature to the left child.</returns>
     internal double[,] GetNodeLeftChildSubspaces(int nodeIndex, double[,] searchSpaces)
         => GetSubspaces(searchSpaces, searchSpacesColumn: 1, nodeIndex);
 
+    /// <summary>Returns the feature bounds after restricting the split feature to the right child.</summary>
+    /// <param name="nodeIndex">The zero-based node index in the flat tree arrays.</param>
+    /// <param name="searchSpaces">The lower and upper bound of each encoded feature, with shape (features, 2).</param>
+    /// <returns>The feature bounds after restricting the split feature to the right child.</returns>
     internal double[,] GetNodeRightChildSubspaces(int nodeIndex, double[,] searchSpaces)
         => GetSubspaces(searchSpaces, searchSpacesColumn: 0, nodeIndex);
 
     /// <summary>Port of <c>_get_cardinality(search_spaces) = np.prod(hi - lo)</c>.</summary>
+    /// <param name="searchSpaces">The lower and upper bound of each encoded feature, with shape (features, 2).</param>
+    /// <returns>The product of interval widths, representing the subspace volume.</returns>
     private static double GetCardinality(double[,] searchSpaces)
     {
         double product = 1.0;
@@ -381,10 +427,13 @@ internal sealed class FanovaTree
 
     /// <summary>
     ///     <c>np.average(values, weights)</c> = <c>(values*weights).sum() / weights.sum()</c>. Both
-    ///     reductions are numpy's pairwise summation (<see cref="MathUtil.PairwiseSum" />), so this is
+    ///     reductions are numpy's pairwise summation (<see cref="MathUtil.PairwiseSum(double[])" />), so this is
     ///     bit-exact vs Optuna even for the large midpoint arrays a real forest produces (not just the
     ///     ≤3-element <c>test_tree.py</c> cases where pairwise == sequential).
     /// </summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <param name="weights">The nonnegative weight associated with each observation or value.</param>
+    /// <returns>The sum of weighted values divided by total weight.</returns>
     private static double WeightedAverage(IReadOnlyList<double> values, IReadOnlyList<double> weights)
     {
         int n = values.Count;
@@ -399,6 +448,10 @@ internal sealed class FanovaTree
     }
 
     /// <summary><c>np.average((values - avg)**2, weights)</c> (pairwise reductions).</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <param name="weights">The nonnegative weight associated with each observation or value.</param>
+    /// <param name="average">The weighted mean about which squared deviations are measured.</param>
+    /// <returns>The weighted sum of squared deviations from the supplied average.</returns>
     private static double WeightedSquaredDeviation(
         IReadOnlyList<double> values, IReadOnlyList<double> weights, double average)
     {
@@ -415,6 +468,8 @@ internal sealed class FanovaTree
     }
 
     /// <summary><c>itertools.product</c> over ranges <c>[0, dims[k])</c>, yielding index tuples.</summary>
+    /// <param name="dims">The coordinate indices to update.</param>
+    /// <returns>Every index combination selecting one interval per requested feature.</returns>
     private static IEnumerable<int[]> CartesianProduct(int[] dims)
     {
         // If any dimension is empty, the product is empty (matches itertools.product).

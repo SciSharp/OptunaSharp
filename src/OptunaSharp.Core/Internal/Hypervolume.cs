@@ -41,6 +41,11 @@ internal static class Hypervolume
     // ===========================================================================================
 
     /// <summary>Python <c>compute_hypervolume(loss_vals, reference_point, assume_pareto)</c>.</summary>
+    /// <param name="lossVals">Objective rows converted to minimization, one solution per row.</param>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <param name="assumePareto">Whether the caller guarantees that the input rows are already nondominated.</param>
+    /// <returns>The volume dominated by the solutions and bounded by the reference point.</returns>
+    /// <exception cref="NumSharp.ValueError">At least one minimization objective exceeds the corresponding reference-point coordinate.</exception>
     internal static double ComputeHypervolume(double[][] lossVals, double[] referencePoint, bool assumePareto = false)
     {
         int m = referencePoint.Length;
@@ -92,6 +97,9 @@ internal static class Hypervolume
     }
 
     /// <summary>Python <c>wfg._compute_2d</c>.</summary>
+    /// <param name="sortedParetoSols">Unique nondominated minimization rows in lexicographic order.</param>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <returns>The dominated area between the Pareto front and the reference point.</returns>
     private static double Compute2d(double[][] sortedParetoSols, double[] referencePoint)
     {
         // rect_diag_y = concat([ref[1:], sols[:-1, 1]]); edge_x = ref[0]-sols[:,0];
@@ -109,6 +117,9 @@ internal static class Hypervolume
     }
 
     /// <summary>Python <c>wfg._compute_3d</c> (O(N^2) cumulative-max voxel count).</summary>
+    /// <param name="sortedParetoSols">Unique nondominated minimization rows in lexicographic order.</param>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <returns>The dominated three-dimensional volume relative to the reference point.</returns>
     private static double Compute3d(double[][] sortedParetoSols, double[] referencePoint)
     {
         int n = sortedParetoSols.Length;
@@ -151,6 +162,9 @@ internal static class Hypervolume
     }
 
     /// <summary>Python <c>wfg._compute_hv</c> — the WFG recursion for any dimension.</summary>
+    /// <param name="sortedLossVals">Minimization objective rows sorted lexicographically.</param>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <returns>The union volume of the dominated objective boxes.</returns>
     private static double ComputeHv(double[][] sortedLossVals, double[] referencePoint)
     {
         int n = sortedLossVals.Length;
@@ -197,6 +211,10 @@ internal static class Hypervolume
     }
 
     /// <summary>Python <c>wfg._compute_exclusive_hv</c>.</summary>
+    /// <param name="limitedSols">The competing solutions clipped to the candidate's dominated box.</param>
+    /// <param name="inclusiveHv">The candidate box volume before subtracting overlap with competing boxes.</param>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <returns>The candidate's dominated volume after removing overlap with the other boxes.</returns>
     private static double ComputeExclusiveHv(double[][] limitedSols, double inclusiveHv, double[] referencePoint)
     {
         if (limitedSols.Length <= 3)
@@ -215,6 +233,11 @@ internal static class Hypervolume
     // ===========================================================================================
 
     /// <summary>Python <c>hssp._solve_hssp(rank_i_loss_vals, rank_i_indices, subset_size, reference_point)</c>.</summary>
+    /// <param name="rankILossVals">The minimization objective rows in the partially selected Pareto rank.</param>
+    /// <param name="rankIIndices">Original trial indices corresponding to the rows of the partially selected rank.</param>
+    /// <param name="subsetSize">The number of solutions to select from the candidate rank.</param>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <returns>The original indices of the greedily selected hypervolume-maximizing subset.</returns>
     internal static int[] SolveHssp(
         double[][] rankILossVals, int[] rankIIndices, int subsetSize, double[] referencePoint)
     {
@@ -242,6 +265,11 @@ internal static class Hypervolume
     }
 
     /// <summary>Python <c>hssp._solve_hssp_on_unique_loss_vals</c>.</summary>
+    /// <param name="rankILossVals">The minimization objective rows in the partially selected Pareto rank.</param>
+    /// <param name="mappedIndices">Original row indices to return after selecting from the deduplicated rows.</param>
+    /// <param name="subsetSize">The number of solutions to select from the candidate rank.</param>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <returns>The mapped original indices selected from the distinct candidate rows.</returns>
     private static int[] SolveHsspOnUniqueLossVals(
         double[][] rankILossVals, int[] mappedIndices, int subsetSize, double[] referencePoint)
     {
@@ -284,6 +312,11 @@ internal static class Hypervolume
     }
 
     /// <summary>Python <c>hssp._solve_hssp_2d</c> (O(subset_size * n) for two objectives).</summary>
+    /// <param name="rankILossVals">The minimization objective rows in the partially selected Pareto rank.</param>
+    /// <param name="mappedIndices">Original row indices to return after selecting from the deduplicated rows.</param>
+    /// <param name="subsetSize">The number of solutions to select from the candidate rank.</param>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <returns>The mapped original indices selected by the two-objective subset routine.</returns>
     private static int[] SolveHssp2d(
         double[][] rankILossVals, int[] mappedIndices, int subsetSize, double[] referencePoint)
     {
@@ -321,6 +354,13 @@ internal static class Hypervolume
     }
 
     /// <summary>Python <c>hssp._lazy_contribs_update</c>.</summary>
+    /// <param name="contribs">Cached upper estimates of each candidate's hypervolume contribution.</param>
+    /// <param name="paretoLossValues">The nondominated objective rows from which the subset is selected.</param>
+    /// <param name="selectedVecs">The workspace containing objective rows already selected.</param>
+    /// <param name="selectedCount">The number of populated rows in the selected-solution workspace.</param>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <param name="hvSelected">The hypervolume already covered by the selected solutions.</param>
+    /// <returns>The updated cached hypervolume-contribution estimates.</returns>
     private static double[] LazyContribsUpdate(
         double[] contribs, double[][] paretoLossValues, double[][] selectedVecs, int selectedCount,
         double[] referencePoint, double hvSelected)
@@ -399,6 +439,9 @@ internal static class Hypervolume
     // ===========================================================================================
 
     /// <summary>Sequential <c>np.prod(reference_point - row)</c>.</summary>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <param name="row">The objective or feature row used by the operation.</param>
+    /// <returns>The product of coordinate distances from the solution to the reference point.</returns>
     private static double ProdRefMinus(double[] referencePoint, double[] row)
     {
         double p = 1.0;
@@ -408,6 +451,8 @@ internal static class Hypervolume
     }
 
     /// <summary>NumPy <c>np.argmax</c>: the first index of the maximum (values here are non-negative, finite or +inf).</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The index of the first largest value.</returns>
     private static int ArgMax(IReadOnlyList<double> values)
     {
         int best = 0;
@@ -442,6 +487,10 @@ internal static class Hypervolume
     ///     through negation, elementwise <c>max</c>, comparisons, and lexicographic <c>np.unique</c>
     ///     sort — no summation, dot, or transcendental, so there is no float-order drift.</para>
     /// </summary>
+    /// <param name="lossVals">Objective rows converted to minimization, one solution per row.</param>
+    /// <param name="refPoint">The reference objective vector bounding the dominated region.</param>
+    /// <returns>Paired lower and upper rows describing the nondominated boxes.</returns>
+    /// <exception cref="System.ArgumentException">An objective row has not been clipped to the reference-point boundary required by the decomposition.</exception>
     internal static (double[][] Lower, double[][] Upper) GetNonDominatedBoxBounds(
         double[][] lossVals, double[] refPoint)
     {
@@ -467,6 +516,9 @@ internal static class Hypervolume
     }
 
     /// <summary>Python <c>_get_non_dominated_box_bounds</c>. See <see cref="GetNonDominatedBoxBounds" />.</summary>
+    /// <param name="sortedParetoSols">Unique nondominated minimization rows in lexicographic order.</param>
+    /// <param name="refPoint">The reference objective vector bounding the dominated region.</param>
+    /// <returns>Paired lower and upper rows describing the nondominated boxes.</returns>
     private static (double[][] Lower, double[][] Upper) GetNonDominatedBoxBoundsInner(
         double[][] sortedParetoSols, double[] refPoint)
     {
@@ -507,6 +559,9 @@ internal static class Hypervolume
     ///     points. Returns <c>upper_bound_set</c> (each <c>(n_objectives,)</c>) and <c>def_points</c>
     ///     (each <c>(n_objectives, n_objectives)</c>, indexed <c>[defining-dim, coordinate]</c>).
     /// </summary>
+    /// <param name="sortedParetoSols">Unique nondominated minimization rows in lexicographic order.</param>
+    /// <param name="refPoint">The reference objective vector bounding the dominated region.</param>
+    /// <returns>The local upper-bound vectors and their corresponding defining-point matrices.</returns>
     private static (List<double[]> UpperBoundSet, List<double[,]> DefPoints) GetUpperBoundSet(
         double[][] sortedParetoSols, double[] refPoint)
     {
@@ -534,6 +589,11 @@ internal static class Hypervolume
     ///     <c>(bound, dimension)</c> updates so the output row order matches NumPy's boolean-mask
     ///     flatten and <c>np.vstack</c> exactly.
     /// </summary>
+    /// <param name="sol">The new objective row to incorporate into the upper-bound decomposition.</param>
+    /// <param name="ubs">The current local upper bounds of the uncovered region.</param>
+    /// <param name="dps">The defining points associated with each local upper bound.</param>
+    /// <param name="m">The number of objective dimensions.</param>
+    /// <returns>The updated local upper bounds and corresponding defining points.</returns>
     private static (List<double[]>, List<double[,]>) UpperBoundSetUpdate(
         double[] sol, List<double[]> ubs, List<double[,]> dps, int m)
     {
@@ -607,6 +667,10 @@ internal static class Hypervolume
     ///     points into box <c>[lower, upper]</c> bounds, dropping empty boxes (<c>upper &lt;= lower</c>
     ///     in any coordinate). Returns the two stacked halves the caller negates/swaps.
     /// </summary>
+    /// <param name="upperBoundSet">The local upper bounds defining nondominated boxes.</param>
+    /// <param name="defPoints">The defining points associated with each local upper bound.</param>
+    /// <param name="refPoint">The reference objective vector bounding the dominated region.</param>
+    /// <returns>Paired lower and upper corner rows for the resulting boxes.</returns>
     private static (double[][] Bounds0, double[][] Bounds1) GetBoxBounds(
         List<double[]> upperBoundSet, List<double[,]> defPoints, double[] refPoint)
     {
@@ -646,6 +710,9 @@ internal static class Hypervolume
         return (keptBounds0.ToArray(), keptBounds1.ToArray());
     }
 
+    /// <summary>Returns a new vector with every input coordinate negated.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <returns>A new vector with every input coordinate negated.</returns>
     private static double[] Neg(double[] a)
     {
         var r = new double[a.Length];
@@ -654,6 +721,10 @@ internal static class Hypervolume
         return r;
     }
 
+    /// <summary>Returns the retained row references in their original order.</summary>
+    /// <param name="rows">The matrix rows to select or process.</param>
+    /// <param name="keep">One flag per row; only rows whose flag is true are retained.</param>
+    /// <returns>The retained row references in their original order.</returns>
     private static double[][] Mask(double[][] rows, bool[] keep)
     {
         var result = new List<double[]>();
@@ -663,6 +734,8 @@ internal static class Hypervolume
     }
 
     /// <summary>Stable ascending argsort (NaN sorts last, mirroring NumPy).</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>Indices sorting values in ascending order while preserving equal-value order.</returns>
     private static int[] StableArgsort(double[] values)
         => Enumerable.Range(0, values.Length)
             .OrderBy(i => values[i], AscNanLastComparer.Instance).ToArray();
@@ -672,13 +745,20 @@ internal static class Hypervolume
     ///     <c>np.argsort(-contribs)</c>. The result is tie-order-independent (see class remark), so a
     ///     stable order suffices.
     /// </summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>Indices sorting finite values descending and placing NaNs last.</returns>
     private static int[] ArgsortDescendingNanLast(double[] values)
         => Enumerable.Range(0, values.Length)
             .OrderBy(i => values[i], DescNanLastComparer.Instance).ToArray();
 
     private sealed class AscNanLastComparer : IComparer<double>
     {
+        /// <summary>The shared stateless comparer used for deterministic ordering.</summary>
         internal static readonly AscNanLastComparer Instance = new();
+        /// <summary>Returns a negative, zero, or positive value for ascending order, with NaNs after numeric values.</summary>
+        /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+        /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+        /// <returns>A negative, zero, or positive value for ascending order, with NaNs after numeric values.</returns>
         public int Compare(double a, double b)
         {
             bool na = double.IsNaN(a), nb = double.IsNaN(b);
@@ -690,7 +770,12 @@ internal static class Hypervolume
 
     private sealed class DescNanLastComparer : IComparer<double>
     {
+        /// <summary>The shared stateless comparer used for deterministic ordering.</summary>
         internal static readonly DescNanLastComparer Instance = new();
+        /// <summary>Returns a negative, zero, or positive value for descending order, with NaNs after numeric values.</summary>
+        /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+        /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+        /// <returns>A negative, zero, or positive value for descending order, with NaNs after numeric values.</returns>
         public int Compare(double a, double b)
         {
             bool na = double.IsNaN(a), nb = double.IsNaN(b);

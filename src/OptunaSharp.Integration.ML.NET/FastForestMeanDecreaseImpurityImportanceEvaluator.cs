@@ -29,6 +29,7 @@ public sealed class FastForestMeanDecreaseImpurityImportanceEvaluator : BaseImpo
     /// <param name="nTrees">Number of trees in the random forest.</param>
     /// <param name="maxDepth">The maximum depth of each tree in the random forest.</param>
     /// <param name="seed">Seed for the random forest.</param>
+    /// <summary>Creates the FastForest mean-decrease-in-impurity evaluator with the requested tree count, depth, and random seed.</summary>
     public FastForestMeanDecreaseImpurityImportanceEvaluator(int nTrees = 64, int maxDepth = 64, int? seed = null)
     {
         _nTrees = nTrees;
@@ -47,6 +48,7 @@ public sealed class FastForestMeanDecreaseImpurityImportanceEvaluator : BaseImpo
     ///     other field is used as given. For a reproducible result set <c>Seed</c> and
     ///     <c>NumberOfThreads = 1</c>.
     /// </param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="options" /> is null.</exception>
     public FastForestMeanDecreaseImpurityImportanceEvaluator(FastForestRegressionTrainer.Options options)
         => _options = options ?? throw new ArgumentNullException(nameof(options));
 
@@ -60,6 +62,7 @@ public sealed class FastForestMeanDecreaseImpurityImportanceEvaluator : BaseImpo
     /// <param name="nTrees">The number of trees in the forest (the options baseline).</param>
     /// <param name="maxDepth">The maximum depth of each tree (derives the baseline leaf count).</param>
     /// <param name="seed">Baseline seed; may be overridden inside <paramref name="configure" />.</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="configure" /> is null.</exception>
     public FastForestMeanDecreaseImpurityImportanceEvaluator(
         Action<FastForestRegressionTrainer.Options> configure, int nTrees = 64, int maxDepth = 64, int? seed = null)
     {

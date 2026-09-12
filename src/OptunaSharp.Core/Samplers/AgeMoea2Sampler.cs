@@ -41,9 +41,8 @@ public class AgeMoea2Sampler : BaseGASampler
 
     /// <param name="populationSize">Number of individuals (trials) per generation. Must be &gt;= 2.</param>
     /// <param name="mutation">
-    ///     Mutation applied when creating children. Defaults to <see cref="PolynomialMutation" />
-    ///     (<c>eta = 20</c>), AGE-MOEA-2's mutation. If <c>null</c> a parameter selected for mutation is
-    ///     resampled independently.
+    ///     Mutation applied when creating children. Null selects <see cref="Nsgaii.PolynomialMutation" />
+    ///     with <c>eta = 20</c>, AGE-MOEA-2's default mutation.
     /// </param>
     /// <param name="mutationProb">Per-parameter mutation probability. <c>null</c> ⇒ <c>1 / len(params)</c>.</param>
     /// <param name="crossover">Crossover applied when creating children. Defaults to <see cref="SBXCrossover" /> (<c>eta = 15</c>).</param>
@@ -51,6 +50,8 @@ public class AgeMoea2Sampler : BaseGASampler
     /// <param name="swappingProb">Probability of swapping each parameter during crossover.</param>
     /// <param name="seed">Seed for the random number generator.</param>
     /// <param name="conditionalParams">OptunaSharp extension — see <see cref="ConditionalParams" /> and <see cref="NSGAIISampler" />.</param>
+    /// <summary>Configures AGE-MOEA-2 survival and the genetic operators used to produce each generation.</summary>
+    /// <exception cref="NumSharp.ValueError">Population size is below two or the crossover parent count, or a configured reproduction probability is invalid.</exception>
     public AgeMoea2Sampler(
         int populationSize = 50,
         BaseMutation? mutation = null,
@@ -85,6 +86,7 @@ public class AgeMoea2Sampler : BaseGASampler
         _afterTrialStrategy = new NSGAIIAfterTrialStrategy(null).Call;
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         _randomSampler.ReseedRng();
@@ -93,6 +95,7 @@ public class AgeMoea2Sampler : BaseGASampler
         _rng.Rng.seed(BitConverter.ToUInt32(buffer));
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -105,6 +108,7 @@ public class AgeMoea2Sampler : BaseGASampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override List<FrozenTrial> SelectParent(Study study, int generation)
     {
         var combined = GetPopulation(study, generation - 1);
@@ -112,6 +116,7 @@ public class AgeMoea2Sampler : BaseGASampler
         return _eliteStrategy.Select(study, combined);
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -124,13 +129,17 @@ public class AgeMoea2Sampler : BaseGASampler
         return child;
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
         => _randomSampler.SampleIndependent(study, trial, paramName, paramDistribution);
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _randomSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
+    /// <exception cref="System.Exception">A configured after-trial or constraint callback fails; its exception propagates.</exception>
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         _afterTrialStrategy(study, trial, state, values);

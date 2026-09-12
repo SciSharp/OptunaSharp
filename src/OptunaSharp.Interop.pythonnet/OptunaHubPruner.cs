@@ -21,6 +21,9 @@ public sealed class OptunaHubPruner : BasePruner, IDisposable
     private readonly string _name;
     private PyObject? _pruner;
 
+    /// <summary>Takes ownership of the Python algorithm instance and records its diagnostic name.</summary>
+    /// <param name="name">The package and class name displayed in diagnostics.</param>
+    /// <param name="pruner">The Python pruner handle owned by the wrapper, or borrowed by a low-level invocation.</param>
     internal OptunaHubPruner(string name, PyObject pruner)
     {
         _name = name;
@@ -33,6 +36,9 @@ public sealed class OptunaHubPruner : BasePruner, IDisposable
     private PyObject Pruner => _pruner ?? throw new ObjectDisposedException(nameof(OptunaHubPruner));
 
     /// <inheritdoc />
+    /// <exception cref="System.ObjectDisposedException">The algorithm wrapper has already been disposed.</exception>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python algorithm or shadow-study operation fails.</exception>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.PythonInteropException">The interpreter or a required Python module cannot be initialized.</exception>
     public override bool Prune(Study study, FrozenTrial trial) => PythonRuntime.Run(() =>
     {
         using PyObject pystudy = BuildStudy(study, trial.Number);
@@ -45,6 +51,10 @@ public sealed class OptunaHubPruner : BasePruner, IDisposable
 
     // ---- shadow study (finished trials + their intermediate values) ------------------------------
 
+    /// <summary>Builds an in-memory Python study containing earlier finished trials for sampler or pruner replay.</summary>
+    /// <param name="study">The study whose trial history is mirrored, or its borrowed Python shadow-study handle.</param>
+    /// <param name="currentNumber">The current trial number; only earlier finished trials are included in the shadow study.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
     private static PyObject BuildStudy(Study study, int currentNumber)
     {
         OptunaHubRuntime.EnsureQuiet();
@@ -65,6 +75,10 @@ public sealed class OptunaHubPruner : BasePruner, IDisposable
 
     // Open a running trial and replay this trial's reported intermediate values onto it — that is what
     // the pruner reads (trial.intermediate_values / last_step) to decide.
+    /// <summary>Adds a running trial to the Python shadow study and returns its frozen snapshot.</summary>
+    /// <param name="pystudy">The borrowed Python shadow study that receives a new running trial.</param>
+    /// <param name="trial">The trial being mirrored, sampled, or checked for optimizer compatibility.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
     private static PyObject OpenRunningTrial(PyObject pystudy, FrozenTrial trial)
     {
         using PyObject running = Python.optuna.Study.ask(pystudy);
@@ -75,6 +89,7 @@ public sealed class OptunaHubPruner : BasePruner, IDisposable
         return trials[new PyInt(number)];
     }
 
+    /// <summary>Releases owned Python references while holding the GIL.</summary>
     public void Dispose()
     {
         var pruner = _pruner;

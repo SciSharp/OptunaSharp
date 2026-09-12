@@ -60,6 +60,11 @@ internal static class Python
         {
             /// <summary><c>cma.CMAEvolutionStrategy(x0, sigma0, inopts=opts)</c> — construct the optimizer.
             /// Dispose the returned instance (under the GIL) when done.</summary>
+            /// <param name="x0">The initial parameter values or Python initial coordinate vector for CMA-ES.</param>
+            /// <param name="sigma0">The initial CMA-ES standard deviation in its transformed coordinates.</param>
+            /// <param name="opts">The borrowed Python options dictionary for CMAEvolutionStrategy.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject New(PyObject x0, double sigma0, PyObject opts)
             {
                 using PyObject ctor = Module.GetAttr("CMAEvolutionStrategy");
@@ -69,10 +74,17 @@ internal static class Python
 
             /// <summary><c>es.ask()</c> — a fresh generation of candidate solutions (a Python list of numpy
             /// arrays). Dispose it.</summary>
+            /// <param name="es">The borrowed live Python CMAEvolutionStrategy instance.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject ask(PyObject es) => es.InvokeMethod("ask");
 
             /// <summary><c>es.tell(solutions, function_values)</c> — update the distribution from the given
             /// solutions and their objective values (returns <c>None</c>). Under the GIL.</summary>
+            /// <param name="es">The borrowed live Python CMAEvolutionStrategy instance.</param>
+            /// <param name="solutions">The borrowed Python sequence of candidate parameter vectors.</param>
+            /// <param name="functionValues">The borrowed Python sequence of objective values oriented for minimization.</param>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static void tell(PyObject es, PyObject solutions, PyObject functionValues)
             {
                 using PyObject _ = es.InvokeMethod("tell", solutions, functionValues);
@@ -80,6 +92,9 @@ internal static class Python
 
             /// <summary><c>es.popsize</c> as a CLR <see cref="long" /> — the population size pycma resolved
             /// (the default <c>4 + floor(3 ln N)</c>, or the user's <c>popsize</c> option).</summary>
+            /// <param name="es">The borrowed live Python CMAEvolutionStrategy instance.</param>
+            /// <returns>The Python CMA-ES population size.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static long popsize_t(PyObject es)
             {
                 using PyObject p = es.GetAttr("popsize");

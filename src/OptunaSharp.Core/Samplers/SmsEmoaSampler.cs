@@ -82,6 +82,8 @@ public class SmsEmoaSampler : BaseSampler
     /// <param name="swappingProb">Probability of swapping each parameter of the parents during crossover.</param>
     /// <param name="seed">Seed for the random number generator.</param>
     /// <param name="hvReferenceEps">Reference-point offset for the survival hypervolume: <c>ref = 1 + eps</c> in the population-normalized objective space (pymoo default <c>10</c>).</param>
+    /// <summary>Configures steady-state hypervolume survival and the operators used to produce offspring.</summary>
+    /// <exception cref="NumSharp.ValueError">Population size is below two or the crossover parent count, or a configured reproduction probability is invalid.</exception>
     public SmsEmoaSampler(
         int populationSize = 50,
         BaseMutation? mutation = null,
@@ -113,6 +115,7 @@ public class SmsEmoaSampler : BaseSampler
             mutation, mutationProb, crossover, crossoverProb, swappingProb, null, _rng);
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         _randomSampler.ReseedRng();
@@ -121,6 +124,7 @@ public class SmsEmoaSampler : BaseSampler
         _rng.Rng.seed(BitConverter.ToUInt32(buffer));
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -134,6 +138,7 @@ public class SmsEmoaSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -156,13 +161,16 @@ public class SmsEmoaSampler : BaseSampler
         return _childGeneration.Generate(study, searchSpace, survivors);
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
         => _randomSampler.SampleIndependent(study, trial, paramName, paramDistribution);
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _randomSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
         => _randomSampler.AfterTrial(study, trial, state, values);
 
@@ -173,6 +181,9 @@ public class SmsEmoaSampler : BaseSampler
     ///     it. Trials are folded in ascending trial-number order (one (μ+1)→μ survival step each); a gap
     ///     in that order stalls the advance until it fills (matching the single-writer assumption).
     /// </summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="completed">Completed trial snapshots available for harvesting.</param>
+    /// <returns>The incumbent trial population reconstructed from persisted replacement history.</returns>
     private List<FrozenTrial> ReconstructPopulation(Study study, List<FrozenTrial> completed)
     {
         var byNumber = new Dictionary<int, FrozenTrial>(completed.Count);
@@ -212,6 +223,10 @@ public class SmsEmoaSampler : BaseSampler
         return ResolveIds(_survivorIds, byId);
     }
 
+    /// <summary>Resolves stored trial identifiers against available history in the requested order.</summary>
+    /// <param name="ids">Stored trial identifiers in requested order.</param>
+    /// <param name="byId">Available trial snapshots indexed by storage identifier.</param>
+    /// <returns>Available trials corresponding to the identifiers, in identifier order.</returns>
     private static List<FrozenTrial> ResolveIds(List<int> ids, Dictionary<int, FrozenTrial> byId)
     {
         var result = new List<FrozenTrial>(ids.Count);
@@ -222,6 +237,8 @@ public class SmsEmoaSampler : BaseSampler
     }
 
     /// <summary>Per-objective sign so every objective becomes a minimization (Optuna internal convention).</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>One multiplier per objective: plus one for minimization and minus one for maximization.</returns>
     private static double[] DirectionSigns(Study study)
     {
         var directions = study.Directions;
@@ -231,6 +248,10 @@ public class SmsEmoaSampler : BaseSampler
         return signs;
     }
 
+    /// <summary>Converts objective values into minimization-oriented losses using one sign per objective.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="signs">One multiplier per objective: +1 for minimization and -1 for maximization.</param>
+    /// <returns>Minimization-oriented objective values in study objective order.</returns>
     private static double[] Loss(FrozenTrial trial, double[] signs)
     {
         var values = trial.Values!;
@@ -241,6 +262,9 @@ public class SmsEmoaSampler : BaseSampler
     }
 
     /// <summary>ideal/nadir over the pre-merge parent population (pymoo estimates them here, adding 1e-32 to nadir).</summary>
+    /// <param name="parents">Selected parent individuals in crossover order.</param>
+    /// <param name="signs">One multiplier per objective: +1 for minimization and -1 for maximization.</param>
+    /// <returns>Coordinate-wise minimum and maximum objective vectors.</returns>
     private static (double[] Ideal, double[] Nadir) IdealNadir(List<FrozenTrial> parents, double[] signs)
     {
         int m = signs.Length;

@@ -50,6 +50,9 @@ public sealed class SklearnEstimator : ICrossValidationEstimator
     ///     The score assigned to a fold whose fit or scoring throws. Defaults to <c>NaN</c>
     ///     (scikit-learn's <c>error_score=np.nan</c>).
     /// </param>
+    /// <summary>Combines a regressor, owned training data, fold strategy, and scoring function for OptunaSearchCV.</summary>
+    /// <exception cref="System.ArgumentNullException">The estimator, feature matrix, or target vector is null.</exception>
+    /// <exception cref="NumSharp.ValueError">The feature-row and target counts differ, or the supplied fold/scorer specification is unsupported.</exception>
     public SklearnEstimator(
         IRegressor estimator,
         double[,] x,
@@ -94,6 +97,9 @@ public sealed class SklearnEstimator : ICrossValidationEstimator
     }
 
     /// <summary>Predict with the refit best estimator. Available only after a refit.</summary>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <returns>One predicted target value per feature row.</returns>
+    /// <exception cref="System.InvalidOperationException">The estimator has not been refit on the complete training data.</exception>
     public double[] Predict(double[,] x)
     {
         if (_bestEstimator is null)
@@ -103,6 +109,10 @@ public sealed class SklearnEstimator : ICrossValidationEstimator
     }
 
     /// <summary>Score with the refit best estimator, using the configured scorer (higher is better). Available only after a refit.</summary>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <param name="y">Target values aligned with the feature rows.</param>
+    /// <returns>The coefficient of determination, where higher values indicate better predictions.</returns>
+    /// <exception cref="System.InvalidOperationException">The estimator has not been refit on the complete training data.</exception>
     public double Score(double[,] x, double[] y)
     {
         if (_bestEstimator is null)

@@ -25,6 +25,10 @@ internal partial class AgeMoeaSurvival
     ///     pymoo runs this under <c>@jit(fastmath=True)</c>, but the reductions are over
     ///     <c>n_obj</c> (2–3) terms — no reassociation freedom — so it is bit-exact here.
     /// </summary>
+    /// <param name="p">Objective-space points whose distance to the line is measured.</param>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="b">Second numerical array operand.</param>
+    /// <returns>Euclidean distances from each point to the line through the two endpoints.</returns>
     internal static double[] PointToLineDistance(double[][] p, double[] a, double[] b)
     {
         int m = p.Length;
@@ -63,6 +67,8 @@ internal partial class AgeMoeaSurvival
     ///     <c>i</c>, the row minimizing the distance to the perturbed axis <c>W[i] = 1e-6 + e_i</c>,
     ///     each row usable once. Returns <c>arange(m)</c> when <c>m ≤ n</c>.
     /// </summary>
+    /// <param name="front">Objective vectors of one nondominated front.</param>
+    /// <returns>Indices of distinct points closest to objective-axis reference lines.</returns>
     internal static int[] FindCornerSolutions(double[][] front)
     {
         int m = front.Length;
@@ -107,6 +113,9 @@ internal partial class AgeMoeaSurvival
     ///     non-finite / non-positive. Zero intercepts become 1. Returns the normalized front and the
     ///     normalization vector.
     /// </summary>
+    /// <param name="front">Objective vectors of one nondominated front.</param>
+    /// <param name="extreme">Extreme points used to determine objective normalization.</param>
+    /// <returns>The objective loss normalized between the ideal and reference points.</returns>
     internal static (double[][] Front, double[] Normalization) Normalize(double[][] front, int[] extreme)
     {
         int m = front.Length;
@@ -139,6 +148,10 @@ internal partial class AgeMoeaSurvival
     }
 
     /// <summary>The intercepts <c>1 / solve(front[extreme], ones)</c>, or null to trigger the fallback.</summary>
+    /// <param name="front">Objective vectors of one nondominated front.</param>
+    /// <param name="extreme">Extreme points used to determine objective normalization.</param>
+    /// <param name="n">Number of numerical coordinates.</param>
+    /// <returns>Positive hyperplane intercepts, or null when the linear solve is singular or unsuitable.</returns>
     private static double[]? SolveIntercepts(double[][] front, int[] extreme, int n)
     {
         var a = new double[n, n];
@@ -171,6 +184,9 @@ internal partial class AgeMoeaSurvival
     }
 
     /// <summary><c>np.max(front, axis=0)</c> — the per-objective maximum.</summary>
+    /// <param name="front">Objective vectors of one nondominated front.</param>
+    /// <param name="n">Number of numerical coordinates.</param>
+    /// <returns>The largest value in each requested objective column.</returns>
     private static double[] MaxAxis(double[][] front, int n)
     {
         var mx = new double[n];

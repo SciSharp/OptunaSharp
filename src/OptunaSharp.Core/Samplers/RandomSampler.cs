@@ -19,18 +19,22 @@ namespace OptunaSharp.Samplers;
 ///     study.Optimize(trial => Math.Pow(trial.SuggestFloat("x", -5, 5), 2), nTrials: 10);
 ///     </code>
 /// </example>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.RandomSampler.html">Official Optuna RandomSampler reference.</seealso>
 public class RandomSampler : BaseSampler
 {
     private readonly LazyRandomState _rng;
 
     /// <param name="seed">Seed for random number generator.</param>
+    /// <summary>Creates an independent sampler with a lazily initialized NumPy-compatible random stream.</summary>
     public RandomSampler(int? seed = null)
     {
         _rng = new LazyRandomState(seed);
     }
 
+    /// <summary>Shared lazy NumPy-compatible random-state holder.</summary>
     internal LazyRandomState Rng => _rng;
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         // Python: self._rng.rng.seed() — reseed from OS entropy.
@@ -39,13 +43,16 @@ public class RandomSampler : BaseSampler
         _rng.Rng.seed(BitConverter.ToUInt32(buffer));
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
         => new();
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
         => new();
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {

@@ -5,13 +5,21 @@ namespace OptunaSharp.Importance.Forests.Internal.Cart;
 /// <summary>Port of <c>sklearn/tree/_splitter.pxd: SplitRecord</c> (regression fields).</summary>
 internal struct SplitRecord
 {
+    /// <summary>The zero-based feature index selected for the split.</summary>
     internal int Feature;
+    /// <summary>The exclusive endpoint of the left child in the shared sample-index array.</summary>
     internal int Pos;
+    /// <summary>The number of missing feature values associated with the split.</summary>
     internal int NMissing;
+    /// <summary>The feature cutoff; values at or below it route left.</summary>
     internal double Threshold;
+    /// <summary>The weighted decrease in impurity achieved by the split.</summary>
     internal double Improvement;
+    /// <summary>The weighted target variance in the left child.</summary>
     internal double ImpurityLeft;
+    /// <summary>The weighted target variance in the right child.</summary>
     internal double ImpurityRight;
+    /// <summary>Whether a missing feature value follows the left child during prediction.</summary>
     internal bool MissingGoToLeft;
 }
 
@@ -25,13 +33,21 @@ internal struct SplitRecord
 /// </summary>
 internal sealed class DensePartitioner
 {
+    /// <summary>The tolerance below which adjacent float32 feature values are treated as the same split candidate.</summary>
     internal const float FeatureThreshold = 1e-7f;
 
+    /// <summary>The shared float32 training feature matrix, indexed by original sample row and feature column.</summary>
     internal float[,] X = null!;          // float32 (n_samples, n_features)
+    /// <summary>The shared permutation of original sample-row indices.</summary>
     internal int[] Samples = null!;       // the shared, in-place-permuted samples array
+    /// <summary>The reusable buffer of values for the feature currently being sorted.</summary>
     internal float[] FeatureValues = null!;
+    /// <summary>The current half-open node range and its missing-value count in the shared sample array.</summary>
     internal int Start, End, NMissing;
 
+    /// <summary>Selects the node's half-open sample range and clears its missing-value count.</summary>
+    /// <param name="start">The inclusive start of the interval or slice.</param>
+    /// <param name="end">The exclusive endpoint of the sample-index slice.</param>
     internal void InitNodeSplit(int start, int end)
     {
         Start = start;
@@ -40,6 +56,7 @@ internal sealed class DensePartitioner
     }
 
     /// <summary><c>sort_samples_and_feature_values</c> (no missing).</summary>
+    /// <param name="feature">The zero-based feature column whose splits or importance are requested.</param>
     internal void SortSamplesAndFeatureValues(int feature)
     {
         for (int i = Start; i < End; i++)
@@ -49,6 +66,8 @@ internal sealed class DensePartitioner
     }
 
     /// <summary><c>next_p</c> — advance past feature values within FEATURE_THRESHOLD of each other.</summary>
+    /// <param name="pPrev">Receives the final index of the current group of nearly equal feature values.</param>
+    /// <param name="p">The bit position or cursor used by the operation.</param>
     internal void NextP(ref int pPrev, ref int p)
     {
         int endNonMissing = End - NMissing;
@@ -59,6 +78,9 @@ internal sealed class DensePartitioner
     }
 
     /// <summary><c>partition_samples_final</c> (no missing).</summary>
+    /// <param name="bestThresholdFeature">The feature column chosen by the best split.</param>
+    /// <param name="bestThreshold">The split threshold; values at or below it go to the left child.</param>
+    /// <param name="bestNMissing">The number of missing feature values kept outside the ordinary partition range.</param>
     internal void PartitionSamplesFinal(int bestThresholdFeature, double bestThreshold, int bestNMissing)
     {
         int start = Start;
@@ -80,6 +102,11 @@ internal sealed class DensePartitioner
 
     // ---- introsort (sklearn/tree/_partitioner.pyx: sort / introsort / median3 / heapsort) ----
 
+    /// <summary>Sorts feature values and sample indices together using the scikit-learn-compatible introsort path.</summary>
+    /// <param name="featureValues">The float32 feature-value buffer sorted together with its sample indices.</param>
+    /// <param name="samples">The original sample indices reordered in place together with their feature values.</param>
+    /// <param name="baseIdx">The starting index of the slice being sorted.</param>
+    /// <param name="n">The number of elements or points to process.</param>
     private static void Sort(float[] featureValues, int[] samples, int baseIdx, int n)
     {
         if (n == 0)
@@ -88,12 +115,22 @@ internal sealed class DensePartitioner
         Introsort(featureValues, samples, baseIdx, n, maxd);
     }
 
+    /// <summary>Exchanges feature values and their associated original-sample indices together.</summary>
+    /// <param name="fv">The feature values sorted in place together with their sample indices.</param>
+    /// <param name="s">The original sample-row indices permuted together with the feature values.</param>
+    /// <param name="i">The first zero-based position involved in the operation.</param>
+    /// <param name="j">The second zero-based position involved in the operation.</param>
     private static void Swap(float[] fv, int[] s, int i, int j)
     {
         (fv[i], fv[j]) = (fv[j], fv[i]);
         (s[i], s[j]) = (s[j], s[i]);
     }
 
+    /// <summary>Returns the median of the first, middle, and last values used as the sort pivot.</summary>
+    /// <param name="fv">The feature values sorted in place together with their sample indices.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <param name="n">The number of elements or points to process.</param>
+    /// <returns>The median of the first, middle, and last values used as the sort pivot.</returns>
     private static float Median3(float[] fv, int b, int n)
     {
         float a = fv[b], mid = fv[b + n / 2], c = fv[b + n - 1];
@@ -102,6 +139,12 @@ internal sealed class DensePartitioner
         else return mid;
     }
 
+    /// <summary>Partitions feature values with median-of-three pivots, falling back to heapsort when the recursion budget is exhausted.</summary>
+    /// <param name="fv">The feature values sorted in place together with their sample indices.</param>
+    /// <param name="s">The original sample-row indices permuted together with the feature values.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <param name="n">The number of elements or points to process.</param>
+    /// <param name="maxd">The remaining introsort recursion budget before heapsort is used.</param>
     private static void Introsort(float[] fv, int[] s, int b, int n, int maxd)
     {
         while (n > 1)
@@ -125,6 +168,12 @@ internal sealed class DensePartitioner
         }
     }
 
+    /// <summary>Restores the max-heap invariant while keeping feature values paired with their sample indices.</summary>
+    /// <param name="fv">The feature values sorted in place together with their sample indices.</param>
+    /// <param name="s">The original sample-row indices permuted together with the feature values.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <param name="start">The inclusive start of the interval or slice.</param>
+    /// <param name="end">The exclusive endpoint of the sample-index slice.</param>
     private static void SiftDown(float[] fv, int[] s, int b, int start, int end)
     {
         int root = start;
@@ -140,6 +189,11 @@ internal sealed class DensePartitioner
         }
     }
 
+    /// <summary>Sorts the remaining partition with bounded worst-case work when quicksort becomes too deep.</summary>
+    /// <param name="fv">The feature values sorted in place together with their sample indices.</param>
+    /// <param name="s">The original sample-row indices permuted together with the feature values.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <param name="n">The number of elements or points to process.</param>
     private static void Heapsort(float[] fv, int[] s, int b, int n)
     {
         int start = (n - 2) / 2;

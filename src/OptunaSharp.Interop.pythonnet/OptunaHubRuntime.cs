@@ -66,6 +66,9 @@ public static class OptunaHubRuntime
         }
     }
 
+    /// <summary>Reads optional module version metadata without failing when it is unavailable.</summary>
+    /// <param name="module">The borrowed Python module inspected for version metadata.</param>
+    /// <returns>The module's version string, or null when it cannot be read.</returns>
     private static string? ReadVersion(PyObject module)
     {
         try

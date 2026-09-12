@@ -7,6 +7,10 @@ namespace OptunaSharp.Integration.Sklearn;
 ///     analogue of the callable <c>scorer(estimator, X, y)</c> that <c>cross_validate</c> and
 ///     <see cref="OptunaSearchCV" /> use.
 /// </summary>
+/// <param name="estimator">The regressor configuration cloned for each fold or parameter assignment.</param>
+/// <param name="x">Feature values with one sample per row and one feature per column.</param>
+/// <param name="y">Target values aligned with the feature rows.</param>
+/// <returns>The scalar validation score, with higher values indicating better predictions.</returns>
 public delegate double Scorer(IRegressor estimator, double[,] x, double[] y);
 
 /// <summary>
@@ -29,6 +33,9 @@ public static class Scorers
     ///     Resolve a scikit-learn scoring name to a <see cref="Scorer" />. Supported: <c>null</c> (the
     ///     estimator's default <c>score</c>), <c>"r2"</c>, and <c>"neg_mean_squared_error"</c>.
     /// </summary>
+    /// <param name="scoring">The registered scorer name, or null to use the estimator's own score.</param>
+    /// <returns>The registered scorer corresponding to the supplied name.</returns>
+    /// <exception cref="NumSharp.ValueError">The scorer name is neither r2 nor neg_mean_squared_error and is not null.</exception>
     public static Scorer CheckScoring(string? scoring = null) => scoring switch
     {
         null => Default,

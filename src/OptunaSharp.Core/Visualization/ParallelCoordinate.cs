@@ -14,6 +14,14 @@ namespace OptunaSharp.Visualization;
 ///     numeric position on this axis (categorical params are mapped to integer codes; missing values
 ///     get a synthetic below-range position).
 /// </summary>
+/// <param name="Label">The visible axis label.</param>
+/// <param name="Values">The per-trial values in the same order as the plot's trial sequence.</param>
+/// <param name="Range">The padded minimum and maximum positions used as the axis bounds.</param>
+/// <param name="IsLog">Whether the axis uses logarithmic scaling.</param>
+/// <param name="IsCat">Whether the axis represents discrete categorical labels.</param>
+/// <param name="Tickvals">The numeric positions at which the renderer should place ticks.</param>
+/// <param name="Ticktext">The display labels corresponding to the tick positions.</param>
+/// <param name="HasMissing">Whether this axis contains synthetic positions for absent parameter values.</param>
 public sealed record DimensionInfo(
     string Label,
     IReadOnlyList<double> Values,
@@ -29,6 +37,14 @@ public sealed record DimensionInfo(
 ///     multi-objective study (<c>target</c> = null) the lines are coloured by Pareto rank
 ///     (<see cref="IsRankColor" />).
 /// </summary>
+/// <param name="DimsObjectives">The objective axes in display order.</param>
+/// <param name="DimsParams">The parameter axes in display order.</param>
+/// <param name="ReverseScale">Whether the renderer should reverse its objective-value color scale.</param>
+/// <param name="ColorbarTitle">The display label for the line-color encoding.</param>
+/// <param name="ColorValues">The objective or Pareto-rank values controlling each trial line's color.</param>
+/// <param name="IsRankColor">Whether line colors represent Pareto rank instead of one scalar objective.</param>
+/// <param name="DrawOrder">Indices specifying the order in which trial lines should be drawn.</param>
+/// <param name="Feasibility">The per-trial feasibility mask, or null when no constraints were recorded.</param>
 public sealed record ParallelCoordinateInfo(
     IReadOnlyList<DimensionInfo> DimsObjectives,
     IReadOnlyList<DimensionInfo> DimsParams,
@@ -52,6 +68,12 @@ public static class ParallelCoordinate
     private static readonly object Missing = new();
 
     /// <summary>Python <c>_get_parallel_coordinate_info(study, params, target, target_name)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="params">Parameter names to include; null selects the parameters supported by this operation.</param>
+    /// <param name="target">A scalar target selector; null uses the objective value for a single-objective study or all objectives with Pareto-rank coloring for a multi-objective study.</param>
+    /// <param name="targetName">The display label for the selected objective or custom target.</param>
+    /// <returns>The objective and parameter dimensions, line-color values, drawing order, and optional feasibility flags.</returns>
+    /// <exception cref="NumSharp.ValueError">A requested parameter is absent from the included completed trials.</exception>
     public static ParallelCoordinateInfo GetInfo(
         Study study,
         IReadOnlyList<string>? @params = null,
@@ -190,6 +212,11 @@ public static class ParallelCoordinate
 
     // -------------------------------------------------------------------- dimension builders
 
+    /// <summary>Returns a logarithmic axis descriptor including tick labels and any missing-value position.</summary>
+    /// <param name="pName">The parameter name identifying this axis.</param>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <param name="hasMissing">Whether the dimension contains an absent parameter value requiring a synthetic position.</param>
+    /// <returns>A logarithmic axis descriptor including tick labels and any missing-value position.</returns>
     private static DimensionInfo BuildLogDimension(string pName, List<object?> values, bool hasMissing)
     {
         var validValues = values.Where(v => !ReferenceEquals(v, Missing)).Select(ToDouble).ToList();
@@ -221,6 +248,14 @@ public static class ParallelCoordinate
             (missingValue ?? minValue, maxValue), true, false, tickvals, ticktext, hasMissing);
     }
 
+    /// <summary>Returns a categorical axis descriptor mapping choices to numerical plotting positions.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="pName">The parameter name identifying this axis.</param>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <param name="hasMissing">Whether the dimension contains an absent parameter value requiring a synthetic position.</param>
+    /// <param name="dimIndex">The dimension's index in the combined axis list.</param>
+    /// <param name="numericCatParamsIndices">Receives indices of categorical dimensions whose choices are numeric.</param>
+    /// <returns>A categorical axis descriptor mapping choices to numerical plotting positions.</returns>
     private static DimensionInfo BuildCategoricalDimension(
         IReadOnlyList<FrozenTrial> trials, string pName, List<object?> values, bool hasMissing,
         int dimIndex, List<int> numericCatParamsIndices)
@@ -259,6 +294,11 @@ public static class ParallelCoordinate
             (categoricalValues.Min(), categoricalValues.Max()), false, true, tickvals, fullTicktext, hasMissing);
     }
 
+    /// <summary>Returns a numeric parameter axis descriptor with any missing values assigned a synthetic position.</summary>
+    /// <param name="pName">The parameter name identifying this axis.</param>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <param name="hasMissing">Whether the dimension contains an absent parameter value requiring a synthetic position.</param>
+    /// <returns>A numeric parameter axis descriptor with any missing values assigned a synthetic position.</returns>
     private static DimensionInfo BuildNumericalParamDimension(string pName, List<object?> values, bool hasMissing)
     {
         var validValues = values.Where(v => !ReferenceEquals(v, Missing)).Select(ToDouble).ToList();
@@ -288,12 +328,19 @@ public static class ParallelCoordinate
 
     // -------------------------------------------------------------------- helpers
 
+    /// <summary>Returns a numeric axis descriptor containing values, range, and labels.</summary>
+    /// <param name="label">The text used as an axis or legend label.</param>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>A numeric axis descriptor containing values, range, and labels.</returns>
     private static DimensionInfo BuildNumericalDimension(string label, List<double> values)
     {
         var range = values.Count > 0 ? (values.Min(), values.Max()) : (0.0, 0.0);
         return new DimensionInfo(label, values, range, false, false, new List<double>(), new List<string>(), false);
     }
 
+    /// <summary>Returns per-trial feasibility flags, or null when no constraints are present.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <returns>Per-trial feasibility flags, or null when no constraints are present.</returns>
     private static IReadOnlyList<bool>? GetFeasibility(IReadOnlyList<FrozenTrial> trials)
     {
         if (!trials.Any(t => t.Constraints.Count > 0))
@@ -303,12 +350,23 @@ public static class ParallelCoordinate
             .ToList();
     }
 
+    /// <summary>Returns a synthetic axis position below the ordinary numeric range.</summary>
+    /// <param name="minValue">The minimum numeric axis value before padding.</param>
+    /// <param name="maxValue">The maximum numeric axis value before padding.</param>
+    /// <returns>A synthetic axis position below the ordinary numeric range.</returns>
     private static double GetMissingValue(double minValue, double maxValue)
         => minValue == maxValue ? minValue - 1.0 : minValue - (maxValue - minValue) * 0.12 / 0.88;
 
+    /// <summary>Returns the original label or its shortened display form when it exceeds the supported length.</summary>
+    /// <param name="label">The text used as an axis or legend label.</param>
+    /// <returns>The original label or its shortened display form when it exceeds the supported length.</returns>
     private static string TruncateLabel(string label)
         => label.Length < 20 ? label : $"{label.Substring(0, 17)}...";
 
+    /// <summary>Returns the category's existing or newly assigned numeric position.</summary>
+    /// <param name="vocab">The category-to-axis-position mapping populated in first-appearance order.</param>
+    /// <param name="key">The key whose associated entry is requested.</param>
+    /// <returns>The category's existing or newly assigned numeric position.</returns>
     private static int VocabId(Dictionary<object?, int> vocab, object? key)
     {
         if (!vocab.TryGetValue(key, out int id))
@@ -319,6 +377,9 @@ public static class ParallelCoordinate
         return id;
     }
 
+    /// <summary>Returns the numeric axis value of the boxed external parameter.</summary>
+    /// <param name="v">The values used by the numerical reduction or transformation.</param>
+    /// <returns>The numeric axis value of the boxed external parameter.</returns>
     private static double ToDouble(object? v)
         => Convert.ToDouble(v, System.Globalization.CultureInfo.InvariantCulture);
 
@@ -327,6 +388,8 @@ public static class ParallelCoordinate
     ///     argsort is an unstable quicksort, so for tied ranks the tie order can differ — a documented
     ///     divergence, cosmetic (it only reorders which lines are drawn first).
     /// </summary>
+    /// <param name="ranks">The average rank assigned to each absolute nonzero difference.</param>
+    /// <returns>Indices ordering values from largest to smallest.</returns>
     private static int[] ArgsortDescending(int[] ranks)
         => Enumerable.Range(0, ranks.Length)
             .OrderBy(i => ranks[i])
@@ -337,6 +400,9 @@ public static class ParallelCoordinate
     ///     NumPy <c>np.lexsort([keys][::-1])</c> over the numeric-categorical param columns: a stable
     ///     multi-key ascending sort of the trial indices, primary key = the first numeric-cat param.
     /// </summary>
+    /// <param name="combined">The objective and parameter dimensions used to determine line order.</param>
+    /// <param name="numericCatIndices">The indices of categorical axes that require numeric ordering.</param>
+    /// <returns>The trial drawing order determined by the numeric categorical dimensions.</returns>
     private static int[] LexsortByNumericCatParams(List<DimensionInfo> combined, List<int> numericCatIndices)
     {
         IOrderedEnumerable<int> ordered = Enumerable.Range(0, combined[numericCatIndices[0]].Values.Count)

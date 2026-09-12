@@ -15,6 +15,12 @@ namespace OptunaSharp.Visualization;
 ///     <see cref="Values" /> is the per-trial value (numeric, string, or <c>null</c> when the
 ///     parameter is absent).
 /// </summary>
+/// <param name="Name">The parameter name identifying this axis.</param>
+/// <param name="Range">The padded minimum and maximum positions used as the axis bounds.</param>
+/// <param name="IsLog">Whether the axis uses logarithmic scaling.</param>
+/// <param name="IsCat">Whether the axis represents discrete categorical labels.</param>
+/// <param name="Indices">The sorted distinct axis positions, including any synthetic boundary positions.</param>
+/// <param name="Values">The per-trial values in the same order as the plot's trial sequence.</param>
 public sealed record ContourAxisInfo(
     string Name,
     (double Min, double Max) Range,
@@ -27,6 +33,10 @@ public sealed record ContourAxisInfo(
 ///     One (x-param, y-param) contour cell: the axis metadata, the sparse grid <c>z</c> values keyed
 ///     by (x-index, y-index), and per-trial feasibility. Port of <c>_SubContourInfo</c>.
 /// </summary>
+/// <param name="XAxis">The metadata describing the horizontal parameter axis.</param>
+/// <param name="YAxis">The metadata describing the vertical parameter axis.</param>
+/// <param name="ZValues">Target values keyed by the corresponding pair of axis-position indices.</param>
+/// <param name="Constraints">One flag per trial; true means every recorded constraint is satisfied.</param>
 public sealed record SubContourInfo(
     ContourAxisInfo XAxis,
     ContourAxisInfo YAxis,
@@ -37,6 +47,10 @@ public sealed record SubContourInfo(
 ///     The data backing a contour plot: the sorted parameters and the (possibly N×N) grid of
 ///     subplots. Port of <c>_ContourInfo</c>.
 /// </summary>
+/// <param name="SortedParams">The parameter names in the deterministic order used to lay out subplots.</param>
+/// <param name="SubPlotInfos">The row/column matrix of pairwise parameter subplot data.</param>
+/// <param name="ReverseScale">Whether the renderer should reverse its objective-value color scale.</param>
+/// <param name="TargetName">The display label for the selected objective or custom target.</param>
 public sealed record ContourInfo(
     IReadOnlyList<string> SortedParams,
     IReadOnlyList<IReadOnlyList<SubContourInfo>> SubPlotInfos,
@@ -54,6 +68,12 @@ public static class Contour
     private const double PaddingRatio = 0.05;
 
     /// <summary>Python <c>_get_contour_info(study, params, target, target_name)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="params">Parameter names to include; null selects the parameters supported by this operation.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="targetName">The display label for the selected objective or custom target.</param>
+    /// <returns>The subplot matrix, axis metadata, and sparse target grid for the selected parameters.</returns>
+    /// <exception cref="NumSharp.ValueError">A requested parameter is absent from the plotted completed trials, or a multi-objective study has no scalar target selector.</exception>
     public static ContourInfo GetInfo(
         Study study,
         IReadOnlyList<string>? @params = null,
@@ -112,6 +132,12 @@ public static class Contour
     }
 
     /// <summary>Python <c>_get_contour_subplot_info(study, trials, x_param, y_param, target)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="xParam">The parameter assigned to the horizontal axis.</param>
+    /// <param name="yParam">The parameter assigned to the vertical axis.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <returns>The two axis descriptions, sparse target grid, and per-trial feasibility flags.</returns>
     private static SubContourInfo GetContourSubplotInfo(
         Study study,
         IReadOnlyList<FrozenTrial> trials,
@@ -170,10 +196,16 @@ public static class Contour
         return new SubContourInfo(xaxis, yaxis, zValues, constraints);
     }
 
+    /// <summary>Returns true when every recorded trial constraint is nonpositive.</summary>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <returns>True when every recorded trial constraint is nonpositive.</returns>
     private static bool SatisfyConstraints(FrozenTrial trial)
         => trial.Constraints.Values.All(x => x <= 0.0);
 
     /// <summary>Python <c>_get_axis_info(trials, param_name)</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="paramName">The parameter name identifying the distribution or values to process.</param>
+    /// <returns>The axis bounds, scale, categorical positions, and per-trial values.</returns>
     private static ContourAxisInfo GetAxisInfo(IReadOnlyList<FrozenTrial> trials, string paramName)
     {
         bool isNumerical = VisualizationUtils.IsNumerical(trials, paramName);
@@ -239,6 +271,9 @@ public static class Contour
         return new ContourAxisInfo(paramName, (minValue, maxValue), isLog, isCat, indices, values);
     }
 
+    /// <summary>Returns the smallest and largest numeric value in the supplied sequence.</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The smallest and largest numeric value in the supplied sequence.</returns>
     private static (double Min, double Max) NumericMinMax(IReadOnlyList<object?> values)
     {
         double min = double.PositiveInfinity, max = double.NegativeInfinity;
@@ -254,6 +289,9 @@ public static class Contour
     }
 
     /// <summary>Python <c>sorted(set([v for v in values if v is not None]))</c>.</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <param name="isNumerical">Whether axis values should be sorted and compared numerically.</param>
+    /// <returns>The distinct axis values in numeric or ordinal display order.</returns>
     private static List<object> SortedUnique(IReadOnlyList<object?> values, bool isNumerical)
     {
         var distinct = values.Where(v => v is not null).Select(v => v!).Distinct().ToList();
@@ -267,6 +305,8 @@ public static class Contour
     }
 
     /// <summary>Map each index entry to its position (Python <c>list.index</c>), first-occurrence.</summary>
+    /// <param name="indices">The ordered positions or sample-row indices to use.</param>
+    /// <returns>A mapping from each axis position to its index in the ordered axis grid.</returns>
     private static Dictionary<object, int> BuildIndexLookup(IReadOnlyList<object> indices)
     {
         var map = new Dictionary<object, int>();

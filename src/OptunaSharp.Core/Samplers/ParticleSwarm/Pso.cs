@@ -68,6 +68,8 @@ internal sealed class Pso
     /// <param name="c2">Social coefficient (default 1.49445).</param>
     /// <param name="vMax">Per-coordinate velocity clamp magnitude in the unit box (default 0.2).</param>
     /// <param name="seed">Seed for the MT19937 stream (null ⇒ nondeterministic).</param>
+    /// <summary>Copies an evaluated swarm and initializes velocities and personal/global bests.</summary>
+    /// <exception cref="System.ArgumentException">The initial swarm is empty, contains fewer than two particles, has invalid dimensions, or is not aligned with initial objective values.</exception>
     internal Pso(double[][] initialPop, double[] initialVal,
         double w0 = 0.9, double w1 = 0.4, int inertiaDecayGenerations = 100,
         double c1 = 1.49445, double c2 = 1.49445, double vMax = 0.2, int? seed = null)
@@ -107,17 +109,23 @@ internal sealed class Pso
         if (seed is not null) _rng.seed((uint)seed.Value);
     }
 
+    /// <summary>Number of numerical decision coordinates.</summary>
     internal int Dim => _nDim;
+    /// <summary>Number of evaluated individuals required for one generation.</summary>
     internal int PopulationSize => _popsize;
+    /// <summary>Number of completed optimizer updates.</summary>
     internal int Generation => _t;
 
     /// <summary>Re-seed the MT19937 stream — the per-trial sampler reseeds before each single ask so its
     ///     one candidate is reproducible from the restored swarm (as <c>De.ReseedRng</c>).</summary>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
     internal void ReseedRng(int seed) => _rng.seed((uint)seed);
 
     /// <summary>The inertia weight at generation <paramref name="t" /> — a linear decrease from
     ///     <see cref="_w0" /> to <see cref="_w1" /> over <see cref="_inertiaDecayGenerations" /> generations
     ///     (Shi &amp; Eberhart 1998), constant at <see cref="_w1" /> thereafter.</summary>
+    /// <param name="t">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>The current linearly decayed inertia coefficient.</returns>
     internal double InertiaWeight(int t)
     {
         if (_inertiaDecayGenerations <= 0) return _w1;
@@ -133,6 +141,9 @@ internal sealed class Pso
     ///     the persistent velocity/position are advanced by <see cref="Tell" />, so a freshly-restored
     ///     optimizer asks the same candidate after an identical reseed.
     /// </summary>
+    /// <param name="target">Zero-based population slot for the candidate.</param>
+    /// <returns>The proposed decision vector for the requested population slot.</returns>
+    /// <exception cref="System.ArgumentOutOfRangeException">The target index is outside the swarm.</exception>
     internal double[] AskCandidate(int target)
     {
         if (target < 0 || target >= _popsize) throw new ArgumentOutOfRangeException(nameof(target));
@@ -163,6 +174,8 @@ internal sealed class Pso
     ///     updated when the value is finite and no worse (or the personal best was unknown). The global best
     ///     is then refreshed and the generation advanced.
     /// </summary>
+    /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
+    /// <exception cref="System.ArgumentException">The number of target-ordered solutions differs from the swarm size.</exception>
     internal void Tell(IReadOnlyList<(double[] X, double Value)> solutions)
     {
         if (solutions.Count != _popsize)
@@ -199,14 +212,22 @@ internal sealed class Pso
         }
     }
 
+    /// <summary>Tests whether a scalar excludes NaN and both infinities.</summary>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>True for a finite scalar, including zero.</returns>
     private static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
 
     /// <summary>The default swarm size shared by the sampler: <c>max(10, 4 + ⌊3 ln d⌋)</c> — the CMA-ES λ
     ///     formula floored at 10 for a workable swarm, kept modest so generations stay short enough to
     ///     iterate at Optuna trial budgets (a textbook PSO swarm of 20–40 rarely completes many generations
     ///     in a few-hundred-trial study).</summary>
+    /// <param name="d">Decision-space dimension.</param>
+    /// <returns>The algorithm default population size for the supplied dimension.</returns>
     internal static int DefaultPopulationSize(int d) => Math.Max(10, 4 + (int)Math.Floor(3.0 * Math.Log(d)));
 
+    /// <summary>Copies both the outer array and every population row.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>A detached copy of the population and every individual vector.</returns>
     private static double[][] CloneJagged(double[][] a)
     {
         var j = new double[a.Length][];
@@ -216,6 +237,8 @@ internal sealed class Pso
 
     // ---- state serialization (own JSON; mirrors the De/LmCma pattern) -----------------------------
 
+    /// <summary>Captures constructor settings and evolving optimizer arrays in a serializable state object.</summary>
+    /// <returns>A serializable snapshot of optimizer settings and evolving state.</returns>
     internal PsoState ToState() => new()
     {
         NDim = _nDim,
@@ -235,6 +258,10 @@ internal sealed class Pso
         T = _t,
     };
 
+    /// <summary>Recreates optimizer constants and restores evolving state from a serialized snapshot.</summary>
+    /// <param name="s">Serialized optimizer settings and evolving proposal state.</param>
+    /// <returns>An optimizer restored from the supplied snapshot.</returns>
+    /// <exception cref="System.ArgumentException">Stored constructor settings or population dimensions are rejected when the optimizer is recreated.</exception>
     internal static Pso FromState(PsoState s)
     {
         // Reconstruct through the ctor (validates shapes and seeds pos/pbest), then restore the evolving
@@ -255,19 +282,34 @@ internal sealed class Pso
 /// <summary>Serialized evolving state of a <see cref="Pso" /> optimizer (own JSON; see <c>DeState</c>).</summary>
 internal sealed class PsoState
 {
+    /// <summary>Serialized number of numerical decision coordinates.</summary>
     public int NDim { get; set; }
+    /// <summary>Serialized number of evaluated individuals in one generation.</summary>
     public int Popsize { get; set; }
+    /// <summary>Initial particle-swarm inertia coefficient.</summary>
     public double W0 { get; set; }
+    /// <summary>Final particle-swarm inertia coefficient.</summary>
     public double W1 { get; set; }
+    /// <summary>Number of generations over which inertia decreases to its final value.</summary>
     public int InertiaDecayGenerations { get; set; }
+    /// <summary>Particle-swarm attraction coefficient toward each particle personal best.</summary>
     public double C1 { get; set; }
+    /// <summary>Particle-swarm attraction coefficient toward the global best position.</summary>
     public double C2 { get; set; }
+    /// <summary>Maximum absolute velocity per normalized coordinate.</summary>
     public double VMax { get; set; }
+    /// <summary>Serialized current particle positions.</summary>
     public double[][] Pos { get; set; } = Array.Empty<double[]>();
+    /// <summary>Serialized current particle velocities.</summary>
     public double[][] Vel { get; set; } = Array.Empty<double[]>();
+    /// <summary>Serialized best position observed for each particle.</summary>
     public double[][] PbestPos { get; set; } = Array.Empty<double[]>();
+    /// <summary>Serialized best minimization-oriented score observed for each particle.</summary>
     public double[] PbestVal { get; set; } = Array.Empty<double>();
+    /// <summary>Serialized best position observed across the swarm.</summary>
     public double[] GbestPos { get; set; } = Array.Empty<double>();
+    /// <summary>Serialized best minimization-oriented score observed across the swarm.</summary>
     public double GbestVal { get; set; }
+    /// <summary>Serialized generation/update counter.</summary>
     public int T { get; set; }
 }

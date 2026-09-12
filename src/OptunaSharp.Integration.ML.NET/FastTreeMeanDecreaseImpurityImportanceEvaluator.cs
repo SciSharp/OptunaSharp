@@ -31,6 +31,7 @@ public sealed class FastTreeMeanDecreaseImpurityImportanceEvaluator : BaseImport
     /// <param name="nTrees">The number of boosting iterations (trees).</param>
     /// <param name="maxDepth">The maximum depth of each tree.</param>
     /// <param name="seed">Controls the randomness of the ensemble. Specify a value for determinism.</param>
+    /// <summary>Creates the FastTree mean-decrease-in-impurity evaluator with the requested tree count, depth, and random seed.</summary>
     public FastTreeMeanDecreaseImpurityImportanceEvaluator(int nTrees = 64, int maxDepth = 64, int? seed = null)
     {
         _nTrees = nTrees;
@@ -48,6 +49,7 @@ public sealed class FastTreeMeanDecreaseImpurityImportanceEvaluator : BaseImport
     ///     by the evaluator (bound to the transformed-trial schema) and are overwritten; every other
     ///     field is used as given. For a reproducible result set <c>Seed</c> and <c>NumberOfThreads = 1</c>.
     /// </param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="options" /> is null.</exception>
     public FastTreeMeanDecreaseImpurityImportanceEvaluator(FastTreeRegressionTrainer.Options options)
         => _options = options ?? throw new ArgumentNullException(nameof(options));
 
@@ -60,6 +62,7 @@ public sealed class FastTreeMeanDecreaseImpurityImportanceEvaluator : BaseImport
     /// <param name="nTrees">The number of boosting iterations (the options baseline).</param>
     /// <param name="maxDepth">The maximum depth of each tree (derives the baseline leaf count).</param>
     /// <param name="seed">Baseline seed; may be overridden inside <paramref name="configure" />.</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="configure" /> is null.</exception>
     public FastTreeMeanDecreaseImpurityImportanceEvaluator(
         Action<FastTreeRegressionTrainer.Options> configure, int nTrees = 64, int maxDepth = 64, int? seed = null)
     {

@@ -13,6 +13,14 @@ namespace OptunaSharp.Visualization;
 ///     <c>optuna/visualization/_pareto_front.py</c>. Each trial is paired with the target values used
 ///     for its axes (the objective values by default).
 /// </summary>
+/// <param name="NTargets">The number of displayed objective or custom target axes.</param>
+/// <param name="TargetNames">The labels of the displayed target axes.</param>
+/// <param name="BestTrialsWithValues">Feasible nondominated trials paired with their displayed target coordinates.</param>
+/// <param name="NonBestTrialsWithValues">Feasible dominated trials paired with their displayed target coordinates.</param>
+/// <param name="InfeasibleTrialsWithValues">Infeasible trials paired with their displayed target coordinates.</param>
+/// <param name="AxisOrder">The target-column indices specifying the rendered axis order.</param>
+/// <param name="IncludeDominatedTrials">Whether dominated feasible trials should be displayed.</param>
+/// <param name="HasConstraints">Whether constraint values were available for classifying trials.</param>
 public sealed record ParetoFrontInfo(
     int NTargets,
     IReadOnlyList<string> TargetNames,
@@ -36,6 +44,13 @@ public static class ParetoFront
     ///     Python <c>_get_pareto_front_info(study, target_names, include_dominated_trials,
     ///     constraints_func, targets)</c>.
     /// </summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="targetNames">The displayed target-axis labels, or null to use objective names.</param>
+    /// <param name="includeDominatedTrials">Whether feasible dominated trials should be included in the returned plot data.</param>
+    /// <param name="constraintsFunc">A deprecated per-trial constraint selector; null uses recorded trial constraints.</param>
+    /// <param name="targets">A selector for the displayed two or three target coordinates; null uses the trial objectives.</param>
+    /// <returns>The feasible Pareto, feasible dominated, and infeasible trial groups with their plotted coordinates.</returns>
+    /// <exception cref="NumSharp.ValueError">The plot does not have two or three targets, supplied target names have the wrong length, or an empty study with custom targets has no target names.</exception>
     public static ParetoFrontInfo GetInfo(
         Study study,
         IReadOnlyList<string>? targetNames = null,
@@ -154,6 +169,9 @@ public static class ParetoFront
     }
 
     /// <summary>Python <c>_get_non_pareto_front_trials(trials, pareto_trials)</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="paretoTrials">The feasible nondominated trials to exclude from the dominated-trial result.</param>
+    /// <returns>The feasible trials that are absent from the supplied Pareto front.</returns>
     private static List<FrozenTrial> GetNonParetoFrontTrials(
         List<FrozenTrial> trials, List<FrozenTrial> paretoTrials)
     {

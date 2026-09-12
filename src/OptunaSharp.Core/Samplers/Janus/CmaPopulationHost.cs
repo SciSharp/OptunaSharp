@@ -16,7 +16,7 @@ using OptunaSharp.Samplers.CmaEs;
 namespace OptunaSharp.Samplers.Janus;
 
 /// <summary>
-///     The single-objective CMA-ES <see cref="IPopulationHost" /> for <see cref="JanusInfill" />: a
+///     The single-objective CMA-ES <see cref="IPopulationHost" /> for <see cref="JanusOptimizer" />: a
 ///     <see cref="Cma" /> host that supplies native offspring (resample-then-repair ask), coherent
 ///     generation tell, and the full proposal statistics JANUS reads — mean, step-size σ, the
 ///     covariance trace, and the square-root-invariant Mahalanobis whitening ‖z‖ = √(dᵀC⁻¹d)/σ. With
@@ -35,6 +35,7 @@ internal sealed class CmaPopulationHost : IPopulationHost
     ///     its <c>sigma0=0.2</c>).</param>
     /// <param name="popsize">Population size λ (default <c>4 + ⌊3 ln d⌋</c>, the CMA-ES default).</param>
     /// <param name="seed">Seed for the host's MT19937 stream.</param>
+    /// <summary>Creates the CMA-ES host and transformed box used by JANUS injection.</summary>
     internal CmaPopulationHost(SearchSpaceTransform trans, double? sigma0, int? popsize, int seed)
     {
         double[] boundsFlat = trans.Bounds.ToArray<double>();
@@ -61,18 +62,27 @@ internal sealed class CmaPopulationHost : IPopulationHost
             populationSize: lambda, cov: null, lrAdapt: false);
     }
 
+    /// <summary>Number of evaluated individuals required for one generation.</summary>
     public int PopulationSize => _cma.PopulationSize;
+    /// <summary>Current Gaussian proposal center in transformed coordinates.</summary>
     public double[] Mean => _cma.Mean;
+    /// <summary>Global Gaussian proposal step size.</summary>
     public double Sigma => _cma.Sigma;
 
+    /// <summary>Draws one candidate from the current proposal without advancing the generation.</summary>
+    /// <returns>One candidate vector in transformed coordinates.</returns>
     public double[] Ask() => _cma.Ask();
 
+    /// <summary>Updates the optimizer using evaluated candidates from one coherent generation.</summary>
+    /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
     public void Tell(IReadOnlyList<(double[] X, double Value)> solutions)
         // Cma.Tell wants a concrete List; the driver always passes one, so this cast avoids a copy.
         => _cma.Tell(solutions as List<(double[] X, double Value)> ?? new List<(double[] X, double Value)>(solutions));
 
+    /// <summary>Whether this population host can expose and replace a proposal covariance.</summary>
     public bool HasProposalCovariance => true;
 
+    /// <summary>Sum of proposal covariance diagonal entries used to match exploration scale.</summary>
     public double ProposalCovarianceTrace
     {
         get
@@ -85,6 +95,9 @@ internal sealed class CmaPopulationHost : IPopulationHost
         }
     }
 
+    /// <summary>Measures a displacement in the host proposal scale for bounded JANUS injection.</summary>
+    /// <param name="diff">Displacement from the proposal center in transformed coordinates.</param>
+    /// <returns>The host-scaled step norm; a nonpositive result signals unavailable whitening.</returns>
     public double WhitenedStepNorm(double[] diff)
     {
         try
@@ -100,8 +113,13 @@ internal sealed class CmaPopulationHost : IPopulationHost
         }
     }
 
+    /// <summary>Obtains a detached proposal covariance when the host supplies one.</summary>
+    /// <returns>A detached covariance matrix, or null for a covariance-free host.</returns>
     public double[,]? GetProposalCovariance() => (double[,])_cma.Cov.Clone();
 
+    /// <summary>Updates a covariance-capable host and invalidates factors derived from its previous covariance.</summary>
+    /// <param name="c">Replacement proposal covariance in transformed coordinates.</param>
+    /// <returns>True when the host accepted a proposal covariance; false when unsupported.</returns>
     public bool TrySetProposalCovariance(double[,] c)
     {
         _cma.SetCovariance(c);   // resets the cached eigendecomposition; next Ask re-derives it

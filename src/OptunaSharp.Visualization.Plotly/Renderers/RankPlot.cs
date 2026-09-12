@@ -16,6 +16,9 @@ namespace OptunaSharp.Visualization.Plotly.Renderers;
 /// </summary>
 internal static class RankPlot
 {
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(RankPlotInfo info)
     {
         var layout = Fig.Layout(("title", $"Rank ({info.TargetName})"));
@@ -67,6 +70,11 @@ internal static class RankPlot
         return Fig.Figure(traces, layout);
     }
 
+    /// <summary>Builds a parameter-pair scatter using target-rank colors and feasibility styling.</summary>
+    /// <param name="sub">Extracted data for one parameter or parameter-pair subplot.</param>
+    /// <param name="targetName">Label used for the selected objective on axes, hover text, or the colorbar.</param>
+    /// <param name="hasCustomTarget">Whether hover text should include original objectives in addition to the selected target.</param>
+    /// <returns>Scatter trace with per-trial hover text.</returns>
     private static Trace RankScatter(RankSubplotInfo sub, string targetName, bool hasCustomTarget)
     {
         object?[] xs = sub.XAxis.IsCat
@@ -96,6 +104,12 @@ internal static class RankPlot
             ("hovertext", hovertext));
     }
 
+    /// <summary>Formats trial parameters, selected target, and optional original objectives.</summary>
+    /// <param name="trial">Trial whose parameter and objective values appear in hover text.</param>
+    /// <param name="targetValue">Selected scalar target value for this trial.</param>
+    /// <param name="targetName">Label used for the selected objective on axes, hover text, or the colorbar.</param>
+    /// <param name="hasCustomTarget">Whether hover text should include original objectives in addition to the selected target.</param>
+    /// <returns>HTML line-break-separated hover text.</returns>
     private static string HoverText(FrozenTrial trial, double targetValue, string targetName, bool hasCustomTarget)
     {
         var lines = new List<string> { $"Trial #{trial.Number}" };
@@ -108,6 +122,10 @@ internal static class RankPlot
         return string.Join("<br>", lines);
     }
 
+    /// <summary>Builds a hidden marker trace carrying target-quantile colorbar labels.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <returns>Legend-hidden trace with the rank color scale.</returns>
+    /// <exception cref="System.IndexOutOfRangeException">The extracted target array is empty.</exception>
     private static Trace ColorbarTrace(RankPlotInfo info)
     {
         var sorted = (double[])info.Zs.Clone();
@@ -135,6 +153,9 @@ internal static class RankPlot
             ("showlegend", false));
     }
 
+    /// <summary>Applies the extracted categorical or logarithmic axis range to a Plotly axis.</summary>
+    /// <param name="axis">Mutable Plotly axis object receiving range and scale settings.</param>
+    /// <param name="ax">Extracted numeric or categorical axis metadata.</param>
     private static void SetRangeType(DObj axis, RankAxisInfo ax)
     {
         axis.SetValue("range", new[] { ax.Range.Min, ax.Range.Max });

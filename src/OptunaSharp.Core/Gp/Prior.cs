@@ -11,7 +11,7 @@ namespace OptunaSharp.Gp;
 ///     optimum), so this reproduces the exact objective the L-BFGS-B fit sees.
 ///
 ///     <para>Optuna's <c>default_log_prior</c> is a pluggable <c>Callable[[GPRegressor], Tensor]</c>
-///     whose gradient is taken by autograd; <see cref="GPSampler" /> only ever installs this default
+///     whose gradient is taken by autograd; <see cref="OptunaSharp.Samplers.GPSampler" /> only ever installs this default
 ///     one. Because OptunaSharp hand-derives the fit gradient, the analytic derivative of this exact
 ///     closed form is folded into <see cref="GPRegressor.LossAndGrad" /> (documented there); a custom
 ///     prior would need its own derivative — the one boundary vs Optuna's callable seam.</para>
@@ -25,6 +25,8 @@ internal static class Prior
     ///     <c>default_log_prior(gpr)</c> — the (constant-omitted) log prior density of the kernel
     ///     hyperparameters. <c>gamma_log_prior(x, c, rate) = (c - 1)·log(x) - rate·x</c>.
     /// </summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <returns>The log prior density up to constants independent of the kernel parameters.</returns>
     internal static double DefaultLogPrior(GPRegressor gpr)
     {
         double[] w = gpr.InverseSquaredLengthscales;

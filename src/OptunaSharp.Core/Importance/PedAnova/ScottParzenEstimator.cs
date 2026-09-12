@@ -16,6 +16,12 @@ internal sealed class ScottParzenEstimator
 {
     private readonly MixtureOfProductDistribution _mixtureDistribution;
 
+    /// <summary>Builds a grid-density estimator with Scott bandwidth selection and the requested observation/prior weights.</summary>
+    /// <param name="observations">The observed parameter values used to estimate the density.</param>
+    /// <param name="searchSpace">The single parameter distribution defining the support and scale of this density estimator.</param>
+    /// <param name="predeterminedWeights">The non-null weight of each observed grid position, in observation order.</param>
+    /// <param name="priorWeight">The weight contributed by the smoothing prior.</param>
+    /// <exception cref="NumSharp.ValueError">The smoothing prior weight is negative.</exception>
     internal ScottParzenEstimator(
         double[] observations, BaseDistribution searchSpace, double[] predeterminedWeights, double priorWeight)
     {
@@ -48,6 +54,11 @@ internal sealed class ScottParzenEstimator
     /// <summary>Exposed for the mirrored unit tests (Optuna asserts on <c>_mixture_distribution</c>).</summary>
     internal MixtureOfProductDistribution MixtureDistribution => _mixtureDistribution;
 
+    /// <summary>Returns the smoothed categorical component distribution used by the density estimator.</summary>
+    /// <param name="observations">The observed parameter values used to estimate the density.</param>
+    /// <param name="searchSpace">The single parameter distribution defining the support and scale of this density estimator.</param>
+    /// <param name="priorWeight">The weight contributed by the smoothing prior.</param>
+    /// <returns>The smoothed categorical component distribution used by the density estimator.</returns>
     private static BatchedDistributions CalculateCategoricalDistributions(
         double[] observations, CategoricalDistribution searchSpace, double priorWeight)
     {
@@ -83,6 +94,11 @@ internal sealed class ScottParzenEstimator
         return new BatchedCategoricalDistributions(weights);
     }
 
+    /// <summary>Returns the truncated numerical component distributions and their bandwidths.</summary>
+    /// <param name="observations">The observed parameter values used to estimate the density.</param>
+    /// <param name="searchSpace">The single parameter distribution defining the support and scale of this density estimator.</param>
+    /// <param name="weights">The nonnegative weight associated with each observation or value.</param>
+    /// <returns>The truncated numerical component distributions and their bandwidths.</returns>
     private static BatchedDistributions CalculateNumericalDistributions(
         double[] observations, BaseDistribution searchSpace, double[] weights)
     {
@@ -137,6 +153,8 @@ internal sealed class ScottParzenEstimator
     }
 
     /// <summary>Python <c>ScottParzenEstimator.pdf(samples)</c>.</summary>
+    /// <param name="samples">The sample positions at which the density is evaluated.</param>
+    /// <returns>The estimated density at each supplied sample position.</returns>
     internal double[] Pdf(double[] samples)
     {
         var x = new double[samples.Length, 1];
@@ -150,6 +168,9 @@ internal sealed class ScottParzenEstimator
     }
 
     /// <summary>Sequential (left-to-right) dot product — bit-exact vs NumPy's <c>@</c> for PED-ANOVA.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <returns>The scalar dot product accumulated sequentially in input order.</returns>
     private static double SeqDot(double[] a, double[] b)
     {
         double sum = 0.0;
@@ -159,6 +180,9 @@ internal sealed class ScottParzenEstimator
     }
 
     /// <summary>NumPy <c>searchsorted(a, v, side="left")</c> for an ascending array (bisect left).</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="v">The values used by the numerical reduction or transformation.</param>
+    /// <returns>The first insertion index that preserves sorted order before equal elements.</returns>
     private static int BisectLeft(double[] a, double v)
     {
         int lo = 0, hi = a.Length;
@@ -174,6 +198,9 @@ internal sealed class ScottParzenEstimator
     }
 
     /// <summary>NumPy <c>searchsorted(a, v, side="right")</c> for an ascending array (bisect right).</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="v">The values used by the numerical reduction or transformation.</param>
+    /// <returns>The first insertion index after any equal elements.</returns>
     private static int BisectRight(double[] a, double v)
     {
         int lo = 0, hi = a.Length;
@@ -196,6 +223,11 @@ internal sealed class ScottParzenEstimator
 internal static class ScottParzenEstimatorFunctions
 {
     /// <summary>Python <c>_count_numerical_param_in_grid(param_name, dist, trials, n_steps)</c>.</summary>
+    /// <param name="paramName">The parameter name identifying the distribution or values to process.</param>
+    /// <param name="dist">The parameter distribution defining the values and support of the grid.</param>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="nSteps">The number of grid points used for discretizing a numerical parameter.</param>
+    /// <returns>The observation count assigned to each numerical grid cell.</returns>
     internal static long[] CountNumericalParamInGrid(
         string paramName, BaseDistribution dist, IReadOnlyList<FrozenTrial> trials, int nSteps)
     {
@@ -258,6 +290,10 @@ internal static class ScottParzenEstimatorFunctions
     }
 
     /// <summary>Python <c>_count_categorical_param_in_grid(param_name, dist, trials)</c>.</summary>
+    /// <param name="paramName">The parameter name identifying the distribution or values to process.</param>
+    /// <param name="dist">The parameter distribution defining the values and support of the grid.</param>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <returns>The observation count assigned to each categorical choice.</returns>
     internal static long[] CountCategoricalParamInGrid(
         string paramName, CategoricalDistribution dist, IReadOnlyList<FrozenTrial> trials)
     {
@@ -271,6 +307,13 @@ internal static class ScottParzenEstimatorFunctions
     }
 
     /// <summary>Python <c>build_parzen_estimator_on_grid(param_name, dist, trials, n_steps, prior_weight)</c>.</summary>
+    /// <param name="paramName">The parameter name identifying the distribution or values to process.</param>
+    /// <param name="dist">The parameter distribution defining the values and support of the grid.</param>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="nSteps">The number of grid points used for discretizing a numerical parameter.</param>
+    /// <param name="priorWeight">The weight contributed by the smoothing prior.</param>
+    /// <returns>The fitted grid-based Parzen estimator and its grid size.</returns>
+    /// <exception cref="System.ArgumentException">The parameter uses an unsupported distribution type.</exception>
     internal static (ScottParzenEstimator Estimator, int GridSize) BuildParzenEstimatorOnGrid(
         string paramName, BaseDistribution dist, IReadOnlyList<FrozenTrial> trials, int nSteps, double priorWeight)
     {

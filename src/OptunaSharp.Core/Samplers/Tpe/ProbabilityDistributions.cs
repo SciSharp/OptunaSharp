@@ -28,6 +28,8 @@ internal sealed class BatchedCategoricalDistributions : BatchedDistributions
     /// <summary>Per-kernel categorical weights, shape <c>(n_kernels, n_choices)</c>.</summary>
     internal double[,] Weights { get; }
 
+    /// <summary>Retains the per-kernel probabilities for each categorical choice.</summary>
+    /// <param name="weights">Per-kernel categorical probabilities, with kernels as rows and choices as columns.</param>
     internal BatchedCategoricalDistributions(double[,] weights) => Weights = weights;
 }
 
@@ -38,11 +40,20 @@ internal sealed class BatchedCategoricalDistributions : BatchedDistributions
 /// </summary>
 internal abstract class BatchedNumericalDistributions : BatchedDistributions
 {
+    /// <summary>Kernel centers in transformed numerical coordinates.</summary>
     internal double[] Mu { get; }
+    /// <summary>Per-kernel standard deviations in transformed numerical coordinates.</summary>
     internal double[] Sigma { get; }
+    /// <summary>Lower endpoint of the represented numerical domain.</summary>
     internal double Low { get; }
+    /// <summary>Upper endpoint of the represented numerical domain.</summary>
     internal double High { get; }
 
+    /// <summary>Retains numerical kernel centers, bandwidths, and external truncation bounds.</summary>
+    /// <param name="mu">Kernel centers in transformed numerical coordinates.</param>
+    /// <param name="sigma">Kernel standard deviations in transformed coordinates.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
     protected BatchedNumericalDistributions(double[] mu, double[] sigma, double low, double high)
     {
         Mu = mu;
@@ -51,8 +62,11 @@ internal abstract class BatchedNumericalDistributions : BatchedDistributions
         High = high;
     }
 
+    /// <summary>Lower truncation bound in kernel coordinates, expanded by half a bin for discrete domains.</summary>
     internal abstract double AdaptedLow { get; }
+    /// <summary>Upper truncation bound in kernel coordinates, expanded by half a bin for discrete domains.</summary>
     internal abstract double AdaptedHigh { get; }
+    /// <summary>Whether numerical kernels are represented in logarithmic coordinates.</summary>
     internal abstract bool IsLog { get; }
 
     /// <summary>Discretization step; <c>0.0</c> for the continuous kinds (Python's <c>step</c> property).</summary>
@@ -62,24 +76,42 @@ internal abstract class BatchedNumericalDistributions : BatchedDistributions
 /// <summary>Python <c>_BatchedTruncNormDistributions</c>.</summary>
 internal sealed class BatchedTruncNormDistributions : BatchedNumericalDistributions
 {
+    /// <summary>Creates continuous Gaussian kernels truncated directly in parameter space.</summary>
+    /// <param name="mu">Kernel centers in transformed numerical coordinates.</param>
+    /// <param name="sigma">Kernel standard deviations in transformed coordinates.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
     internal BatchedTruncNormDistributions(double[] mu, double[] sigma, double low, double high)
         : base(mu, sigma, low, high) { }
 
+    /// <inheritdoc />
     internal override double AdaptedLow => Low;
+    /// <inheritdoc />
     internal override double AdaptedHigh => High;
+    /// <inheritdoc />
     internal override bool IsLog => false;
+    /// <inheritdoc />
     internal override double Step => 0.0;
 }
 
 /// <summary>Python <c>_BatchedTruncLogNormDistributions</c>.</summary>
 internal sealed class BatchedTruncLogNormDistributions : BatchedNumericalDistributions
 {
+    /// <summary>Creates continuous Gaussian kernels truncated in logarithmic parameter space.</summary>
+    /// <param name="mu">Kernel centers in transformed numerical coordinates.</param>
+    /// <param name="sigma">Kernel standard deviations in transformed coordinates.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
     internal BatchedTruncLogNormDistributions(double[] mu, double[] sigma, double low, double high)
         : base(mu, sigma, low, high) { }
 
+    /// <inheritdoc />
     internal override double AdaptedLow => Math.Log(Low);
+    /// <inheritdoc />
     internal override double AdaptedHigh => Math.Log(High);
+    /// <inheritdoc />
     internal override bool IsLog => true;
+    /// <inheritdoc />
     internal override double Step => 0.0;
 }
 
@@ -88,12 +120,22 @@ internal sealed class BatchedDiscreteTruncNormDistributions : BatchedNumericalDi
 {
     private readonly double _step;
 
+    /// <summary>Creates Gaussian kernels whose bins represent quantized numerical choices.</summary>
+    /// <param name="mu">Kernel centers in transformed numerical coordinates.</param>
+    /// <param name="sigma">Kernel standard deviations in transformed coordinates.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
+    /// <param name="step">Positive spacing between adjacent quantized numerical values.</param>
     internal BatchedDiscreteTruncNormDistributions(double[] mu, double[] sigma, double low, double high, double step)
         : base(mu, sigma, low, high) => _step = step;
 
+    /// <inheritdoc />
     internal override double AdaptedLow => Low - _step / 2.0;
+    /// <inheritdoc />
     internal override double AdaptedHigh => High + _step / 2.0;
+    /// <inheritdoc />
     internal override bool IsLog => false;
+    /// <inheritdoc />
     internal override double Step => _step;
 }
 
@@ -102,21 +144,36 @@ internal sealed class BatchedDiscreteTruncLogNormDistributions : BatchedNumerica
 {
     private readonly double _step;
 
+    /// <summary>Creates logarithmic Gaussian kernels whose bins represent quantized numerical choices.</summary>
+    /// <param name="mu">Kernel centers in transformed numerical coordinates.</param>
+    /// <param name="sigma">Kernel standard deviations in transformed coordinates.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
+    /// <param name="step">Positive spacing between adjacent quantized numerical values.</param>
     internal BatchedDiscreteTruncLogNormDistributions(double[] mu, double[] sigma, double low, double high, double step)
         : base(mu, sigma, low, high) => _step = step;
 
+    /// <inheritdoc />
     internal override double AdaptedLow => Math.Log(Low - _step / 2.0);
+    /// <inheritdoc />
     internal override double AdaptedHigh => Math.Log(High + _step / 2.0);
+    /// <inheritdoc />
     internal override bool IsLog => true;
+    /// <inheritdoc />
     internal override double Step => _step;
 }
 
 /// <summary>Python <c>_MixtureOfProductDistribution</c>.</summary>
 internal sealed class MixtureOfProductDistribution
 {
+    /// <summary>Nonnegative mixture-component probabilities, in shared kernel order.</summary>
     internal double[] Weights { get; }
+    /// <summary>Coordinate distributions sharing the same mixture-component index.</summary>
     internal IReadOnlyList<BatchedDistributions> Distributions { get; }
 
+    /// <summary>Retains mixture weights and the coordinate distributions sharing each kernel index.</summary>
+    /// <param name="weights">Nonnegative weights aligned with mixture components.</param>
+    /// <param name="distributions">Coordinate distributions sharing the same mixture component ordering.</param>
     internal MixtureOfProductDistribution(double[] weights, IReadOnlyList<BatchedDistributions> distributions)
     {
         Weights = weights;
@@ -131,6 +188,9 @@ internal sealed class MixtureOfProductDistribution
     ///     dim order, then a single <c>uniform(0, 1, (n_numerical, batch_size))</c> for all numerical
     ///     dims — matching Optuna byte-for-byte so the whole study stays RNG-aligned.
     /// </summary>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="batchSize">Number of candidate vectors to draw from the mixture.</param>
+    /// <returns>A sample-by-parameter matrix in internal distribution representation, with logarithms undone and discrete bins snapped.</returns>
     internal double[,] Sample(LazyRandomState rng, int batchSize)
     {
         int nDim = Distributions.Count;
@@ -246,6 +306,10 @@ internal sealed class MixtureOfProductDistribution
     ///     cdf /= cdf[-1], then <c>cdf.searchsorted(random_sample(size), side='right')</c>. Replicated
     ///     directly because NumSharp's <c>choice</c> uses <c>side='left'</c> (see the BruteForce ledger).
     /// </summary>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="weights">Nonnegative weights aligned with mixture components.</param>
+    /// <param name="size">Number of candidate samples to draw.</param>
+    /// <returns>Mixture-component indices sampled according to the supplied probabilities.</returns>
     private static int[] Choice(LazyRandomState rng, double[] weights, int size)
     {
         int n = weights.Length;
@@ -268,6 +332,9 @@ internal sealed class MixtureOfProductDistribution
     }
 
     /// <summary>Python <c>_MixtureOfProductDistribution.log_pdf(x)</c>, with <c>x</c> shape <c>(n_samples, dim)</c>.</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>One mixture log probability density per sample row.</returns>
+    /// <exception cref="System.InvalidOperationException">A coordinate uses an unknown batched-distribution implementation.</exception>
     internal double[] LogPdf(double[,] x)
     {
         int nSamples = x.GetLength(0);
@@ -389,6 +456,10 @@ internal sealed class MixtureOfProductDistribution
     ///     computed once over the <c>(n_kernels, n_cont)</c> standardized bounds, exactly as NumPy does,
     ///     so the <see cref="Erf" /> array-size threshold is exercised identically.
     /// </summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <param name="weightedLogPdf">Log densities including each mixture component weight.</param>
+    /// <param name="contDists">Continuous numerical coordinate distributions.</param>
+    /// <param name="contCols">Original coordinate indices of continuous numerical distributions.</param>
     private void AddContinuousLogPdf(
         double[,] x, double[,] weightedLogPdf,
         List<BatchedNumericalDistributions> contDists, List<int> contCols)
@@ -450,6 +521,9 @@ internal sealed class MixtureOfProductDistribution
     }
 
     /// <summary>NumPy <c>searchsorted(cdf, v, side='right')</c> for an ascending array (bisect right).</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>The insertion position after all entries equal to the target.</returns>
     private static int BisectRight(double[] a, double v)
     {
         int lo = 0, hi = a.Length;
@@ -470,6 +544,9 @@ internal sealed class MixtureOfProductDistribution
     ///     optimization here — it fixes the array size passed to <c>erf</c>, which switches between
     ///     the exact and the vectorized approximation at 2000 elements (see <see cref="Erf" />).
     /// </summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="b">Second numerical array operand.</param>
+    /// <returns>Gaussian interval log masses expanded back to the original input order.</returns>
     private static double[] LogGaussMassUnique(double[] a, double[] b)
     {
         var (aUniq, bUniq, inv) = UniqueInverse2d(a, b);
@@ -481,6 +558,8 @@ internal sealed class MixtureOfProductDistribution
     }
 
     /// <summary>NumPy <c>np.unique(x, return_inverse=True)</c> for a 1-D array.</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>Sorted unique values and inverse indices reconstructing the input.</returns>
     private static (double[] Uniq, int[] Inv) UniqueInverse1d(double[] x)
     {
         int n = x.Length;
@@ -501,6 +580,9 @@ internal sealed class MixtureOfProductDistribution
     ///     Python <c>_unique_inverse_2d(a, b)</c>: the unique (a, b) row pairs sorted
     ///     lexicographically, plus the inverse mapping original-index → unique-index.
     /// </summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="b">Second numerical array operand.</param>
+    /// <returns>Sorted unique paired values and inverse indices reconstructing the input pairs.</returns>
     private static (double[] AUniq, double[] BUniq, int[] Inv) UniqueInverse2d(double[] a, double[] b)
     {
         int n = a.Length;

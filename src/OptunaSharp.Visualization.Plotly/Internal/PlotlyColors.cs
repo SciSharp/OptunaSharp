@@ -27,6 +27,7 @@ internal static class PlotlyColors
     ///     <c>0.3</c>), which differs from the <c>i·step</c> positions <see cref="SampleRgb" />'s
     ///     interpolation uses internally.
     /// </summary>
+    /// <returns>Reversed RdYlBu scale expanded into normalized positions and RGB strings.</returns>
     public static object[] RdYlBuRScale()
     {
         int n = RdYlBuR.Length;
@@ -40,6 +41,8 @@ internal static class PlotlyColors
     ///     Python <c>plotly.colors.sample_colorscale("RdYlBu_r", points)</c> → per-point RGB, then the
     ///     <c>label_rgb(unlabel_rgb(...))</c> round-trip Optuna applies, giving <c>"rgb(r.0, g.0, b.0)"</c>.
     /// </summary>
+    /// <param name="point">Normalized scale position from zero through one.</param>
+    /// <returns>Interpolated RGB text using Plotly-compatible decimal rounding.</returns>
     public static string SampleRgb(double point)
     {
         int n = RdYlBuR.Length;
@@ -75,6 +78,8 @@ internal static class PlotlyColors
     ///     <c>find_intermediate_color</c> interpolated in 0-255 rgb space, then <c>label_rgb</c> — so
     ///     the components stay float, e.g. <c>"rgb(20.5, 80.5, 144.0)"</c>.
     /// </summary>
+    /// <param name="value">Normalized scale position from zero through one.</param>
+    /// <returns>Interpolated Blues color with floating-point RGB components.</returns>
     public static string BluesLineColor(double value)
     {
         int n = BluesRgb.Length;
@@ -87,9 +92,19 @@ internal static class PlotlyColors
         return $"rgb({PythonRepr.FloatRepr(r)}, {PythonRepr.FloatRepr(g)}, {PythonRepr.FloatRepr(b)})";
     }
 
+    /// <summary>Formats integral color channels with the floating-point notation emitted by Plotly.</summary>
+    /// <param name="r">Red channel from zero through 255.</param>
+    /// <param name="g">Green channel from zero through 255.</param>
+    /// <param name="b">Blue channel from zero through 255.</param>
+    /// <returns>An rgb(r.0, g.0, b.0) string.</returns>
     private static string Rgb(int r, int g, int b) => $"rgb({r}.0, {g}.0, {b}.0)";
 
     // find_intermediate_color interpolates in 0-1 space (colors normalised by /255).
+    /// <summary>Interpolates byte-range channels after normalizing both endpoints.</summary>
+    /// <param name="lo255">Channel value at the lower color stop.</param>
+    /// <param name="hi255">Channel value at the upper color stop.</param>
+    /// <param name="interp">Fractional distance between the two stops.</param>
+    /// <returns>Interpolated channel in the zero-to-one domain.</returns>
     private static double Lerp01(int lo255, int hi255, double interp)
     {
         double lo = lo255 / 255.0, hi = hi255 / 255.0;
@@ -97,6 +112,11 @@ internal static class PlotlyColors
     }
 
     // convert_to_RGB_255: Decimal(str(v01*255)).quantize(1, ROUND_HALF_EVEN).
+    /// <summary>Converts a normalized channel to an integer using decimal half-even rounding.</summary>
+    /// <param name="v01">Normalized finite channel value.</param>
+    /// <returns>Rounded channel in the byte domain.</returns>
+    /// <exception cref="System.FormatException">The channel cannot be parsed as a decimal.</exception>
+    /// <exception cref="System.OverflowException">The scaled channel exceeds Decimal or Int32.</exception>
     private static int To255(double v01)
     {
         decimal d = decimal.Parse(PythonRepr.FloatRepr(v01 * 255.0), CultureInfo.InvariantCulture);
@@ -104,6 +124,10 @@ internal static class PlotlyColors
     }
 
     /// <summary>NumPy <c>np.quantile(sorted, q)</c> with the default linear interpolation.</summary>
+    /// <param name="sorted">Nonempty values already sorted in ascending order.</param>
+    /// <param name="q">Quantile position from zero through one, inclusive.</param>
+    /// <returns>Linearly interpolated quantile matching NumPy's default method.</returns>
+    /// <exception cref="System.IndexOutOfRangeException">The input is empty or the quantile produces an index outside the array.</exception>
     public static double QuantileSorted(double[] sorted, double q)
     {
         double pos = q * (sorted.Length - 1);
@@ -117,6 +141,10 @@ internal static class PlotlyColors
     ///     Python <c>format(value, "g")</c> (default precision 6): significant-figure formatting with
     ///     trailing zeros stripped, scientific when the exponent is &lt; -4 or ≥ precision.
     /// </summary>
+    /// <param name="value">Numeric tick value to format.</param>
+    /// <param name="precision">Positive number of significant digits; defaults to six.</param>
+    /// <returns>Invariant text with Python-style exponent and trailing-zero conventions.</returns>
+    /// <exception cref="System.FormatException">The derived numeric precision is unsupported by the runtime formatter.</exception>
     public static string FormatG(double value, int precision = 6)
     {
         if (value == 0.0)
@@ -148,6 +176,9 @@ internal static class PlotlyColors
         return negative ? "-" + body : body;
     }
 
+    /// <summary>Removes fractional trailing zeros and an empty decimal point.</summary>
+    /// <param name="s">Fixed-point numeric text to compact.</param>
+    /// <returns>The compact numeric text.</returns>
     private static string StripZeros(string s)
     {
         if (!s.Contains('.'))

@@ -17,6 +17,9 @@ internal sealed class DuplicateElimination
     ///     <c>do(pop, *others)</c>: drop within-<paramref name="pop" /> duplicates (keeping the first
     ///     occurrence), then drop any individual duplicating a row of one of the <paramref name="others" />.
     /// </summary>
+    /// <param name="pop">Population whose decision and evaluation columns are consumed or updated.</param>
+    /// <param name="others">Additional populations against which duplicate candidates are removed.</param>
+    /// <returns>The input population with duplicate individuals removed.</returns>
     public Population Do(Population pop, params Population[] others)
     {
         if (pop.Count == 0) return pop;
@@ -51,6 +54,9 @@ internal sealed class DuplicateElimination
     }
 
     /// <summary>Euclidean distance (scipy <c>cdist</c> default). NaN coordinates propagate to inf (never ≤ eps).</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="b">Second numerical array operand.</param>
+    /// <returns>The Euclidean distance between the two decision vectors.</returns>
     private static double Dist(double[] a, double[] b)
     {
         double s = 0.0;

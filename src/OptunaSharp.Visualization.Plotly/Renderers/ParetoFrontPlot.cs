@@ -14,6 +14,9 @@ namespace OptunaSharp.Visualization.Plotly.Renderers;
 /// </summary>
 internal static class ParetoFrontPlot
 {
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(ParetoFrontInfo info)
     {
         var traces = new List<Trace>();
@@ -45,6 +48,13 @@ internal static class ParetoFrontPlot
         return Fig.Figure(traces, layout);
     }
 
+    /// <summary>Builds a two- or three-dimensional trace for one Pareto/feasibility group.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <param name="trialsWithValues">Trial records paired with their selected objective coordinates.</param>
+    /// <param name="hovertemplate">Plotly hover template applied to every point in this trace.</param>
+    /// <param name="dominated">Whether this group consists of feasible trials outside the Pareto front.</param>
+    /// <param name="infeasible">Whether this group consists of constraint-violating trials.</param>
+    /// <returns>Scatter trace with the group's coordinates, markers, and hover data.</returns>
     private static Trace Scatter(
         ParetoFrontInfo info,
         IReadOnlyList<(FrozenTrial Trial, IReadOnlyList<double> Values)> trialsWithValues,
@@ -68,6 +78,12 @@ internal static class ParetoFrontPlot
         return Fig.Trace(info.NTargets == 2 ? "scatter" : "scatter3d", entries.ToArray());
     }
 
+    /// <summary>Selects marker colors and colorbar placement for one trial group.</summary>
+    /// <param name="trials">Trial records used to color points by trial number.</param>
+    /// <param name="includeDominated">Whether a dominated-trial colorbar is present and the best-trial colorbar must shift right.</param>
+    /// <param name="dominated">Whether this group consists of feasible trials outside the Pareto front.</param>
+    /// <param name="infeasible">Whether this group consists of constraint-violating trials.</param>
+    /// <returns>Mutable Plotly marker object.</returns>
     private static DObj Marker(List<FrozenTrial> trials, bool includeDominated, bool dominated, bool infeasible)
     {
         if (infeasible)

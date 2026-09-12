@@ -10,10 +10,16 @@ namespace OptunaSharp;
 /// <summary>Base class for Optuna specific errors.</summary>
 public class OptunaError : Exception
 {
+    /// <summary>Creates a OptunaError carrying the supplied failure details, if any.</summary>
     public OptunaError() { }
 
+    /// <summary>Creates a OptunaError carrying the supplied failure details, if any.</summary>
+    /// <param name="message">Error message explaining the failure.</param>
     public OptunaError(string message) : base(message) { }
 
+    /// <summary>Creates a OptunaError carrying the supplied failure details, if any.</summary>
+    /// <param name="message">Error message explaining the failure.</param>
+    /// <param name="innerException">Original failure retained as the cause of this exception.</param>
     public OptunaError(string message, Exception innerException) : base(message, innerException) { }
 }
 
@@ -37,8 +43,11 @@ public class OptunaError : Exception
 /// </example>
 public class TrialPruned : OptunaError
 {
+    /// <summary>Creates a TrialPruned carrying the supplied failure details, if any.</summary>
     public TrialPruned() { }
 
+    /// <summary>Creates a TrialPruned carrying the supplied failure details, if any.</summary>
+    /// <param name="message">Error message explaining the failure.</param>
     public TrialPruned(string message) : base(message) { }
 }
 
@@ -49,8 +58,11 @@ public class TrialPruned : OptunaError
 /// </summary>
 public class CLIUsageError : OptunaError
 {
+    /// <summary>Creates a CLIUsageError carrying the supplied failure details, if any.</summary>
     public CLIUsageError() { }
 
+    /// <summary>Creates a CLIUsageError carrying the supplied failure details, if any.</summary>
+    /// <param name="message">Error message explaining the failure.</param>
     public CLIUsageError(string message) : base(message) { }
 }
 
@@ -61,8 +73,11 @@ public class CLIUsageError : OptunaError
 /// </summary>
 public class StorageInternalError : OptunaError
 {
+    /// <summary>Creates a StorageInternalError carrying the supplied failure details, if any.</summary>
     public StorageInternalError() { }
 
+    /// <summary>Creates a StorageInternalError carrying the supplied failure details, if any.</summary>
+    /// <param name="message">Error message explaining the failure.</param>
     public StorageInternalError(string message) : base(message) { }
 }
 
@@ -73,8 +88,11 @@ public class StorageInternalError : OptunaError
 /// </summary>
 public class DuplicatedStudyError : OptunaError
 {
+    /// <summary>Creates a DuplicatedStudyError carrying the supplied failure details, if any.</summary>
     public DuplicatedStudyError() { }
 
+    /// <summary>Creates a DuplicatedStudyError carrying the supplied failure details, if any.</summary>
+    /// <param name="message">Error message explaining the failure.</param>
     public DuplicatedStudyError(string message) : base(message) { }
 }
 
@@ -87,7 +105,10 @@ public class DuplicatedStudyError : OptunaError
 /// </summary>
 public class UpdateFinishedTrialError : OptunaError
 {
+    /// <summary>Creates a UpdateFinishedTrialError carrying the supplied failure details, if any.</summary>
     public UpdateFinishedTrialError() { }
 
+    /// <summary>Creates a UpdateFinishedTrialError carrying the supplied failure details, if any.</summary>
+    /// <param name="message">Error message explaining the failure.</param>
     public UpdateFinishedTrialError(string message) : base(message) { }
 }

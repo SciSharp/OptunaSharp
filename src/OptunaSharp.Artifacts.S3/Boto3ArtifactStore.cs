@@ -26,6 +26,7 @@ public class Boto3ArtifactStore : IArtifactStore
     private readonly IAmazonS3 _client;
     private readonly bool _avoidBufCopy;
 
+    /// <summary>Creates an S3 artifact store using the supplied client or the AWS default client configuration.</summary>
     /// <param name="bucketName">The name of the bucket to store artifacts.</param>
     /// <param name="client">
     ///     An S3 client to use for storage operations. If not specified, a new
@@ -46,10 +47,17 @@ public class Boto3ArtifactStore : IArtifactStore
         _avoidBufCopy = avoidBufCopy;
     }
 
+    /// <summary>Opens the S3 object's response stream for reading.</summary>
+    /// <param name="artifactId">The object key assigned to the artifact.</param>
+    /// <returns>The response stream; the caller must dispose it after reading.</returns>
+    /// <exception cref="ArtifactNotFound">S3 reports a missing key or an HTTP 404 response.</exception>
+    /// <exception cref="AmazonS3Exception">S3 rejects the download for another reason, such as authorization or a service failure.</exception>
     public Stream OpenReader(string artifactId)
     {
         try
         {
+            // IArtifactStore exposes synchronous operations. Unwrap the SDK task directly so callers
+            // receive the original provider exception and can apply Optuna's missing-artifact handling.
             GetObjectResponse obj = _client
                 .GetObjectAsync(new GetObjectRequest { BucketName = _bucket, Key = artifactId })
                 .ConfigureAwait(false).GetAwaiter().GetResult();
@@ -62,6 +70,13 @@ public class Boto3ArtifactStore : IArtifactStore
         }
     }
 
+    /// <summary>Uploads bytes from the source's current position, replacing an existing object with the same key.</summary>
+    /// <param name="artifactId">The destination object key.</param>
+    /// <param name="contentBody">The readable source stream, which remains owned by the caller.</param>
+    /// <exception cref="AmazonS3Exception">S3 rejects the upload.</exception>
+    /// <exception cref="IOException">Reading the source stream fails.</exception>
+    /// <exception cref="System.ObjectDisposedException">The source stream has already been disposed.</exception>
+    /// <exception cref="System.NotSupportedException">The source stream does not support reading.</exception>
     public void Write(string artifactId, Stream contentBody)
     {
         Stream fsrc = contentBody;
@@ -93,6 +108,9 @@ public class Boto3ArtifactStore : IArtifactStore
         }
     }
 
+    /// <summary>Deletes the object; an already absent key is treated as success by S3.</summary>
+    /// <param name="artifactId">The object key to delete.</param>
+    /// <exception cref="AmazonS3Exception">S3 rejects the delete request.</exception>
     public void Remove(string artifactId)
     {
         // S3 delete_object is idempotent — deleting a missing key succeeds (no ArtifactNotFound),
@@ -102,6 +120,8 @@ public class Boto3ArtifactStore : IArtifactStore
     }
 
     /// <summary>Port of <c>optuna/artifacts/_boto3.py: _is_not_found_error</c>.</summary>
+    /// <param name="e">The SDK failure to classify.</param>
+    /// <returns>Whether the error denotes a missing artifact.</returns>
     private static bool IsNotFoundError(AmazonS3Exception e) =>
         e.ErrorCode == "NoSuchKey" || e.StatusCode == HttpStatusCode.NotFound;
 }

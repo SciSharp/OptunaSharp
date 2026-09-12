@@ -59,6 +59,8 @@ internal sealed class De
     /// <param name="cr">Crossover rate CR (default 0.9).</param>
     /// <param name="strategy">Mutation strategy (default DE/rand/1/bin).</param>
     /// <param name="seed">Seed for the MT19937 stream (null ⇒ nondeterministic).</param>
+    /// <summary>Copies an evaluated population and initializes differential-evolution proposal state.</summary>
+    /// <exception cref="System.ArgumentException">The initial population is empty, contains fewer than four individuals, has invalid dimensions, or is not aligned with initial objective values.</exception>
     internal De(double[][] initialPop, double[] initialVal,
         double f = 0.8, double cr = 0.9, DeStrategy strategy = DeStrategy.Rand1Bin, int? seed = null)
     {
@@ -87,18 +89,26 @@ internal sealed class De
         if (seed is not null) _rng.seed((uint)seed.Value);
     }
 
+    /// <summary>Number of numerical decision coordinates.</summary>
     internal int Dim => _nDim;
+    /// <summary>Number of evaluated individuals required for one generation.</summary>
     internal int PopulationSize => _popsize;
+    /// <summary>Number of completed optimizer updates.</summary>
     internal int Generation => _t;
+    /// <summary>Differential-evolution scale applied to donor-vector differences.</summary>
     internal double F => _f;
+    /// <summary>Binomial crossover probability used by differential evolution.</summary>
     internal double CR => _cr;
+    /// <summary>Differential-evolution donor and crossover strategy.</summary>
     internal DeStrategy Strategy => _strategy;
 
     /// <summary>Re-seed the MT19937 stream — the per-trial sampler reseeds before each single ask so its
     ///     one candidate is reproducible from the restored population (as <c>LmCma.ReseedRng</c>).</summary>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
     internal void ReseedRng(int seed) => _rng.seed((uint)seed);
 
-    /// <summary>The population centroid — the JANUS host's injection center (<see cref="IPopulationHost.Mean" />).</summary>
+    /// <summary>The population centroid — the JANUS host's injection center (<see cref="OptunaSharp.Samplers.Janus.IPopulationHost.Mean" />).</summary>
+    /// <returns>The coordinate-wise mean of the current population.</returns>
     internal double[] Mean()
     {
         var m = new double[_nDim];
@@ -111,6 +121,7 @@ internal sealed class De
     /// <summary>Per-dimension population standard deviation (population/ddof-0, floored at <see cref="Eps" />)
     ///     — DE's covariance-free analogue of a proposal scale, used by the JANUS host's step-length
     ///     whitening and its reported σ.</summary>
+    /// <returns>The population standard deviation of each decision coordinate.</returns>
     internal double[] PerDimStd()
     {
         double[] mean = Mean();
@@ -125,6 +136,7 @@ internal sealed class De
     }
 
     /// <summary>Index of the current best (lowest-value) member; non-finite values sort last.</summary>
+    /// <returns>The first index with the best finite minimization-oriented objective value.</returns>
     internal int BestIndex()
     {
         int best = 0;
@@ -143,6 +155,9 @@ internal sealed class De
     ///     <c>j_rand</c> forced coordinate guaranteeing <c>u ≠ x_target</c>. The result is returned in the
     ///     optimizer's coordinate space — the caller clamps it to any box.
     /// </summary>
+    /// <param name="target">Zero-based population slot for the candidate.</param>
+    /// <returns>The proposed decision vector for the requested population slot.</returns>
+    /// <exception cref="System.ArgumentOutOfRangeException">The target index is outside the population.</exception>
     internal double[] AskCandidate(int target)
     {
         if (target < 0 || target >= _popsize) throw new ArgumentOutOfRangeException(nameof(target));
@@ -178,6 +193,8 @@ internal sealed class De
     ///     <c>i</c>). Each parent is replaced iff its offspring is finite and no worse (or the parent's own
     ///     value was non-finite, i.e. unknown). Advances the generation counter.
     /// </summary>
+    /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
+    /// <exception cref="System.ArgumentException">The number of target-ordered solutions differs from the population size.</exception>
     internal void Tell(IReadOnlyList<(double[] X, double Value)> solutions)
     {
         if (solutions.Count != _popsize)
@@ -202,6 +219,7 @@ internal sealed class De
     ///     not preserved (the injected Gauss–Newton elite simply competes for a place in the pool). Advances
     ///     the generation counter.
     /// </summary>
+    /// <param name="offspring">Evaluated offspring vectors and their minimization-oriented objective values.</param>
     internal void TellElitist(IReadOnlyList<(double[] X, double Value)> offspring)
     {
         var combined = new List<(double[] X, double Val)>(_popsize + offspring.Count);
@@ -217,10 +235,15 @@ internal sealed class De
         _t += 1;
     }
 
+    /// <summary>Maps unusable objective values to the worst minimization score before population selection.</summary>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>A minimization-sortable score with unusable values ranked last.</returns>
     private static double SortKey(double v) => IsFinite(v) ? v : double.PositiveInfinity;
 
     /// <summary>A distinct index in [0, NP) not already in <paramref name="exclude" /> (which it mutates).
     ///     NP ≥ 4 guarantees termination for both strategies.</summary>
+    /// <param name="exclude">Population indices unavailable for this donor draw.</param>
+    /// <returns>A sampled population index not present in the excluded set.</returns>
     private int SampleDistinct(HashSet<int> exclude)
     {
         while (true)
@@ -230,16 +253,23 @@ internal sealed class De
         }
     }
 
+    /// <summary>Tests whether a scalar excludes NaN and both infinities.</summary>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>True for a finite scalar, including zero.</returns>
     private static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
 
     /// <summary>The population-size default shared by the sampler and the host: <c>max(8, 4 + ⌊3 ln d⌋)</c>
     ///     — the CMA-ES λ formula floored at 8 for donor diversity, kept modest so generations stay short
     ///     enough to iterate at Optuna trial budgets (a DE textbook <c>NP ≈ 10d</c> rarely completes a
     ///     generation in a few-hundred-trial study).</summary>
+    /// <param name="d">Decision-space dimension.</param>
+    /// <returns>The algorithm default population size for the supplied dimension.</returns>
     internal static int DefaultPopulationSize(int d) => Math.Max(8, 4 + (int)Math.Floor(3.0 * Math.Log(d)));
 
     // ---- state serialization (own JSON; mirrors the LmCma/SepCma pattern) -------------------------
 
+    /// <summary>Captures constructor settings and evolving optimizer arrays in a serializable state object.</summary>
+    /// <returns>A serializable snapshot of optimizer settings and evolving state.</returns>
     internal DeState ToState() => new()
     {
         NDim = _nDim,
@@ -252,6 +282,10 @@ internal sealed class De
         T = _t,
     };
 
+    /// <summary>Recreates optimizer constants and restores evolving state from a serialized snapshot.</summary>
+    /// <param name="s">Serialized optimizer settings and evolving proposal state.</param>
+    /// <returns>An optimizer restored from the supplied snapshot.</returns>
+    /// <exception cref="System.ArgumentException">Stored constructor settings or population dimensions are rejected when the optimizer is recreated.</exception>
     internal static De FromState(DeState s)
     {
         var de = new De(s.Pop, s.PopVal, s.F, s.Cr, (DeStrategy)s.Strategy, seed: null);
@@ -259,6 +293,9 @@ internal sealed class De
         return de;
     }
 
+    /// <summary>Copies both the outer array and every population row.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>A detached copy of the population and every individual vector.</returns>
     private static double[][] CloneJagged(double[][] a)
     {
         var j = new double[a.Length][];
@@ -270,12 +307,20 @@ internal sealed class De
 /// <summary>Serialized evolving state of a <see cref="De" /> optimizer (own JSON; see <c>LmCmaState</c>).</summary>
 internal sealed class DeState
 {
+    /// <summary>Serialized number of numerical decision coordinates.</summary>
     public int NDim { get; set; }
+    /// <summary>Serialized number of evaluated individuals in one generation.</summary>
     public int Popsize { get; set; }
+    /// <summary>Differential-evolution scale applied to donor-vector differences.</summary>
     public double F { get; set; }
+    /// <summary>Serialized binomial crossover probability.</summary>
     public double Cr { get; set; }
+    /// <summary>Differential-evolution donor and crossover strategy.</summary>
     public int Strategy { get; set; }
+    /// <summary>Serialized decision vectors of the retained population.</summary>
     public double[][] Pop { get; set; } = Array.Empty<double[]>();
+    /// <summary>Serialized minimization-oriented objective values aligned with population rows.</summary>
     public double[] PopVal { get; set; } = Array.Empty<double>();
+    /// <summary>Serialized generation/update counter.</summary>
     public int T { get; set; }
 }

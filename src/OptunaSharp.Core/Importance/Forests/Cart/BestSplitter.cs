@@ -12,9 +12,12 @@ namespace OptunaSharp.Importance.Forests.Internal.Cart;
 /// </summary>
 internal sealed class BestSplitter
 {
+    /// <summary>The shared weighted-MSE accumulator used to score candidate child partitions.</summary>
     internal readonly MseRegressionCriterion Criterion = new();
+    /// <summary>The feature-value sorter and sample-index partitioner shared by split searches.</summary>
     internal readonly DensePartitioner Partitioner = new();
 
+    /// <summary>The original sample indices permuted in place as nodes split.</summary>
     internal int[] Samples = null!;
     private int[] _features = null!;
     private int[] _constantFeatures = null!;
@@ -26,8 +29,12 @@ internal sealed class BestSplitter
     private double _weightedNSamples;
     private uint _randRState;
 
+    /// <summary>The number of positive-weight training samples available to the splitter.</summary>
     internal int NSamples { get; private set; }
 
+    /// <summary>Sets the minimum sample-count and weight constraints that every accepted leaf must satisfy.</summary>
+    /// <param name="minSamplesLeaf">The minimum number of samples required in either child after a split.</param>
+    /// <param name="minWeightLeaf">The minimum sample-weight mass required in either child.</param>
     internal BestSplitter(int minSamplesLeaf, double minWeightLeaf)
     {
         _minSamplesLeaf = minSamplesLeaf;
@@ -43,6 +50,11 @@ internal sealed class BestSplitter
     ///     <see cref="SklearnRandom.RandInt" /> is consumed identically either way, so the RNG stays in
     ///     lock-step with scikit-learn).
     /// </param>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <param name="y">Target values aligned with the feature rows.</param>
+    /// <param name="sampleWeight">The non-null weight of every original training row; zero-weight rows are excluded from the split sample permutation.</param>
+    /// <param name="nFeatures">The number of feature columns in the training matrix.</param>
+    /// <param name="randRSeed">The state used to seed the splitter's scikit-learn-compatible random generator.</param>
     internal void Init(float[,] x, double[] y, double[] sampleWeight, int nFeatures, uint randRSeed, int maxFeatures = -1)
     {
         _randRState = randRSeed;
@@ -82,18 +94,32 @@ internal sealed class BestSplitter
     }
 
     /// <summary><c>Splitter.node_reset</c>.</summary>
+    /// <param name="start">The inclusive start of the interval or slice.</param>
+    /// <param name="end">The exclusive endpoint of the sample-index slice.</param>
+    /// <returns>The total sample weight of the newly selected node range.</returns>
     internal double NodeReset(int start, int end)
     {
         Criterion.Init(Criterion.Y, Criterion.SampleWeight, _weightedNSamples, Samples, start, end);
         return Criterion.WeightedNNodeSamples;
     }
 
+    /// <summary>Returns the weighted target variance at the current node.</summary>
+    /// <returns>The weighted target variance at the current node.</returns>
     internal double NodeImpurity() => Criterion.NodeImpurity();
+    /// <summary>Returns the weighted mean target used as the current node's prediction.</summary>
+    /// <returns>The weighted mean target used as the current node's prediction.</returns>
     internal double NodeValue() => Criterion.NodeValue();
 
+    /// <summary>Exchanges feature-permutation entries without changing their associated column identities.</summary>
+    /// <param name="f">The feature-index permutation updated in place.</param>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
     private static void SwapFeatures(int[] f, int a, int b) => (f[a], f[b]) = (f[b], f[a]);
 
     /// <summary><c>node_split_best</c>. Returns the best split; updates <paramref name="nConstantFeatures" />.</summary>
+    /// <param name="impurity">The weighted target variance at the parent node.</param>
+    /// <param name="nConstantFeatures">The number of features already known to be constant along the ancestor path; updated for descendants.</param>
+    /// <returns>The best valid split and its child impurity statistics.</returns>
     internal SplitRecord NodeSplit(double impurity, ref int nConstantFeatures)
     {
         int start = Criterion.Start;

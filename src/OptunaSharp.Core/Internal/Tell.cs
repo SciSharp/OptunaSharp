@@ -13,9 +13,19 @@ internal static class TellHelpers
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.study._tell");
 
     /// <summary>Python <c>_get_frozen_trial(study, trial)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <returns>The snapshot read from study storage using the trial identifier or study-local trial number.</returns>
+    /// <exception cref="NumSharp.KeyError">The trial identifier has no corresponding record in the study storage.</exception>
     internal static FrozenTrial GetFrozenTrial(Study study, Trial trial)
         => study.Storage.GetTrial(trial.TrialId);
 
+    /// <summary>Returns the snapshot read from study storage using the trial identifier or study-local trial number.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trialNumber">The study-local trial number, rather than the storage's internal trial identifier.</param>
+    /// <returns>The snapshot read from study storage using the trial identifier or study-local trial number.</returns>
+    /// <exception cref="NumSharp.KeyError">The trial identifier has no corresponding record in the study storage.</exception>
+    /// <exception cref="NumSharp.ValueError">The study-local trial number has not been created.</exception>
     internal static FrozenTrial GetFrozenTrial(Study study, int trialNumber)
     {
         int trialId;
@@ -33,6 +43,9 @@ internal static class TellHelpers
     }
 
     /// <summary>Python <c>_check_state_and_values</c>.</summary>
+    /// <param name="state">The requested or recorded trial completion state.</param>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <exception cref="NumSharp.ValueError">The requested completion state and presence of objective values are inconsistent.</exception>
     internal static void CheckStateAndValues(TrialState? state, IReadOnlyList<double>? values)
     {
         if (state == TrialState.Complete)
@@ -55,6 +68,9 @@ internal static class TellHelpers
     }
 
     /// <summary>Python <c>_check_values_are_feasible</c>. Returns an error message or <c>null</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>Null when the objective values are valid, otherwise a diagnostic explaining the mismatch.</returns>
     internal static string? CheckValuesAreFeasible(Study study, IReadOnlyList<double> values)
     {
         var errors = new List<string>();
@@ -76,6 +92,13 @@ internal static class TellHelpers
     ///     Python <c>_tell_with_warning</c> — the internal method of <see cref="Study.Tell(Trial, IReadOnlyList{double}, TrialState?, bool)" />.
     /// </summary>
     /// <returns>(state, values, valuesConversionFailureMessage)</returns>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="frozenTrial">The trial snapshot to validate and complete in storage.</param>
+    /// <param name="valueOrValues">The values returned by the objective before completion-state validation.</param>
+    /// <param name="state">The requested or recorded trial completion state.</param>
+    /// <param name="skipIfFinished">Whether an already finished trial is returned unchanged instead of rejected.</param>
+    /// <param name="suppressWarning">Whether value-validation warnings are returned without being emitted.</param>
+    /// <exception cref="NumSharp.ValueError">The trial is not running and cannot be skipped, the requested state/value combination is invalid, or explicit complete-state values fail validation.</exception>
     internal static (TrialState State, List<double>? Values, string? WarningMessage) TellWithWarning(
         Study study,
         FrozenTrial frozenTrial,
@@ -175,6 +198,9 @@ internal static class TellHelpers
         return (state.Value, finalValues, valuesConversionFailureMessage);
     }
 
+    /// <summary>Returns the Python-style representation of the supplied objective-value sequence.</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The Python-style representation of the supplied objective-value sequence.</returns>
     private static string FormatValues(IReadOnlyList<double>? values)
         => values is null ? "None" : PythonRepr.ListRepr(values);
 }

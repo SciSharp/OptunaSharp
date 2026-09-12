@@ -14,6 +14,8 @@ public class UniformCrossover : BaseCrossover
     private readonly double _swappingProb;
 
     /// <param name="swappingProb">Probability of swapping each parameter of the parents during crossover.</param>
+    /// <summary>Configures the probability that an offspring coordinate comes from the second parent.</summary>
+    /// <exception cref="NumSharp.ValueError">The swapping probability is outside [0, 1].</exception>
     public UniformCrossover(double swappingProb = 0.5)
     {
         if (!(0.0 <= swappingProb && swappingProb <= 1.0))
@@ -21,8 +23,10 @@ public class UniformCrossover : BaseCrossover
         _swappingProb = swappingProb;
     }
 
+    /// <inheritdoc />
     public override int NParents => 2;
 
+    /// <inheritdoc />
     public override double[] Crossover(
         double[][] parentsParams, NumPyRandom rng, Study study, double[,] searchSpaceBounds)
     {

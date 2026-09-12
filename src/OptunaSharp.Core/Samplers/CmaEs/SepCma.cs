@@ -15,7 +15,7 @@ namespace OptunaSharp.Samplers.CmaEs;
 ///
 ///     <para><b>Bit-exact vs the Python <c>cmaes</c> package.</b> Same numeric discipline as
 ///     <see cref="Cma" />: <c>rng.randn</c> → NumSharp MT19937; the contiguous 1-D <c>np.sum(weights)</c>
-///     → <see cref="MathUtil.PairwiseSum" />; but the constructor's Python <c>sum(...)</c> and the
+///     → <see cref="MathUtil.PairwiseSum(double[])" />; but the constructor's Python <c>sum(...)</c> and the
 ///     strided <c>y_w</c>/<c>rank_mu</c> axis reductions accumulate <b>sequentially</b>; scalar
 ///     <c>**2</c> → multiply (array squaring), <c>y_w / D</c> is an elementwise divide. No LAPACK is
 ///     needed (the covariance is diagonal), so SepCMA sampling is byte-for-byte reproducible.</para>
@@ -60,6 +60,14 @@ internal class SepCma : ICmaOptimizer
     private readonly int _funhistTerm;
     private readonly double[] _funhistValues;
 
+    /// <summary>Initializes a Gaussian proposal with diagonal covariance and separable adaptation.</summary>
+    /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
+    /// <param name="sigma">Initial positive global proposal standard deviation.</param>
+    /// <param name="bounds">Optional box with one row per decision coordinate and lower/upper bound columns.</param>
+    /// <param name="nMaxResampling">Maximum rejected box-infeasible proposals before coordinate repair.</param>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
+    /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
+    /// <exception cref="System.ArgumentException">The scale is nonpositive, mean dimension is below two or exceeds the supported magnitude, or population size is nonpositive.</exception>
     internal SepCma(
         double[] mean,
         double sigma,
@@ -141,19 +149,31 @@ internal class SepCma : ICmaOptimizer
         _funhistValues = new double[_funhistTerm * 2];
     }
 
+    /// <summary>Number of numerical decision coordinates.</summary>
     public int Dim => _nDim;
+    /// <summary>Number of evaluated individuals required for one generation.</summary>
     public int PopulationSize => _popsize;
+    /// <summary>Number of completed optimizer updates.</summary>
     public int Generation => _g;
+    /// <summary>Current Gaussian proposal center in transformed coordinates.</summary>
     internal double[] Mean => _mean;
+    /// <summary>Global Gaussian proposal step size.</summary>
     internal double Sigma => _sigma;
+    /// <summary>Current proposal covariance representation.</summary>
     internal double[] Cov => _c;
+    /// <summary>Evolution path used to adapt the global step size.</summary>
     internal double[] PSigma => _pSigma;
+    /// <summary>Evolution path used by the rank-one covariance update.</summary>
     internal double[] Pc => _pc;
 
+    /// <summary>Resets the optimizer random stream for subsequent proposals.</summary>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
     public void ReseedRng(int seed) => _rng.seed((uint)seed);
 
     // ---- state serialization (own JSON; SepCMA's covariance is a 1-D vector — no symmetry trick) ---
 
+    /// <summary>Captures constructor settings and evolving optimizer arrays in a serializable state object.</summary>
+    /// <returns>A serializable snapshot of optimizer settings and evolving state.</returns>
     internal SepCmaState ToState() => new()
     {
         NDim = _nDim,
@@ -170,6 +190,10 @@ internal class SepCma : ICmaOptimizer
         FunhistValues = (double[])_funhistValues.Clone(),
     };
 
+    /// <summary>Recreates optimizer constants and restores evolving state from a serialized snapshot.</summary>
+    /// <param name="s">Serialized optimizer settings and evolving proposal state.</param>
+    /// <returns>An optimizer restored from the supplied snapshot.</returns>
+    /// <exception cref="System.ArgumentException">Stored constructor settings or population dimensions are rejected when the optimizer is recreated.</exception>
     internal static SepCma FromState(SepCmaState s)
     {
         var cma = new SepCma(new double[s.NDim], s.Sigma0, FromJagged(s.Bounds), s.NMaxResampling,
@@ -185,6 +209,8 @@ internal class SepCma : ICmaOptimizer
         return cma;
     }
 
+    /// <summary>Draws one candidate from the current proposal without advancing the generation.</summary>
+    /// <returns>One candidate vector in transformed coordinates.</returns>
     public double[] Ask()
     {
         for (int i = 0; i < _nMaxResampling; i++)
@@ -196,6 +222,8 @@ internal class SepCma : ICmaOptimizer
         return RepairInfeasibleParams(SampleSolution());
     }
 
+    /// <summary>Refreshes the covariance factorization used to sample and whiten proposal vectors.</summary>
+    /// <returns>Square roots of the diagonal covariance entries, cached for sampling and whitening.</returns>
     private double[] EigenDecomposition()
     {
         if (_d is not null) return _d;
@@ -205,6 +233,8 @@ internal class SepCma : ICmaOptimizer
         return d;
     }
 
+    /// <summary>Draws an unconstrained vector from the current Gaussian proposal.</summary>
+    /// <returns>A proposal vector before box-feasibility repair.</returns>
     private double[] SampleSolution()
     {
         double[] d = EigenDecomposition();
@@ -215,6 +245,9 @@ internal class SepCma : ICmaOptimizer
         return x;
     }
 
+    /// <summary>Checks whether every proposal coordinate lies within its configured box.</summary>
+    /// <param name="param">Decision vector whose box feasibility is checked or repaired.</param>
+    /// <returns>True if every coordinate lies inside its configured bounds.</returns>
     private bool IsFeasible(double[] param)
     {
         if (_bounds is null) return true;
@@ -224,6 +257,9 @@ internal class SepCma : ICmaOptimizer
         return true;
     }
 
+    /// <summary>Clamps a proposal to the configured box after rejection sampling is exhausted.</summary>
+    /// <param name="param">Decision vector whose box feasibility is checked or repaired.</param>
+    /// <returns>The proposal with out-of-box coordinates clamped to the nearest bound.</returns>
     private double[] RepairInfeasibleParams(double[] param)
     {
         if (_bounds is null) return param;
@@ -238,6 +274,9 @@ internal class SepCma : ICmaOptimizer
         return result;
     }
 
+    /// <summary>Updates the optimizer using evaluated candidates from one coherent generation.</summary>
+    /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
+    /// <exception cref="System.ArgumentException">The solution count differs from population size or a coordinate exceeds the supported magnitude.</exception>
     public void Tell(List<(double[] X, double Value)> solutions)
     {
         if (solutions.Count != _popsize)
@@ -315,6 +354,8 @@ internal class SepCma : ICmaOptimizer
             _c[i] = cCoef * _c[i] + _c1 * rankOne[i] + _cmu * rankMu[i];
     }
 
+    /// <summary>Checks numerical and progress criteria that indicate the current optimizer has converged or stalled.</summary>
+    /// <returns>True when a numerical or convergence stopping criterion is met.</returns>
     internal bool ShouldStop()
     {
         double[] d = EigenDecomposition();
@@ -347,11 +388,26 @@ internal class SepCma : ICmaOptimizer
 
     // ---- helpers ------------------------------------------------------------------------------
 
+    /// <summary>Accumulates values from left to right to preserve the reference reduction order.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The left-to-right sum of the entries.</returns>
     private static double SeqSum(double[] a) { double s = 0; foreach (double v in a) s += v; return s; }
+    /// <summary>Computes the scalar second power used by adaptation equations.</summary>
+    /// <param name="x">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>The product of the scalar with itself.</returns>
     private static double Square(double x) => x * x;
+    /// <summary>Finds the largest vector entry using the reference reduction semantics.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The largest vector entry.</returns>
     private static double Max(double[] a) { double m = a[0]; foreach (double v in a) if (v > m) m = v; return m; }
+    /// <summary>Finds the smallest vector entry using the reference reduction semantics.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The smallest vector entry.</returns>
     private static double Min(double[] a) { double m = a[0]; foreach (double v in a) if (v < m) m = v; return m; }
 
+    /// <summary>Copies a rectangular matrix into row arrays for serialization.</summary>
+    /// <param name="m">Rectangular matrix operand.</param>
+    /// <returns>Copied matrix rows, or null when the source matrix is null.</returns>
     private static double[][]? ToJagged(double[,]? m)
     {
         if (m is null) return null;
@@ -365,6 +421,9 @@ internal class SepCma : ICmaOptimizer
         return j;
     }
 
+    /// <summary>Copies serialized row arrays into rectangular matrix storage.</summary>
+    /// <param name="j">Serialized matrix row arrays.</param>
+    /// <returns>A rectangular copy of the rows, or null when the source is null.</returns>
     private static double[,]? FromJagged(double[][]? j)
     {
         if (j is null) return null;
@@ -379,16 +438,28 @@ internal class SepCma : ICmaOptimizer
 /// <summary>Serialized evolving state of a <see cref="SepCma" /> optimizer (own JSON; see <see cref="CmaState" />).</summary>
 internal sealed class SepCmaState
 {
+    /// <summary>Serialized number of numerical decision coordinates.</summary>
     public int NDim { get; set; }
+    /// <summary>Initial proposal step size retained for reconstruction.</summary>
     public double Sigma0 { get; set; }
+    /// <summary>Optional lower/upper proposal bounds in coordinate order.</summary>
     public double[][]? Bounds { get; set; }
+    /// <summary>Maximum rejected proposals before box repair is applied.</summary>
     public int NMaxResampling { get; set; }
+    /// <summary>Serialized number of evaluated individuals in one generation.</summary>
     public int Popsize { get; set; }
+    /// <summary>Serialized number of completed optimizer updates.</summary>
     public int G { get; set; }
+    /// <summary>Current Gaussian proposal center in transformed coordinates.</summary>
     public double[] Mean { get; set; } = System.Array.Empty<double>();
+    /// <summary>Global Gaussian proposal step size.</summary>
     public double Sigma { get; set; }
+    /// <summary>Serialized covariance representation used to restore the proposal geometry.</summary>
     public double[] C { get; set; } = System.Array.Empty<double>();
+    /// <summary>Evolution path used to adapt the global step size.</summary>
     public double[] PSigma { get; set; } = System.Array.Empty<double>();
+    /// <summary>Evolution path used by the rank-one covariance update.</summary>
     public double[] Pc { get; set; } = System.Array.Empty<double>();
+    /// <summary>Recent objective-value history used by convergence checks.</summary>
     public double[] FunhistValues { get; set; } = System.Array.Empty<double>();
 }

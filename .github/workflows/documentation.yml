@@ -1,0 +1,48 @@
+name: In-code documentation
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'Directory.Build.*'
+      - '.github/scripts/check_documentation.cs'
+      - '.github/workflows/documentation.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Directory.Build.*'
+      - '.github/scripts/check_documentation.cs'
+      - '.github/workflows/documentation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      # CS1591 only covers externally visible APIs. The syntax audit additionally checks
+      # internal contracts, private methods, and both supported conditional-compilation branches.
+      - name: Check member documentation coverage
+        run: dotnet run .github/scripts/check_documentation.cs -- src
+
+      # Override the historical per-project NoWarn setting in this dedicated gate. Building only
+      # source projects avoids the package-parity suite's prerequisite of already packed NuGets.
+      # Both target frameworks are built so cref and conditional API differences remain checked.
+      - name: Compile XML documentation and references
+        shell: bash
+        run: |
+          for project in src/*/*.csproj; do
+            dotnet build "$project" --configuration Release \
+              -p:NoWarn= \
+              -p:WarningsAsErrors=CS0419%3BCS1570%3BCS1571%3BCS1572%3BCS1573%3BCS1574%3BCS1580%3BCS1581%3BCS1584%3BCS1587%3BCS1591%3BCS1711%3BCS1734%3BCS1735
+          done

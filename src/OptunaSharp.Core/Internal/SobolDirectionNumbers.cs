@@ -19,6 +19,7 @@ internal static class SobolDirectionNumbers
     private static ushort[]? _poly;
     private static ushort[]? _vinit;
 
+    /// <summary>Decodes the embedded initial direction numbers on first access and retains the decoded table for reuse.</summary>
     private static void EnsureDecoded()
     {
         if (_poly is not null)
@@ -36,6 +37,8 @@ internal static class SobolDirectionNumbers
     }
 
     /// <summary>The primitive polynomial for dimension <paramref name="dim" /> (0-based).</summary>
+    /// <param name="dim">The zero-based dimension index in the embedded direction-number table.</param>
+    /// <returns>The primitive-polynomial encoding for the requested Sobol dimension.</returns>
     internal static ushort Poly(int dim)
     {
         EnsureDecoded();
@@ -43,6 +46,7 @@ internal static class SobolDirectionNumbers
     }
 
     /// <summary>The flattened initial m-values (degree-many per dimension, concatenated).</summary>
+    /// <returns>The decoded initial direction-number table.</returns>
     internal static ushort[] Vinit()
     {
         EnsureDecoded();

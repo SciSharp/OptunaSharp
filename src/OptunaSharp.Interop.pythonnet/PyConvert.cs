@@ -17,6 +17,8 @@ public static class PyConvert
     // ---- values ---------------------------------------------------------------------------------
 
     /// <summary>CLR parameter value (from a suggest call / <see cref="CategoricalChoice" />) → Python object.</summary>
+    /// <param name="value">The parameter value or borrowed Python scalar to convert.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
     public static PyObject ToPy(object? value)
     {
         switch (value)
@@ -44,6 +46,8 @@ public static class PyConvert
     ///     Python value → CLR (<c>null</c>, <see cref="bool" />, <see cref="long" />,
     ///     <see cref="double" /> or <see cref="string" />), recognizing numpy scalar types too.
     /// </summary>
+    /// <param name="value">The parameter value or borrowed Python scalar to convert.</param>
+    /// <returns>A managed scalar, string, or null, detached from Python reference lifetime.</returns>
     public static object? ToClr(PyObject value)
     {
         if (value is null || value.IsNone())
@@ -68,8 +72,13 @@ public static class PyConvert
     }
 
     /// <summary>Python value → a typed <see cref="CategoricalChoice" /> (Python-equality semantics apply downstream).</summary>
+    /// <param name="value">The parameter value or borrowed Python scalar to convert.</param>
+    /// <returns>A typed categorical value using OptunaSharp's Python-compatible equality rules.</returns>
     public static CategoricalChoice ToChoice(PyObject value) => CategoricalChoice.From(ToClr(value));
 
+    /// <summary>Attempts numeric conversion before falling back to a Python string conversion.</summary>
+    /// <param name="value">The parameter value or borrowed Python scalar to convert.</param>
+    /// <returns>The converted floating-point value, or the fallback managed string.</returns>
     private static object? TryFloatElseString(PyObject value)
     {
         try { return value.As<double>(); }
@@ -80,6 +89,9 @@ public static class PyConvert
 
     /// <summary>OptunaSharp distribution → a live <c>optuna.distributions.*</c> object (constructed
     /// through the <c>Python.optuna.distributions</c> facade).</summary>
+    /// <param name="dist">The distribution defining value conversion or the borrowed Python distribution object.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.OptunaHubInteropException">The distribution is not a supported float, integer, or categorical distribution.</exception>
     public static PyObject ToPy(BaseDistribution dist) => dist switch
     {
         FloatDistribution f => Python.optuna.distributions.FloatDistribution(f.Low, f.High, f.Log, f.Step),
@@ -91,6 +103,9 @@ public static class PyConvert
     };
 
     /// <summary>A live <c>optuna.distributions.*</c> object → the matching OptunaSharp distribution.</summary>
+    /// <param name="dist">The distribution defining value conversion or the borrowed Python distribution object.</param>
+    /// <returns>A managed float, integer, or categorical distribution corresponding to the Python object.</returns>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.OptunaHubInteropException">The Python distribution type is unsupported.</exception>
     public static BaseDistribution ToClrDistribution(PyObject dist)
     {
         string name;
@@ -139,6 +154,10 @@ public static class PyConvert
         }
     }
 
+    /// <summary>Reads an optional Boolean attribute, treating a missing attribute or None as false.</summary>
+    /// <param name="obj">The borrowed Python object whose optional attribute is inspected.</param>
+    /// <param name="attr">The case-sensitive Python attribute name.</param>
+    /// <returns>Whether the attribute exists, is not None, and converts to true.</returns>
     private static bool HasTrue(PyObject obj, string attr)
     {
         if (!obj.HasAttr(attr))
@@ -147,6 +166,10 @@ public static class PyConvert
         return !a.IsNone() && a.As<bool>();
     }
 
+    /// <summary>Reads an optional floating-point attribute, treating a missing attribute or None as null.</summary>
+    /// <param name="obj">The borrowed Python object whose optional attribute is inspected.</param>
+    /// <param name="attr">The case-sensitive Python attribute name.</param>
+    /// <returns>The floating-point attribute value, or null for a missing attribute or None.</returns>
     private static double? ReadNullableDouble(PyObject obj, string attr)
     {
         if (!obj.HasAttr(attr))
@@ -155,6 +178,10 @@ public static class PyConvert
         return a.IsNone() ? null : a.As<double>();
     }
 
+    /// <summary>Reads an optional integer attribute, treating a missing attribute or None as null.</summary>
+    /// <param name="obj">The borrowed Python object whose optional attribute is inspected.</param>
+    /// <param name="attr">The case-sensitive Python attribute name.</param>
+    /// <returns>The integer attribute value, or null for a missing attribute or None.</returns>
     private static long? ReadNullableLong(PyObject obj, string attr)
     {
         if (!obj.HasAttr(attr))

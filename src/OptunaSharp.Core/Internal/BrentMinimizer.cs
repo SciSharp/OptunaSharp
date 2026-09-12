@@ -23,6 +23,15 @@ internal static class BrentMinimizer
     ///     minimizer <c>xmin</c> (scipy's <c>OptimizeResult.x</c>). <paramref name="tol" /> is scipy's
     ///     <c>xtol</c> (the <c>tol=</c> kwarg of <c>minimize_scalar</c>).
     /// </summary>
+    /// <param name="func">The scalar objective whose value is evaluated during minimization.</param>
+    /// <param name="xa">The first endpoint of the three-point minimization bracket.</param>
+    /// <param name="xb">The interior bracket point whose function value is smaller than at both endpoints.</param>
+    /// <param name="xc">The other endpoint of the three-point minimization bracket.</param>
+    /// <param name="tol">The relative stopping tolerance for the scalar minimizer.</param>
+    /// <param name="maxiter">The maximum number of optimizer iterations.</param>
+    /// <returns>The best bracket point found when convergence or the iteration limit is reached.</returns>
+    /// <exception cref="System.ArgumentException">The bracket is not strictly ordered around its interior point, or the interior function value is not smaller than both endpoint values.</exception>
+    /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
     internal static double MinimizeScalar(
         Func<double, double> func, double xa, double xb, double xc, double tol, int maxiter = 500)
     {

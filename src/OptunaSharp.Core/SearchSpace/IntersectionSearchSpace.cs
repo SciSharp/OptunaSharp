@@ -14,6 +14,11 @@ namespace OptunaSharp.SearchSpace;
 public static class SearchSpaceFunctions
 {
     /// <summary>Python <c>optuna.search_space.intersection._calculate</c>.</summary>
+    /// <param name="trials">Trial snapshots sorted by ascending study-local number; the incremental fold scans them in reverse.</param>
+    /// <param name="includePruned">Whether pruned trials contribute their recorded parameter distributions.</param>
+    /// <param name="searchSpace">The previously intersected distributions, or null when no finished trial has initialized the cache.</param>
+    /// <param name="cachedTrialNumber">The earliest trial number to revisit; minus one performs a complete scan.</param>
+    /// <returns>The intersected distributions and the earliest trial number that must be revisited next time.</returns>
     internal static (OrderedDict<string, BaseDistribution>? SearchSpace, int NextCachedTrialNumber) Calculate(
         IReadOnlyList<FrozenTrial> trials,
         bool includePruned = false,
@@ -46,6 +51,8 @@ public static class SearchSpaceFunctions
 
             if (!trial.State.IsFinished())
             {
+                // An unfinished trial may later contribute distributions. Keep the cache boundary
+                // before it even while folding newer finished trials, so completion is not skipped.
                 nextCachedTrialNumber = trial.Number;
                 continue;
             }
@@ -81,6 +88,8 @@ public static class SearchSpaceFunctions
     ///     A dictionary containing the parameter names and parameter's distributions sorted by
     ///     parameter names.
     /// </returns>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="includePruned">Whether pruned trials contribute their recorded parameter distributions.</param>
     public static OrderedDict<string, BaseDistribution> IntersectionSearchSpaceOf(
         IReadOnlyList<FrozenTrial> trials, bool includePruned = false)
     {
@@ -100,6 +109,14 @@ public static class SearchSpaceFunctions
     ///     <see cref="OptunaWarnings" /> once per parameter (tracked in <paramref name="warned" />; pass
     ///     <c>null</c> to stay silent). Same incremental-cache contract as <see cref="Calculate" />.
     /// </summary>
+    /// <param name="trials">Trial snapshots sorted by ascending study-local number; the incremental fold scans them in reverse.</param>
+    /// <param name="includePruned">Whether pruned trials contribute their recorded parameter distributions.</param>
+    /// <param name="searchSpace">The cached conditional-aware distributions, or null before the first finished trial is folded in.</param>
+    /// <param name="cachedTrialNumber">The earliest trial number to revisit; minus one performs a complete scan.</param>
+    /// <param name="conditionalParams">The declared activation rules used to distinguish inactive parameters from missing observations.</param>
+    /// <param name="excluded">Conditional parameters previously observed with conflicting distributions; updated in place to prevent their reintroduction.</param>
+    /// <param name="warned">Parameter names already reported as contradicting activation rules; null suppresses these warnings.</param>
+    /// <returns>The conditional-aware distributions and the earliest trial number that must be revisited next time.</returns>
     internal static (OrderedDict<string, BaseDistribution>? SearchSpace, int NextCachedTrialNumber) CalculateConditional(
         IReadOnlyList<FrozenTrial> trials,
         bool includePruned,
@@ -178,6 +195,10 @@ public static class SearchSpaceFunctions
         return (searchSpace, nextCachedTrialNumber);
     }
 
+    /// <summary>Reports each parameter whose recorded presence contradicts its declared activation rules at most once.</summary>
+    /// <param name="conditionalParams">The declared activation rules used to distinguish inactive parameters from missing observations.</param>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <param name="warned">The non-null set of parameter names already reported; updated so each parameter warns at most once.</param>
     private static void WarnContradictions(ConditionalParams conditionalParams, FrozenTrial trial, HashSet<string> warned)
     {
         foreach (var (name, message) in conditionalParams.Contradictions(trial))
@@ -201,6 +222,10 @@ public static class SearchSpaceFunctions
     ///     A dictionary containing the parameter names and parameter's distributions sorted by
     ///     parameter names.
     /// </returns>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="conditionalParams">The declared activation rules used to distinguish inactive parameters from missing observations.</param>
+    /// <param name="includePruned">Whether pruned trials contribute their recorded parameter distributions.</param>
+    /// <exception cref="System.ArgumentNullException">The conditional-parameter rule collection is null.</exception>
     public static OrderedDict<string, BaseDistribution> IntersectionSearchSpaceOf(
         IReadOnlyList<FrozenTrial> trials, ConditionalParams conditionalParams, bool includePruned = false)
     {
@@ -212,6 +237,9 @@ public static class SearchSpaceFunctions
         return Sorted(searchSpace ?? new OrderedDict<string, BaseDistribution>());
     }
 
+    /// <summary>Returns a new insertion-ordered dictionary sorted by ordinal parameter name.</summary>
+    /// <param name="searchSpace">The parameter distributions in the column order used by the transform or model.</param>
+    /// <returns>A new insertion-ordered dictionary sorted by ordinal parameter name.</returns>
     internal static OrderedDict<string, BaseDistribution> Sorted(OrderedDict<string, BaseDistribution> searchSpace)
     {
         var result = new OrderedDict<string, BaseDistribution>(searchSpace.Count);
@@ -234,6 +262,7 @@ public static class SearchSpaceFunctions
 ///     different studies are passed to <see cref="Calculate(Study, bool)" />, a
 ///     <see cref="ValueError" /> is raised.
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.search_space.IntersectionSearchSpace.html" />
 public class IntersectionSearchSpace
 {
     private int _cachedTrialNumber = -1;
@@ -254,6 +283,7 @@ public class IntersectionSearchSpace
     ///     <see cref="ConditionalParams" /> and <see cref="SearchSpaceFunctions.CalculateConditional" />.
     ///     <c>null</c> (default) is Optuna's plain intersection.
     /// </param>
+    /// <summary>Creates a per-study incremental intersection cache with optional pruned-trial and conditional-parameter handling.</summary>
     public IntersectionSearchSpace(bool includePruned = false, ConditionalParams? conditionalParams = null)
     {
         _includePruned = includePruned;
@@ -272,6 +302,8 @@ public class IntersectionSearchSpace
     ///     A dictionary containing the parameter names and parameter's distributions sorted by
     ///     parameter names.
     /// </returns>
+    /// <exception cref="NumSharp.ValueError">This cache is reused with a different study identifier.</exception>
+    /// <remarks>The returned dictionary is a new sorted container. Distribution objects are shared with trial snapshots and are treated as immutable.</remarks>
     public OrderedDict<string, BaseDistribution> Calculate(Study study, bool useCache = false)
     {
         if (_studyId is null)

@@ -21,10 +21,14 @@ public abstract class BaseJournalBackend
     ///     Read logs with a log number greater than or equal to <paramref name="logNumberFrom" />.
     ///     If <paramref name="logNumberFrom" /> is 0, read all the logs.
     /// </summary>
+    /// <param name="logNumberFrom">Zero-based inclusive log-record number; zero reads the complete journal.</param>
+    /// <returns>A sequence of decoded records in append order, starting at the requested record number.</returns>
+    /// <exception cref="System.Exception">The journal backend cannot read or decode its records; lazy backends can fail during enumeration.</exception>
     public abstract IEnumerable<OrderedDict<string, object?>> ReadLogs(int logNumberFrom);
 
     /// <summary>Append logs to the backend.</summary>
     /// <param name="logs">A list that contains json-serializable logs.</param>
+    /// <exception cref="System.Exception">The backend cannot serialize or durably append the records.</exception>
     public abstract void AppendLogs(IReadOnlyList<OrderedDict<string, object?>> logs);
 }
 
@@ -38,9 +42,13 @@ public abstract class BaseJournalBackend
 public interface IBaseJournalSnapshot
 {
     /// <summary>Save snapshot to the backend.</summary>
+    /// <param name="snapshot">Opaque serialized replay state to persist atomically according to the backend contract.</param>
+    /// <exception cref="System.Exception">The snapshot backend cannot persist the bytes.</exception>
     void SaveSnapshot(byte[] snapshot);
 
     /// <summary>Load snapshot from the backend, or <c>null</c> if not found.</summary>
+    /// <returns>Snapshot bytes, or null when no snapshot is available.</returns>
+    /// <exception cref="System.Exception">The snapshot backend fails to read the saved state.</exception>
     byte[]? LoadSnapshot();
 }
 

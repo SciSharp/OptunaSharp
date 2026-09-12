@@ -29,6 +29,9 @@ public static class PlotlyChartExtensions
     ///     the gap left by Plotly.NET, whose fluent surface has <c>.WithConfig</c>/<c>.WithLayout</c> but
     ///     no <c>.WithDisplayOptions</c>.)
     /// </summary>
+    /// <param name="chart">Chart to which the requested display settings are applied.</param>
+    /// <param name="displayOptions">Plotly.NET HTML display settings to attach to the chart.</param>
+    /// <returns>The chart returned by Plotly.NET with the requested display options attached.</returns>
     public static GenericChart WithDisplayOptions(this GenericChart chart, DisplayOptions displayOptions)
         => GenericChart.setDisplayOptions(displayOptions, chart);
 
@@ -40,6 +43,9 @@ public static class PlotlyChartExtensions
     ///     (<c>GenericChart.setDisplayOptions</c>). A <c>null</c> member is skipped. This is exactly what
     ///     the <c>PlotlyVisualization.Plot*(study, customization, …)</c> overloads do.
     /// </summary>
+    /// <param name="chart">Chart to which the requested display settings are applied.</param>
+    /// <param name="customization">Layout, interaction, and HTML display settings applied after creating the chart.</param>
+    /// <returns>The chart after merging the layout and applying non-null config and display settings.</returns>
     public static GenericChart WithCustomization(this GenericChart chart, PlotlyChartCustomization customization)
     {
         if (customization.Layout is { } layout)

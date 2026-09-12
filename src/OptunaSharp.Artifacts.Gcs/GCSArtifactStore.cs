@@ -23,6 +23,7 @@ public class GCSArtifactStore : IArtifactStore
     private readonly string _bucketName;
     private readonly StorageClient _client;
 
+    /// <summary>Creates a GCS artifact store using a supplied client or Application Default Credentials.</summary>
     /// <param name="bucketName">The name of the bucket to store artifacts.</param>
     /// <param name="client">
     ///     A <see cref="StorageClient" /> to use for storage operations. If not specified, a new
@@ -34,6 +35,11 @@ public class GCSArtifactStore : IArtifactStore
         _client = client ?? StorageClient.Create();
     }
 
+    /// <summary>Downloads an artifact into an independent, seekable memory stream.</summary>
+    /// <param name="artifactId">The GCS object name assigned to the artifact.</param>
+    /// <returns>A stream positioned at zero; the caller must dispose it.</returns>
+    /// <exception cref="ArtifactNotFound">GCS returns an HTTP 404 response.</exception>
+    /// <exception cref="GoogleApiException">GCS rejects the download for another reason.</exception>
     public Stream OpenReader(string artifactId)
     {
         // Python downloads the whole blob (download_as_bytes) and wraps it in a BytesIO; mirror
@@ -54,6 +60,11 @@ public class GCSArtifactStore : IArtifactStore
         return body;
     }
 
+    /// <summary>Uploads source bytes to the artifact's GCS object.</summary>
+    /// <param name="artifactId">The destination object name.</param>
+    /// <param name="contentBody">A readable source stream, owned and disposed by the caller.</param>
+    /// <exception cref="GoogleApiException">GCS rejects the upload.</exception>
+    /// <exception cref="IOException">Reading the source stream fails.</exception>
     public void Write(string artifactId, Stream contentBody)
     {
         // Optuna calls blob.upload_from_string(data) (content_type defaults to text/plain in
@@ -63,6 +74,9 @@ public class GCSArtifactStore : IArtifactStore
         _client.UploadObject(_bucketName, artifactId, contentType: null, source: contentBody);
     }
 
+    /// <summary>Deletes an artifact from GCS.</summary>
+    /// <param name="artifactId">The object name to delete.</param>
+    /// <exception cref="GoogleApiException">The object does not exist, or GCS rejects the request for another reason.</exception>
     public void Remove(string artifactId)
     {
         // Matches Optuna: delete_blob raises when the object is missing (google's NotFound). The

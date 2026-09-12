@@ -27,6 +27,7 @@ public class AzureBlobArtifactStore : IArtifactStore
     private readonly BlobContainerClient _container;
 
     /// <summary>Use a caller-supplied container client (full control over auth and configuration).</summary>
+    /// <param name="container">The container client retained for subsequent requests.</param>
     public AzureBlobArtifactStore(BlobContainerClient container)
     {
         _container = container;
@@ -55,6 +56,11 @@ public class AzureBlobArtifactStore : IArtifactStore
         _container = service.GetBlobContainerClient(containerName);
     }
 
+    /// <summary>Opens a streaming download of the artifact blob.</summary>
+    /// <param name="artifactId">The blob name assigned to the artifact.</param>
+    /// <returns>The download stream, which the caller must dispose.</returns>
+    /// <exception cref="ArtifactNotFound">Azure returns HTTP 404 for the blob or container.</exception>
+    /// <exception cref="RequestFailedException">Azure rejects the request for another reason.</exception>
     public Stream OpenReader(string artifactId)
     {
         BlobClient blob = _container.GetBlobClient(artifactId);
@@ -69,12 +75,21 @@ public class AzureBlobArtifactStore : IArtifactStore
         }
     }
 
+    /// <summary>Uploads source bytes, overwriting a blob that already uses the artifact name.</summary>
+    /// <param name="artifactId">The destination blob name.</param>
+    /// <param name="contentBody">The readable source stream; its lifetime remains the caller's responsibility.</param>
+    /// <exception cref="RequestFailedException">Azure rejects the upload.</exception>
+    /// <exception cref="IOException">Reading the source stream fails.</exception>
     public void Write(string artifactId, Stream contentBody)
     {
         BlobClient blob = _container.GetBlobClient(artifactId);
         blob.Upload(contentBody, overwrite: true);
     }
 
+    /// <summary>Deletes the artifact blob.</summary>
+    /// <param name="artifactId">The blob name to delete.</param>
+    /// <exception cref="ArtifactNotFound">Azure returns HTTP 404 for the blob or container.</exception>
+    /// <exception cref="RequestFailedException">Azure rejects the delete request for another reason.</exception>
     public void Remove(string artifactId)
     {
         BlobClient blob = _container.GetBlobClient(artifactId);

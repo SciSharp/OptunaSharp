@@ -15,6 +15,7 @@ namespace OptunaSharp.Samplers.Nsgaii;
 /// </summary>
 public abstract class BaseCrossover
 {
+    /// <inheritdoc />
     public override string ToString() => GetType().Name;
 
     /// <summary>Number of parent individuals required to perform crossover.</summary>

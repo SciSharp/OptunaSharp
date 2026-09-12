@@ -13,13 +13,19 @@ namespace OptunaSharp.Internal;
 /// </summary>
 internal static class SignedRankTest
 {
+    /// <summary>The direction of the one-sided signed-rank alternative hypothesis.</summary>
     internal enum Alternative
     {
+        /// <summary>Tests whether paired differences tend to be negative.</summary>
         Less,
+        /// <summary>Tests whether paired differences tend to be positive.</summary>
         Greater,
     }
 
     /// <summary>P-value of the one-sample test on differences <paramref name="d" /> with <c>zero_method="zsplit"</c>.</summary>
+    /// <param name="d">The signed paired differences being tested.</param>
+    /// <param name="alternative">The one-sided alternative hypothesis for the signed differences.</param>
+    /// <returns>The one-sided signed-rank p-value using the zsplit treatment of zero differences.</returns>
     internal static double PValueZsplit(double[] d, Alternative alternative)
     {
         int n = d.Length;
@@ -51,6 +57,8 @@ internal static class SignedRankTest
     ///     scipy <c>_rankdata(x, "average", return_ties=True)</c>: average ranks plus per-group
     ///     tie counts (count at each sorted group's first element, 0 elsewhere in the group).
     /// </summary>
+    /// <param name="x">The numerical input values, in the order used by the operation.</param>
+    /// <returns>Average ranks, tie-group sizes, and whether any ties were present.</returns>
     private static (double[] Ranks, long[] TieCounts, bool HasTies) AverageRanks(double[] x)
     {
         int n = x.Length;
@@ -79,6 +87,11 @@ internal static class SignedRankTest
     }
 
     /// <summary>The normal approximation with tie correction (scipy <c>method="asymptotic"</c>, <c>correction=False</c>).</summary>
+    /// <param name="n">The number of elements or points to process.</param>
+    /// <param name="rPlus">The sum of ranks assigned to positive differences.</param>
+    /// <param name="tieCounts">The size of each tied rank group used in the variance correction.</param>
+    /// <param name="alternative">The one-sided alternative hypothesis for the signed differences.</param>
+    /// <returns>The normal-approximation one-sided p-value with the tie correction.</returns>
     private static double AsymptoticPValue(int n, double rPlus, long[] tieCounts, Alternative alternative)
     {
         double mn = n * (n + 1.0) * 0.25;
@@ -95,6 +108,10 @@ internal static class SignedRankTest
     }
 
     /// <summary>The exact null distribution of <c>r_plus</c> (no ties/zeros; scipy <c>WilcoxonDistribution</c>).</summary>
+    /// <param name="n">The number of elements or points to process.</param>
+    /// <param name="rPlus">The sum of ranks assigned to positive differences.</param>
+    /// <param name="alternative">The one-sided alternative hypothesis for the signed differences.</param>
+    /// <returns>The exact one-sided p-value from the signed-rank null distribution.</returns>
     private static double ExactPValue(int n, double rPlus, Alternative alternative)
     {
         // pmf of r_plus over 0..n(n+1)/2: DP over rank subsets, each outcome weight 2^-n.
@@ -122,6 +139,13 @@ internal static class SignedRankTest
         }
     }
 
+    /// <summary>Returns the lower-tail probability at the requested rank sum.</summary>
+    /// <param name="counts">The number or probability mass of rank-sum outcomes at each integer sum.</param>
+    /// <param name="total">The total mass of all possible rank-sum outcomes.</param>
+    /// <param name="maxSum">The largest attainable sum of positive ranks.</param>
+    /// <param name="mean">The predictive mean in the standardized objective coordinate system.</param>
+    /// <param name="k">The integer index or combinatorial selection count used by this operation.</param>
+    /// <returns>The lower-tail probability at the requested rank sum.</returns>
     private static double Cdf(double[] counts, double total, int maxSum, double mean, long k)
     {
         if (k < 0)
@@ -138,6 +162,13 @@ internal static class SignedRankTest
         return 1 - Sf(counts, total, maxSum, mean, k + 1);
     }
 
+    /// <summary>Returns the upper-tail probability at the requested rank sum.</summary>
+    /// <param name="counts">The number or probability mass of rank-sum outcomes at each integer sum.</param>
+    /// <param name="total">The total mass of all possible rank-sum outcomes.</param>
+    /// <param name="maxSum">The largest attainable sum of positive ranks.</param>
+    /// <param name="mean">The predictive mean in the standardized objective coordinate system.</param>
+    /// <param name="k">The integer index or combinatorial selection count used by this operation.</param>
+    /// <returns>The upper-tail probability at the requested rank sum.</returns>
     private static double Sf(double[] counts, double total, int maxSum, double mean, long k)
     {
         if (k <= 0)
@@ -158,6 +189,12 @@ internal static class SignedRankTest
     ///     all sign assignments; p-values compare with scipy's relative tolerance
     ///     <c>gamma = 100·eps·|observed|</c> and no +1 adjustment (exhaustive enumeration).
     /// </summary>
+    /// <param name="d">The signed paired differences being tested.</param>
+    /// <param name="ranks">The average rank assigned to each absolute nonzero difference.</param>
+    /// <param name="rZeroHalfTotal">Half the rank mass of zero differences, assigned to each side by the zsplit convention.</param>
+    /// <param name="observed">The observed positive-rank sum compared with the null distribution.</param>
+    /// <param name="alternative">The one-sided alternative hypothesis for the signed differences.</param>
+    /// <returns>The one-sided p-value from exhaustive sign permutations.</returns>
     private static double PermutationPValue(
         double[] d, double[] ranks, double rZeroHalfTotal, double observed, Alternative alternative)
     {

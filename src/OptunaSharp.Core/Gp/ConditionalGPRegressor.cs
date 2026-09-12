@@ -37,6 +37,12 @@ internal sealed class ConditionalGPRegressor
     private readonly double[,] _covRrPostInvDeltaR; // (r, n_qmc) = cov_rr_post⁻¹ · (fantasy − mean_r)ᵀ
     private readonly double[,] _vR;                 // (N, r) = (cov_Y_Y⁻¹ · cov_fX_fXr)
 
+    /// <summary>Caches fixed QMC fantasies for running trials so query posterior samples remain deterministic during acquisition optimization.</summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="xRunning">The normalized input rows of pending trials.</param>
+    /// <param name="nQmcSamples">The number of fixed quasi-Monte Carlo draws used to approximate posterior expectations.</param>
+    /// <param name="qmcSeed">The seed used to scramble the quasi-Monte Carlo normal samples.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
     internal ConditionalGPRegressor(
         GPRegressor gpr, double[,] xRunning, int nQmcSamples, int qmcSeed, double stabilizingNoise = 1e-12)
     {
@@ -83,6 +89,7 @@ internal sealed class ConditionalGPRegressor
     }
 
     /// <summary><c>get_fantasy_samples()</c> — the pre-sampled running fantasies, shape <c>(n_qmc, r)</c>.</summary>
+    /// <returns>The cached pending-trial fantasy values; the returned array is the model's shared buffer.</returns>
     internal double[,] GetFantasySamples() => _fantasySamples;
 
     /// <summary>Number of QMC samples (the actual drawn count, which may exceed the requested value).</summary>
@@ -96,10 +103,14 @@ internal sealed class ConditionalGPRegressor
     ///     <c>(n_qmc, r+1)</c> joint-posterior samples (the running fantasies followed by the query
     ///     sample per QMC draw).
     /// </summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>Posterior draws for pending points followed by the query point.</returns>
     internal double[,] SampleJointPosterior(double[] x)
         => WithFantasy(Query(x, withGrad: false).Samples);
 
     /// <summary><c>sample_joint_posterior(x, return_fantasy=False)</c> — just the query samples, shape <c>(n_qmc,)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The fixed-sample posterior draws at the query point.</returns>
     internal double[] SampleQuerySamples(double[] x) => Query(x, withGrad: false).Samples;
 
     /// <summary>
@@ -107,6 +118,8 @@ internal sealed class ConditionalGPRegressor
     ///     query point (the fantasy columns are constant → zero gradient). Returns <c>YPost (n_qmc, r+1)</c>
     ///     and <c>DSamples (n_qmc, dim)</c> = <c>∂samples[s]/∂x_d</c>.
     /// </summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>Joint pending/query draws and the derivative of the query samples.</returns>
     internal (double[,] YPost, double[,] DSamples) SampleJointPosteriorWithGrad(double[] x)
     {
         (double[] samples, double[,]? dSamples) = Query(x, withGrad: true);
@@ -114,12 +127,17 @@ internal sealed class ConditionalGPRegressor
     }
 
     /// <summary>The query samples <c>(n_qmc,)</c> and their gradient <c>(n_qmc, dim)</c> (for <c>qLogEHVI</c>, <c>return_fantasy=False</c>).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>Query posterior draws and their normalized-coordinate derivatives.</returns>
     internal (double[] Samples, double[,] DSamples) SampleQueryWithGrad(double[] x)
     {
         (double[] samples, double[,]? dSamples) = Query(x, withGrad: true);
         return (samples, dSamples!);
     }
 
+    /// <summary>Returns a sample matrix combining the cached pending fantasies with the query draws.</summary>
+    /// <param name="samples">The sample positions at which the density is evaluated.</param>
+    /// <returns>A sample matrix combining the cached pending fantasies with the query draws.</returns>
     private double[,] WithFantasy(double[] samples)
     {
         var yPost = new double[_nQmc, _nRunning + 1];
@@ -138,6 +156,9 @@ internal sealed class ConditionalGPRegressor
     ///     posterior (<c>μ_x</c>, <c>cov_xx</c>) and the running cross-covariance
     ///     <c>cov_fx_fXr_post = cov_fx_fXr − cov_fx_fX·V_r</c> through the conditional mean/variance.
     /// </summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <param name="withGrad">Whether query posterior derivatives are computed alongside samples.</param>
+    /// <returns>Query draws and, when requested, their normalized-coordinate derivatives.</returns>
     private (double[] Samples, double[,]? DSamples) Query(double[] x, bool withGrad)
     {
         int dim = x.Length;
@@ -238,6 +259,9 @@ internal sealed class ConditionalGPRegressor
         return (samples, dSamples);
     }
 
+    /// <summary>Returns a new matrix with rows and columns exchanged.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <returns>A new matrix with rows and columns exchanged.</returns>
     private static double[,] Transpose(double[,] a)
     {
         int rows = a.GetLength(0), cols = a.GetLength(1);

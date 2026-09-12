@@ -20,6 +20,10 @@ internal static class VisualizationUtils
     private static readonly Logger Logger = OptunaLogging.GetLogger("optuna.visualization._utils");
 
     /// <summary>Python <c>_check_plot_args</c>.</summary>
+    /// <param name="studies">The studies to compare, in the order their data should appear.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="targetName">The display label for the selected objective or custom target.</param>
+    /// <exception cref="NumSharp.ValueError">A multi-objective study has no scalar target selector.</exception>
     internal static void CheckPlotArgs(
         IReadOnlyList<Study> studies, Func<FrozenTrial, double>? target, string targetName)
     {
@@ -34,10 +38,17 @@ internal static class VisualizationUtils
     }
 
     /// <inheritdoc cref="CheckPlotArgs(System.Collections.Generic.IReadOnlyList{Study}, System.Func{FrozenTrial, double}, string)" />
+    /// <param name="study">The study to validate before selecting scalar plot values.</param>
+    /// <param name="target">The scalar target selector required when the study has multiple objectives.</param>
+    /// <param name="targetName">The target label; a default label with a custom selector produces a warning.</param>
+    /// <exception cref="NumSharp.ValueError">A multi-objective study has no scalar target selector.</exception>
     internal static void CheckPlotArgs(Study study, Func<FrozenTrial, double>? target, string targetName)
         => CheckPlotArgs(new[] { study }, target, targetName);
 
     /// <summary>Python <c>_is_log_scale</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="param">The parameter name to look up in trial data.</param>
+    /// <returns>True when the first observed distribution of the parameter uses logarithmic scaling.</returns>
     internal static bool IsLogScale(IReadOnlyList<FrozenTrial> trials, string param)
     {
         foreach (var trial in trials)
@@ -56,6 +67,10 @@ internal static class VisualizationUtils
     }
 
     /// <summary>Python <c>_is_numerical</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="param">The parameter name to look up in trial data.</param>
+    /// <returns>True when the parameter can be plotted numerically, including supported numeric categorical choices.</returns>
+    /// <exception cref="System.InvalidOperationException">The observed parameter distribution is not a supported numeric or categorical distribution.</exception>
     internal static bool IsNumerical(IReadOnlyList<FrozenTrial> trials, string param)
     {
         foreach (var trial in trials)
@@ -83,6 +98,10 @@ internal static class VisualizationUtils
     ///     Python <c>_filter_nonfinite</c>. Drops trials whose target value is not finite (NaN, +inf
     ///     or -inf); logs a warning per omitted trial when <paramref name="withMessage" /> is true.
     /// </summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="withMessage">Whether nonfinite target values should produce filtering diagnostics.</param>
+    /// <returns>The input trials whose selected target value is finite, in input order.</returns>
     internal static List<FrozenTrial> FilterNonfinite(
         IReadOnlyList<FrozenTrial> trials,
         Func<FrozenTrial, double>? target = null,
@@ -113,6 +132,9 @@ internal static class VisualizationUtils
     }
 
     /// <summary>Python <c>_is_reverse_scale</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <returns>True when the target/color convention requires reversing the renderer's color scale.</returns>
     internal static bool IsReverseScale(Study study, Func<FrozenTrial, double>? target)
         => target is not null || study.Direction == StudyDirection.Minimize;
 
@@ -120,6 +142,8 @@ internal static class VisualizationUtils
     ///     Python <c>_make_json_compatible</c>: return the value unchanged if it is JSON-serializable,
     ///     else its <c>str()</c>.
     /// </summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <returns>The value preserved when directly serializable, otherwise its diagnostic string representation.</returns>
     internal static object? MakeJsonCompatible(object? value)
     {
         try
@@ -137,6 +161,8 @@ internal static class VisualizationUtils
     ///     Python <c>_make_hovertext(trial)</c>: <c>json.dumps({number, values, params, [user_attrs]},
     ///     indent=2)</c> with newlines turned into <c>&lt;br&gt;</c>.
     /// </summary>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <returns>Formatted trial metadata suitable for plot hover text.</returns>
     internal static string MakeHovertext(FrozenTrial trial)
     {
         var userAttrs = new OrderedDict<string, object?>();

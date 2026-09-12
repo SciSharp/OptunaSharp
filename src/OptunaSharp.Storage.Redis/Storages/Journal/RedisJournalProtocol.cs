@@ -10,12 +10,19 @@ namespace OptunaSharp.Storages.Journal;
 public static class RedisJournalProtocol
 {
     /// <summary>The integer log-number counter key: <c>{prefix}:log_number</c>.</summary>
+    /// <param name="prefix">The journal key namespace, shared by its counter, log records, and snapshot.</param>
+    /// <returns>The namespaced Redis journal-counter key.</returns>
     public static string LogNumberKey(string prefix) => $"{prefix}:log_number";
 
     /// <summary>The key of log <paramref name="logNumber" />: <c>{prefix}:log:{n}</c>.</summary>
+    /// <param name="prefix">The journal key namespace, shared by its counter, log records, and snapshot.</param>
+    /// <param name="logNumber">The zero-based sequence number of the journal entry.</param>
+    /// <returns>The namespaced Redis key for the requested journal record.</returns>
     public static string LogKey(string prefix, long logNumber) => $"{prefix}:log:{logNumber}";
 
     /// <summary>The snapshot blob key: <c>{prefix}:snapshot</c>.</summary>
+    /// <param name="prefix">The journal key namespace, shared by its counter, log records, and snapshot.</param>
+    /// <returns>The namespaced Redis snapshot key.</returns>
     public static string SnapshotKey(string prefix) => $"{prefix}:snapshot";
 
     /// <summary>The initial counter value written by SETNX before the first append (first INCR makes it 0).</summary>

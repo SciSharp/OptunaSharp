@@ -9,10 +9,13 @@ namespace OptunaSharp.Importance.Forests.Internal.Cart;
 /// </summary>
 internal static class SklearnRandom
 {
+    /// <summary>The largest integer returned by scikit-learn's portable rand-r implementation.</summary>
     internal const int RandRMax = 2147483647;  // 2**31 - 1
     private const uint DefaultSeed = 1;
 
     /// <summary>Generate a pseudo-random uint32 and advance the seed (<c>our_rand_r</c>).</summary>
+    /// <param name="seed">The seed controlling the reproducible random stream.</param>
+    /// <returns>The next scikit-learn-compatible random integer, with the seed advanced in place.</returns>
     internal static uint OurRandR(ref uint seed)
     {
         // seed shouldn't ever be 0.
@@ -28,6 +31,10 @@ internal static class SklearnRandom
     }
 
     /// <summary>Generate a random integer in <c>[low, high)</c> (<c>rand_int</c>).</summary>
+    /// <param name="low">The lower endpoint of the allowed range.</param>
+    /// <param name="high">The upper endpoint of the allowed range.</param>
+    /// <param name="seed">The seed controlling the reproducible random stream.</param>
+    /// <returns>A pseudorandom integer in the half-open interval from low to high.</returns>
     internal static int RandInt(int low, int high, ref uint seed)
         => low + (int)(OurRandR(ref seed) % (uint)(high - low));
 }

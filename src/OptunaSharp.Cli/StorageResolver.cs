@@ -20,6 +20,7 @@ internal static class StorageResolver
 {
     // Storage-class hint names accepted by --storage-class (Optuna's argparse choices). The last two
     // are deprecated aliases Optuna still honors but hides from the choices list.
+    /// <summary>Supported storage-class names, including compatibility aliases accepted by the CLI.</summary>
     internal static readonly string[] StorageClassChoices =
     {
         nameof(RDBStorage),
@@ -29,6 +30,11 @@ internal static class StorageResolver
         "JournalRedisStorage",
     };
 
+    /// <summary>Uses an explicit storage URL or the OPTUNA_STORAGE environment fallback, rejecting a missing configuration.</summary>
+    /// <param name="storageUrl">The explicit storage URL, or null to consult OPTUNA_STORAGE.</param>
+    /// <param name="logger">The logger used for environment-fallback diagnostics.</param>
+    /// <returns>The explicit URL or environment-provided URL.</returns>
+    /// <exception cref="CLIUsageError">Neither an explicit URL nor OPTUNA_STORAGE is available.</exception>
     internal static string CheckStorageUrl(string? storageUrl, Logger logger)
     {
         if (storageUrl is not null)
@@ -46,6 +52,12 @@ internal static class StorageResolver
         throw new CLIUsageError("Storage URL is not specified.");
     }
 
+    /// <summary>Resolves the storage backend selected by the CLI options and environment fallback.</summary>
+    /// <param name="storageUrl">The explicit storage URL, or null to consult OPTUNA_STORAGE.</param>
+    /// <param name="storageClass">An optional supported storage-class hint.</param>
+    /// <param name="logger">The logger used for environment-fallback diagnostics.</param>
+    /// <returns>The resolved SQLite or journal storage backend.</returns>
+    /// <exception cref="CLIUsageError">The storage configuration is absent, unsupported, or cannot be inferred.</exception>
     internal static BaseStorage GetStorage(string? storageUrl, string? storageClass, Logger logger)
     {
         string url = CheckStorageUrl(storageUrl, logger);

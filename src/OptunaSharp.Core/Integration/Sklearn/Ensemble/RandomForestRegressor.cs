@@ -77,6 +77,7 @@ public sealed class RandomForestRegressor : IRegressor
     ///     an int count; or a fraction of <c>n_samples</c>.
     /// </param>
     /// <param name="criterion">Split criterion; only <c>"squared_error"</c> is supported.</param>
+    /// <summary>Creates an unfitted forest configuration; fitting builds new trees using the configured split and bootstrap settings.</summary>
     public RandomForestRegressor(
         int nEstimators = 100,
         int? maxDepth = null,
@@ -109,6 +110,8 @@ public sealed class RandomForestRegressor : IRegressor
     /// <summary>Number of trees.</summary>
     public int NEstimators => _nEstimators;
 
+    /// <summary>Returns an unfitted forest with the same constructor configuration.</summary>
+    /// <returns>An unfitted forest with the same constructor configuration.</returns>
     private RandomForestRegressor CloneUnfitted() => new()
     {
         _nEstimators = _nEstimators,
@@ -125,6 +128,7 @@ public sealed class RandomForestRegressor : IRegressor
         _maxSamples = _maxSamples,
     };
 
+    /// <summary>Creates an unfitted forest configuration; fitting builds new trees using the configured split and bootstrap settings.</summary>
     private RandomForestRegressor() { }
 
     /// <inheritdoc />
@@ -137,6 +141,10 @@ public sealed class RandomForestRegressor : IRegressor
     }
 
     // The analogue of estimator.set_params(**params). Keys are scikit-learn parameter names.
+    /// <summary>Applies one recognized scikit-learn-style parameter override to an unfitted forest configuration.</summary>
+    /// <param name="name">The parameter or attribute name to look up.</param>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <exception cref="NumSharp.ValueError">The parameter name is unsupported or a numerical value cannot be converted to the required parameter type.</exception>
     private void SetParam(string name, object? value)
     {
         switch (name)
@@ -159,6 +167,7 @@ public sealed class RandomForestRegressor : IRegressor
     }
 
     /// <inheritdoc />
+    /// <exception cref="System.NotSupportedException">The criterion is not squared_error or max_leaf_nodes requests the unported best-first tree builder.</exception>
     public void Fit(double[,] x, double[] y)
     {
         if (_criterion != "squared_error")
@@ -233,6 +242,7 @@ public sealed class RandomForestRegressor : IRegressor
     }
 
     /// <inheritdoc />
+    /// <exception cref="System.InvalidOperationException">No forest has been fitted.</exception>
     public double[] Predict(double[,] x)
     {
         if (_trees is null)
@@ -254,10 +264,16 @@ public sealed class RandomForestRegressor : IRegressor
     }
 
     /// <inheritdoc />
+    /// <exception cref="System.InvalidOperationException">No forest has been fitted.</exception>
     public double Score(double[,] x, double[] y) => Metrics.R2Score(y, Predict(x));
 
     // sklearn.tree._tree.Tree.predict traversal: X is float32, the threshold float64 (float32 <= float64
     // promotes to float64), returning the leaf's stored node value.
+    /// <summary>Returns the leaf prediction reached by the row in the supplied tree.</summary>
+    /// <param name="tree">The fitted tree whose nodes and split statistics are inspected.</param>
+    /// <param name="xf">The float32 feature matrix used by the tree predictor.</param>
+    /// <param name="row">The objective or feature row used by the operation.</param>
+    /// <returns>The leaf prediction reached by the row in the supplied tree.</returns>
     private static double PredictTree(SklearnLikeTree tree, float[,] xf, int row)
     {
         int node = 0;
@@ -272,6 +288,9 @@ public sealed class RandomForestRegressor : IRegressor
         return tree.Value[node];
     }
 
+    /// <summary>Returns a new feature matrix rounded to the float32 values used for tree splitting and prediction.</summary>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <returns>A new feature matrix rounded to the float32 values used for tree splitting and prediction.</returns>
     private static float[,] ToFloat32(double[,] x)
     {
         int rows = x.GetLength(0), cols = x.GetLength(1);
@@ -284,9 +303,18 @@ public sealed class RandomForestRegressor : IRegressor
 
     // ---- scikit-learn hyperparameter resolution (BaseDecisionTree._fit / _get_n_samples_bootstrap) ----
 
+    /// <summary>Returns the effective positive sample-count threshold for a leaf.</summary>
+    /// <param name="v">The values used by the numerical reduction or transformation.</param>
+    /// <param name="nSamples">The number of observations or generated sample rows.</param>
+    /// <returns>The effective positive sample-count threshold for a leaf.</returns>
     private static int ResolveMinSamplesLeaf(object v, int nSamples)
         => IsIntegral(v) ? AsInt(v) : (int)Math.Ceiling(AsDouble(v) * nSamples);
 
+    /// <summary>Returns the effective sample-count threshold required to split a node.</summary>
+    /// <param name="v">The values used by the numerical reduction or transformation.</param>
+    /// <param name="nSamples">The number of observations or generated sample rows.</param>
+    /// <param name="minSamplesLeaf">The minimum number of samples required in either child after a split.</param>
+    /// <returns>The effective sample-count threshold required to split a node.</returns>
     private static int ResolveMinSamplesSplit(object v, int nSamples, int minSamplesLeaf)
     {
         int mss = IsIntegral(v)
@@ -295,6 +323,11 @@ public sealed class RandomForestRegressor : IRegressor
         return Math.Max(mss, 2 * minSamplesLeaf);
     }
 
+    /// <summary>Returns the effective number of candidate features considered per split.</summary>
+    /// <param name="v">The values used by the numerical reduction or transformation.</param>
+    /// <param name="nFeatures">The number of feature columns in the training matrix.</param>
+    /// <returns>The effective number of candidate features considered per split.</returns>
+    /// <exception cref="NumSharp.ValueError">The requested max-features string is unsupported.</exception>
     private static int ResolveMaxFeatures(object? v, int nFeatures)
     {
         switch (v)
@@ -315,6 +348,10 @@ public sealed class RandomForestRegressor : IRegressor
         }
     }
 
+    /// <summary>Returns the number of rows drawn with replacement for one bootstrap sample.</summary>
+    /// <param name="nSamples">The number of observations or generated sample rows.</param>
+    /// <param name="maxSamples">The integer count or fractional share of training rows drawn for a bootstrap sample.</param>
+    /// <returns>The number of rows drawn with replacement for one bootstrap sample.</returns>
     private static int GetNSamplesBootstrap(int nSamples, object? maxSamples)
     {
         if (maxSamples is null)
@@ -325,8 +362,15 @@ public sealed class RandomForestRegressor : IRegressor
         return Math.Max((int)(f * nSamples), 1);
     }
 
+    /// <summary>Returns true when the supplied boxed value represents a supported integer type.</summary>
+    /// <param name="v">The values used by the numerical reduction or transformation.</param>
+    /// <returns>True when the supplied boxed value represents a supported integer type.</returns>
     private static bool IsIntegral(object? v) => v is int or long or short or byte or sbyte or uint or ushort;
 
+    /// <summary>Returns the validated integer parameter value.</summary>
+    /// <param name="v">The values used by the numerical reduction or transformation.</param>
+    /// <returns>The validated integer parameter value.</returns>
+    /// <exception cref="NumSharp.ValueError">The supplied object cannot be read as a supported integer parameter value.</exception>
     private static int AsInt(object? v) => v switch
     {
         int i => i,
@@ -341,6 +385,10 @@ public sealed class RandomForestRegressor : IRegressor
         _ => throw new ValueError($"Expected an integer parameter value, got {v?.GetType().Name ?? "null"}."),
     };
 
+    /// <summary>Returns the validated floating-point parameter value.</summary>
+    /// <param name="v">The values used by the numerical reduction or transformation.</param>
+    /// <returns>The validated floating-point parameter value.</returns>
+    /// <exception cref="NumSharp.ValueError">The supplied object cannot be read as a supported numerical parameter value.</exception>
     private static double AsDouble(object? v) => v switch
     {
         double d => d,

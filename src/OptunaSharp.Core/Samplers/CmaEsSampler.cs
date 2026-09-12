@@ -32,6 +32,7 @@ namespace OptunaSharp.Samplers;
 ///     study.Optimize(t => Math.Pow(t.SuggestFloat("x", -1, 1), 2) + t.SuggestInt("y", -1, 1), nTrials: 20);
 ///     </code>
 /// </example>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.CmaEsSampler.html">Official Optuna CmaEsSampler reference.</seealso>
 public class CmaEsSampler : BaseSampler
 {
     // The value of system_attrs must be less than 2046 characters on RDBStorage.
@@ -74,6 +75,8 @@ public class CmaEsSampler : BaseSampler
     /// <param name="withMargin">Use CMA-ES with margin for discrete distributions (experimental).</param>
     /// <param name="lrAdapt">Use CMA-ES with learning-rate adaptation (experimental).</param>
     /// <param name="sourceTrials">Warm Starting CMA-ES source trials (experimental).</param>
+    /// <summary>Configures covariance-matrix adaptation and its independent startup and unsupported-parameter fallback.</summary>
+    /// <exception cref="NumSharp.ValueError">Source-trial initialization, explicit initial parameters, separable adaptation, margin correction, or learning-rate adaptation are combined incompatibly.</exception>
     public CmaEsSampler(
         IReadOnlyDictionary<string, object?>? x0 = null,
         double? sigma0 = null,
@@ -140,12 +143,14 @@ public class CmaEsSampler : BaseSampler
                 "Currently, we do not support `use_separable_cma=True` and `with_margin=True`.");
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         // _cmaRng doesn't require reseeding because the relative sampling reseeds in each trial.
         _independentSampler.ReseedRng();
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -166,6 +171,8 @@ public class CmaEsSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -248,10 +255,16 @@ public class CmaEsSampler : BaseSampler
     private string AttrKeyGeneration => _attrPrefix + "generation";
     private string AttrKeyOptimizer => _attrPrefix + "optimizer";
 
+    /// <summary>Reassembles serialized optimizer chunks in numeric chunk order.</summary>
+    /// <param name="optimizerAttrs">Stored serialized optimizer chunks keyed by chunk identifier.</param>
+    /// <returns>The full serialized optimizer string in chunk-index order.</returns>
     private string ConcatOptimizerAttrs(IReadOnlyDictionary<string, string> optimizerAttrs)
         => string.Concat(Enumerable.Range(0, optimizerAttrs.Count)
             .Select(i => optimizerAttrs[$"{AttrKeyOptimizer}:{i}"]));
 
+    /// <summary>Splits a serialized optimizer into storage-sized system-attribute chunks.</summary>
+    /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
+    /// <returns>Chunk-indexed system attributes within the storage string-length limit.</returns>
     private Dictionary<string, string> SplitOptimizerStr(string optimizerStr)
     {
         int optimizerLen = optimizerStr.Length;
@@ -273,6 +286,9 @@ public class CmaEsSampler : BaseSampler
     // emits no newlines, so the `\n` split is unambiguous.
 
     /// <summary>Serialize the optimizer's evolving state to our own JSON (the pickle analogue).</summary>
+    /// <param name="optimizer">Optimizer whose proposal and adaptation state are persisted.</param>
+    /// <returns>A tagged JSON representation of the optimizer state.</returns>
+    /// <exception cref="System.NotSupportedException">The optimizer implementation has no supported serialization tag.</exception>
     private static string SerializeOptimizer(ICmaOptimizer optimizer) => optimizer switch
     {
         Cma c => "cma\n" + JsonSerializer.Serialize(c.ToState()),
@@ -281,6 +297,12 @@ public class CmaEsSampler : BaseSampler
         _ => throw new NotSupportedException($"Cannot serialize optimizer of type {optimizer.GetType().Name}."),
     };
 
+    /// <summary>Decodes a persisted optimizer tag and reconstructs its matching state type.</summary>
+    /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
+    /// <returns>The optimizer reconstructed from the tagged state.</returns>
+    /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type.</exception>
+    /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
     private static ICmaOptimizer DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
@@ -295,6 +317,9 @@ public class CmaEsSampler : BaseSampler
         };
     }
 
+    /// <summary>Finds the newest stored optimizer snapshot in completed trial history.</summary>
+    /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
+    /// <returns>The newest available optimizer, or null when no stored snapshot exists.</returns>
     private ICmaOptimizer? RestoreOptimizer(List<FrozenTrial> completedTrials)
     {
         // Restore a previous CMA object.
@@ -313,6 +338,13 @@ public class CmaEsSampler : BaseSampler
         return null;
     }
 
+    /// <summary>Creates the initial optimizer in the transformed numerical box.</summary>
+    /// <param name="trans">Search-space transform between external parameter values and the numerical box.</param>
+    /// <param name="direction">Whether objective values are minimized or maximized.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <returns>The initialized proposal optimizer.</returns>
+    /// <exception cref="NumSharp.ValueError">No source trial has a compatible search space.</exception>
+    /// <exception cref="System.ArgumentException">A distribution cannot supply a margin step, or the optimizer rejects its initial mean, scale, covariance, or population settings.</exception>
     private ICmaOptimizer InitOptimizer(
         SearchSpaceTransform trans, StudyDirection direction, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -455,6 +487,9 @@ public class CmaEsSampler : BaseSampler
     ///     Python <c>_is_compatible_search_space</c>: the relative space and the source trial's
     ///     distributions must have identical key sets.
     /// </summary>
+    /// <param name="relativeSpace">Distributions selected for joint numerical sampling.</param>
+    /// <param name="distributions">Parameter distributions used to interpret the numerical coordinates.</param>
+    /// <returns>True if all source distributions are compatible with the current relative space.</returns>
     private static bool IsCompatibleSearchSpace(
         OrderedDict<string, BaseDistribution> relativeSpace,
         IReadOnlyDictionary<string, BaseDistribution> distributions)
@@ -463,6 +498,8 @@ public class CmaEsSampler : BaseSampler
         return intersection == relativeSpace.Count && intersection == distributions.Count;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -478,6 +515,9 @@ public class CmaEsSampler : BaseSampler
         return _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
     }
 
+    /// <summary>Explains why the current parameter is delegated to the independent sampler.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="paramName">Name of the parameter being suggested or looked up.</param>
     private void LogIndependentSampling(FrozenTrial trial, string paramName)
     {
         Logger.Warning(string.Format(
@@ -489,6 +529,9 @@ public class CmaEsSampler : BaseSampler
             "dynamic search space and `CategoricalDistribution` are not supported by `CmaEsSampler`"));
     }
 
+    /// <summary>Collects historical trials eligible for this sampler, applying its completed/pruned-trial policy.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>Trial snapshots eligible for the sampler history.</returns>
     private List<FrozenTrial> GetTrials(Study study)
     {
         var completeTrials = new List<FrozenTrial>();
@@ -514,6 +557,10 @@ public class CmaEsSampler : BaseSampler
         return completeTrials;
     }
 
+    /// <summary>Selects trials belonging to one optimizer generation so adaptation uses a coherent population.</summary>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <param name="generation">Zero-based generation whose individuals or optimizer state are requested.</param>
+    /// <returns>Trials from the requested optimizer generation.</returns>
     private List<FrozenTrial> GetSolutionTrials(List<FrozenTrial> trials, int generation)
     {
         var result = new List<FrozenTrial>();
@@ -526,11 +573,13 @@ public class CmaEsSampler : BaseSampler
         return result;
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
     {
         _independentSampler.BeforeTrial(study, trial);
     }
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         if (trial.Constraints != null)

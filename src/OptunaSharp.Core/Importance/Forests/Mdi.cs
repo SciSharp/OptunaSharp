@@ -17,6 +17,8 @@ namespace OptunaSharp.Importance.Forests.Internal;
 internal static class Mdi
 {
     /// <summary>A single tree's normalized MDI (<c>compute_feature_importances(normalize=True)</c>).</summary>
+    /// <param name="tree">The fitted tree whose nodes and split statistics are inspected.</param>
+    /// <returns>The normalized impurity-reduction importance of each feature in this tree.</returns>
     private static double[] TreeImportances(SklearnLikeTree tree)
     {
         int nFeatures = tree.NFeatures;
@@ -52,6 +54,9 @@ internal static class Mdi
     ///     Port of <c>BaseForest.feature_importances_</c>: mean of the per-tree importances over the
     ///     multi-node trees, then renormalize to sum 1 (or all zeros if every tree is a single node).
     /// </summary>
+    /// <param name="trees">The fitted regression trees in the ensemble.</param>
+    /// <param name="nFeatures">The number of feature columns in the training matrix.</param>
+    /// <returns>The ensemble-averaged normalized impurity importance of each feature.</returns>
     internal static double[] FeatureImportances(SklearnLikeTree[] trees, int nFeatures)
     {
         var perTree = new List<double[]>();

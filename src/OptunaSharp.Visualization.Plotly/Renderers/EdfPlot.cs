@@ -12,6 +12,10 @@ namespace OptunaSharp.Visualization.Plotly.Renderers;
 /// </summary>
 internal static class EdfPlot
 {
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <param name="targetName">Label used for the selected objective on axes, hover text, or the colorbar.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(EdfInfo info, string targetName)
     {
         var yaxis = Fig.Obj(("title", "Cumulative Probability"));

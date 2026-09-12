@@ -235,9 +235,14 @@ internal static class RdbModels
     // ------------------------------------------------------------------ enum ↔ stored string
 
     /// <summary>Map a <see cref="StudyDirection" /> to the string SQLAlchemy stores (the enum name).</summary>
+    /// <param name="direction">The objective direction used for ordering or representation conversion.</param>
+    /// <returns>The corresponding direction label used by the database schema.</returns>
     internal static string DirectionToDb(StudyDirection direction) => direction.PythonName();
 
     /// <summary>Inverse of <see cref="DirectionToDb" />.</summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The matching OptunaSharp objective direction.</returns>
+    /// <exception cref="NumSharp.ValueError">The stored direction label is unknown.</exception>
     internal static StudyDirection DirectionFromDb(string value) => value switch
     {
         "MINIMIZE" => StudyDirection.Minimize,
@@ -247,9 +252,14 @@ internal static class RdbModels
     };
 
     /// <summary>Map a <see cref="TrialState" /> to the string SQLAlchemy stores (the enum name).</summary>
+    /// <param name="state">The trial lifecycle state to convert or persist.</param>
+    /// <returns>The corresponding lifecycle-state label used by the database schema.</returns>
     internal static string StateToDb(TrialState state) => state.PythonName();
 
     /// <summary>Inverse of <see cref="StateToDb" />.</summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The matching OptunaSharp trial lifecycle state.</returns>
+    /// <exception cref="NumSharp.ValueError">The stored trial-state label is unknown.</exception>
     internal static TrialState StateFromDb(string value) => value switch
     {
         "RUNNING" => TrialState.Running,
@@ -266,6 +276,8 @@ internal static class RdbModels
     ///     Python <c>TrialValueModel.value_to_stored_repr</c>: split a value into (stored column,
     ///     value_type tag). ±inf are stored as NULL with a tag so the column stays a plain FLOAT.
     /// </summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The nullable numeric column and a tag preserving finite values or either infinity.</returns>
     internal static (double? Value, string Type) ValueToStoredRepr(double value)
     {
         if (double.IsPositiveInfinity(value))
@@ -276,6 +288,11 @@ internal static class RdbModels
     }
 
     /// <summary>Python <c>TrialValueModel.stored_repr_to_value</c>.</summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <param name="type">The database tag distinguishing finite values, infinities, and, for intermediate reports, NaN.</param>
+    /// <returns>The objective value reconstructed from its numeric column and type tag.</returns>
+    /// <exception cref="NumSharp.ValueError">The stored objective-value tag is unknown.</exception>
+    /// <exception cref="System.InvalidOperationException">A FINITE tag is paired with a null numeric value.</exception>
     internal static double StoredReprToValue(double? value, string type) => type switch
     {
         "INF_POS" => double.PositiveInfinity,
@@ -288,6 +305,8 @@ internal static class RdbModels
     ///     Python <c>TrialIntermediateValueModel.intermediate_value_to_stored_repr</c> — like
     ///     <see cref="ValueToStoredRepr" /> but also carries a NaN tag.
     /// </summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The nullable numeric column and a tag preserving finite values, either infinity, or NaN.</returns>
     internal static (double? Value, string Type) IntermediateValueToStoredRepr(double value)
     {
         if (double.IsNaN(value))
@@ -300,6 +319,11 @@ internal static class RdbModels
     }
 
     /// <summary>Python <c>TrialIntermediateValueModel.stored_repr_to_intermediate_value</c>.</summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <param name="type">The database tag distinguishing finite values, infinities, and, for intermediate reports, NaN.</param>
+    /// <returns>The intermediate value reconstructed from its numeric column and type tag.</returns>
+    /// <exception cref="NumSharp.ValueError">The stored intermediate-value tag is unknown.</exception>
+    /// <exception cref="System.InvalidOperationException">A FINITE tag is paired with a null numeric value.</exception>
     internal static double StoredReprToIntermediateValue(double? value, string type) => type switch
     {
         "NAN" => double.NaN,
@@ -325,6 +349,8 @@ internal static class RdbModels
     ///     <c>yyyy-MM-dd HH:mm:ss.ffffff</c> (always six microsecond digits). A local/unspecified
     ///     value is converted to UTC first (Python's setter does <c>astimezone(utc)</c>).
     /// </summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The timestamp serialized in Optuna's storage format.</returns>
     internal static string FormatDatetime(DateTime value)
     {
         DateTime utc = value.Kind switch
@@ -341,6 +367,9 @@ internal static class RdbModels
     ///     inverse of <see cref="FormatDatetime" /> (Python's getter converts the stored UTC back to
     ///     naive local time when constructing a <see cref="FrozenTrial" />).
     /// </summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The local timestamp reconstructed from stored UTC text, or null for an absent timestamp.</returns>
+    /// <exception cref="System.FormatException">The nonempty timestamp does not match the supported wire or database formats.</exception>
     internal static DateTime? ParseDatetime(string? value)
     {
         if (string.IsNullOrEmpty(value))

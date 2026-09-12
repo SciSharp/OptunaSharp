@@ -28,14 +28,17 @@ public class UNDXCrossover : BaseCrossover
 
     /// <param name="sigmaXi">Parametrizes the normal distribution from which <c>xi</c> is drawn.</param>
     /// <param name="sigmaEta">Parametrizes the normal distribution from which <c>etas</c> are drawn. Defaults to <c>0.35 / sqrt(len(search_space))</c>.</param>
+    /// <summary>Configures normal offspring variation along and perpendicular to the primary parent axis.</summary>
     public UNDXCrossover(double sigmaXi = 0.5, double? sigmaEta = null)
     {
         _sigmaXi = sigmaXi;
         _sigmaEta = sigmaEta;
     }
 
+    /// <inheritdoc />
     public override int NParents => 3;
 
+    /// <inheritdoc />
     public override double[] Crossover(
         double[][] parentsParams, NumPyRandom rng, Study study, double[,] searchSpaceBounds)
     {
@@ -81,6 +84,8 @@ public class UNDXCrossover : BaseCrossover
     }
 
     /// <summary>Python <c>_normalized_x1_to_x2</c>: normalized vector from x1 to x2.</summary>
+    /// <param name="parentsParams">Numerical parent vectors, one parent per row and one parameter per column.</param>
+    /// <returns>A unit vector along the primary parent axis.</returns>
     private static double[] NormalizedX1ToX2(double[][] parentsParams)
     {
         int n = parentsParams[0].Length;
@@ -100,6 +105,8 @@ public class UNDXCrossover : BaseCrossover
     }
 
     /// <summary>Python <c>_distance_from_x_to_psl</c>.</summary>
+    /// <param name="parentsParams">Numerical parent vectors, one parent per row and one parameter per column.</param>
+    /// <returns>The perpendicular distance to the primary parent line.</returns>
     private static double DistanceFromXToPsl(double[][] parentsParams)
     {
         int n = parentsParams[0].Length;
@@ -121,6 +128,9 @@ public class UNDXCrossover : BaseCrossover
     }
 
     /// <summary>Python <c>_orthonormal_basis_vector_to_psl</c> → returns <c>Q.T[1:]</c> (n-1 rows of length n).</summary>
+    /// <param name="parentsParams">Numerical parent vectors, one parent per row and one parameter per column.</param>
+    /// <param name="n">Number of numerical coordinates.</param>
+    /// <returns>Basis vectors perpendicular to the primary parent line.</returns>
     private static double[][] OrthonormalBasisVectorToPsl(double[][] parentsParams, int n)
     {
         var e12 = NormalizedX1ToX2(parentsParams);
@@ -167,6 +177,9 @@ public class UNDXCrossover : BaseCrossover
     ///     <paramref name="a" />; returns the orthogonal factor <c>Q</c> such that <c>A = Q R</c>,
     ///     using the LAPACK sign convention (<c>alpha = -sign(x0)·‖x‖</c>).
     /// </summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="n">Number of numerical coordinates.</param>
+    /// <returns>The orthogonal factor produced by Householder reflections.</returns>
     private static double[,] HouseholderQ(double[,] a, int n)
     {
         var r = (double[,])a.Clone();

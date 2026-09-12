@@ -60,6 +60,8 @@ namespace OptunaSharp.SearchSpace;
 public sealed class ConditionalParams
 {
     /// <summary>One admissible-value test on an activator plus its display form for diagnostics.</summary>
+    /// <param name="Predicate">The test that determines whether an external activator value is admissible.</param>
+    /// <param name="Display">The readable condition text used in activation diagnostics.</param>
     internal sealed record Condition(Func<object?, bool> Predicate, string Display);
 
     // dependent -> activator -> conditions. OR within an activator, AND across activators. Insertion
@@ -100,6 +102,9 @@ public sealed class ConditionalParams
     ///     the choice <c>None</c> — spell it <c>(object?)null</c>, since a bare <c>null</c> literal is
     ///     ambiguous with the predicate overload.
     /// </param>
+    /// <returns>A builder that attaches dependent parameters to the supplied activator condition.</returns>
+    /// <exception cref="System.ArgumentNullException">The activator name is null.</exception>
+    /// <exception cref="NumSharp.ValueError">The activator name is blank, or no admissible values are supplied.</exception>
     public ActivationBuilder When(string activator, params object?[]? values)
     {
         ValidateName(activator, nameof(activator));
@@ -119,6 +124,11 @@ public sealed class ConditionalParams
     ///     parameters, the raw choice value (<c>string</c>/<c>long</c>/<c>double</c>/<c>bool</c>/<c>null</c>)
     ///     for categorical ones.
     /// </summary>
+    /// <param name="activator">The name of the parameter whose value controls whether dependent parameters are active.</param>
+    /// <param name="predicate">The admissible-value test applied to the activator's external value.</param>
+    /// <returns>A builder that attaches dependent parameters to the supplied activator condition.</returns>
+    /// <exception cref="System.ArgumentNullException">The activator name or predicate is null.</exception>
+    /// <exception cref="NumSharp.ValueError">The activator name is blank.</exception>
     public ActivationBuilder When(string activator, Func<object?, bool> predicate)
     {
         ValidateName(activator, nameof(activator));
@@ -134,6 +144,10 @@ public sealed class ConditionalParams
         private readonly string _activator;
         private readonly Condition _condition;
 
+        /// <summary>Binds the fluent declaration to its owning rule set and activator condition.</summary>
+        /// <param name="owner">The activation-rule collection that will receive the dependent-parameter declarations.</param>
+        /// <param name="activator">The name of the parameter whose value controls whether dependent parameters are active.</param>
+        /// <param name="condition">The activation predicate and its diagnostic display text.</param>
         internal ActivationBuilder(ConditionalParams owner, string activator, Condition condition)
         {
             _owner = owner;
@@ -142,6 +156,10 @@ public sealed class ConditionalParams
         }
 
         /// <summary>Names the parameters the rule activates (one or more); returns the owner for chaining.</summary>
+        /// <param name="parameters">One or more dependent parameter names to attach to this activator rule.</param>
+        /// <returns>The owning rule collection, enabling another fluent activation declaration.</returns>
+        /// <exception cref="NumSharp.ValueError">The dependent list is empty, a name is blank, or a declaration introduces self-activation or a cycle.</exception>
+        /// <exception cref="System.ArgumentNullException">A dependent parameter name is null.</exception>
         public ConditionalParams Activates(params string[] parameters)
         {
             if (parameters is null || parameters.Length == 0)
@@ -156,9 +174,13 @@ public sealed class ConditionalParams
     public IReadOnlyCollection<string> Parameters => _rules.Keys;
 
     /// <summary>Whether <paramref name="name" /> was declared conditional.</summary>
+    /// <param name="name">The parameter or attribute name to look up.</param>
+    /// <returns>True when the parameter has at least one declared activator.</returns>
     public bool IsConditional(string name) => _rules.ContainsKey(name);
 
     /// <summary>The activators <paramref name="name" /> was declared under (empty when unconditional).</summary>
+    /// <param name="name">The parameter or attribute name to look up.</param>
+    /// <returns>The declared activator names for this parameter, or an empty collection for an unconditional parameter.</returns>
     public IReadOnlyCollection<string> ActivatorsOf(string name)
         => _rules.TryGetValue(name, out var byActivator) ? byActivator.Keys : Array.Empty<string>();
 
@@ -168,6 +190,11 @@ public sealed class ConditionalParams
     ///     active when every activator it was declared under is present, admits the value it holds, and is
     ///     itself active.
     /// </summary>
+    /// <param name="name">The parameter or attribute name to look up.</param>
+    /// <param name="params">The complete external parameter assignment against which activation is evaluated.</param>
+    /// <returns>True when the current assignment satisfies every declared activator requirement.</returns>
+    /// <exception cref="System.ArgumentNullException">The parameter assignment is null or the lookup name is null.</exception>
+    /// <exception cref="System.Exception">A caller-supplied activation predicate throws while evaluating an external parameter value.</exception>
     public bool IsActive(string name, IReadOnlyDictionary<string, object?> @params)
     {
         if (@params is null)
@@ -192,6 +219,11 @@ public sealed class ConditionalParams
     ///     this judges a single activator, so it can be asked of a partial assignment such as a sampler's
     ///     proposal in which other activators are still to be drawn.
     /// </summary>
+    /// <param name="name">The parameter or attribute name to look up.</param>
+    /// <param name="activator">The name of the parameter whose value controls whether dependent parameters are active.</param>
+    /// <param name="value">The proposed external value of the named activator.</param>
+    /// <returns>True when no rule links the parameters or at least one condition accepts the activator value.</returns>
+    /// <exception cref="System.Exception">A caller-supplied activation predicate throws while evaluating an external parameter value.</exception>
     internal bool ActivatorAdmits(string name, string activator, object? value)
         => !_rules.TryGetValue(name, out var byActivator)
            || !byActivator.TryGetValue(activator, out var conditions)
@@ -203,6 +235,10 @@ public sealed class ConditionalParams
     ///     activator it depends on is not present in <paramref name="assignment" /> yet (e.g. dropped for
     ///     mutation and still to be drawn), so activity cannot be decided here.
     /// </summary>
+    /// <param name="name">The parameter or attribute name to look up.</param>
+    /// <param name="assignment">The proposed external parameter values used to resolve activation rules.</param>
+    /// <returns>True or false when activation is resolved, or null when an activator value is unavailable.</returns>
+    /// <exception cref="System.Exception">A caller-supplied activation predicate throws while evaluating an external parameter value.</exception>
     internal bool? ResolveActive(string name, IReadOnlyDictionary<string, object?> assignment)
     {
         if (!_rules.TryGetValue(name, out var byActivator))
@@ -230,6 +266,12 @@ public sealed class ConditionalParams
     ///     latest latent value — so a reactivating branch resumes instead of drawing at random. Consumes
     ///     no sampler RNG; mutates <paramref name="child" /> in place and writes at most one system attr.
     /// </summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <param name="child">The candidate parameter assignment whose inactive entries are removed.</param>
+    /// <param name="parentPopulation">The parent trials contributing active and dormant values to a candidate.</param>
+    /// <param name="searchSpace">The parameter distributions in the column order used by the transform or model.</param>
+    /// <exception cref="System.Exception">A caller-supplied activation predicate throws while evaluating an external parameter value.</exception>
     internal void ApplyDormantCarry(
         Study study,
         FrozenTrial trial,
@@ -274,6 +316,8 @@ public sealed class ConditionalParams
     ///     — a parent's own recorded value where the branch was active, or the value it had parked while
     ///     dormant — with the most recent parent (by trial number) winning.
     /// </summary>
+    /// <param name="parentPopulation">The parent trials contributing active and dormant values to a candidate.</param>
+    /// <returns>The dormant parameter values collected from the supplied parent trials.</returns>
     private Dictionary<string, object?> GatherLatent(IReadOnlyList<FrozenTrial> parentPopulation)
     {
         var latent = new Dictionary<string, object?>(StringComparer.Ordinal);
@@ -297,6 +341,10 @@ public sealed class ConditionalParams
     }
 
     /// <summary>Whether <paramref name="value" /> is a legal value of <paramref name="name" />'s distribution.</summary>
+    /// <param name="searchSpace">The parameter distributions in the column order used by the transform or model.</param>
+    /// <param name="name">The parameter or attribute name to look up.</param>
+    /// <param name="value">The dormant external parameter value whose current distribution support is checked.</param>
+    /// <returns>True when the external value is representable within the supplied distribution.</returns>
     private static bool InRange(IReadOnlyDictionary<string, BaseDistribution> searchSpace, string name, object? value)
     {
         if (!searchSpace.TryGetValue(name, out var distribution))
@@ -312,6 +360,8 @@ public sealed class ConditionalParams
     }
 
     /// <summary>Reads back a stored dormant map regardless of how the storage round-tripped it.</summary>
+    /// <param name="raw">The stored dormant-value object to interpret as a parameter dictionary.</param>
+    /// <returns>The stored dormant parameter/value entries that can be read as a mapping.</returns>
     private static IEnumerable<KeyValuePair<string, object?>> CoerceDormant(object raw)
     {
         switch (raw)
@@ -340,6 +390,9 @@ public sealed class ConditionalParams
     ///     it will be sampled independently), in which case the dependent is kept and the objective's own
     ///     suggest calls decide.
     /// </summary>
+    /// <param name="child">The candidate parameter assignment whose inactive entries are removed.</param>
+    /// <param name="relativeSearchSpace">The distributions of parameters currently eligible for relative sampling.</param>
+    /// <exception cref="System.Exception">A caller-supplied activation predicate throws while evaluating an external parameter value.</exception>
     internal void Prune(
         OrderedDict<string, object?> child, IReadOnlyDictionary<string, BaseDistribution> relativeSearchSpace)
     {
@@ -352,6 +405,11 @@ public sealed class ConditionalParams
         }
     }
 
+    /// <summary>Returns true when the candidate parameter should remain active under the declared rules.</summary>
+    /// <param name="name">The parameter or attribute name to look up.</param>
+    /// <param name="child">The candidate parameter assignment whose inactive entries are removed.</param>
+    /// <param name="relativeSearchSpace">The distributions of parameters currently eligible for relative sampling.</param>
+    /// <returns>True when the candidate parameter should remain active under the declared rules.</returns>
     private bool ShouldKeep(
         string name, OrderedDict<string, object?> child, IReadOnlyDictionary<string, BaseDistribution> relativeSearchSpace)
     {
@@ -376,6 +434,9 @@ public sealed class ConditionalParams
     ///     trial agrees. Used to warn once per parameter that the rules and the objective's suggest calls
     ///     differ.
     /// </summary>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <returns>Parameter names and diagnostics for trial contents inconsistent with declared activation rules.</returns>
+    /// <exception cref="System.Exception">A caller-supplied activation predicate throws while evaluating an external parameter value.</exception>
     internal IEnumerable<(string Name, string Message)> Contradictions(FrozenTrial trial)
     {
         foreach (var name in Order)
@@ -393,13 +454,23 @@ public sealed class ConditionalParams
     }
 
     /// <summary>Renders <paramref name="name" />'s rule: <c>`a` in {1, 2} and `b` satisfies predicate</c>.</summary>
+    /// <param name="name">The parameter or attribute name to look up.</param>
+    /// <returns>The readable activation requirements of the selected parameter.</returns>
     private string Describe(string name)
         => string.Join(" and ", _rules[name].Select(kv =>
             $"`{kv.Key}` " + string.Join(" or ", kv.Value.Select(c => c.Display))));
 
+    /// <summary>Returns a deterministic textual description of the declared activation rules.</summary>
+    /// <returns>A deterministic textual description of the declared activation rules.</returns>
     public override string ToString()
         => "ConditionalParams(" + string.Join("; ", _rules.Keys.Select(name => $"`{name}` when {Describe(name)}")) + ")";
 
+    /// <summary>Adds dependent-parameter rules after validating names and rejecting self-dependency or cycles.</summary>
+    /// <param name="parameter">The dependent parameter whose activation or stored value is being checked.</param>
+    /// <param name="activator">The name of the parameter whose value controls whether dependent parameters are active.</param>
+    /// <param name="condition">The activation predicate and its diagnostic display text.</param>
+    /// <exception cref="NumSharp.ValueError">The dependent name is blank, self-activation is requested, or the new edge would create a dependency cycle.</exception>
+    /// <exception cref="System.ArgumentNullException">The dependent parameter name is null.</exception>
     private void Add(string parameter, string activator, Condition condition)
     {
         ValidateName(parameter, nameof(parameter));
@@ -419,6 +490,9 @@ public sealed class ConditionalParams
     }
 
     /// <summary>Whether <paramref name="name" /> is (transitively) activated by <paramref name="candidate" />.</summary>
+    /// <param name="name">The parameter or attribute name to look up.</param>
+    /// <param name="candidate">The possible transitive activator whose reachability is tested.</param>
+    /// <returns>True when following activator dependencies reaches the requested parameter.</returns>
     private bool DependsOn(string name, string candidate)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -440,6 +514,8 @@ public sealed class ConditionalParams
         return false;
     }
 
+    /// <summary>Returns a dependency order placing activators before their dependent parameters.</summary>
+    /// <returns>A dependency order placing activators before their dependent parameters.</returns>
     private List<string> ComputeOrder()
     {
         // Kahn's algorithm over activator -> dependent edges, ties broken by first mention, so the order
@@ -486,6 +562,10 @@ public sealed class ConditionalParams
         return order;
     }
 
+    /// <summary>Returns true when at least one of the alternative activation conditions accepts the value.</summary>
+    /// <param name="conditions">The alternative admissible-value tests for one activator.</param>
+    /// <param name="value">The external activator value passed to each alternative predicate.</param>
+    /// <returns>True when at least one of the alternative activation conditions accepts the value.</returns>
     private static bool Admits(List<Condition> conditions, object? value)
     {
         foreach (var condition in conditions)
@@ -496,6 +576,11 @@ public sealed class ConditionalParams
         return false;
     }
 
+    /// <summary>Rejects a missing or blank parameter name before it can enter the dependency graph.</summary>
+    /// <param name="name">The parameter name to validate before adding it to the dependency graph.</param>
+    /// <param name="paramName">The argument name included in an ArgumentNullException diagnostic.</param>
+    /// <exception cref="System.ArgumentNullException">The parameter name is null.</exception>
+    /// <exception cref="NumSharp.ValueError">The parameter name is empty or whitespace.</exception>
     private static void ValidateName(string name, string paramName)
     {
         if (name is null)
@@ -509,6 +594,9 @@ public sealed class ConditionalParams
     ///     Optuna's categorical lookup does); values outside the categorical-choice domain fall back to
     ///     <see cref="object.Equals(object?, object?)" />.
     /// </summary>
+    /// <param name="expected">The declared categorical value to compare.</param>
+    /// <param name="actual">The observed external value to compare against the declaration.</param>
+    /// <returns>True when the values compare equal under the categorical/Python comparison convention.</returns>
     internal static bool ValuesEqual(object? expected, object? actual)
     {
         if (TryChoice(expected, out var e) && TryChoice(actual, out var a))
@@ -516,6 +604,10 @@ public sealed class ConditionalParams
         return Equals(expected, actual);
     }
 
+    /// <summary>Returns true when the external value can be represented as a supported categorical choice.</summary>
+    /// <param name="value">The external scalar to interpret as a categorical choice.</param>
+    /// <param name="choice">Receives the categorical representation when the value can be represented as a categorical choice.</param>
+    /// <returns>True when the external value can be represented as a supported categorical choice.</returns>
     private static bool TryChoice(object? value, out CategoricalChoice choice)
     {
         switch (value)

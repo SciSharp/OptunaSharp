@@ -21,14 +21,23 @@ public interface IRegressor
     ///     scikit-learn parameter names (e.g. <c>"n_estimators"</c>, <c>"max_depth"</c>,
     ///     <c>"min_samples_split"</c>, <c>"max_features"</c>).
     /// </summary>
+    /// <param name="parameters">The estimator hyperparameter names and values to apply.</param>
+    /// <returns>An unfitted regressor with the requested parameter overrides applied.</returns>
     IRegressor WithParams(IReadOnlyDictionary<string, object?> parameters);
 
     /// <summary>Fit the estimator on <paramref name="x" /> (row-major <c>(n_samples, n_features)</c>) and targets <paramref name="y" />.</summary>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <param name="y">Target values aligned with the feature rows.</param>
     void Fit(double[,] x, double[] y);
 
     /// <summary>Predict targets for <paramref name="x" /> (row-major <c>(n_samples, n_features)</c>). Requires a prior <see cref="Fit" />.</summary>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <returns>One predicted target value per feature row.</returns>
     double[] Predict(double[,] x);
 
     /// <summary>The estimator's default score on <paramref name="x" />/<paramref name="y" /> (for a regressor, <c>r2_score</c>).</summary>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <param name="y">Target values aligned with the feature rows.</param>
+    /// <returns>The coefficient of determination, where higher values indicate better predictions.</returns>
     double Score(double[,] x, double[] y);
 }

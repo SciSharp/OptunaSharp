@@ -25,6 +25,12 @@ internal static class WarmStart
     ///     (parameter vector, value) pairs on a source task. <paramref name="gamma" /> selects the
     ///     top-(γ·100)% by value; <paramref name="alpha" /> is the prior for the initial covariance.
     /// </summary>
+    /// <param name="sourceSolutions">Evaluated source-task vectors and their minimization-oriented values.</param>
+    /// <param name="gamma">Fraction of best source solutions retained for warm-start estimation.</param>
+    /// <param name="alpha">Isotropic regularization scale added to the warm-start covariance.</param>
+    /// <returns>The warm-start mean, global scale, and covariance estimated from the best source solutions.</returns>
+    /// <exception cref="System.ArgumentException">Gamma is outside (0, 1], or its selected source subset is empty.</exception>
+    /// <exception cref="NumSharp.ValueError">No source solutions were supplied.</exception>
     internal static (double[] Mean, double Sigma, double[,] Cov) GetWarmStartMgd(
         List<(double[] Params, double Value)> sourceSolutions, double gamma = 0.1, double alpha = 0.1)
     {

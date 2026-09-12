@@ -19,6 +19,8 @@ internal static class PythonRepr
     ///     fixed when the decimal point position is in (-4, 16], scientific otherwise
     ///     (see CPython <c>pystrtod.c: format_float_short</c>, mode 'r').
     /// </summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <returns>The Python-style floating-point literal, including nonfinite-value spellings.</returns>
     internal static string FloatRepr(double value)
     {
         if (double.IsNaN(value))
@@ -116,6 +118,8 @@ internal static class PythonRepr
     }
 
     /// <summary>CPython <c>repr(str)</c>: single-quoted unless the text contains <c>'</c> but no <c>"</c>.</summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <returns>A quoted Python-style string literal with the required escapes.</returns>
     internal static string StringRepr(string value)
     {
         char quote = '\'';
@@ -161,6 +165,8 @@ internal static class PythonRepr
     }
 
     /// <summary>CPython <c>repr(value)</c> for the JSON-ish object model OptunaSharp carries around.</summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <returns>The Python-style diagnostic representation of the supplied value.</returns>
     internal static string Repr(object? value)
     {
         switch (value)
@@ -191,10 +197,14 @@ internal static class PythonRepr
     }
 
     /// <summary>CPython <c>str(value)</c>: like <see cref="Repr" /> but raw for strings.</summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <returns>The Python-style user-facing text for the supplied value.</returns>
     internal static string Str(object? value)
         => value is string s ? s : value is CategoricalChoice c && c.Value is string cs ? cs : Repr(value);
 
     /// <summary>Python list repr: <c>[a, b]</c>.</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>A bracketed comma-separated Python list representation.</returns>
     internal static string ListRepr(IEnumerable values)
     {
         var sb = new StringBuilder("[");
@@ -210,6 +220,8 @@ internal static class PythonRepr
     }
 
     /// <summary>Python tuple repr: <c>(a, b)</c>, with the single-element trailing comma <c>(a,)</c>.</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>A parenthesized Python tuple representation, including the singleton comma when needed.</returns>
     internal static string TupleRepr(IEnumerable values)
     {
         var sb = new StringBuilder("(");
@@ -227,6 +239,8 @@ internal static class PythonRepr
     }
 
     /// <summary>Python dict repr: <c>{'a': 1, 'b': 2}</c> in insertion order.</summary>
+    /// <param name="dict">The dictionary whose insertion-ordered keys and values are processed.</param>
+    /// <returns>A Python dictionary representation preserving enumeration order.</returns>
     internal static string DictRepr(IDictionary dict)
     {
         var sb = new StringBuilder("{");
@@ -242,6 +256,8 @@ internal static class PythonRepr
     }
 
     /// <summary>Python set repr over string elements: <c>{'a', 'b'}</c> (or <c>set()</c> when empty).</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>A Python set representation, with the empty-set spelling when needed.</returns>
     internal static string SetRepr(IEnumerable values)
     {
         var sb = new StringBuilder("{");

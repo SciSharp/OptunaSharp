@@ -14,8 +14,18 @@ namespace OptunaSharp;
 public class FrozenStudy : IEquatable<FrozenStudy>, IComparable<FrozenStudy>
 {
     private readonly List<StudyDirection> _directions;
+    /// <summary>Storage identifier of this study, also used as its ordering key.</summary>
     internal int StudyId;
 
+    /// <param name="studyName">Name identifying the study in the selected storage.</param>
+    /// <param name="direction">Single objective direction; ignored when a directions sequence is supplied.</param>
+    /// <param name="userAttrs">User metadata; values should be JSON serializable for persistent storage.</param>
+    /// <param name="systemAttrs">Internal metadata used by samplers and storage; preserve reserved keys.</param>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="directions">Objective directions in the same order as the objective values.</param>
+    /// <summary>Builds a study record from persisted metadata and objective directions.</summary>
+    /// <exception cref="NumSharp.ValueError">Neither direction nor directions is supplied.</exception>
+    /// <remarks>Directions are materialized; supplied attribute dictionaries and any best-trial object are retained by reference.</remarks>
     public FrozenStudy(
         string studyName,
         StudyDirection? direction,
@@ -52,6 +62,8 @@ public class FrozenStudy : IEquatable<FrozenStudy>, IComparable<FrozenStudy>
     ///     <see cref="StudyDirection" /> of the study. Only available during single-objective
     ///     optimization.
     /// </summary>
+    /// <exception cref="NumSharp.RuntimeError">There is more than one objective direction.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException">The directions collection is empty.</exception>
     public StudyDirection Direction
     {
         get
@@ -65,6 +77,8 @@ public class FrozenStudy : IEquatable<FrozenStudy>, IComparable<FrozenStudy>
     /// <summary>A list of <see cref="StudyDirection" /> objects.</summary>
     public List<StudyDirection> Directions => _directions;
 
+    /// <summary>Copies study directions and supported nested attribute containers.</summary>
+    /// <returns>A detached study record with the same storage identifier.</returns>
     internal FrozenStudy DeepCopy() => new(
         studyName: StudyName,
         direction: null,
@@ -81,6 +95,8 @@ public class FrozenStudy : IEquatable<FrozenStudy>, IComparable<FrozenStudy>
     ///     Python <c>__eq__</c>: value equality over every field (<c>other.__dict__ == self.__dict__</c>)
     ///     — study name, directions, user attributes, system attributes and study id.
     /// </summary>
+    /// <param name="other">Value to compare with this instance; null compares unequal.</param>
+    /// <returns>True when the other value has the same type and equal recorded fields.</returns>
     public bool Equals(FrozenStudy? other)
     {
         if (other is null)
@@ -94,6 +110,9 @@ public class FrozenStudy : IEquatable<FrozenStudy>, IComparable<FrozenStudy>
             && StudyId == other.StudyId;
     }
 
+    /// <summary>Compares the fields participating in value equality.</summary>
+    /// <param name="obj">Object to compare with this instance.</param>
+    /// <returns>True when the other value has the same type and equal recorded fields.</returns>
     public override bool Equals(object? obj) => obj is FrozenStudy other && Equals(other);
 
     /// <summary>
@@ -101,22 +120,49 @@ public class FrozenStudy : IEquatable<FrozenStudy>, IComparable<FrozenStudy>
     ///     unhashable (<c>__eq__</c> without <c>__hash__</c>); as elsewhere in the port we expose a
     ///     usable hash instead.
     /// </summary>
+    /// <returns>Hash code consistent with this type's equality contract.</returns>
     public override int GetHashCode() => HashCode.Combine(StudyId, StudyName);
 
     /// <summary>Python <c>__lt__</c> / <c>__le__</c>: <see cref="FrozenStudy" /> is ordered by study id.</summary>
+    /// <param name="other">Study record to compare by identifier; null sorts before this instance.</param>
+    /// <returns>Negative, zero, or positive according to study identifier order; null sorts first.</returns>
     public int CompareTo(FrozenStudy? other) => other is null ? 1 : StudyId.CompareTo(other.StudyId);
 
+    /// <summary>Applies the <c>==</c> comparison using the type's value equality.</summary>
+    /// <param name="left">Left operand of the comparison.</param>
+    /// <param name="right">Right operand of the comparison.</param>
+    /// <returns>True when the comparison holds.</returns>
     public static bool operator ==(FrozenStudy? left, FrozenStudy? right)
         => left is null ? right is null : left.Equals(right);
 
+    /// <summary>Applies the <c>!=</c> comparison using the type's value equality.</summary>
+    /// <param name="left">Left operand of the comparison.</param>
+    /// <param name="right">Right operand of the comparison.</param>
+    /// <returns>True when the comparison holds.</returns>
     public static bool operator !=(FrozenStudy? left, FrozenStudy? right) => !(left == right);
 
     // Ordering mirrors Python's __lt__/__le__ (by study id); >/>= are the reflected forms.
+    /// <summary>Applies the <c>&lt;</c> comparison by study identifier.</summary>
+    /// <param name="left">Left operand of the comparison.</param>
+    /// <param name="right">Right operand of the comparison.</param>
+    /// <returns>True when the comparison holds.</returns>
     public static bool operator <(FrozenStudy left, FrozenStudy right) => left.StudyId < right.StudyId;
 
+    /// <summary>Applies the <c>&gt;</c> comparison by study identifier.</summary>
+    /// <param name="left">Left operand of the comparison.</param>
+    /// <param name="right">Right operand of the comparison.</param>
+    /// <returns>True when the comparison holds.</returns>
     public static bool operator >(FrozenStudy left, FrozenStudy right) => left.StudyId > right.StudyId;
 
+    /// <summary>Applies the <c>&lt;=</c> comparison by study identifier.</summary>
+    /// <param name="left">Left operand of the comparison.</param>
+    /// <param name="right">Right operand of the comparison.</param>
+    /// <returns>True when the comparison holds.</returns>
     public static bool operator <=(FrozenStudy left, FrozenStudy right) => left.StudyId <= right.StudyId;
 
+    /// <summary>Applies the <c>&gt;=</c> comparison by study identifier.</summary>
+    /// <param name="left">Left operand of the comparison.</param>
+    /// <param name="right">Right operand of the comparison.</param>
+    /// <returns>True when the comparison holds.</returns>
     public static bool operator >=(FrozenStudy left, FrozenStudy right) => left.StudyId >= right.StudyId;
 }

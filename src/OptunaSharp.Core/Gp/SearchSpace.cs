@@ -21,7 +21,18 @@ namespace OptunaSharp.Gp;
 /// </summary>
 internal sealed class GpSearchSpace
 {
-    internal enum ScaleType { Linear = 0, Log = 1, Categorical = 2 }
+    /// <summary>The transformation applied to an external parameter before GP evaluation.</summary>
+    internal enum ScaleType
+    {
+        /// <summary>Uses affine scaling in the original numeric coordinate.</summary>
+        Linear = 0,
+
+        /// <summary>Uses affine scaling after taking the natural logarithm.</summary>
+        Log = 1,
+
+        /// <summary>Represents categories by their distribution-choice indices.</summary>
+        Categorical = 2
+    }
 
     private readonly string[] _names;
     private readonly BaseDistribution[] _distributions;
@@ -29,15 +40,25 @@ internal sealed class GpSearchSpace
     private readonly double[,] _bounds;  // (dim, 2)
     private readonly double[] _steps;
 
+    /// <summary>The number of parameters in the normalized coordinate layout.</summary>
     internal int Dim { get; }
+    /// <summary>A flag per coordinate selecting categorical equality in the kernel.</summary>
     internal bool[] IsCategorical { get; }
+    /// <summary>Coordinate indices whose support is a finite grid or categorical choice set.</summary>
     internal int[] DiscreteIndices { get; }
+    /// <summary>Coordinate indices that permit unconstrained movement inside the normalized interval.</summary>
     internal int[] ContinuousIndices { get; }
 
+    /// <summary>The linear, log, or categorical scale code of each coordinate.</summary>
     internal IReadOnlyList<long> ScaleTypes => _scaleTypes;
+    /// <summary>The external lower/upper bounds in coordinate order; categorical bounds describe their index support.</summary>
     internal double[,] Bounds => _bounds;
+    /// <summary>The external grid spacing of each coordinate; zero indicates continuity.</summary>
     internal IReadOnlyList<double> Steps => _steps;
 
+    /// <summary>Builds a stable normalized-coordinate layout from the ordered parameter distributions.</summary>
+    /// <param name="optunaSearchSpace">The parameter distributions; enumeration order fixes the GP coordinate order.</param>
+    /// <exception cref="System.ArgumentException">A parameter uses an unsupported distribution type.</exception>
     internal GpSearchSpace(IReadOnlyDictionary<string, BaseDistribution> optunaSearchSpace)
     {
         _names = optunaSearchSpace.Keys.ToArray();
@@ -81,6 +102,8 @@ internal sealed class GpSearchSpace
     }
 
     /// <summary>The normalized training matrix <c>(len(trials), dim)</c> — <c>get_normalized_params</c>.</summary>
+    /// <param name="trialParams">External parameter dictionaries containing every modeled parameter, one dictionary per input row.</param>
+    /// <returns>The trial-by-coordinate matrix in the GP search space's normalized representation.</returns>
     internal double[,] GetNormalizedParams(IReadOnlyList<IReadOnlyDictionary<string, object?>> trialParams)
     {
         int n = trialParams.Count;
@@ -106,6 +129,8 @@ internal sealed class GpSearchSpace
     }
 
     /// <summary>Convert one normalized parameter vector back to external values — <c>get_unnormalized_param</c>.</summary>
+    /// <param name="normalizedParam">One normalized coordinate vector in search-space order.</param>
+    /// <returns>External parameter values keyed by name after inverse scaling and grid rounding.</returns>
     internal Dictionary<string, object?> GetUnnormalizedParam(double[] normalizedParam)
     {
         var ret = new Dictionary<string, object?>();
@@ -135,6 +160,7 @@ internal sealed class GpSearchSpace
     }
 
     /// <summary>The normalized grid of choices for each discrete dimension — <c>get_choices_of_discrete_params</c>.</summary>
+    /// <returns>The admissible normalized grid for each discrete coordinate, in discrete-index order.</returns>
     internal List<double[]> GetChoicesOfDiscreteParams()
     {
         var result = new List<double[]>();
@@ -161,6 +187,9 @@ internal sealed class GpSearchSpace
     ///     scrambled Sobol' box-fill runs through <see cref="ScrambledSobol" />, then each categorical
     ///     dimension floors to a code and each discrete dimension rounds to its grid.
     /// </summary>
+    /// <param name="n">The number of elements or points to process.</param>
+    /// <param name="rng">The random generator whose state is advanced when drawing samples.</param>
+    /// <returns>A matrix of sampled normalized points rounded onto each coordinate's support.</returns>
     internal double[,] SampleNormalizedParams(int n, NumPyRandom rng)
     {
         int seed = (int)rng.randint(0, 2147483647);  // rng.randint(np.iinfo(np.int32).max)
@@ -184,6 +213,12 @@ internal sealed class GpSearchSpace
 
     // ---- one-parameter transforms (pure numpy, bit-exact) -------------------------------------
 
+    /// <summary>Returns the external value mapped into its normalized GP coordinate.</summary>
+    /// <param name="value">The external numerical value or categorical index to map into GP coordinates.</param>
+    /// <param name="scaleType">Whether the parameter uses linear, logarithmic, or categorical coordinates.</param>
+    /// <param name="bounds">The coordinate bounds used by this numerical operation.</param>
+    /// <param name="step">The distribution's grid spacing; zero denotes a continuous coordinate.</param>
+    /// <returns>The external value mapped into its normalized GP coordinate.</returns>
     internal static double NormalizeOneParam(double value, ScaleType scaleType, (double Low, double High) bounds, double step)
     {
         if (scaleType == ScaleType.Categorical)
@@ -201,6 +236,12 @@ internal sealed class GpSearchSpace
         return (value - low) / (high - low);
     }
 
+    /// <summary>Returns the external numerical value corresponding to the normalized coordinate.</summary>
+    /// <param name="value">The normalized numerical coordinate or categorical index to map back to its external coordinate.</param>
+    /// <param name="scaleType">Whether the parameter uses linear, logarithmic, or categorical coordinates.</param>
+    /// <param name="bounds">The coordinate bounds used by this numerical operation.</param>
+    /// <param name="step">The distribution's grid spacing; zero denotes a continuous coordinate.</param>
+    /// <returns>The external numerical value corresponding to the normalized coordinate.</returns>
     internal static double UnnormalizeOneParam(double value, ScaleType scaleType, (double Low, double High) bounds, double step)
     {
         if (scaleType == ScaleType.Categorical)
@@ -218,6 +259,12 @@ internal sealed class GpSearchSpace
         return value;
     }
 
+    /// <summary>Returns the nearest admissible discrete coordinate in normalized space.</summary>
+    /// <param name="value">The normalized numerical coordinate to project onto the parameter's supported grid.</param>
+    /// <param name="scaleType">Whether the parameter uses linear, logarithmic, or categorical coordinates.</param>
+    /// <param name="bounds">The coordinate bounds used by this numerical operation.</param>
+    /// <param name="step">The distribution's grid spacing; zero denotes a continuous coordinate.</param>
+    /// <returns>The nearest admissible discrete coordinate in normalized space.</returns>
     internal static double RoundOneNormalizedParam(double value, ScaleType scaleType, (double Low, double High) bounds, double step)
     {
         if (step == 0.0)
@@ -230,6 +277,10 @@ internal sealed class GpSearchSpace
     }
 
     /// <summary>NumPy <c>np.arange(start, stop, step)</c> — length <c>ceil((stop - start) / step)</c>, value <c>start + i·step</c>.</summary>
+    /// <param name="start">The inclusive start of the interval or slice.</param>
+    /// <param name="stop">The final value of the generated numerical interval.</param>
+    /// <param name="step">The nonzero increment between successive grid values.</param>
+    /// <returns>The generated arithmetic progression, excluding its stop value.</returns>
     private static double[] Arange(double start, double stop, double step)
     {
         int count = (int)Math.Ceiling((stop - start) / step);
@@ -241,6 +292,11 @@ internal sealed class GpSearchSpace
         return a;
     }
 
+    /// <summary>Returns the value bounded by the supplied interval endpoints.</summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <param name="low">The lower endpoint of the allowed range.</param>
+    /// <param name="high">The upper endpoint of the allowed range.</param>
+    /// <returns>The value bounded by the supplied interval endpoints.</returns>
     private static double MathUtilClip(double value, double low, double high)
         => Math.Min(Math.Max(value, low), high);
 }

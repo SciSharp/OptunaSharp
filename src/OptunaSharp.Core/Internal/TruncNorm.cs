@@ -25,6 +25,7 @@ internal static class TruncNorm
     private static readonly double Sqrt2 = Math.Sqrt(2.0);
 
     // Python: _norm_pdf_C = sqrt(2*pi); _norm_pdf_logC = log(_norm_pdf_C).
+    /// <summary>The log normalization constant subtracted from the standard-normal log density.</summary>
     internal static readonly double NormPdfLogC = Math.Log(Math.Sqrt(2.0 * Math.PI));
 
     // Python: _ndtri_exp_approx_C = sqrt(3) / pi.
@@ -34,6 +35,8 @@ internal static class TruncNorm
     private const double MachineEpsilon = 2.220446049250313e-16;
 
     /// <summary>Python <c>_ndtr_single(a)</c> — the scalar normal CDF used inside <c>_log_ndtr</c>.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <returns>The standard-normal cumulative probability of the scalar argument.</returns>
     private static double NdtrSingle(double a)
     {
         double x = a / Sqrt2;
@@ -48,6 +51,8 @@ internal static class TruncNorm
     }
 
     /// <summary>Python <c>_ndtr(a)</c> — the vectorized normal CDF (uses the <c>_erf.py</c> variant).</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <returns>Elementwise standard-normal cumulative probabilities.</returns>
     private static double[] Ndtr(double[] a)
     {
         var scaled = new double[a.Length];
@@ -61,6 +66,8 @@ internal static class TruncNorm
     }
 
     /// <summary>Python <c>_log_ndtr_single(a)</c>.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <returns>The log standard-normal cumulative probability, evaluated stably in the tails.</returns>
     private static double LogNdtrSingle(double a)
     {
         if (a > 6.0)
@@ -91,12 +98,18 @@ internal static class TruncNorm
     }
 
     /// <summary>Python <c>_log_diff(log_p, log_q) = log_p + log1p(-exp(log_q - log_p))</c>.</summary>
+    /// <param name="logP">The logarithm of the first term in a log-space subtraction.</param>
+    /// <param name="logQ">The logarithm of the positive quantity to subtract from the first.</param>
+    /// <returns>The logarithm of exp(logP) minus exp(logQ).</returns>
     private static double LogDiff(double logP, double logQ) => logP + MathUtil.Log1p(-Math.Exp(logQ - logP));
 
     /// <summary>
     ///     Python <c>_log_gauss_mass(a, b)</c> — log of the Gaussian probability mass in the
     ///     interval <c>[a, b]</c>. Element-wise over 1-D arrays.
     /// </summary>
+    /// <param name="a">The standardized lower truncation bound for each interval.</param>
+    /// <param name="b">The standardized upper truncation bound for each interval.</param>
+    /// <returns>The log standard-normal probability mass inside each corresponding interval.</returns>
     internal static double[] LogGaussMass(double[] a, double[] b)
     {
         int n = a.Length;
@@ -143,6 +156,8 @@ internal static class TruncNorm
     // ------------------------------------------------------------------------------------------
 
     /// <summary>Python <c>_log_ndtr(a)</c> — the vectorized <c>frompyfunc(_log_ndtr_single)</c>.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <returns>Elementwise log standard-normal cumulative probabilities.</returns>
     internal static double[] LogNdtr(double[] a)
     {
         var result = new double[a.Length];
@@ -152,6 +167,8 @@ internal static class TruncNorm
     }
 
     /// <summary>Python <c>_norm_logpdf(x) = -(x**2) / 2 - _norm_pdf_logC</c> (scalar; array <c>**2</c> == <c>x*x</c>).</summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The logarithm of the standard-normal density.</returns>
     internal static double NormLogPdf(double x) => -(x * x) / 2.0 - NormPdfLogC;
 
     // Cephes ndtri (the inverse of the standard-normal CDF) — reference-quality (~1 ULP). The GP QMC
@@ -179,6 +196,8 @@ internal static class TruncNorm
     ///     <paramref name="y0" /> (three rational-approximation regions). <c>ndtri(0) = −∞</c>,
     ///     <c>ndtri(1) = +∞</c>.
     /// </summary>
+    /// <param name="y0">The probability whose standard-normal quantile is requested.</param>
+    /// <returns>The standard-normal quantile for the supplied probability.</returns>
     internal static double Ndtri(double y0)
     {
         if (y0 <= 0.0)
@@ -212,6 +231,9 @@ internal static class TruncNorm
     }
 
     /// <summary>Cephes <c>polevl</c> — evaluate the polynomial with coefficients <paramref name="coef" /> (highest degree first).</summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <param name="coef">Polynomial coefficients in descending-power order.</param>
+    /// <returns>The value of the polynomial with the supplied coefficients.</returns>
     private static double Polevl(double x, double[] coef)
     {
         double ans = coef[0];
@@ -221,6 +243,9 @@ internal static class TruncNorm
     }
 
     /// <summary>Cephes <c>p1evl</c> — same as <see cref="Polevl" /> but with an implicit leading coefficient of 1.</summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <param name="coef">Polynomial coefficients in descending-power order.</param>
+    /// <returns>The value of the polynomial with an implicit leading coefficient of one.</returns>
     private static double P1evl(double x, double[] coef)
     {
         double ans = x + coef[0];
@@ -235,6 +260,8 @@ internal static class TruncNorm
     ///     together, break when every element's update satisfies <c>|dx| &lt; 1e-8 |x|</c>), exactly
     ///     as NumPy's whole-array loop does.
     /// </summary>
+    /// <param name="y">The second numerical input, aligned with the first input where both are sequences.</param>
+    /// <returns>Standard-normal quantiles evaluated from log probabilities.</returns>
     internal static double[] NdtriExp(double[] y)
     {
         int n = y.Length;
@@ -292,6 +319,10 @@ internal static class TruncNorm
     ///     broadcasts). <c>case_left</c> (<c>a &lt; 0</c>) and <c>case_right</c> are computed on
     ///     disjoint subsets for numerical stability, matching Optuna.
     /// </summary>
+    /// <param name="q">The probabilities at which truncated-normal quantiles are requested.</param>
+    /// <param name="a">The standardized lower truncation bound for each requested quantile.</param>
+    /// <param name="b">The standardized upper truncation bound for each requested quantile.</param>
+    /// <returns>The truncated-normal quantile at each supplied probability and interval.</returns>
     internal static double[] Ppf(double[] q, double[] a, double[] b)
     {
         int n = q.Length;

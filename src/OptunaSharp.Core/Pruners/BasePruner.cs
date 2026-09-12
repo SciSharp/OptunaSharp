@@ -24,6 +24,9 @@ public abstract class BasePruner
     ///     overrides this to substitute the bracket study; every other pruner returns the study
     ///     unchanged.
     /// </summary>
+    /// <param name="study">Study whose history is made available to the sampler.</param>
+    /// <param name="trial">Current trial used to select any pruner-specific history partition.</param>
+    /// <returns>The original study, or an override's view restricted to relevant trials.</returns>
     internal virtual Study FilterStudy(Study study, FrozenTrial trial) => study;
 }
 
@@ -31,6 +34,9 @@ public abstract class BasePruner
 internal static class PrunerHelpers
 {
     /// <summary>Python <c>optuna.pruners._filter_study(study, trial)</c>.</summary>
+    /// <param name="study">Study whose configured pruner selects the history view.</param>
+    /// <param name="trial">Current trial used to select any history partition.</param>
+    /// <returns>The study view supplied by the configured pruner.</returns>
     internal static Study FilterStudy(Study study, FrozenTrial trial)
         => study.Pruner.FilterStudy(study, trial);
 }

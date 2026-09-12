@@ -35,6 +35,10 @@ internal static class Qmc
     ///     <c>sample_from_normal_sobol(dim, n_samples, seed)</c> — the first <paramref name="nSamples" />
     ///     points of the standard-normal QMC sequence, shape <c>(n_samples, dim)</c>.
     /// </summary>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <param name="nSamples">The number of observations or generated sample rows.</param>
+    /// <param name="seed">The seed controlling the reproducible random stream.</param>
+    /// <returns>Standard-normal QMC draws with shape (samples, dimensions).</returns>
     internal static double[,] SampleFromNormalSobol(int dim, int nSamples, int seed)
     {
         double[,] sobol = ScrambledSobolDraw(dim, nSamples, seed);
@@ -50,6 +54,10 @@ internal static class Qmc
     ///     <c>torch.quasirandom.SobolEngine(dimension=dim, scramble=True, seed=seed).draw(n)</c> — the
     ///     scrambled Sobol' points in <c>[0, 1)</c>, shape <c>(n, dim)</c>.
     /// </summary>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <param name="n">The number of elements or points to process.</param>
+    /// <param name="seed">The seed controlling the reproducible random stream.</param>
+    /// <returns>Scrambled Sobol points in the unit hypercube, one point per row.</returns>
     private static double[,] ScrambledSobolDraw(int dim, int n, int seed)
     {
         var mt = new TorchMt19937((uint)seed);
@@ -107,6 +115,9 @@ internal static class Qmc
     ///     bit is <c>v_l ⊕ XOR_{k&lt;l} ltm[d][l][k]·v_k</c> (the forced unit diagonal plus the strict
     ///     lower triangle).
     /// </summary>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <param name="ltm">The lower-triangular binary matrices defining the linear scramble.</param>
+    /// <param name="sv">The Sobol direction-number vectors to scramble in place.</param>
     private static void Scramble(int dim, uint[][,] ltm, uint[][] sv)
     {
         for (int d = 0; d < dim; d++)
@@ -130,6 +141,8 @@ internal static class Qmc
     }
 
     /// <summary>The 1-based position of the right-most zero bit of <paramref name="x" /> (Gray-code index).</summary>
+    /// <param name="x">The scalar argument of the kernel or acquisition helper.</param>
+    /// <returns>The one-based position of the least significant zero bit.</returns>
     private static int LowZeroBit(uint x)
     {
         int i = 0;

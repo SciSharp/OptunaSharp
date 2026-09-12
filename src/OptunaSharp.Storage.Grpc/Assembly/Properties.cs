@@ -7,8 +7,10 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpGrpcFriendKey.PublicKey)]
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Interop, PublicKey=" + OptunaSharpGrpcFriendKey.PublicKey)]
 
+/// <summary>Shares the signing identity used to grant the test assembly access to internal implementation details.</summary>
 internal static class OptunaSharpGrpcFriendKey
 {
+    /// <summary>The full strong-name public key matched by the friend-assembly declaration.</summary>
     internal const string PublicKey =
         "00240000048000009400000006020000002400005253413100040000010001004b86c4cb78549b34" +
         "bab61a3b1800e23bfeb5b3ec390074041536a7e3cbd97f5f04cf0f857155a8928eaa29ebfd11cfbb" +

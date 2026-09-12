@@ -63,6 +63,8 @@ public static class CliProgram
         Description = "Show tracebacks on errors.",
     };
 
+    /// <summary>Creates the storage-class option with supported names and deprecated aliases.</summary>
+    /// <returns>The configured storage-class option.</returns>
     private static Option<string?> MakeStorageClassOption()
     {
         var opt = new Option<string?>("--storage-class")
@@ -75,6 +77,8 @@ public static class CliProgram
     }
 
     /// <summary>Programmatic entry point (the process <c>Main</c> forwards here); returns the exit code.</summary>
+    /// <param name="args">Command-line arguments excluding the executable name.</param>
+    /// <returns>The process exit code: zero on success and nonzero on parser or command failure.</returns>
     public static int Run(string[] args)
     {
         RootCommand root = BuildRoot();
@@ -86,6 +90,8 @@ public static class CliProgram
 
     // ---- Optuna's _set_verbosity / _set_log_file -----------------------------------------------
 
+    /// <summary>Applies the parsed quiet or verbose options to CLI logging.</summary>
+    /// <param name="pr">The parsed command-line options for the current invocation.</param>
     private static void SetVerbosity(ParseResult pr)
     {
         // Optuna maps verbose_level {0: WARNING, 1: INFO(default), 2: DEBUG}; -q -> 0, -v (any count) -> 2.
@@ -93,6 +99,8 @@ public static class CliProgram
         OptunaLogging.SetVerbosity(level);
     }
 
+    /// <summary>Attaches the optional log-file destination selected by the command line.</summary>
+    /// <param name="pr">The parsed command-line options for the current invocation.</param>
     private static void SetLogFile(ParseResult pr)
     {
         string? logFile = pr.GetValue(LogFileOpt);
@@ -104,6 +112,8 @@ public static class CliProgram
 
     // ---- root/parser assembly — Optuna's _get_parser / _add_commands ---------------------------
 
+    /// <summary>Builds the root command and global options with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static RootCommand BuildRoot()
     {
         var root = new RootCommand(
@@ -134,6 +144,8 @@ public static class CliProgram
 
     // ---- create-study --------------------------------------------------------------------------
 
+    /// <summary>Builds the create-study command with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildCreateStudy()
     {
         var studyName = new Option<string?>("--study-name")
@@ -180,6 +192,8 @@ public static class CliProgram
 
     // ---- delete-study --------------------------------------------------------------------------
 
+    /// <summary>Builds the delete-study command with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildDeleteStudy()
     {
         var studyName = new Option<string?>("--study-name") { Description = "The name of the study to delete." };
@@ -197,6 +211,8 @@ public static class CliProgram
 
     // ---- study set-user-attr -------------------------------------------------------------------
 
+    /// <summary>Builds the study command group with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildStudy()
     {
         var studyName = new Option<string?>("--study-name")
@@ -228,6 +244,8 @@ public static class CliProgram
 
     // ---- study-names ---------------------------------------------------------------------------
 
+    /// <summary>Builds the study-names command with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildStudyNames()
     {
         var format = FormatOption("value");
@@ -248,6 +266,8 @@ public static class CliProgram
 
     // ---- studies -------------------------------------------------------------------------------
 
+    /// <summary>Builds the studies command with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildStudies()
     {
         var format = FormatOption("table");
@@ -292,6 +312,8 @@ public static class CliProgram
 
     // ---- trials / best-trial / best-trials -----------------------------------------------------
 
+    /// <summary>Builds the trials command with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildTrials()
     {
         var (studyName, format, flatten) = TrialListingOptions("The name of the study which includes trials.");
@@ -310,6 +332,8 @@ public static class CliProgram
         return cmd;
     }
 
+    /// <summary>Builds the best-trial command with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildBestTrial()
     {
         var (studyName, format, flatten) = TrialListingOptions("The name of the study to get the best trial.");
@@ -328,6 +352,8 @@ public static class CliProgram
         return cmd;
     }
 
+    /// <summary>Builds the best-trials command with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildBestTrials()
     {
         var (studyName, format, flatten) = TrialListingOptions("The name of the study to get the best trials (trials at the Pareto front).");
@@ -349,17 +375,26 @@ public static class CliProgram
         return cmd;
     }
 
+    /// <summary>Creates the shared study, output-format, and flatten options for trial-listing commands.</summary>
+    /// <param name="studyNameHelp">Help text describing the study-name option.</param>
+    /// <returns>The study-name, output-format, and flatten options shared by a listing command.</returns>
     private static (Option<string?> StudyName, Option<string> Format, Option<bool> Flatten) TrialListingOptions(string studyNameHelp)
     {
         var studyName = new Option<string?>("--study-name") { Required = true, Description = studyNameHelp };
         return (studyName, FormatOption("table"), FlattenOption("Flatten nested columns such as params and user_attrs."));
     }
 
+    /// <summary>Loads the named study from the parsed storage options for a listing command.</summary>
+    /// <param name="pr">The parsed command-line options for the current invocation.</param>
+    /// <param name="studyName">The study-name option whose value selects the stored study.</param>
+    /// <returns>The loaded study used to produce output rows.</returns>
     private static Study LoadStudyForListing(ParseResult pr, Option<string?> studyName)
         => Optuna.LoadStudy(pr.GetValue(studyName), GetStorage(pr));
 
     // ---- storage upgrade -----------------------------------------------------------------------
 
+    /// <summary>Builds the storage command group with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildStorage()
     {
         var upgrade = new Command("upgrade", "Upgrade the schema of an RDB storage.");
@@ -413,6 +448,8 @@ public static class CliProgram
 
     // ---- ask -----------------------------------------------------------------------------------
 
+    /// <summary>Builds the ask command with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildAsk()
     {
         var studyName = new Option<string?>("--study-name") { Description = "Name of study." };
@@ -507,6 +544,8 @@ public static class CliProgram
 
     // ---- tell ----------------------------------------------------------------------------------
 
+    /// <summary>Builds the tell command with its options and deferred action handlers.</summary>
+    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
     private static Command BuildTell()
     {
         var studyName = new Option<string?>("--study-name") { Description = "Name of study." };
@@ -551,6 +590,10 @@ public static class CliProgram
 
     // ---- shared helpers ------------------------------------------------------------------------
 
+    /// <summary>Resolves the storage backend selected by the CLI options and environment fallback.</summary>
+    /// <param name="pr">The parsed command-line options for the current invocation.</param>
+    /// <returns>The resolved SQLite or journal storage backend.</returns>
+    /// <exception cref="CLIUsageError">The storage configuration is absent, unsupported, or cannot be inferred.</exception>
     private static BaseStorage GetStorage(ParseResult pr)
         => StorageResolver.GetStorage(pr.GetValue(StorageOpt), pr.GetValue(StorageClassOpt), Log);
 
@@ -558,9 +601,14 @@ public static class CliProgram
     // translates every '\n' to os.linesep. The formatter joins its lines with '\n', so match that
     // translation (Environment.NewLine == os.linesep on every platform) instead of Console.WriteLine,
     // which would leave the string's internal '\n' untranslated.
+    /// <summary>Writes formatted output using Python-compatible platform newline handling.</summary>
+    /// <param name="text">Text to write to standard output with platform newline translation.</param>
     private static void Print(string text)
         => Console.Out.Write(text.Replace("\n", Environment.NewLine) + Environment.NewLine);
 
+    /// <summary>Creates an output-format option restricted to the supported renderer names.</summary>
+    /// <param name="default">The format selected when the user does not specify --format.</param>
+    /// <returns>The configured output-format option.</returns>
     private static Option<string> FormatOption(string @default)
     {
         var opt = new Option<string>("--format", "-f")
@@ -572,11 +620,23 @@ public static class CliProgram
         return opt;
     }
 
+    /// <summary>Creates the flag that expands nested values into separate output columns.</summary>
+    /// <param name="description">The user-visible help text for the flatten option.</param>
+    /// <returns>The configured Boolean flatten option.</returns>
     private static Option<bool> FlattenOption(string description) => new("--flatten") { Description = description };
 
+    /// <summary>Maps the validated direction option to the managed optimization direction.</summary>
+    /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
+    /// <returns>Maximize for the maximize spelling; otherwise Minimize, following prior option validation.</returns>
     private static StudyDirection ParseDirection(string value) => value == "maximize" ? StudyDirection.Maximize : StudyDirection.Minimize;
+    /// <summary>Maps an optional validated direction option, preserving an omitted value.</summary>
+    /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
+    /// <returns>The selected direction, or null when omitted.</returns>
     private static StudyDirection? ParseDirectionOrNull(string? value) => value is null ? null : ParseDirection(value);
 
+    /// <summary>Formats an optimization direction using the uppercase Python enum spelling.</summary>
+    /// <param name="direction">The study optimization direction to display.</param>
+    /// <returns>The uppercase Optuna direction name.</returns>
     private static string DirectionName(StudyDirection direction) => direction switch
     {
         StudyDirection.Minimize => "MINIMIZE",
@@ -584,6 +644,10 @@ public static class CliProgram
         _ => "NOT_SET",
     };
 
+    /// <summary>Parses the terminal trial-state names accepted by the tell command.</summary>
+    /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
+    /// <returns>The terminal trial state represented by the supplied spelling.</returns>
+    /// <exception cref="NumSharp.ValueError">The spelling is not complete, pruned, or fail.</exception>
     private static TrialState ParseState(string value) => value switch
     {
         "complete" => TrialState.Complete,
@@ -593,17 +657,31 @@ public static class CliProgram
     };
 
     // Diagnostics-only reprs (stderr; not part of the stdout parity surface).
+    /// <summary>Formats parameter names and values for CLI diagnostic messages.</summary>
+    /// <param name="parameters">Sampled parameter names and values to render in diagnostics.</param>
+    /// <returns>The Python-style parameter mapping for diagnostics.</returns>
     private static string ReprParams(IReadOnlyDictionary<string, object?> parameters)
         => "{" + string.Join(", ", parameters.Select(kv => $"'{kv.Key}': {PythonRepr.Repr(kv.Value)}")) + "}";
 
+    /// <summary>Formats objective values for CLI diagnostic messages, preserving the None spelling.</summary>
+    /// <param name="values">The objective-value array, or null when no values were supplied.</param>
+    /// <returns>The Python-style objective list, or None.</returns>
     private static string ReprValues(double[]? values)
         => values is null ? "None" : "[" + string.Join(", ", values.Select(PythonRepr.FloatRepr)) + "]";
 
+    /// <summary>Formats a trial state as a Python-style enum expression for diagnostics.</summary>
+    /// <param name="state">The trial lifecycle state to display.</param>
+    /// <returns>The Python-style trial-state expression, or None.</returns>
     private static string StateRepr(TrialState? state) => state is null ? "None" : "TrialState." + Records.StateName(state.Value);
 
     // Optuna's main() special-cases CLIUsageError (nice message + the subcommand's help; a full trace
     // under --debug). System.CommandLine swallows other exceptions in its pipeline and returns 1, which
     // matches Optuna letting non-CLIUsageError propagate to a traceback.
+    /// <summary>Executes a command and renders usage help for CLIUsageError while preserving other failures.</summary>
+    /// <param name="pr">The parsed command-line options for the current invocation.</param>
+    /// <param name="command">The current subcommand whose usage is displayed on a CLI usage error.</param>
+    /// <param name="body">The command action returning its exit code; usage errors are translated into help output.</param>
+    /// <returns>The action's exit code, or one when a CLI usage error is rendered.</returns>
     private static int RunAction(ParseResult pr, Command command, Func<int> body)
     {
         try

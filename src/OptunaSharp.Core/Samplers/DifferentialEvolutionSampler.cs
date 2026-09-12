@@ -87,6 +87,8 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
     /// <param name="f">Differential weight F, scaling the difference vector (default 0.8).</param>
     /// <param name="cr">Crossover rate CR, the per-coordinate probability of inheriting the mutant (default 0.9).</param>
     /// <param name="strategy">Mutation strategy: <c>rand1bin</c> (default, DE/rand/1/bin) or <c>best1bin</c> (DE/best/1/bin).</param>
+    /// <summary>Configures differential-evolution proposals and independent startup sampling.</summary>
+    /// <exception cref="System.ArgumentException">The requested population size is below four.</exception>
     public DifferentialEvolutionSampler(
         int nStartupTrials = 1,
         BaseSampler? independentSampler = null,
@@ -110,6 +112,9 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         _strategy = ParseStrategy(strategy);
     }
 
+    /// <summary>Maps supported differential-evolution strategy names to the internal strategy enum.</summary>
+    /// <param name="strategy">Differential-evolution donor/crossover strategy name or enum.</param>
+    /// <returns>The supported strategy, with unrecognized names resolved to the implementation default.</returns>
     private static DeStrategy ParseStrategy(string strategy)
     {
         string s = (strategy ?? "rand1bin").ToLowerInvariant().Replace("/", "").Replace("_", "").Replace("bin", "");
@@ -121,12 +126,14 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         };
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         // _deRng needs no reseed here: relative sampling reseeds per trial (see SampleRelative).
         _independentSampler.ReseedRng();
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -140,6 +147,8 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -217,6 +226,13 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         return trans.Untransform(np.array(deParams));
     }
 
+    /// <summary>Builds the first population from compatible completed trials when enough individuals are available.</summary>
+    /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
+    /// <param name="trans">Search-space transform between external parameter values and the numerical box.</param>
+    /// <param name="nDim">Number of numerical decision coordinates.</param>
+    /// <param name="popsize">Number of individuals evaluated per generation.</param>
+    /// <param name="direction">Whether objective values are minimized or maximized.</param>
+    /// <returns>The initialized population optimizer, or null when compatible startup history is insufficient.</returns>
     private De? BuildInitialOptimizer(
         List<FrozenTrial> completedTrials, SearchSpaceTransform trans, int nDim, int popsize, StudyDirection direction)
     {
@@ -248,10 +264,16 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
     private static string AttrKeyIndex => AttrPrefix + "index";
     private static string AttrKeyOptimizer => AttrPrefix + "optimizer";
 
+    /// <summary>Reassembles serialized optimizer chunks in numeric chunk order.</summary>
+    /// <param name="optimizerAttrs">Stored serialized optimizer chunks keyed by chunk identifier.</param>
+    /// <returns>The full serialized optimizer string in chunk-index order.</returns>
     private static string ConcatOptimizerAttrs(IReadOnlyDictionary<string, string> optimizerAttrs)
         => string.Concat(Enumerable.Range(0, optimizerAttrs.Count)
             .Select(i => optimizerAttrs[$"{AttrKeyOptimizer}:{i}"]));
 
+    /// <summary>Splits a serialized optimizer into storage-sized system-attribute chunks.</summary>
+    /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
+    /// <returns>Chunk-indexed system attributes within the storage string-length limit.</returns>
     private static Dictionary<string, string> SplitOptimizerStr(string optimizerStr)
     {
         int optimizerLen = optimizerStr.Length;
@@ -266,9 +288,18 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         return attrs;
     }
 
+    /// <summary>Encodes the optimizer type and serializable state for storage on a trial.</summary>
+    /// <param name="optimizer">Optimizer whose proposal and adaptation state are persisted.</param>
+    /// <returns>A tagged JSON representation of the optimizer state.</returns>
     private static string SerializeOptimizer(De optimizer)
         => "de\n" + JsonSerializer.Serialize(optimizer.ToState());
 
+    /// <summary>Decodes a persisted optimizer tag and reconstructs its matching state type.</summary>
+    /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
+    /// <returns>The optimizer reconstructed from the tagged state.</returns>
+    /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type.</exception>
+    /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
     private static De DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
@@ -279,6 +310,9 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         return De.FromState(JsonSerializer.Deserialize<DeState>(json)!);
     }
 
+    /// <summary>Finds the newest stored optimizer snapshot in completed trial history.</summary>
+    /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
+    /// <returns>The newest available optimizer, or null when no stored snapshot exists.</returns>
     private static De? RestoreOptimizer(List<FrozenTrial> completedTrials)
     {
         for (int idx = completedTrials.Count - 1; idx >= 0; idx--)
@@ -293,6 +327,8 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         return null;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -308,6 +344,9 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         return _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
     }
 
+    /// <summary>Explains why the current parameter is delegated to the independent sampler.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="paramName">Name of the parameter being suggested or looked up.</param>
     private void LogIndependentSampling(FrozenTrial trial, string paramName)
     {
         Logger.Warning(string.Format(
@@ -319,6 +358,9 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
             "dynamic search space and `CategoricalDistribution` are not supported by `DifferentialEvolutionSampler`"));
     }
 
+    /// <summary>Collects historical trials eligible for this sampler, applying its completed/pruned-trial policy.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>Trial snapshots eligible for the sampler history.</returns>
     private List<FrozenTrial> GetTrials(Study study)
     {
         var completeTrials = new List<FrozenTrial>();
@@ -330,6 +372,9 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
 
     /// <summary>The offspring of one generation, ordered by their target index (so <c>result[i]</c> is the
     ///     offspring of parent <c>i</c>) — the pairing DE's greedy selection needs.</summary>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <param name="generation">Zero-based generation whose individuals or optimizer state are requested.</param>
+    /// <returns>Trials from the requested optimizer generation.</returns>
     private static List<FrozenTrial> GetSolutionTrials(List<FrozenTrial> trials, int generation)
     {
         var result = new List<(FrozenTrial Trial, long Index)>();
@@ -343,9 +388,11 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         return result.OrderBy(e => e.Index).Select(e => e.Trial).ToList();
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _independentSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         if (trial.Constraints != null)

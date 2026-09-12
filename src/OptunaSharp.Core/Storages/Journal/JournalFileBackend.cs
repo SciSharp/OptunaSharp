@@ -21,7 +21,9 @@ namespace OptunaSharp.Storages.Journal;
 /// </summary>
 public class JournalFileBackend : BaseJournalBackend
 {
+    /// <summary>Suffix used for the journal's exclusivity lock file.</summary>
     internal const string LockFileSuffix = ".lock";
+    /// <summary>Suffix used when atomically renaming a lock before deleting it.</summary>
     internal const string RenameFileSuffix = ".rename";
 
     private readonly string _filePath;
@@ -35,6 +37,9 @@ public class JournalFileBackend : BaseJournalBackend
     ///     passed. In a Windows environment symlink creation may need privileges — prefer
     ///     <see cref="JournalFileOpenLock" /> there (same guidance as Optuna's docs).
     /// </param>
+    /// <summary>Opens or creates a UTF-8 JSON-lines journal using the supplied interprocess lock.</summary>
+    /// <exception cref="System.IO.IOException">The journal file cannot be opened or created.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">The process lacks access to the journal path.</exception>
     public JournalFileBackend(string filePath, BaseJournalFileLock? lockObj = null)
     {
         _filePath = filePath;
@@ -46,6 +51,13 @@ public class JournalFileBackend : BaseJournalBackend
         }
     }
 
+    /// <summary>Reads complete journal records within the file-size snapshot taken when enumeration begins.</summary>
+    /// <param name="logNumberFrom">Zero-based inclusive log number to read.</param>
+    /// <returns>Lazy decoded log records; dispose the enumerator to close its file stream.</returns>
+    /// <exception cref="System.IO.IOException">The journal cannot be read.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">The journal cannot be opened for reading.</exception>
+    /// <exception cref="NumSharp.ValueError">A malformed record is followed by another record.</exception>
+    /// <exception cref="System.InvalidCastException">A decoded record is not a JSON object.</exception>
     public override IEnumerable<OrderedDict<string, object?>> ReadLogs(int logNumberFrom)
     {
         using var f = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -105,6 +117,10 @@ public class JournalFileBackend : BaseJournalBackend
     ///     Streams raw lines (including the <c>\n</c> terminator, like Python's binary-file line
     ///     iteration) so byte lengths match the offsets Python would compute.
     /// </summary>
+    /// <param name="stream">Caller-owned readable stream; this iterator does not close it.</param>
+    /// <returns>Raw line bytes plus whether each line ends with newline.</returns>
+    /// <exception cref="System.IO.IOException">Reading a byte from the input stream fails.</exception>
+    /// <exception cref="System.ObjectDisposedException">The stream is closed.</exception>
     private static IEnumerable<(byte[] Line, bool EndsWithNewline)> ReadRawLines(Stream stream)
     {
         var buffer = new List<byte>(256);
@@ -122,6 +138,11 @@ public class JournalFileBackend : BaseJournalBackend
             yield return (buffer.ToArray(), false);
     }
 
+    /// <summary>Appends compact JSON records while holding the interprocess lock, then flushes data to disk.</summary>
+    /// <param name="logs">Ordered JSON-serializable records to append as one locked batch.</param>
+    /// <exception cref="System.IO.IOException">Writing or flushing the journal fails.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Journal or lock-file access is denied.</exception>
+    /// <exception cref="NumSharp.RuntimeError">Releasing the acquired lock fails.</exception>
     public override void AppendLogs(IReadOnlyList<OrderedDict<string, object?>> logs)
     {
         using (JournalFileLockScope.Acquire(_lock))
@@ -146,8 +167,14 @@ public class JournalFileBackend : BaseJournalBackend
 /// <summary>Port of <c>BaseJournalFileLock</c>.</summary>
 public abstract class BaseJournalFileLock
 {
+    /// <summary>Blocks until the journal lock is acquired.</summary>
+    /// <returns>True after acquiring exclusive ownership.</returns>
+    /// <exception cref="System.IO.IOException">Lock creation fails for a reason other than an existing lock.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Lock-file or symbolic-link creation is denied.</exception>
     public abstract bool Acquire();
 
+    /// <summary>Releases the currently owned journal lock.</summary>
+    /// <exception cref="NumSharp.RuntimeError">The lock cannot be renamed and deleted, including when ownership was lost.</exception>
     public abstract void Release();
 }
 
@@ -156,17 +183,25 @@ internal readonly struct JournalFileLockScope : IDisposable
 {
     private readonly BaseJournalFileLock _lockObj;
 
+    /// <summary>Records an already-acquired lock for release on scope exit.</summary>
+    /// <param name="lockObj">Acquired lock whose release is owned by this scope.</param>
     private JournalFileLockScope(BaseJournalFileLock lockObj)
     {
         _lockObj = lockObj;
     }
 
+    /// <summary>Acquires an interprocess lock and returns a scope that releases it.</summary>
+    /// <param name="lockObj">Shared lock implementation to acquire.</param>
+    /// <returns>A disposable scope owning one Release call.</returns>
+    /// <exception cref="System.Exception">The lock implementation fails to acquire ownership.</exception>
     internal static JournalFileLockScope Acquire(BaseJournalFileLock lockObj)
     {
         lockObj.Acquire();
         return new JournalFileLockScope(lockObj);
     }
 
+    /// <summary>Releases the acquired lock when the protected operation ends.</summary>
+    /// <exception cref="NumSharp.RuntimeError">The file lock cannot be released.</exception>
     public void Dispose() => _lockObj.Release();
 }
 
@@ -191,6 +226,8 @@ public class JournalFileSymlinkLock : BaseJournalFileLock
 
     /// <param name="filepath">The path of the file whose race condition must be protected.</param>
     /// <param name="gracePeriod">Grace period before an existing lock is forcibly released.</param>
+    /// <summary>Creates a journal lock policy with optional stale-lock recovery.</summary>
+    /// <exception cref="NumSharp.ValueError">A non-null grace period is zero or negative.</exception>
     public JournalFileSymlinkLock(string filepath, int? gracePeriod = 30)
     {
         _lockTargetFile = filepath;
@@ -208,6 +245,9 @@ public class JournalFileSymlinkLock : BaseJournalFileLock
     /// <summary>
     ///     Acquire a lock in a blocking way by creating a symbolic link of a file.
     /// </summary>
+    /// <returns>True after acquiring exclusive ownership.</returns>
+    /// <exception cref="System.IO.IOException">Lock creation fails for a reason other than an existing lock.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Lock-file or symbolic-link creation is denied.</exception>
     public override bool Acquire()
     {
         double sleepSecs = 0.001;
@@ -284,6 +324,7 @@ public class JournalFileSymlinkLock : BaseJournalFileLock
     }
 
     /// <summary>Release a lock by removing the symbolic link.</summary>
+    /// <exception cref="NumSharp.RuntimeError">The lock cannot be renamed and deleted, including when ownership was lost.</exception>
     public override void Release()
     {
         string lockRenameFile = _lockFile + Guid.NewGuid() + JournalFileBackend.RenameFileSuffix;
@@ -322,6 +363,8 @@ public class JournalFileOpenLock : BaseJournalFileLock
 
     /// <param name="filepath">The path of the file whose race condition must be protected.</param>
     /// <param name="gracePeriod">Grace period before an existing lock is forcibly released.</param>
+    /// <summary>Creates a journal lock policy with optional stale-lock recovery.</summary>
+    /// <exception cref="NumSharp.ValueError">A non-null grace period is zero or negative.</exception>
     public JournalFileOpenLock(string filepath, int? gracePeriod = 30)
     {
         _lockFile = filepath + JournalFileBackend.LockFileSuffix;
@@ -336,6 +379,9 @@ public class JournalFileOpenLock : BaseJournalFileLock
     }
 
     /// <summary>Acquire a lock in a blocking way by creating a lock file.</summary>
+    /// <returns>True after acquiring exclusive ownership.</returns>
+    /// <exception cref="System.IO.IOException">Lock creation fails for a reason other than an existing lock.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Lock-file or symbolic-link creation is denied.</exception>
     public override bool Acquire()
     {
         double sleepSecs = 0.001;
@@ -409,6 +455,7 @@ public class JournalFileOpenLock : BaseJournalFileLock
     }
 
     /// <summary>Release a lock by removing the created file.</summary>
+    /// <exception cref="NumSharp.RuntimeError">The lock cannot be renamed and deleted, including when ownership was lost.</exception>
     public override void Release()
     {
         string lockRenameFile = _lockFile + Guid.NewGuid() + JournalFileBackend.RenameFileSuffix;
@@ -434,6 +481,11 @@ public class JournalFileOpenLock : BaseJournalFileLock
 [Obsolete("Deprecated in v4.0.0. This feature will be removed in v6.0.0. Use JournalFileBackend instead.")]
 public class JournalFileStorage : JournalFileBackend
 {
+    /// <summary>Opens or creates a UTF-8 JSON-lines journal using the supplied interprocess lock.</summary>
+    /// <param name="filePath">Journal file path; its parent directory must already exist.</param>
+    /// <param name="lockObj">Lock implementation; null selects a symbolic-link lock.</param>
+    /// <exception cref="System.IO.IOException">The journal file cannot be opened or created.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">The process lacks access to the journal path.</exception>
     public JournalFileStorage(string filePath, BaseJournalFileLock? lockObj = null)
         : base(filePath, lockObj)
     {

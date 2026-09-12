@@ -16,6 +16,7 @@ namespace OptunaSharp.Interop.PyCma;
 /// <summary>The public half of the strong-name key this package is signed with (the SciSharp STACK key).</summary>
 internal static class PyCmaFriendKey
 {
+    /// <summary>The full strong-name public key matched by the friend-assembly declaration.</summary>
     internal const string PublicKey =
         "00240000048000009400000006020000002400005253413100040000010001004b86c4cb78549b34" +
         "bab61a3b1800e23bfeb5b3ec390074041536a7e3cbd97f5f04cf0f857155a8928eaa29ebfd11cfbb" +

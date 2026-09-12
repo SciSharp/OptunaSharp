@@ -30,10 +30,16 @@ internal static class PymooInterop
 {
     /// <summary>An <see cref="NDArray" /> (1-D vector or 2-D matrix) → an independent numpy array in one
     /// bulk copy (no per-element loop). Dispose the returned object. Under the GIL.</summary>
+    /// <param name="array">The managed array copied into independently owned NumPy storage.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject ToNumpy(NDArray array) => array.ToNumpyCopy();
 
     /// <summary>A numpy array (e.g. a population's <c>X</c> matrix from <c>ask()</c>) → an independent
     /// <see cref="NDArray" /> in one bulk copy (no per-element loop), detached so the source may be
     /// disposed afterwards. Under the GIL.</summary>
+    /// <param name="numpy">The borrowed NumPy array whose data is copied into managed storage.</param>
+    /// <returns>An independent managed NumSharp array whose storage no longer depends on the Python input.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static NDArray ToNDArray(PyObject numpy) => numpy.ToNDArray();
 }

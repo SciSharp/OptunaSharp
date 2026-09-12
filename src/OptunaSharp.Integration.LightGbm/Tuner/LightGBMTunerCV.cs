@@ -24,7 +24,7 @@ public sealed class LightGBMTunerCV : LightGbmBaseTuner
     /// <param name="trainSet">The full training set to cross-validate.</param>
     /// <param name="numBoostRound">The number of boosting rounds per trial (<c>num_boost_round</c>).</param>
     /// <param name="nFold">The number of CV folds (<c>nfold</c>).</param>
-    /// <param name="stratified">Whether to stratify folds (accepted for parity; ignored for regression).</param>
+    /// <param name="stratified">The requested stratification policy passed to the trainer. The default ML.NET adapter does not stratify labels.</param>
     /// <param name="shuffle">Whether to shuffle rows before folding.</param>
     /// <param name="seed">The fold-splitting seed (<c>seed</c>).</param>
     /// <param name="timeBudget">Optional wall-clock budget for tuning, in seconds.</param>
@@ -36,6 +36,11 @@ public sealed class LightGBMTunerCV : LightGbmBaseTuner
     /// <param name="returnCvBooster">Whether <see cref="GetBestBooster" /> is enabled (retains fold models).</param>
     /// <param name="optunaSeed">Seed for the per-step <c>GridSampler</c>/<c>TPESampler</c> (reproducibility).</param>
     /// <param name="trainer">The training backend; defaults to <see cref="MlNetLightGbmTrainer" />.</param>
+    /// <summary>Creates a stepwise LightGBM tuner that scores each trial through cross-validation.</summary>
+    /// <exception cref="NumSharp.ValueError">The existing study direction is inconsistent with the selected validation metric.</exception>
+    /// <exception cref="System.NotSupportedException">A model directory is requested but the custom trainer does not implement booster persistence.</exception>
+    /// <exception cref="System.IO.IOException">The requested model directory cannot be created.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Access to the requested model directory is denied.</exception>
     public LightGBMTunerCV(
         IReadOnlyDictionary<string, object?> @params,
         Dataset trainSet,
@@ -63,6 +68,7 @@ public sealed class LightGBMTunerCV : LightGbmBaseTuner
         _returnCvBooster = returnCvBooster;
     }
 
+    /// <inheritdoc />
     private protected override OptunaObjective CreateObjective(
         List<string> targetParamNames, Dataset trainSet, string stepName)
         => new OptunaObjectiveCV(
@@ -75,6 +81,8 @@ public sealed class LightGBMTunerCV : LightGbmBaseTuner
     ///     from <c>model_dir</c> via the trainer's <see cref="ILightGbmBoosterStore" />. Requires
     ///     <c>returnCvBooster</c> (as in Python).
     /// </summary>
+    /// <returns>The best completed trial's booster, recovered from the model store when necessary.</returns>
+    /// <exception cref="NumSharp.ValueError">No trial has completed, the best model cannot be found locally or in the shared model store, or CV models were not requested.</exception>
     public CvBooster GetBestBooster()
     {
         if (!_returnCvBooster)

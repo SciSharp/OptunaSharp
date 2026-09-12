@@ -84,6 +84,8 @@ public class PruningCallback
     /// <param name="trial">
     ///     The <see cref="Trial" /> corresponding to the current evaluation of the objective function.
     /// </param>
+    /// <summary>Associates an iterative training callback with the trial whose intermediate values it reports.</summary>
+    /// <exception cref="System.ArgumentNullException">The trial is null.</exception>
     public PruningCallback(Trial trial)
     {
         _trial = trial ?? throw new ArgumentNullException(nameof(trial));
@@ -104,6 +106,7 @@ public class PruningCallback
     ///     differently (e.g. <c>"Trial was pruned at epoch {step}."</c>).
     /// </summary>
     /// <param name="step">The step at which pruning was decided.</param>
+    /// <returns>The diagnostic message used when the callback raises TrialPruned.</returns>
     protected virtual string FormatPrunedMessage(int step) => $"Trial was pruned at iteration {step}.";
 
     /// <summary>
@@ -117,6 +120,11 @@ public class PruningCallback
     ///     pruners assume <paramref name="step" /> starts at zero.
     /// </param>
     /// <exception cref="TrialPruned">Thrown when the pruner decides the trial should be pruned.</exception>
+    /// <exception cref="NumSharp.ValueError">The reported step is negative.</exception>
+    /// <exception cref="System.NotImplementedException">Intermediate reporting or pruning is requested for a multi-objective study.</exception>
+    /// <exception cref="OptunaSharp.UpdateFinishedTrialError">The trial has already finished when its intermediate value is stored.</exception>
+    /// <exception cref="NumSharp.KeyError">The trial no longer exists in storage.</exception>
+    /// <exception cref="System.Exception">A custom pruner, storage provider, or message formatter throws.</exception>
     public void Report(double value, int step)
     {
         _trial.Report(value, step);
@@ -137,11 +145,19 @@ public class PruningCallback
     /// <param name="value">The intermediate objective value observed at this step.</param>
     /// <param name="step">The step of the trial. Must be a non-negative integer starting at zero.</param>
     /// <returns><c>true</c> to keep training; <c>false</c> if the trial should be pruned.</returns>
+    /// <exception cref="NumSharp.ValueError">The reported step is negative.</exception>
+    /// <exception cref="System.NotImplementedException">Intermediate reporting or pruning is requested for a multi-objective study.</exception>
+    /// <exception cref="OptunaSharp.UpdateFinishedTrialError">The trial has already finished when its intermediate value is stored.</exception>
+    /// <exception cref="NumSharp.KeyError">The trial no longer exists in storage.</exception>
+    /// <exception cref="System.Exception">A custom pruner, storage provider, or message formatter throws.</exception>
+    /// <remarks>The deferred convention suppresses the pruning exception only. Reporting validation, storage, and custom-pruner failures can still propagate.</remarks>
     public bool AfterIteration(double value, int step)
     {
         _trial.Report(value, step);
         if (_trial.ShouldPrune())
         {
+            // Remember the decision so training engines that cannot unwind inside their callback can
+            // stop normally and translate the decision into TrialPruned after returning to managed code.
             _message = FormatPrunedMessage(step);
             _pruned = true;
             return false;

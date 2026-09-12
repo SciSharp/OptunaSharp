@@ -10,6 +10,12 @@ namespace OptunaSharp.Visualization;
 ///     One trial's lifetime bar. Port of <c>_TimelineBarInfo</c> in
 ///     <c>optuna/visualization/_timeline.py</c>.
 /// </summary>
+/// <param name="Number">The study-local trial number displayed by the timeline bar.</param>
+/// <param name="Start">The beginning of the trial's displayed time interval.</param>
+/// <param name="Complete">The end of the displayed interval, using the current-time surrogate for running trials.</param>
+/// <param name="State">The trial state used to style the timeline bar.</param>
+/// <param name="Hovertext">The formatted trial metadata shown when hovering over the bar.</param>
+/// <param name="Infeasible">Flags identifying trials whose constraints are violated.</param>
 public sealed record TimelineBarInfo(
     int Number,
     DateTime Start,
@@ -19,6 +25,7 @@ public sealed record TimelineBarInfo(
     bool Infeasible);
 
 /// <summary>The data backing a timeline plot. Port of <c>_TimelineInfo</c>.</summary>
+/// <param name="Bars">The timeline intervals in trial order.</param>
 public sealed record TimelineInfo(IReadOnlyList<TimelineBarInfo> Bars);
 
 /// <summary>
@@ -32,6 +39,9 @@ public static class Timeline
 
     /// <summary>Python <c>_get_timeline_info(study, n_recent_trials)</c>.</summary>
     /// <exception cref="ValueError">If <paramref name="nRecentTrials" /> is 0 or negative.</exception>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="nRecentTrials">The number of most recent trials to include, or null for the whole study.</param>
+    /// <returns>The trial time intervals and hover metadata, in trial order.</returns>
     public static TimelineInfo GetInfo(Study study, int? nRecentTrials = null)
     {
         if (nRecentTrials is not null && nRecentTrials <= 0)
@@ -69,6 +79,8 @@ public static class Timeline
     }
 
     /// <summary>Python <c>_get_max_datetime_complete(study)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <returns>The latest known completion time, with running-trial timing handled by the timeline convention.</returns>
     private static DateTime GetMaxDatetimeComplete(Study study)
     {
         var trials = study.GetTrials(deepcopy: false);
@@ -94,6 +106,9 @@ public static class Timeline
     }
 
     /// <summary>Python <c>_is_running_trials_in_study(study, max_run_duration)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="maxRunDuration">The duration threshold used when assessing whether running trials are still active.</param>
+    /// <returns>True when a running trial satisfies the requested duration criterion.</returns>
     private static bool IsRunningTrialsInStudy(Study study, TimeSpan? maxRunDuration)
     {
         var running = study.GetTrials(deepcopy: false, states: new[] { TrialState.Running });

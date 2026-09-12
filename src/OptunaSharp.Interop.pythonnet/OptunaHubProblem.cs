@@ -20,6 +20,8 @@ public sealed class OptunaHubProblem : IDisposable
     private PyObject? _problem;
 
     /// <summary>Reads directions + search space eagerly (called under the GIL by <see cref="OptunaHubModule.CreateProblem" />).</summary>
+    /// <param name="source">The registry package name retained for diagnostics.</param>
+    /// <param name="problem">The borrowed Python problem or benchmark instance.</param>
     internal OptunaHubProblem(string source, PyObject problem)
     {
         Source = source;
@@ -49,6 +51,7 @@ public sealed class OptunaHubProblem : IDisposable
     ///     A single-objective objective for <see cref="Study.Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool)" />.
     ///     Throws if the problem is multi-objective.
     /// </summary>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.OptunaHubInteropException">The benchmark declares more than one objective; use Objective to retain all values.</exception>
     public Func<Trial, double> SingleObjective
     {
         get
@@ -60,6 +63,11 @@ public sealed class OptunaHubProblem : IDisposable
         }
     }
 
+    /// <summary>Suggests each declared parameter in C# and evaluates the resulting configuration with the Python benchmark.</summary>
+    /// <param name="trial">The trial being mirrored, sampled, or checked for optimizer compatibility.</param>
+    /// <returns>One managed value per benchmark objective in its declared order.</returns>
+    /// <exception cref="System.ObjectDisposedException">The benchmark wrapper has already been disposed.</exception>
+    /// <exception cref="global::Python.Runtime.PythonException">The benchmark evaluation fails in Python.</exception>
     private IReadOnlyList<double> Evaluate(Trial trial)
     {
         // C# side first: suggest every parameter on the trial (no GIL needed here).
@@ -79,6 +87,12 @@ public sealed class OptunaHubProblem : IDisposable
         });
     }
 
+    /// <summary>Dispatches a benchmark distribution to the matching typed OptunaSharp suggestion method.</summary>
+    /// <param name="trial">The trial being mirrored, sampled, or checked for optimizer compatibility.</param>
+    /// <param name="name">The Python attribute, parameter, or algorithm name required by the operation.</param>
+    /// <param name="dist">The distribution defining value conversion or the borrowed Python distribution object.</param>
+    /// <returns>The trial's suggested external value for the declared parameter.</returns>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.OptunaHubInteropException">The benchmark search space contains an unsupported distribution type.</exception>
     private static object? Suggest(Trial trial, string name, BaseDistribution dist) => dist switch
     {
         FloatDistribution f => trial.SuggestFloat(name, f.Low, f.High, f.Step, f.Log),
@@ -87,6 +101,9 @@ public sealed class OptunaHubProblem : IDisposable
         _ => throw new OptunaHubInteropException($"Unsupported distribution {dist.GetType().Name} in '{name}'."),
     };
 
+    /// <summary>Copies the Python benchmark's ordered objective directions into managed values.</summary>
+    /// <param name="problem">The borrowed Python problem or benchmark instance.</param>
+    /// <returns>The benchmark's managed directions in objective-index order.</returns>
     private static IReadOnlyList<StudyDirection> ReadDirections(PyObject problem)
     {
         using var directions = Python.optunahub.benchmarks.BaseProblem.directions(problem);
@@ -100,6 +117,10 @@ public sealed class OptunaHubProblem : IDisposable
         return result;
     }
 
+    /// <summary>Recognizes a Python direction enum or textual name as an OptunaSharp direction.</summary>
+    /// <param name="d">The borrowed Python optimization-direction enum or name.</param>
+    /// <returns>The recognized managed optimization direction.</returns>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.OptunaHubInteropException">The Python direction is neither minimize nor maximize.</exception>
     private static StudyDirection ParseDirection(PyObject d)
     {
         // optuna.study.StudyDirection is an IntEnum; read its .name, falling back to str().
@@ -118,6 +139,9 @@ public sealed class OptunaHubProblem : IDisposable
         throw new OptunaHubInteropException($"Unrecognized optimization direction '{text}'.");
     }
 
+    /// <summary>Copies the Python benchmark's ordered distribution mapping into OptunaSharp distributions.</summary>
+    /// <param name="problem">The borrowed Python problem or benchmark instance.</param>
+    /// <returns>The ordered managed search-space dictionary.</returns>
     private static OrderedDict<string, BaseDistribution> ReadSearchSpace(PyObject problem)
     {
         using var searchSpace = Python.optunahub.benchmarks.BaseProblem.search_space(problem);
@@ -134,6 +158,9 @@ public sealed class OptunaHubProblem : IDisposable
         return result;
     }
 
+    /// <summary>Converts a Python scalar or sequence into an ordered managed objective-value list.</summary>
+    /// <param name="result">The borrowed Python scalar or objective-value sequence returned by evaluation.</param>
+    /// <returns>A one-element list for a scalar, or the converted objective sequence.</returns>
     private static IReadOnlyList<double> ReadValues(PyObject result)
     {
         // A sequence (list/tuple/ndarray) has __len__; a python/numpy scalar does not.
@@ -149,6 +176,9 @@ public sealed class OptunaHubProblem : IDisposable
         return values;
     }
 
+    /// <summary>Recognizes Python and NumPy strings so they are not treated as objective sequences.</summary>
+    /// <param name="o">The borrowed Python object whose type is inspected.</param>
+    /// <returns>Whether the object type is Python str or NumPy str_.</returns>
     private static bool IsString(PyObject o)
     {
         using var type = o.GetPythonType();
@@ -156,11 +186,14 @@ public sealed class OptunaHubProblem : IDisposable
         return name.As<string>() is "str" or "str_";
     }
 
+    /// <summary>Releases owned Python references while holding the GIL.</summary>
     public void Dispose()
     {
         var problem = _problem;
         if (problem is null)
             return;
+        // Mark the wrapper unusable before native release; its objective delegates must not retain
+        // permission to call a Python object whose owned reference has been released.
         _problem = null;
         PythonRuntime.Run(problem.Dispose);
     }

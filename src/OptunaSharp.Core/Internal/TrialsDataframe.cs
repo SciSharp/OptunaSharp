@@ -12,6 +12,10 @@ namespace OptunaSharp;
 /// </summary>
 public sealed class TrialsTable
 {
+    /// <summary>Stores trial row values alongside the ordered column descriptors used by dataframe-style access.</summary>
+    /// <param name="columns">The ordered attribute/key column descriptors of the trial table.</param>
+    /// <param name="rows">One cell-value array per trial, aligned with the supplied column descriptors.</param>
+    /// <param name="multiIndex">Whether the result retains separate attribute and nested-key column levels.</param>
     internal TrialsTable(List<(string Column, string Nested)> columns, List<object?[]> rows, bool multiIndex)
     {
         MultiColumns = columns;
@@ -36,11 +40,18 @@ public sealed class TrialsTable
     /// <summary>Row-major cell values, one array per trial, aligned with <see cref="MultiColumns" />.</summary>
     public IReadOnlyList<object?[]> Rows { get; }
 
+    /// <summary>The number of trial records in the table.</summary>
     public int RowCount => Rows.Count;
 
+    /// <summary>The number of attribute/key columns in the table.</summary>
     public int ColumnCount => MultiColumns.Count;
 
     /// <summary>Cell accessor by row index and flattened column name.</summary>
+    /// <param name="row">The zero-based row index of the trial record.</param>
+    /// <param name="flatColumn">The display name of a flattened attribute/key column.</param>
+    /// <returns>The cell value at the requested row and column, including null for a missing attribute value.</returns>
+    /// <exception cref="NumSharp.KeyError">The flattened column name does not exist.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException">The row index is outside the table.</exception>
     public object? this[int row, string flatColumn]
     {
         get
@@ -56,6 +67,7 @@ public sealed class TrialsTable
 /// <summary>Port of <c>optuna/study/_dataframe.py</c> targeting <see cref="TrialsTable" />.</summary>
 internal static class TrialsDataframe
 {
+    /// <summary>The default trial attributes exported by dataframe-style trial inspection.</summary>
     internal static readonly string[] DefaultAttrs =
     {
         "number",
@@ -70,6 +82,10 @@ internal static class TrialsDataframe
     };
 
     /// <summary>Python <c>_trials_dataframe(study, attrs, multi_index)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="attrs">The trial attributes to include as table column groups.</param>
+    /// <param name="multiIndex">Whether the result retains separate attribute and nested-key column levels.</param>
+    /// <returns>The trial records and ordered column descriptors represented as a managed table.</returns>
     internal static TrialsTable Build(Study study, string[] attrs, bool multiIndex)
     {
         // If no trials, return an empty table.
@@ -89,6 +105,9 @@ internal static class TrialsDataframe
     }
 
     /// <summary>Python <c>_create_records_and_aggregate_column</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="attrs">The trial attributes to include as table column groups.</param>
+    /// <returns>The row dictionaries and combined attribute/key columns in display order.</returns>
     private static (List<Dictionary<(string, string), object?>> Records, List<(string, string)> Columns)
         CreateRecordsAndAggregateColumn(Study study, string[] attrs)
     {
@@ -215,6 +234,9 @@ internal static class TrialsDataframe
         return (records, columns);
     }
 
+    /// <summary>Returns the requested row value, or null when that column is absent.</summary>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <returns>The requested row value, or null when that column is absent.</returns>
     private static object? TryGetValue(FrozenTrial trial)
     {
         try
@@ -227,6 +249,11 @@ internal static class TrialsDataframe
         }
     }
 
+    /// <summary>Returns the managed value of the requested trial attribute.</summary>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <param name="attr">The trial attribute whose scalar or mapping value is requested.</param>
+    /// <returns>The managed value of the requested trial attribute.</returns>
+    /// <exception cref="NumSharp.ValueError">The requested attribute name is not supported by the managed trial table.</exception>
     private static object? GetScalarAttr(FrozenTrial trial, string attr) => attr switch
     {
         "number" => (long)trial.Number,
@@ -242,8 +269,13 @@ internal static class TrialsDataframe
     /// <summary>Sorts nested labels numerically when both parse as ints (Python tuple sort over int keys).</summary>
     private sealed class NestedComparer : IComparer<string>
     {
+        /// <summary>The shared stateless comparer used for deterministic ordering.</summary>
         internal static readonly NestedComparer Instance = new();
 
+        /// <summary>Returns the lexicographic comparison of the two column descriptors.</summary>
+        /// <param name="x">The numerical input values, in the order used by the operation.</param>
+        /// <param name="y">The second numerical input, aligned with the first input where both are sequences.</param>
+        /// <returns>The lexicographic comparison of the two column descriptors.</returns>
         public int Compare(string? x, string? y)
         {
             if (long.TryParse(x, out long lx) && long.TryParse(y, out long ly))

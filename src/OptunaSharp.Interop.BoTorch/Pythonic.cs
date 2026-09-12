@@ -131,6 +131,10 @@ internal static class Python
         ///     Evaluate a single botorch expression with the given operands bound — the workhorse for the
         ///     one-liners. Under the GIL.
         /// </summary>
+        /// <param name="expr">The Python expression evaluated in the temporary scope.</param>
+        /// <param name="vars">Names and borrowed Python operands bound into the temporary execution scope.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
         internal static PyObject with(string expr, params (string name, PyObject val)[] vars)
         {
             using PyModule scope = Py.CreateScope();
@@ -145,6 +149,11 @@ internal static class Python
         ///     <paramref name="resultVar" /> — the multi-step form a <c>candidates_func</c> needs (the GP is
         ///     fit in place, the acqf built, then optimized). Under the GIL.
         /// </summary>
+        /// <param name="setup">The Python statements executed before the result expression is evaluated.</param>
+        /// <param name="resultVar">The expression naming the Python result to return after executing the statements.</param>
+        /// <param name="vars">Names and borrowed Python operands bound into the temporary execution scope.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
         internal static PyObject evalStmts(string setup, string resultVar, params (string name, PyObject val)[] vars)
         {
             using PyModule scope = Py.CreateScope();
@@ -162,6 +171,9 @@ internal static class Python
         ///     <c>using (Python.botorch.manual_seed(seed)) …</c> to make it reproducible. Under the GIL
         ///     (create AND dispose).
         /// </summary>
+        /// <param name="seed">The random seed; where nullable, null leaves seed selection to the documented runtime default.</param>
+        /// <returns>An owned context scope; dispose it under the GIL to restore the preceding random state.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
         internal static ManualSeedScope manual_seed(int? seed) => new(seed);
 
         /// <summary>The live <c>manual_seed</c> context manager — entered on construction, exited on dispose.</summary>
@@ -169,6 +181,9 @@ internal static class Python
         {
             private readonly PyObject _cm;
 
+            /// <summary>Enters a BoTorch manual-seed context whose previous random state is restored on disposal.</summary>
+            /// <param name="seed">The random seed; where nullable, null leaves seed selection to the documented runtime default.</param>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal ManualSeedScope(int? seed)
             {
                 PyObject sampling = PythonRuntime.Import("botorch.utils.sampling");
@@ -179,6 +194,8 @@ internal static class Python
                 enter.Invoke().Dispose();
             }
 
+            /// <summary>Releases owned Python references while holding the GIL.</summary>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             public void Dispose()
             {
                 using (_cm)
@@ -209,9 +226,15 @@ internal static class Python
         internal static class Tensor
         {
             /// <summary><c>torch.Tensor.dim(t)</c> — the number of dimensions, as a Python <c>int</c>. Dispose it.</summary>
+            /// <param name="t">The borrowed torch tensor whose dimensions or shape are accessed.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject dim(PyObject t) => t.InvokeMethod("dim");
 
             /// <summary><c>torch.Tensor.dim(t)</c> as a CLR <see cref="long" /> — the number of dimensions.</summary>
+            /// <param name="t">The borrowed torch tensor whose dimensions or shape are accessed.</param>
+            /// <returns>The tensor's number of dimensions.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static long dim_t(PyObject t)
             {
                 using PyObject d = t.InvokeMethod("dim");
@@ -220,6 +243,10 @@ internal static class Python
 
             /// <summary><c>torch.Tensor.size(t, dim)</c> — one dimension's length (negative indexes from the
             /// end), as a Python <c>int</c>. Dispose it.</summary>
+            /// <param name="t">The borrowed torch tensor whose dimensions or shape are accessed.</param>
+            /// <param name="dim">The tensor axis, using PyTorch's negative-axis convention when applicable.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject size(PyObject t, long dim)
             {
                 using PyObject d = new PyInt(dim);
@@ -227,6 +254,10 @@ internal static class Python
             }
 
             /// <summary><c>torch.Tensor.size(t, dim)</c> as a CLR <see cref="long" /> — one dimension's length.</summary>
+            /// <param name="t">The borrowed torch tensor whose dimensions or shape are accessed.</param>
+            /// <param name="dim">The tensor axis, using PyTorch's negative-axis convention when applicable.</param>
+            /// <returns>The length of the requested tensor axis.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static long size_t(PyObject t, long dim)
             {
                 using PyObject d = new PyInt(dim);
@@ -236,9 +267,16 @@ internal static class Python
 
             /// <summary><c>torch.Tensor.size(t)</c> — the whole <c>torch.Size</c> shape (e.g. for a
             /// diagnostic message). Dispose it.</summary>
+            /// <param name="t">The borrowed torch tensor whose dimensions or shape are accessed.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject size(PyObject t) => t.InvokeMethod("size");
 
             /// <summary><c>torch.Tensor.squeeze(t, dim)</c> — drop a size-1 dimension. Dispose it.</summary>
+            /// <param name="t">The borrowed torch tensor whose dimensions or shape are accessed.</param>
+            /// <param name="dim">The tensor axis, using PyTorch's negative-axis convention when applicable.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject squeeze(PyObject t, long dim)
             {
                 using PyObject d = new PyInt(dim);

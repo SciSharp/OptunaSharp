@@ -21,6 +21,7 @@ namespace OptunaSharp.Pruners;
 ///     <c>study_name</c> and the trial number (CRC-32), so specify <c>studyName</c> to make the
 ///     pruning algorithm reproducible.
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.pruners.HyperbandPruner.html">Official Optuna HyperbandPruner reference.</seealso>
 public class HyperbandPruner : BasePruner
 {
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.pruners._hyperband");
@@ -49,6 +50,8 @@ public class HyperbandPruner : BasePruner
     ///     Number of trials required in a rung before any trial can be promoted. Incompatible
     ///     with automatic <c>maxResource</c>.
     /// </param>
+    /// <summary>Configures resource brackets whose successive-halving competitions have separate trial histories.</summary>
+    /// <exception cref="NumSharp.ValueError">Positive bootstrap is combined with automatic maximum resource.</exception>
     public HyperbandPruner(
         int minResource = 1,
         int? maxResource = null,
@@ -69,10 +72,16 @@ public class HyperbandPruner : BasePruner
                 $"are mutually incompatible, bootstrap_count is {_bootstrapCount}");
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives and the pruning rule requests its scalar direction.</exception>
+    /// <exception cref="NumSharp.ValueError">Deferred bracket initialization rejects invalid resource, reduction, or bootstrap settings.</exception>
+    /// <exception cref="System.InvalidOperationException">Initialized bracket allocation budgets are inconsistent.</exception>
     public override bool Prune(Study study, FrozenTrial trial)
     {
         if (_pruners.Count == 0)
         {
+            // Automatic maximum resource depends on completed reports; until available, there is
+            // no stable bracket schedule under which this trial could fairly be pruned.
             TryInitialization(study);
             if (_pruners.Count == 0)
                 return false;
@@ -80,13 +89,19 @@ public class HyperbandPruner : BasePruner
 
         int bracketId = GetBracketId(study, trial);
         _logger.Debug($"{bracketId}th bracket is selected");
+        // Compete only against this bracket's trials, whose minimum-resource schedules match.
         var bracketStudy = CreateBracketStudy(study, bracketId);
         return _pruners[bracketId].Prune(bracketStudy, trial);
     }
 
+    /// <inheritdoc />
+    /// <exception cref="System.InvalidOperationException">Initialized bracket allocation budgets are inconsistent.</exception>
     internal override Study FilterStudy(Study study, FrozenTrial trial)
         => CreateBracketStudy(study, GetBracketId(study, trial));
 
+    /// <summary>Initializes Hyperband brackets once the maximum resource can be determined.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <exception cref="NumSharp.ValueError">A successive-halving bracket rejects the configured resource, reduction, or bootstrap settings.</exception>
     private void TryInitialization(Study study)
     {
         if (_maxResource is null)
@@ -130,6 +145,8 @@ public class HyperbandPruner : BasePruner
     ///     <c>_calculate_trial_allocation_budget</c>): the ratio of the number of trials since
     ///     the total is unknown in Optuna's learning scheme.
     /// </summary>
+    /// <param name="bracketId">Zero-based Hyperband bracket index.</param>
+    /// <returns>The integer allocation weight for the bracket.</returns>
     private int CalculateTrialAllocationBudget(int bracketId)
     {
         System.Diagnostics.Debug.Assert(_nBrackets is not null);
@@ -141,6 +158,10 @@ public class HyperbandPruner : BasePruner
     ///     Compute the index of bracket for a trial (Python <c>_get_bracket_id</c>) — CRC-32 of
     ///     <c>"{study_name}_{trial_number}"</c> modulo the total allocation budget.
     /// </summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <returns>The zero-based bracket assigned to the trial, or zero before initialization.</returns>
+    /// <exception cref="System.InvalidOperationException">Initialized bracket budgets fail to cover the computed allocation index.</exception>
     internal int GetBracketId(Study study, FrozenTrial trial)
     {
         if (_pruners.Count == 0)
@@ -160,6 +181,9 @@ public class HyperbandPruner : BasePruner
     }
 
     /// <summary>Python <c>_create_bracket_study</c>.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="bracketId">Zero-based Hyperband bracket index.</param>
+    /// <returns>A view sharing study storage and exposing only trials assigned to the requested bracket.</returns>
     internal Study CreateBracketStudy(Study study, int bracketId)
         => new BracketStudy(study, this, bracketId);
 
@@ -174,6 +198,10 @@ public class HyperbandPruner : BasePruner
         private readonly Study _study;
         private readonly int _bracketId;
 
+        /// <summary>Creates a view sharing the original study storage but restricting public trial history to one bracket.</summary>
+        /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+        /// <param name="pruner">Hyperband pruner assigning trials to brackets.</param>
+        /// <param name="bracketId">Zero-based Hyperband bracket index.</param>
         internal BracketStudy(Study study, HyperbandPruner pruner, int bracketId)
             : base(studyName: study.StudyName, storage: study.Storage, sampler: study.Sampler, pruner: pruner)
         {
@@ -181,6 +209,7 @@ public class HyperbandPruner : BasePruner
             _bracketId = bracketId;
         }
 
+        /// <inheritdoc />
         public override List<FrozenTrial> GetTrials(
             bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
         {
@@ -189,6 +218,8 @@ public class HyperbandPruner : BasePruner
             return trials.Where(t => pruner.GetBracketId(this, t) == _bracketId).ToList();
         }
 
+        /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The original study is not currently executing an optimization loop.</exception>
         public override void Stop()
         {
             // `stop` should stop the original study's optimization loop instead of the bracket's.
@@ -202,6 +233,8 @@ internal static class Crc32
 {
     private static readonly uint[] _table = BuildTable();
 
+    /// <summary>Builds the byte lookup table for the reflected IEEE CRC-32 polynomial.</summary>
+    /// <returns>The 256-entry reflected CRC lookup table.</returns>
     private static uint[] BuildTable()
     {
         var table = new uint[256];
@@ -215,6 +248,9 @@ internal static class Crc32
         return table;
     }
 
+    /// <summary>Computes the zlib-compatible CRC-32 checksum used for deterministic bracket assignment.</summary>
+    /// <param name="data">Bytes whose CRC checksum is computed.</param>
+    /// <returns>The unsigned CRC-32 checksum.</returns>
     internal static uint Compute(byte[] data)
     {
         uint crc = 0xFFFFFFFFu;

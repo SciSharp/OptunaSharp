@@ -47,6 +47,16 @@ internal sealed class CmaWm : ICmaOptimizer
     private double[] _mZLimUp = Array.Empty<double>();
 
     /// <summary>Public constructor — mirrors <c>CMAwM.__init__</c>.</summary>
+    /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
+    /// <param name="sigma">Initial positive global proposal standard deviation.</param>
+    /// <param name="bounds">Optional box with one row per decision coordinate and lower/upper bound columns.</param>
+    /// <param name="steps">Quantization step per coordinate; zero identifies a continuous coordinate.</param>
+    /// <param name="nMaxResampling">Maximum rejected box-infeasible proposals before coordinate repair.</param>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
+    /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
+    /// <param name="cov">Initial covariance matrix, or null for the identity default.</param>
+    /// <param name="margin">Minimum probability retained near discrete choices; null selects the dimension-dependent default.</param>
+    /// <exception cref="System.ArgumentException">Bounds and steps have incompatible lengths, a step is NaN, bounds are invalid, margin is nonpositive, or the underlying CMA settings are invalid.</exception>
     internal CmaWm(
         double[] mean,
         double sigma,
@@ -88,6 +98,9 @@ internal sealed class CmaWm : ICmaOptimizer
     /// <summary>Private constructor for state restore: adopt a pre-built inner <see cref="Cma" /> and
     /// rebuild the (bounds, steps)-derived decomposition. <see cref="FromState" /> then overwrites the
     /// evolving <c>_A</c>/<c>m_z_lim</c>/<c>margin</c>.</summary>
+    /// <param name="cma">Existing full-covariance optimizer whose margin wrapper is restored.</param>
+    /// <param name="steps">Quantization step per coordinate; zero identifies a continuous coordinate.</param>
+    /// <param name="nMaxResampling">Maximum rejected box-infeasible proposals before coordinate repair.</param>
     private CmaWm(Cma cma, double[] steps, int nMaxResampling)
     {
         _cma = cma;
@@ -96,24 +109,41 @@ internal sealed class CmaWm : ICmaOptimizer
         _a = Enumerable.Repeat(1.0, cma.Dim).ToArray();
     }
 
+    /// <summary>Number of numerical decision coordinates.</summary>
     public int Dim => _cma.Dim;
+    /// <summary>Number of evaluated individuals required for one generation.</summary>
     public int PopulationSize => _cma.PopulationSize;
+    /// <summary>Number of completed optimizer updates.</summary>
     public int Generation => _cma.Generation;
 
     // Test-surface accessors (the state parity tests inspect the decomposition + evolving fields).
+    /// <summary>Underlying full-covariance CMA state used by the margin wrapper.</summary>
     internal Cma Inner => _cma;
+    /// <summary>Per-coordinate affine scales applied by margin correction.</summary>
     internal double[] AffineScaling => _a;
+    /// <summary>Indices of quantized decision coordinates.</summary>
     internal int[] DiscreteIdx => _discreteIdx;
+    /// <summary>Indices of continuous decision coordinates.</summary>
     internal int[] ContinuousIdx => _continuousIdx;
+    /// <summary>Discrete coordinate choices represented in the transformed space.</summary>
     internal double[,] ZSpace => _zSpace;
+    /// <summary>Decision thresholds separating neighboring discrete choices.</summary>
     internal double[,] ZLim => _zLim;
+    /// <summary>Nearest lower discrete threshold relative to the current mean.</summary>
     internal double[] MZLimLow => _mZLimLow;
+    /// <summary>Nearest upper discrete threshold relative to the current mean.</summary>
     internal double[] MZLimUp => _mZLimUp;
+    /// <summary>Minimum probability mass maintained near discrete coordinate boundaries.</summary>
     internal double Margin => _margin;
+    /// <summary>Number of discrete coordinates requiring margin correction.</summary>
     internal int NZdim => _nZdim;
 
+    /// <summary>Resets the optimizer random stream for subsequent proposals.</summary>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
     public void ReseedRng(int seed) => _cma.ReseedRng(seed);
 
+    /// <summary>Checks numerical and progress criteria that indicate the current optimizer has converged or stalled.</summary>
+    /// <returns>True when a numerical or convergence stopping criterion is met.</returns>
     internal bool ShouldStop() => _cma.ShouldStop();
 
     // ---- construction helpers -----------------------------------------------------------------
@@ -124,6 +154,9 @@ internal sealed class CmaWm : ICmaOptimizer
     ///     ragged rows and back-filling each with its row <c>nanmax</c>. Also seeds <c>m_z_lim_low/up</c>
     ///     from <paramref name="mean" /> exactly as the Python constructor does.
     /// </summary>
+    /// <param name="bounds">Optional box with one row per decision coordinate and lower/upper bound columns.</param>
+    /// <param name="steps">Quantization step per coordinate; zero identifies a continuous coordinate.</param>
+    /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
     private void BuildDiscreteDecomposition(double[,] bounds, double[] steps, double[] mean)
     {
         _steps = (double[])steps.Clone();
@@ -204,6 +237,9 @@ internal sealed class CmaWm : ICmaOptimizer
 
     // ---- ask ----------------------------------------------------------------------------------
 
+    /// <summary>Rejects the single-vector interface because margin adaptation requires both encoded and raw proposals.</summary>
+    /// <returns>One candidate vector in transformed coordinates.</returns>
+    /// <exception cref="System.NotSupportedException">This interface always rejects single-vector asks; use AskEncoded to preserve both required vectors.</exception>
     double[] ICmaOptimizer.Ask() =>
         throw new NotSupportedException("CMAwM has a two-vector ask(); call AskEncoded() instead.");
 
@@ -213,6 +249,7 @@ internal sealed class CmaWm : ICmaOptimizer
     ///     its discrete dims snapped to the grid (used for evaluation), the raw x updates the
     ///     distribution (stored as <c>x_for_tell</c> and fed back to <see cref="Tell" />).
     /// </summary>
+    /// <returns>The encoded candidate for evaluation and the raw vector required by Tell.</returns>
     internal (double[] Encoded, double[] ForTell) AskEncoded()
     {
         for (int i = 0; i < _nMaxResampling; i++)
@@ -227,6 +264,8 @@ internal sealed class CmaWm : ICmaOptimizer
     }
 
     /// <summary><c>x_encoded = x.copy(); x_encoded[discrete_idx] = _encode_discrete_params(x[discrete_idx])</c>.</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>The decision vector with discrete coordinates mapped to their evaluation values.</returns>
     private double[] EncodeIfNeeded(double[] x)
     {
         var encoded = (double[])x.Clone();
@@ -240,6 +279,8 @@ internal sealed class CmaWm : ICmaOptimizer
     }
 
     /// <summary>Python <c>_is_continuous_feasible</c> — every continuous dim within its bounds (empty ⇒ true).</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>True if all continuous coordinates satisfy the configured box.</returns>
     private bool IsContinuousFeasible(double[] x)
     {
         for (int k = 0; k < _continuousIdx.Length; k++)
@@ -252,6 +293,7 @@ internal sealed class CmaWm : ICmaOptimizer
     }
 
     /// <summary>Python <c>_repair_continuous_params</c> — clip each continuous dim into its bounds, in place.</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
     private void RepairContinuousInPlace(double[] x)
     {
         for (int k = 0; k < _continuousIdx.Length; k++)
@@ -268,6 +310,8 @@ internal sealed class CmaWm : ICmaOptimizer
     ///     Python <c>_encode_discrete_params</c> — affine-scale the raw discrete values by <c>_A</c>
     ///     about the current mean, then snap each to its grid via <c>searchsorted(z_lim)</c> → <c>z_space</c>.
     /// </summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>A vector with each discrete coordinate assigned to its threshold bin.</returns>
     private double[] EncodeDiscreteParams(double[] x)
     {
         double[] mean = _cma.Mean;
@@ -285,6 +329,9 @@ internal sealed class CmaWm : ICmaOptimizer
 
     // ---- tell (the margin correction) ---------------------------------------------------------
 
+    /// <summary>Updates the optimizer using evaluated candidates from one coherent generation.</summary>
+    /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
+    /// <exception cref="System.ArgumentException">The underlying CMA rejects the solution count or a coordinate magnitude.</exception>
     public void Tell(List<(double[] X, double Value)> solutions)
     {
         _cma.Tell(solutions);
@@ -399,6 +446,8 @@ internal sealed class CmaWm : ICmaOptimizer
 
     // ---- state serialization (own JSON; the pickle analogue — see CmaEsSampler) ----------------
 
+    /// <summary>Captures constructor settings and evolving optimizer arrays in a serializable state object.</summary>
+    /// <returns>A serializable snapshot of optimizer settings and evolving state.</returns>
     internal CmaWmState ToState() => new()
     {
         Inner = _cma.ToState(),
@@ -409,6 +458,10 @@ internal sealed class CmaWm : ICmaOptimizer
         MZLimUp = (double[])_mZLimUp.Clone(),
     };
 
+    /// <summary>Recreates optimizer constants and restores evolving state from a serialized snapshot.</summary>
+    /// <param name="s">Serialized optimizer settings and evolving proposal state.</param>
+    /// <returns>An optimizer restored from the supplied snapshot.</returns>
+    /// <exception cref="System.ArgumentException">Stored constructor settings or population dimensions are rejected when the optimizer is recreated.</exception>
     internal static CmaWm FromState(CmaWmState s)
     {
         var cma = Cma.FromState(s.Inner);
@@ -428,9 +481,15 @@ internal sealed class CmaWm : ICmaOptimizer
     // ---- scipy-shaped scalar/array helpers (the erf/chi² tolerance surface) ---------------------
 
     /// <summary>SciPy <c>norm.cdf(x, loc, scale) = Φ((x-loc)/scale)</c> via <see cref="Erf.NormCdf" />.</summary>
+    /// <param name="x">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <param name="loc">Mean of the normal distribution.</param>
+    /// <param name="scale">Standard deviation of the normal distribution.</param>
+    /// <returns>The Gaussian cumulative probability at the supplied coordinate.</returns>
     private static double NormCdf(double x, double loc, double scale) => Erf.NormCdf((x - loc) / scale);
 
     /// <summary>SciPy <c>chi2.ppf(q, df=1) = Φ⁻¹((1+q)/2)²</c> (scalar).</summary>
+    /// <param name="q">Cumulative probability or probabilities in [0, 1].</param>
+    /// <returns>The one-degree-of-freedom chi-square quantile or quantile vector.</returns>
     private static double Chi2Ppf1(double q)
     {
         double p = (1.0 + q) / 2.0;
@@ -440,6 +499,8 @@ internal sealed class CmaWm : ICmaOptimizer
 
     /// <summary>SciPy <c>chi2.ppf(q, df=1)</c> element-wise — batched through the one whole-array
     /// <see cref="TruncNorm.NdtriExp" /> Newton iteration (matches numpy's vectorized evaluation).</summary>
+    /// <param name="q">Cumulative probability or probabilities in [0, 1].</param>
+    /// <returns>The one-degree-of-freedom chi-square quantile or quantile vector.</returns>
     private static double[] Chi2Ppf1(double[] q)
     {
         var logs = new double[q.Length];
@@ -454,6 +515,10 @@ internal sealed class CmaWm : ICmaOptimizer
 
     /// <summary>numpy <c>np.arange(start, stop, step)</c> for floats — length <c>ceil((stop-start)/step)</c>,
     /// element <c>start + i*step</c> (verified bit-identical to numpy over the grids used).</summary>
+    /// <param name="start">Inclusive beginning of the arithmetic progression.</param>
+    /// <param name="stop">Exclusive upper endpoint of the arithmetic progression.</param>
+    /// <param name="step">Positive spacing between adjacent quantized numerical values.</param>
+    /// <returns>Values beginning at the lower endpoint and strictly below the upper endpoint.</returns>
     private static double[] Arange(double start, double stop, double step)
     {
         int n = (int)Math.Ceiling((stop - start) / step);
@@ -465,6 +530,11 @@ internal sealed class CmaWm : ICmaOptimizer
 
     /// <summary>numpy <c>np.searchsorted(a[row], v, side='left')</c> — leftmost index <c>i</c> with
     /// <c>a[i-1] &lt; v &lt;= a[i]</c> (the count of elements strictly less than <paramref name="v" />).</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="row">Zero-based matrix row.</param>
+    /// <param name="len">Number of active entries to examine.</param>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>The insertion position before entries equal to the target.</returns>
     private static int SearchSortedLeft(double[,] a, int row, int len, double v)
     {
         int i = 0;
@@ -472,6 +542,11 @@ internal sealed class CmaWm : ICmaOptimizer
         return i;
     }
 
+    /// <summary>Finds the largest non-NaN value in the active prefix of one matrix row.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="row">Zero-based matrix row.</param>
+    /// <param name="len">Number of active entries to examine.</param>
+    /// <returns>The largest usable row entry, or NaN if the active prefix has none.</returns>
     private static double RowNanMax(double[,] a, int row, int len)
     {
         double m = double.NegativeInfinity;
@@ -483,6 +558,10 @@ internal sealed class CmaWm : ICmaOptimizer
         return m;
     }
 
+    /// <summary>Copies the requested vector entries in the supplied index order.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="idx">Zero-based indices selecting vector entries or population rows.</param>
+    /// <returns>A newly allocated vector following the index order.</returns>
     private static double[] Gather(double[] a, int[] idx)
     {
         var r = new double[idx.Length];
@@ -490,10 +569,23 @@ internal sealed class CmaWm : ICmaOptimizer
         return r;
     }
 
+    /// <summary>Clamps a scalar to an inclusive interval.</summary>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <param name="lo">Inclusive lower clipping bound.</param>
+    /// <param name="hi">Inclusive upper clipping bound.</param>
+    /// <returns>The value restricted to the inclusive interval.</returns>
     private static int Clip(int v, int lo, int hi) => Math.Min(Math.Max(v, lo), hi);
+    /// <summary>Clamps a scalar to an inclusive interval.</summary>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <param name="lo">Inclusive lower clipping bound.</param>
+    /// <param name="hi">Inclusive upper clipping bound.</param>
+    /// <returns>The value restricted to the inclusive interval.</returns>
     private static double Clip(double v, double lo, double hi) => Math.Min(Math.Max(v, lo), hi);
 
     /// <summary>Python <c>_is_valid_bounds(bounds, mean)</c> — every mean within its [low, high] (empty ⇒ true).</summary>
+    /// <param name="bounds">Optional box with one row per decision coordinate and lower/upper bound columns.</param>
+    /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
+    /// <returns>True if the box shape and coordinate bounds are compatible with the mean.</returns>
     private static bool IsValidBounds(double[,] bounds, double[] mean)
     {
         if (mean.Length != bounds.GetLength(0)) return false;
@@ -511,10 +603,16 @@ internal sealed class CmaWm : ICmaOptimizer
 /// </summary>
 internal sealed class CmaWmState
 {
+    /// <summary>Underlying full-covariance CMA state used by the margin wrapper.</summary>
     public CmaState Inner { get; set; } = new();
+    /// <summary>Quantization step for each coordinate; zero denotes a continuous coordinate.</summary>
     public double[] Steps { get; set; } = System.Array.Empty<double>();
+    /// <summary>Minimum probability mass maintained near discrete coordinate boundaries.</summary>
     public double Margin { get; set; }
+    /// <summary>Serialized per-coordinate affine scaling used by margin correction.</summary>
     public double[] A { get; set; } = System.Array.Empty<double>();
+    /// <summary>Nearest lower discrete threshold relative to the current mean.</summary>
     public double[] MZLimLow { get; set; } = System.Array.Empty<double>();
+    /// <summary>Nearest upper discrete threshold relative to the current mean.</summary>
     public double[] MZLimUp { get; set; } = System.Array.Empty<double>();
 }

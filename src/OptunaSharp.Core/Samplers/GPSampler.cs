@@ -40,6 +40,7 @@ namespace OptunaSharp.Samplers;
 ///     study.Optimize(t => Math.Pow(t.SuggestFloat("x", -10, 10) - 2, 2), nTrials: 30);
 ///     </code>
 /// </example>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.GPSampler.html">Official Optuna GPSampler reference.</seealso>
 public class GPSampler : BaseSampler
 {
     private const double Eps = 1e-10;
@@ -88,6 +89,7 @@ public class GPSampler : BaseSampler
     ///     v5.0.0</b> — use <c>Trial.SetConstraint</c> instead.
     /// </param>
     /// <param name="warnIndependentSampling">Emit a warning when a parameter is sampled independently.</param>
+    /// <summary>Configures Gaussian-process fitting and the independent sampler used before enough observations exist.</summary>
     public GPSampler(
         int? seed = null,
         BaseSampler? independentSampler = null,
@@ -114,6 +116,7 @@ public class GPSampler : BaseSampler
         // OptunaSharp targets the Optuna 5.x surface and treats it as stable, so it is omitted.
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         // Python: self._rng.rng.seed() — reseed from OS entropy.
@@ -123,6 +126,7 @@ public class GPSampler : BaseSampler
         _independentSampler.ReseedRng();
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -135,6 +139,7 @@ public class GPSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -170,6 +175,12 @@ public class GPSampler : BaseSampler
         return sampled;
     }
 
+    /// <summary>Fits objective and constraint Gaussian processes and optimizes the acquisition function.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
+    /// <param name="runningTrials">Running trial snapshots used to account for pending evaluations.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <returns>External parameter values selected by the acquisition optimizer.</returns>
     private OrderedDict<string, object?> SampleRelativeImpl(
         Study study, List<FrozenTrial> completedTrials, List<FrozenTrial> runningTrials,
         OrderedDict<string, BaseDistribution> searchSpace)
@@ -314,6 +325,9 @@ public class GPSampler : BaseSampler
     ///     <c>(n, n_constraints)</c> matrix (raising the verbatim <c>ValueError</c> when the count
     ///     differs across trials) and the per-trial feasibility mask (<c>all constraints ≤ 0</c>).
     /// </summary>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <returns>Constraint rows and a feasibility mask aligned with the supplied trials.</returns>
+    /// <exception cref="NumSharp.ValueError">Trials expose different numbers of constraints.</exception>
     private static (double[,] ConstraintVals, bool[] IsFeasible) GetConstraintValsAndFeasibility(
         List<FrozenTrial> trials)
     {
@@ -346,6 +360,10 @@ public class GPSampler : BaseSampler
     ///     cross-trial <see cref="_constraintsGprsCacheList" /> for warm starts, cleared when the
     ///     search-space dimension changes (mirroring Optuna's check against the objective cache).
     /// </summary>
+    /// <param name="constraintVals">Constraint observations aligned with completed trial rows.</param>
+    /// <param name="internalSearchSpace">Encoded numerical search-space bounds and distribution metadata.</param>
+    /// <param name="normalizedParams">Trial coordinates normalized to the unit numerical box.</param>
+    /// <returns>Fitted constraint regressors and their standardized zero-feasibility thresholds.</returns>
     private (List<GPRegressor> Gprs, double[] Thresholds) GetConstraintsAcqfArgs(
         double[,] constraintVals, GpSearchSpace internalSearchSpace, double[,] normalizedParams)
     {
@@ -382,6 +400,8 @@ public class GPSampler : BaseSampler
     }
 
     /// <summary>NumPy <c>np.argmax</c>: the first index of the maximum (−inf-safe for all-infeasible masks).</summary>
+    /// <param name="values">Scores compared to choose the first maximum.</param>
+    /// <returns>The first maximum index.</returns>
     private static int ArgMax(double[] values)
     {
         int best = 0;
@@ -391,6 +411,9 @@ public class GPSampler : BaseSampler
     }
 
     /// <summary>First argmax of column <paramref name="col" /> — <c>np.argmax(standardized_score_vals)</c> for a single objective.</summary>
+    /// <param name="mat">Matrix whose specified row participates in the operation.</param>
+    /// <param name="col">Zero-based column index or column-shaped matrix.</param>
+    /// <returns>The first row attaining the largest value in the selected column.</returns>
     private static int ArgMaxColumn(double[,] mat, int col)
     {
         int best = 0;
@@ -400,6 +423,9 @@ public class GPSampler : BaseSampler
     }
 
     /// <summary>Max of column <paramref name="col" /> — <c>standardized_score_vals[:, col].max()</c>.</summary>
+    /// <param name="mat">Matrix whose specified row participates in the operation.</param>
+    /// <param name="col">Zero-based column index or column-shaped matrix.</param>
+    /// <returns>The maximum selected-column value, or negative infinity for an empty column.</returns>
     private static double ColumnMax(double[,] mat, int col)
     {
         double max = double.NegativeInfinity;
@@ -409,6 +435,9 @@ public class GPSampler : BaseSampler
     }
 
     /// <summary><c>normalized_params[idx, np.newaxis]</c> — the single best point as a <c>(1, dim)</c> warmstart.</summary>
+    /// <param name="normalizedParams">Trial coordinates normalized to the unit numerical box.</param>
+    /// <param name="idx">Zero-based indices selecting vector entries or population rows.</param>
+    /// <returns>The selected normalized point as a one-row warm-start matrix.</returns>
     private static double[,] BestParamsRow(double[,] normalizedParams, int idx)
     {
         int dim = normalizedParams.GetLength(1);
@@ -424,6 +453,9 @@ public class GPSampler : BaseSampler
     ///     params uniformly at random (<c>rng.choice(n_pareto, size, replace=False)</c> ==
     ///     <c>permutation(n_pareto)[:size]</c>, bit-exact via the verified index shuffle).
     /// </summary>
+    /// <param name="normalizedParams">Trial coordinates normalized to the unit numerical box.</param>
+    /// <param name="standardizedScoreVals">Completed objective observations after direction conversion and standardization.</param>
+    /// <returns>A random subset of Pareto-optimal normalized points used to initialize acquisition search.</returns>
     private double[,] GetBestParamsForMultiObjective(double[,] normalizedParams, double[,] standardizedScoreVals)
     {
         int n = standardizedScoreVals.GetLength(0);
@@ -461,6 +493,9 @@ public class GPSampler : BaseSampler
     }
 
     /// <summary><c>a[mask]</c> for a 2-D array — the rows where <paramref name="mask" /> is <c>true</c>, in order.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="mask">Boolean selection mask aligned with population rows.</param>
+    /// <returns>A detached matrix containing selected rows in source order.</returns>
     private static double[,] FilterRows(double[,] a, bool[] mask)
     {
         int cols = a.GetLength(1);
@@ -485,6 +520,8 @@ public class GPSampler : BaseSampler
     ///     <c>np.std</c>). Returns the standardized matrix plus the per-column means/stds (the
     ///     constraint path needs the means/stds for its thresholds).
     /// </summary>
+    /// <param name="values">Objective observations with one trial per row and one objective per column.</param>
+    /// <returns>Standardized objective columns, their original means, and standard deviations.</returns>
     private static (double[,] Standardized, double[] Means, double[] Stds) StandardizeValues(double[,] values)
     {
         double[,] clipped = WarnAndConvertInf(values);
@@ -514,6 +551,8 @@ public class GPSampler : BaseSampler
     ///     min/max (or 0 when a whole column is non-finite). Fast-paths the all-finite case (the common
     ///     one) to return the input unchanged.
     /// </summary>
+    /// <param name="values">Objective observations with one trial per row and one objective per column.</param>
+    /// <returns>Objective values with infinities replaced by finite values for Gaussian-process fitting.</returns>
     private static double[,] WarnAndConvertInf(double[,] values)
     {
         int n = values.GetLength(0);
@@ -550,6 +589,7 @@ public class GPSampler : BaseSampler
         return result;
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -563,6 +603,9 @@ public class GPSampler : BaseSampler
         return _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
     }
 
+    /// <summary>Explains why the current parameter is delegated to the independent sampler.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="paramName">Name of the parameter being suggested or looked up.</param>
     private void LogIndependentSampling(FrozenTrial trial, string paramName)
         => Logger.Warning(string.Format(
             IndependentSamplingWarningTemplate,
@@ -572,9 +615,12 @@ public class GPSampler : BaseSampler
             GetType().Name,
             "dynamic search space is not supported by GPSampler"));
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _independentSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
+    /// <exception cref="System.Exception">A configured after-trial or constraint callback fails; its exception propagates.</exception>
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         if (_constraintsFunc != null)
@@ -586,6 +632,8 @@ public class GPSampler : BaseSampler
     ///     <c>_get_params</c> — a finished trial's params, or (for a running trial) the params it shared
     ///     via the chunked <c>gp:relative_params:{i}</c> system attrs, merged with any concrete params.
     /// </summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <returns>The adaptation coefficients for the current covariance rank.</returns>
     private static IReadOnlyDictionary<string, object?> GetParams(FrozenTrial trial)
     {
         if (trial.State.IsFinished())
@@ -608,6 +656,10 @@ public class GPSampler : BaseSampler
         return merged;
     }
 
+    /// <summary>Converts stored JSON object members into the runtime values used by sampler caches.</summary>
+    /// <param name="json">JSON text containing stored sampler attributes.</param>
+    /// <returns>Runtime values keyed by JSON property name.</returns>
+    /// <exception cref="System.Text.Json.JsonException">The stored attribute is not valid JSON.</exception>
     private static Dictionary<string, object?> ParseJsonObject(string json)
     {
         var dict = new Dictionary<string, object?>();

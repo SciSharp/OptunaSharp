@@ -21,6 +21,9 @@ public sealed class AgeMoea2ElitePopulationSelectionStrategy
 {
     private readonly int _populationSize;
 
+    /// <summary>Configures geometry-based survival to a fixed population size.</summary>
+    /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
+    /// <exception cref="NumSharp.ValueError">Population size is below two.</exception>
     public AgeMoea2ElitePopulationSelectionStrategy(int populationSize)
     {
         if (populationSize < 2)
@@ -29,6 +32,9 @@ public sealed class AgeMoea2ElitePopulationSelectionStrategy
     }
 
     /// <summary>Select the elite population from the combined trials (Python <c>__call__</c>).</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <returns>The individuals retained by the configured survival rule, in selection order.</returns>
     public List<FrozenTrial> Select(Study study, List<FrozenTrial> population)
     {
         if (population.Count == 0)

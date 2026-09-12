@@ -12,14 +12,24 @@ namespace OptunaSharp.Samplers.Tpe;
 /// <summary>Python <c>_ParzenEstimatorParameters</c> (a <c>NamedTuple</c>).</summary>
 internal sealed class ParzenEstimatorParameters
 {
+    /// <summary>Weight assigned to the broad prior kernel.</summary>
     internal double PriorWeight { get; }
+    /// <summary>Whether the minimum-bandwidth heuristic is enabled.</summary>
     internal bool ConsiderMagicClip { get; }
+    /// <summary>Whether domain endpoints contribute to bandwidth selection.</summary>
     internal bool ConsiderEndpoints { get; }
+    /// <summary>Callback computing one nonnegative weight per historical observation.</summary>
     internal Func<int, double[]> Weights { get; }
 
     /// <summary>Historical / unused field (Optuna keeps it "for historical reasons").</summary>
     internal bool Multivariate { get; }
 
+    /// <summary>Stores kernel-prior, bandwidth, and observation-weight settings used by TPE estimators.</summary>
+    /// <param name="priorWeight">Nonnegative weight assigned to the broad prior kernel.</param>
+    /// <param name="considerMagicClip">Whether kernel widths receive the minimum-bandwidth heuristic.</param>
+    /// <param name="considerEndpoints">Whether domain endpoints participate in bandwidth estimation.</param>
+    /// <param name="weights">Callback returning one observation weight per historical sample.</param>
+    /// <param name="multivariate">Whether joint-estimation settings are enabled; retained for upstream compatibility where unused.</param>
     internal ParzenEstimatorParameters(
         double priorWeight, bool considerMagicClip, bool considerEndpoints,
         Func<int, double[]> weights, bool multivariate)
@@ -57,6 +67,12 @@ internal sealed class ParzenEstimator
     private readonly OrderedDict<string, BaseDistribution> _searchSpace;
     private readonly MixtureOfProductDistribution _mixtureDistribution;
 
+    /// <summary>Builds a weighted mixture of product kernels from encoded historical observations.</summary>
+    /// <param name="observations">Encoded historical values indexed by parameter name, with aligned observation rows.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <param name="parameters">Kernel construction and observation-weight configuration.</param>
+    /// <param name="predeterminedWeights">Optional precomputed observation weights replacing the configured callback.</param>
+    /// <exception cref="NumSharp.ValueError">The prior weight is negative, or the configured weight callback returns negative, non-finite, or all-zero weights.</exception>
     internal ParzenEstimator(
         IReadOnlyDictionary<string, double[]> observations,
         OrderedDict<string, BaseDistribution> searchSpace,
@@ -103,6 +119,9 @@ internal sealed class ParzenEstimator
     internal MixtureOfProductDistribution MixtureDistribution => _mixtureDistribution;
 
     /// <summary>Python <c>_ParzenEstimator.sample(rng, size)</c>.</summary>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="size">Number of candidate samples to draw.</param>
+    /// <returns>Sample arrays keyed by parameter name, with aligned candidate indices and original internal distribution scales.</returns>
     internal OrderedDict<string, double[]> Sample(LazyRandomState rng, int size)
     {
         var sampled = _mixtureDistribution.Sample(rng, size);
@@ -110,6 +129,8 @@ internal sealed class ParzenEstimator
     }
 
     /// <summary>Python <c>_ParzenEstimator.log_pdf(samples_dict)</c>.</summary>
+    /// <param name="samplesDict">Candidate values indexed by parameter name, with aligned sample rows.</param>
+    /// <returns>One mixture log probability density per sample row.</returns>
     internal double[] LogPdf(IReadOnlyDictionary<string, double[]> samplesDict)
     {
         var transformed = Transform(samplesDict);
@@ -117,6 +138,8 @@ internal sealed class ParzenEstimator
     }
 
     /// <summary>Python <c>_transform</c>: stack each param's column into a <c>(n_samples, n_params)</c> array.</summary>
+    /// <param name="samplesDict">Candidate values indexed by parameter name, with aligned sample rows.</param>
+    /// <returns>A sample-by-parameter matrix with logarithms applied to log-scaled coordinates.</returns>
     private double[,] Transform(IReadOnlyDictionary<string, double[]> samplesDict)
     {
         int nParams = _searchSpace.Count;
@@ -134,6 +157,8 @@ internal sealed class ParzenEstimator
     }
 
     /// <summary>Python <c>_untransform</c>: split a <c>(n_samples, n_params)</c> array back into a dict.</summary>
+    /// <param name="samplesArray">Candidate matrix with one sample per row and one parameter per column.</param>
+    /// <returns>Candidate coordinates restored from kernel space and keyed by parameter name.</returns>
     private OrderedDict<string, double[]> Untransform(double[,] samplesArray)
     {
         int nSamples = samplesArray.GetLength(0);
@@ -151,6 +176,11 @@ internal sealed class ParzenEstimator
     }
 
     /// <summary>Python <c>_calculate_distributions</c>.</summary>
+    /// <param name="observations">Historical internal values for this single parameter.</param>
+    /// <param name="searchSpace">Distribution selecting the categorical or numerical kernel family.</param>
+    /// <param name="parameters">Kernel construction and observation-weight configuration.</param>
+    /// <returns>The batched kernel family appropriate to the parameter distribution.</returns>
+    /// <exception cref="System.ArgumentException">The distribution is neither categorical nor a supported float/integer distribution.</exception>
     private static BatchedDistributions CalculateDistributions(
         double[] observations, BaseDistribution searchSpace, ParzenEstimatorParameters parameters)
     {
@@ -160,6 +190,10 @@ internal sealed class ParzenEstimator
     }
 
     /// <summary>Python <c>_calculate_categorical_distributions</c>.</summary>
+    /// <param name="observations">Historical zero-based choice indices for this parameter.</param>
+    /// <param name="searchSpace">Categorical distribution fixing the choice count and order.</param>
+    /// <param name="parameters">Kernel construction and observation-weight configuration.</param>
+    /// <returns>Categorical kernel probability rows for observed choices plus the prior.</returns>
     private static BatchedDistributions CalculateCategoricalDistributions(
         double[] observations, CategoricalDistribution searchSpace, ParzenEstimatorParameters parameters)
     {
@@ -196,6 +230,11 @@ internal sealed class ParzenEstimator
     }
 
     /// <summary>Python <c>_calculate_numerical_distributions</c> (with the inner <c>compute_sigmas</c>).</summary>
+    /// <param name="observations">Historical numeric values before any logarithmic transformation.</param>
+    /// <param name="searchSpace">Float or integer distribution defining bounds, logarithmic scale, and quantization.</param>
+    /// <param name="parameters">Kernel construction and observation-weight configuration.</param>
+    /// <returns>Numerical kernels with centers, bandwidths, and truncation bounds.</returns>
+    /// <exception cref="System.ArgumentException">The supplied distribution is not a supported float or integer distribution.</exception>
     private static BatchedDistributions CalculateNumericalDistributions(
         double[] observations, BaseDistribution searchSpace, ParzenEstimatorParameters parameters)
     {
@@ -263,6 +302,12 @@ internal sealed class ParzenEstimator
     }
 
     /// <summary>Python <c>compute_sigmas()</c> nested in <c>_calculate_numerical_distributions</c>.</summary>
+    /// <param name="mus">Kernel centers in transformed numerical coordinates.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
+    /// <param name="nObservations">Number of historical observations represented by the kernels.</param>
+    /// <param name="parameters">Kernel construction and observation-weight configuration.</param>
+    /// <returns>Per-observation kernel widths after endpoint and clipping heuristics.</returns>
     private static double[] ComputeSigmas(
         double[] mus, double low, double high, int nObservations, ParzenEstimatorParameters parameters)
     {
@@ -314,6 +359,11 @@ internal sealed class ParzenEstimator
     }
 
     /// <summary>Python <c>_ParzenEstimator._call_weights_func</c>.</summary>
+    /// <param name="weightsFunc">Callback returning one nonnegative finite weight per observation.</param>
+    /// <param name="n">Number of vector entries to produce.</param>
+    /// <returns>Validated nonnegative finite weights aligned with observations.</returns>
+    /// <exception cref="NumSharp.ValueError">Returned weights contain negative or non-finite values, or are all zero.</exception>
+    /// <exception cref="System.Exception">The configured observation-weight callback fails; its exception propagates.</exception>
     private static double[] CallWeightsFunc(Func<int, double[]> weightsFunc, int n)
     {
         var wFull = weightsFunc(n);

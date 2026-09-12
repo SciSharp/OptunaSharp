@@ -42,6 +42,9 @@ internal static class RdbMigrations
     private const double RdbMinFloat = -(double)float.MaxValue;
 
     /// <summary>numpy <c>np.isclose(a, b)</c> with the default tolerances (<c>rtol=1e-5, atol=1e-8</c>).</summary>
+    /// <param name="a">The first numeric value to compare under migration tolerance.</param>
+    /// <param name="b">The second numeric value to compare under migration tolerance.</param>
+    /// <returns>Whether the values are equal within the migration's floating-point tolerance.</returns>
     private static bool IsClose(double a, double b) => Math.Abs(a - b) <= 1e-8 + 1e-5 * Math.Abs(b);
 
     /// <summary>
@@ -49,6 +52,8 @@ internal static class RdbMigrations
     ///     with the migration's clamp detection — maps a stored intermediate value (possibly a clamped
     ///     ±inf sentinel or NULL) to the (value, value_type) pair the new schema uses.
     /// </summary>
+    /// <param name="raw">The legacy numeric column value to migrate to a tagged representation.</param>
+    /// <returns>The migrated numeric column and its finite, infinity, or NaN tag.</returns>
     internal static (double? Value, string Type) RetagIntermediateValue(double? raw)
     {
         double value;
@@ -71,6 +76,8 @@ internal static class RdbMigrations
     }
 
     /// <summary>Port of <c>v3.0.0.d</c>'s clamp detection + <c>value_to_stored_repr</c> (no NaN case).</summary>
+    /// <param name="raw">The legacy numeric column value to migrate to a tagged representation.</param>
+    /// <returns>The migrated numeric column and its finite or infinity tag.</returns>
     internal static (double? Value, string Type) RetagValue(double raw)
     {
         double value;
@@ -89,6 +96,7 @@ internal static class RdbMigrations
     }
 }
 
+/// <summary>The SQLite migration and schema-introspection portion of the relational storage implementation.</summary>
 public sealed partial class RDBStorage
 {
     // ------------------------------------------------------------------ version manager surface
@@ -97,23 +105,29 @@ public sealed partial class RDBStorage
     ///     Return the alembic revision the storage is currently stamped at (Python
     ///     <c>RDBStorage.get_current_version</c> / <c>_VersionManager.get_current_version</c>).
     /// </summary>
+    /// <returns>The Alembic revision currently recorded by the database.</returns>
     public string GetCurrentVersion()
     {
         lock (_lock)
             return GetCurrentVersionNoLock();
     }
 
+    /// <summary>Reads the database Alembic revision while the caller holds the storage lock.</summary>
+    /// <returns>The Alembic revision currently recorded by the database.</returns>
+    /// <exception cref="NumSharp.RuntimeError">The Alembic revision table is empty.</exception>
     private string GetCurrentVersionNoLock()
         => ScalarString("SELECT version_num FROM alembic_version", null)
             ?? throw new RuntimeError("The alembic_version table is empty.");
 
     /// <summary>Return the latest (head) schema revision — Python <c>get_head_version</c>.</summary>
+    /// <returns>The latest supported Alembic revision identifier.</returns>
     public string GetHeadVersion() => RdbModels.HeadVersion;
 
     /// <summary>
     ///     Return every known schema revision, newest first — Python <c>get_all_versions</c>, which
     ///     lists alembic's <c>walk_revisions()</c> (head → base).
     /// </summary>
+    /// <returns>The supported revision identifiers in migration-chain order.</returns>
     public List<string> GetAllVersions() => Enumerable.Reverse(RdbMigrations.RevisionsBaseToHead).ToList();
 
     /// <summary>
@@ -129,6 +143,7 @@ public sealed partial class RDBStorage
     ///     <c>storage upgrade</c> CLI does) so an out-of-date schema opens without raising and without
     ///     the head tables being pre-created underneath the migration.</para>
     /// </summary>
+    /// <exception cref="NumSharp.RuntimeError">The stored revision is not in the supported migration chain.</exception>
     public void Upgrade()
     {
         lock (_lock)
@@ -154,6 +169,9 @@ public sealed partial class RDBStorage
         }
     }
 
+    /// <summary>Dispatches one known Alembic revision to its SQLite migration implementation.</summary>
+    /// <param name="revision">The exact Alembic revision identifying the migration step.</param>
+    /// <exception cref="NumSharp.RuntimeError">The requested revision has no registered migration implementation.</exception>
     private void ApplyMigration(string revision)
     {
         switch (revision)
@@ -178,12 +196,14 @@ public sealed partial class RDBStorage
     // VARCHAR(8) with no CHECK constraint (verified against a real Optuna 0.9.0 database), so the enum
     // change carries no schema-level effect on SQLite; alembic's batch recreate of `trials` is a
     // structural identity. Nothing to do beyond the version bump the driver applies.
+    /// <summary>Applies the waiting-state revision, whose enum change requires no SQLite table alteration.</summary>
     private void UpgradeV120a()
     {
     }
 
     // v1.3.0.a — add trials.number, backfilling it from each trial's `_number` system attribute, then
     // dropping those attributes.
+    /// <summary>Moves legacy trial-number system attributes into the dedicated trials.number column.</summary>
     private void UpgradeV130a()
     {
         Exec("ALTER TABLE trials ADD COLUMN number INTEGER", null);
@@ -202,6 +222,7 @@ public sealed partial class RDBStorage
     // v2.4.0.a — the big restructure: introduce study_directions + trial_intermediate_values, move the
     // single `studies.direction` / `trials.value` / step-keyed `trial_values` into them, and reshape
     // trial_values into an objective-keyed table.
+    /// <summary>Migrates single-objective schema data into separate directions, objectives, and intermediate-report tables.</summary>
     private void UpgradeV240a()
     {
         if (!TableExists("study_directions"))
@@ -279,6 +300,7 @@ public sealed partial class RDBStorage
     }
 
     // v2.6.0.a — widen the JSON columns from VARCHAR(2048) to TEXT.
+    /// <summary>Rebuilds JSON-bearing columns as TEXT to remove legacy length restrictions.</summary>
     private void UpgradeV260a()
     {
         foreach (var (table, column) in new[]
@@ -298,6 +320,7 @@ public sealed partial class RDBStorage
 
     // v3.0.0.a — rewrite every distribution_json from the deprecated distribution classes to the
     // unified {Int,Float}Distribution form (Python `migrate_new_distribution`).
+    /// <summary>Rewrites legacy distribution JSON into the unified float and integer distribution representations.</summary>
     private void UpgradeV300a()
     {
         var updates = new List<(long ParamId, string Json)>();
@@ -316,6 +339,8 @@ public sealed partial class RDBStorage
     // intermediate_value nullable. The Optuna float-precision alter_columns are no-ops on SQLite (all
     // real numbers are 8-byte); trial_values.value is toggled NOT NULL here only to be made nullable
     // again in v3.0.0.d, so it is left alone (the head nullability is identical either way).
+    /// <summary>Rejects invalid completed-trial values and makes intermediate-value columns nullable.</summary>
+    /// <exception cref="NumSharp.ValueError">A completed trial contains an invalid null objective value.</exception>
     private void UpgradeV300b()
     {
         long invalid = ScalarLong(
@@ -333,6 +358,7 @@ public sealed partial class RDBStorage
 
     // v3.0.0.c — add trial_intermediate_values.intermediate_value_type (default FINITE, then the
     // default removed), and retag clamped/NaN intermediate values as ±inf / NaN.
+    /// <summary>Adds intermediate-value tags that preserve infinities and NaN independently of numeric columns.</summary>
     private void UpgradeV300c()
     {
         Exec(
@@ -361,6 +387,7 @@ public sealed partial class RDBStorage
 
     // v3.0.0.d — add trial_values.value_type (default FINITE, then removed) and make value nullable;
     // retag clamped values as ±inf.
+    /// <summary>Adds objective-value tags and nullable numeric columns to preserve infinities.</summary>
     private void UpgradeV300d()
     {
         Exec("ALTER TABLE trial_values ADD COLUMN value_type VARCHAR(7) DEFAULT 'FINITE' NOT NULL", null);
@@ -390,6 +417,7 @@ public sealed partial class RDBStorage
     // v3.2.0.a — index trials.study_id. Named as alembic does (`op.f("trials_study_id_key")`), which
     // differs from the `ix_trials_study_id` a fresh create_all emits — matching the migration, not the
     // fresh schema, is the parity target when replaying alembic.
+    /// <summary>Adds the Alembic-named index on trials.study_id.</summary>
     private void UpgradeV320a()
     {
         Exec("CREATE INDEX trials_study_id_key ON trials (study_id)", null);
@@ -400,6 +428,9 @@ public sealed partial class RDBStorage
     /// <summary>A reflected column of a table (a subset of <c>PRAGMA table_info</c>).</summary>
     private sealed record RdbColumn(string Name, string Type, bool NotNull, string? Default, bool Pk);
 
+    /// <summary>Checks SQLite schema metadata for a table with the specified name.</summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <returns>Whether SQLite reports a table with the given name.</returns>
     private bool TableExists(string table)
         => ScalarLong("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = $p0", null, table) > 0;
 
@@ -412,6 +443,9 @@ public sealed partial class RDBStorage
     ///     table, so the result matches what <c>alembic upgrade</c> leaves behind (which is
     ///     order-sensitive and differs from a fresh <c>create_all</c>).
     /// </summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <param name="transformColumns">The schema transformation applied to reflected columns before the table is recreated.</param>
+    /// <param name="addUnique">Additional unique column sets to preserve on the rebuilt table, or null for none.</param>
     private void RebuildTable(
         string table,
         Func<List<RdbColumn>, List<RdbColumn>> transformColumns,
@@ -462,9 +496,15 @@ public sealed partial class RDBStorage
             Exec($"CREATE {(unique ? "UNIQUE " : "")}INDEX \"{name}\" ON \"{table}\" ({QuoteList(columns)})", null);
     }
 
+    /// <summary>Quotes SQLite identifiers and joins them into a SQL column list.</summary>
+    /// <param name="names">Schema identifiers to quote as a comma-separated SQL list.</param>
+    /// <returns>A comma-separated list of quoted SQL identifiers.</returns>
     private static string QuoteList(IEnumerable<string> names)
         => string.Join(", ", names.Select(n => $"\"{n}\""));
 
+    /// <summary>Reads SQLite column definitions for a table rebuild.</summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <returns>The reflected column definitions in their original order.</returns>
     private List<RdbColumn> ReflectColumns(string table)
     {
         var columns = new List<RdbColumn>();
@@ -477,6 +517,9 @@ public sealed partial class RDBStorage
         return columns;
     }
 
+    /// <summary>Reads the column groups protected by unique constraints.</summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <returns>The column arrays composing each unique constraint.</returns>
     private List<string[]> ReflectUniqueConstraints(string table)
     {
         var uniqueIndexNames = new List<string>();
@@ -489,6 +532,9 @@ public sealed partial class RDBStorage
         return uniqueIndexNames.Select(ReflectIndexColumns).ToList();
     }
 
+    /// <summary>Reads explicitly created indexes that must survive a table rebuild.</summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <returns>The index names, uniqueness flags, and ordered columns.</returns>
     private List<(string Name, bool Unique, string[] Columns)> ReflectPlainIndexes(string table)
     {
         var plain = new List<(string Name, bool Unique)>();
@@ -500,6 +546,9 @@ public sealed partial class RDBStorage
         return plain.Select(p => (p.Name, p.Unique, ReflectIndexColumns(p.Name))).ToList();
     }
 
+    /// <summary>Reads the ordered columns participating in a SQLite index.</summary>
+    /// <param name="indexName">The exact SQLite index name to inspect.</param>
+    /// <returns>The index's columns in index order.</returns>
     private string[] ReflectIndexColumns(string indexName)
     {
         var columns = new List<string>();
@@ -508,6 +557,9 @@ public sealed partial class RDBStorage
         return columns.ToArray();
     }
 
+    /// <summary>Reads the referenced table and column for each foreign-key column.</summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <returns>The local column and referenced table/column for each foreign key.</returns>
     private List<(string Column, string RefTable, string RefColumn)> ReflectForeignKeys(string table)
     {
         var raw = new List<(long Id, long Seq, string Column, string RefTable, string RefColumn)>();

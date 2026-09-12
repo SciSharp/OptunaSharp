@@ -23,6 +23,8 @@ internal sealed class TorchMt19937
     private readonly uint[] _mt = new uint[N];
     private int _index;
 
+    /// <summary>Initializes the Mersenne Twister state using Torch's seed-expansion convention.</summary>
+    /// <param name="seed">The seed controlling the reproducible random stream.</param>
     internal TorchMt19937(uint seed)
     {
         // init_genrand: s[0] = seed; s[j] = 1812433253 * (s[j-1] ^ (s[j-1] >> 30)) + j  (mod 2^32).
@@ -33,6 +35,7 @@ internal sealed class TorchMt19937
     }
 
     /// <summary>A tempered 32-bit output (<c>at::mt19937::operator()</c>).</summary>
+    /// <returns>The next tempered 32-bit word from the generator, advancing its state.</returns>
     internal uint NextUInt32()
     {
         if (_index >= N)
@@ -46,8 +49,10 @@ internal sealed class TorchMt19937
     }
 
     /// <summary><c>torch.randint(2, …)</c> for a small range is <c>random() % 2</c> — the low bit of a 32-bit draw.</summary>
+    /// <returns>A uniformly distributed zero or one drawn using the Torch-compatible integer path.</returns>
     internal uint NextBit() => NextUInt32() & 1u;
 
+    /// <summary>Regenerates the state block with Torch's MT19937 twist operation.</summary>
     private void Generate()
     {
         for (int i = 0; i < N; i++)

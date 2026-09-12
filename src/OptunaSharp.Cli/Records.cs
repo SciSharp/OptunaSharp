@@ -19,6 +19,8 @@ using Column = OutputFormat.Column;
 internal static class Records
 {
     /// <summary>The attribute set the CLI trial-listing commands request.</summary>
+    /// <param name="study">The study whose metadata and trial snapshots supply the output records.</param>
+    /// <returns>The CLI trial-attribute names, selecting value or values according to objective count.</returns>
     internal static string[] TrialAttrs(Study study) => new[]
     {
         "number",
@@ -31,6 +33,10 @@ internal static class Records
         "state",
     };
 
+    /// <summary>Builds trial output rows and aggregates their nested column keys in display order.</summary>
+    /// <param name="study">The study whose metadata and trial snapshots supply the output records.</param>
+    /// <param name="attrs">The ordered trial attribute names requested by the listing command.</param>
+    /// <returns>The trial row dictionaries and the ordered union of output columns.</returns>
     internal static (List<Dictionary<Column, object?>> Records, List<Column> Columns)
         CreateRecordsAndAggregateColumn(Study study, string[] attrs)
     {
@@ -126,6 +132,11 @@ internal static class Records
         return (records, columns);
     }
 
+    /// <summary>Reads a supported scalar trial field used by CLI table output.</summary>
+    /// <param name="trial">The frozen trial whose scalar attribute is requested.</param>
+    /// <param name="attr">A supported scalar trial attribute name.</param>
+    /// <returns>The requested scalar value, or null when the trial has no corresponding timestamp or duration.</returns>
+    /// <exception cref="NumSharp.ValueError">The requested attribute is not one of the supported scalar fields.</exception>
     private static object? GetScalarAttr(FrozenTrial trial, string attr) => attr switch
     {
         "number" => (long)trial.Number,
@@ -137,6 +148,8 @@ internal static class Records
     };
 
     /// <summary>Python <c>TrialState.name</c> (the value written into the <c>state</c> column).</summary>
+    /// <param name="state">The trial lifecycle state to display.</param>
+    /// <returns>The uppercase Python spelling of the trial state.</returns>
     internal static string StateName(TrialState state) => state switch
     {
         TrialState.Running => "RUNNING",
@@ -150,8 +163,13 @@ internal static class Records
     /// <summary>Python <c>sorted(set of (df_column, nested))</c>: numeric second key when both are ints.</summary>
     private sealed class ColumnComparer : IComparer<Column>
     {
+        /// <summary>The shared comparer ordering compound output-column keys.</summary>
         internal static readonly ColumnComparer Instance = new();
 
+        /// <summary>Orders columns by their top-level name, then numeric or ordinal nested key.</summary>
+        /// <param name="x">The first compound column key to compare.</param>
+        /// <param name="y">The second compound column key to compare.</param>
+        /// <returns>A negative value, zero, or positive value according to column ordering.</returns>
         public int Compare(Column x, Column y)
         {
             int c = string.CompareOrdinal(x.Name, y.Name);

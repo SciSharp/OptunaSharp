@@ -6,7 +6,7 @@ namespace OptunaSharp.Gp;
 /// <summary>
 ///     Random-sampling acquisition-function optimizer — port of <c>optuna/_gp/optim_sample.py</c>.
 ///     Draws <c>n_samples</c> normalized points from the search space (scrambled Sobol', seeded from
-///     <paramref name="rng" />) and returns the argmax by the acquisition value. Used by
+///     <c>rng</c>) and returns the argmax by the acquisition value. Used by
 ///     <see cref="OptunaSharp.Terminator.RegretBoundEvaluator" /> (Phase 3.3) to maximize the UCB over
 ///     the whole search space (Optuna uses this simple sampler, not the mixed local optimizer, for the
 ///     regret-bound estimate).
@@ -17,6 +17,10 @@ internal static class OptimSample
     ///     <c>optimize_acqf_sample(acqf, n_samples, rng)</c> — sample <paramref name="nSamples" /> points,
     ///     evaluate the acqf, and return the best point and its value.
     /// </summary>
+    /// <param name="acqf">The acquisition function to maximize over its normalized search space.</param>
+    /// <param name="nSamples">The number of observations or generated sample rows.</param>
+    /// <param name="rng">The random generator whose state is advanced when drawing samples.</param>
+    /// <returns>The best sampled normalized point and its acquisition value.</returns>
     internal static (double[] X, double Value) OptimizeAcqfSample(
         IAcquisitionFunc acqf, int nSamples, NumPyRandom rng)
     {

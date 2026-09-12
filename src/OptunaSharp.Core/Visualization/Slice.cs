@@ -13,6 +13,14 @@ namespace OptunaSharp.Visualization;
 ///     (a boxed <c>double</c>/<c>long</c>/<c>string</c>/<c>bool</c>/<c>null</c>), one per trial that
 ///     has the parameter.
 /// </summary>
+/// <param name="ParamName">The parameter shown on the subplot's horizontal axis.</param>
+/// <param name="X">The external parameter values aligned with the subplot's target values.</param>
+/// <param name="Y">The objective or custom target values aligned with the horizontal values.</param>
+/// <param name="TrialNumbers">The study-local trial numbers aligned with the value or estimate sequences.</param>
+/// <param name="IsLog">Whether the axis uses logarithmic scaling.</param>
+/// <param name="IsNumerical">Whether this parameter is numeric rather than categorical.</param>
+/// <param name="Constraints">One flag per trial; true means every recorded constraint is satisfied.</param>
+/// <param name="XLabels">The categorical choices used as x-axis labels, or null for a numerical parameter.</param>
 public sealed record SliceSubplotInfo(
     string ParamName,
     IReadOnlyList<object?> X,
@@ -26,6 +34,8 @@ public sealed record SliceSubplotInfo(
 /// <summary>
 ///     The data backing a slice plot: one subplot per parameter. Port of <c>_SlicePlotInfo</c>.
 /// </summary>
+/// <param name="TargetName">The display label for the selected objective or custom target.</param>
+/// <param name="Subplots">One slice subplot for each selected parameter.</param>
 public sealed record SlicePlotInfo(string TargetName, IReadOnlyList<SliceSubplotInfo> Subplots);
 
 /// <summary>
@@ -38,6 +48,12 @@ public static class SlicePlot
     private static readonly Logger Logger = OptunaLogging.GetLogger("optuna.visualization._slice");
 
     /// <summary>Python <c>_get_slice_plot_info(study, params, target, target_name)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="params">Parameter names to include; null selects the parameters supported by this operation.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="targetName">The display label for the selected objective or custom target.</param>
+    /// <returns>One parameter-versus-target subplot per selected parameter.</returns>
+    /// <exception cref="NumSharp.ValueError">A requested parameter is absent from the plotted completed trials, or a multi-objective study has no scalar target selector.</exception>
     public static SlicePlotInfo GetPlotInfo(
         Study study,
         IReadOnlyList<string>? @params = null,
@@ -96,6 +112,13 @@ public static class SlicePlot
     }
 
     /// <summary>Python <c>_get_slice_subplot_info(trials, param, target, log_scale, numerical, x_labels)</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="param">The parameter name to look up in trial data.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="logScale">Whether the parameter's horizontal axis is logarithmic.</param>
+    /// <param name="numerical">Whether the parameter uses numeric positions instead of categorical labels.</param>
+    /// <param name="xLabels">The categorical choices in distribution order, or null for a numerical parameter.</param>
+    /// <returns>The parameter values, target values, trial numbers, and feasibility flags for one slice.</returns>
     private static SliceSubplotInfo GetSliceSubplotInfo(
         IReadOnlyList<FrozenTrial> trials,
         string param,

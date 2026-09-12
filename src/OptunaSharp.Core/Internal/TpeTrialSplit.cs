@@ -17,15 +17,23 @@ internal static class TpeTrialSplit
     // -------------------------------------------------------------------------------------------
 
     /// <summary>Python <c>default_gamma(x) = min(ceil(0.1 * x), 25)</c>.</summary>
+    /// <param name="x">The number of observed trials for which to compute the TPE split or observation weights.</param>
+    /// <returns>The preferred-group size, capped at 25 observations.</returns>
     internal static int DefaultGamma(int x) => Math.Min((int)Math.Ceiling(0.1 * x), 25);
 
     /// <summary>Python <c>default_gamma_multiobjective(x) = ceil(0.1 * x)</c>.</summary>
+    /// <param name="x">The number of observed trials for which to compute the TPE split or observation weights.</param>
+    /// <returns>The preferred-group size for multi-objective TPE.</returns>
     internal static int DefaultGammaMultiObjective(int x) => (int)Math.Ceiling(0.1 * x);
 
     /// <summary>Python <c>hyperopt_default_gamma(x) = min(ceil(0.25 * x**0.5), 25)</c>.</summary>
+    /// <param name="x">The number of observed trials for which to compute the TPE split or observation weights.</param>
+    /// <returns>The Hyperopt-compatible preferred-group size, capped at 25 observations.</returns>
     internal static int HyperoptDefaultGamma(int x) => Math.Min((int)Math.Ceiling(0.25 * Math.Pow(x, 0.5)), 25);
 
     /// <summary>Python <c>default_weights(x)</c> — uniform below 25, ramp+flat at and above 25.</summary>
+    /// <param name="x">The number of observed trials for which to compute the TPE split or observation weights.</param>
+    /// <returns>Observation weights in historical order, with the most recent 25 given unit weight.</returns>
     internal static double[] DefaultWeights(int x)
     {
         if (x == 0)
@@ -47,6 +55,10 @@ internal static class TpeTrialSplit
     }
 
     /// <summary>NumPy <c>np.linspace(start, stop, num)</c> (endpoint=True) — bit-exact.</summary>
+    /// <param name="start">The inclusive start of the interval or slice.</param>
+    /// <param name="stop">The final value of the generated numerical interval.</param>
+    /// <param name="num">The number of values in the output grid.</param>
+    /// <returns>An evenly spaced grid including both endpoints when at least two values are requested.</returns>
     private static double[] Linspace(double start, double stop, int num)
     {
         if (num <= 0)
@@ -69,6 +81,10 @@ internal static class TpeTrialSplit
     // -------------------------------------------------------------------------------------------
 
     /// <summary>Python <c>_split_trials(study, trials, n_below)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="nBelow">The number of trials to assign to the preferred group or to cover by Pareto ranks.</param>
+    /// <returns>The preferred and remaining trials, each sorted by trial number.</returns>
     internal static (List<FrozenTrial> Below, List<FrozenTrial> Above) SplitTrials(
         Study study, IReadOnlyList<FrozenTrial> trials, int nBelow)
     {
@@ -112,6 +128,10 @@ internal static class TpeTrialSplit
     }
 
     /// <summary>Python <c>_split_complete_trials(trials, study, n_below)</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="nBelow">The number of trials to assign to the preferred group or to cover by Pareto ranks.</param>
+    /// <returns>The preferred and remaining completed trials according to the study objectives.</returns>
     private static (List<FrozenTrial> Below, List<FrozenTrial> Above) SplitCompleteTrials(
         IReadOnlyList<FrozenTrial> trials, Study study, int nBelow)
     {
@@ -122,6 +142,10 @@ internal static class TpeTrialSplit
     }
 
     /// <summary>Python <c>_split_complete_trials_single_objective(trials, study, n_below)</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="nBelow">The number of trials to assign to the preferred group or to cover by Pareto ranks.</param>
+    /// <returns>The best requested completed trials and the remaining trials in objective order.</returns>
     private static (List<FrozenTrial> Below, List<FrozenTrial> Above) SplitCompleteTrialsSingleObjective(
         IReadOnlyList<FrozenTrial> trials, Study study, int nBelow)
     {
@@ -133,6 +157,9 @@ internal static class TpeTrialSplit
     }
 
     /// <summary>Python <c>_get_pruned_trial_score(trial, study)</c>.</summary>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <returns>A lexicographic score prioritizing later pruning steps and then better intermediate values.</returns>
     private static (double, double) GetPrunedTrialScore(FrozenTrial trial, Study study)
     {
         if (trial.IntermediateValues.Count > 0)
@@ -149,6 +176,10 @@ internal static class TpeTrialSplit
     }
 
     /// <summary>Python <c>_split_pruned_trials(trials, study, n_below)</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="nBelow">The number of trials to assign to the preferred group or to cover by Pareto ranks.</param>
+    /// <returns>The preferred and remaining pruned trials ranked by pruning step and intermediate value.</returns>
     private static (List<FrozenTrial> Below, List<FrozenTrial> Above) SplitPrunedTrials(
         IReadOnlyList<FrozenTrial> trials, Study study, int nBelow)
     {
@@ -163,6 +194,8 @@ internal static class TpeTrialSplit
     }
 
     /// <summary>Python <c>_get_infeasible_trial_score(trial) = sum(v for v in constraints.values() if v > 0)</c>.</summary>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <returns>The sum of positive constraint violations, or positive infinity when feasibility information is unavailable.</returns>
     private static double GetInfeasibleTrialScore(FrozenTrial trial)
     {
         double sum = 0.0;
@@ -175,6 +208,9 @@ internal static class TpeTrialSplit
     }
 
     /// <summary>Python <c>_split_infeasible_trials(trials, n_below)</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="nBelow">The number of trials to assign to the preferred group or to cover by Pareto ranks.</param>
+    /// <returns>The trials with smallest constraint violation and the remaining infeasible trials.</returns>
     private static (List<FrozenTrial> Below, List<FrozenTrial> Above) SplitInfeasibleTrials(
         IReadOnlyList<FrozenTrial> trials, int nBelow)
     {
@@ -188,6 +224,10 @@ internal static class TpeTrialSplit
     }
 
     /// <summary>Python <c>_split_complete_trials_multi_objective(trials, study, n_below)</c>.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="nBelow">The number of trials to assign to the preferred group or to cover by Pareto ranks.</param>
+    /// <returns>The preferred Pareto-ranked trials and the remainder, using hypervolume to split a partial rank.</returns>
     internal static (List<FrozenTrial> Below, List<FrozenTrial> Above) SplitCompleteTrialsMultiObjective(
         IReadOnlyList<FrozenTrial> trials, Study study, int nBelow)
     {
@@ -264,6 +304,8 @@ internal static class TpeTrialSplit
     }
 
     /// <summary>Python <c>_get_reference_point(loss_vals)</c> (sampler.py). <c>EPS = 1e-12</c>.</summary>
+    /// <param name="lossVals">Objective rows converted to minimization, one solution per row.</param>
+    /// <returns>A reference vector worse than the observed objective extremes in the operation's coordinate convention.</returns>
     private static double[] GetReferencePoint(double[][] lossVals)
     {
         int m = lossVals[0].Length;

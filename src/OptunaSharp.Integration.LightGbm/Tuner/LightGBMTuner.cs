@@ -21,6 +21,7 @@ namespace OptunaSharp.Integration.LightGbm;
 ///     <see href="https://medium.com/optuna/lightgbm-tuner-new-optuna-integration-for-hyperparameter-optimization-8b7095e99258">
 ///     the LightGBM Tuner article</see> for the algorithm.</para>
 /// </summary>
+/// <seealso href="https://optuna-integration.readthedocs.io/en/stable/reference/generated/optuna_integration.lightgbm.LightGBMTuner.html">Official stepwise tuner contract.</seealso>
 public sealed class LightGBMTuner : LightGbmBaseTuner
 {
     /// <param name="params">LightGBM parameters (native names: <c>objective</c>, <c>metric</c>, …).</param>
@@ -36,6 +37,11 @@ public sealed class LightGBMTuner : LightGbmBaseTuner
     /// <param name="showProgressBar">Accepted for parity; defaults to <c>false</c> (a .NET library divergence).</param>
     /// <param name="optunaSeed">Seed for the per-step <c>GridSampler</c>/<c>TPESampler</c> (reproducibility).</param>
     /// <param name="trainer">The training backend; defaults to <see cref="MlNetLightGbmTrainer" />.</param>
+    /// <summary>Creates a stepwise LightGBM tuner that scores each trial against explicit validation datasets.</summary>
+    /// <exception cref="NumSharp.ValueError">The existing study direction is inconsistent with the selected validation metric. Validation datasets are also required.</exception>
+    /// <exception cref="System.NotSupportedException">A model directory is requested but the custom trainer does not implement booster persistence.</exception>
+    /// <exception cref="System.IO.IOException">The requested model directory cannot be created.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Access to the requested model directory is denied.</exception>
     public LightGBMTuner(
         IReadOnlyDictionary<string, object?> @params,
         Dataset trainSet,
@@ -60,6 +66,7 @@ public sealed class LightGBMTuner : LightGbmBaseTuner
         ValidNames = validNames;
     }
 
+    /// <inheritdoc />
     private protected override OptunaObjective CreateObjective(
         List<string> targetParamNames, Dataset trainSet, string stepName)
         => new OptunaObjective(
@@ -72,6 +79,8 @@ public sealed class LightGBMTuner : LightGbmBaseTuner
     ///     <c>model_dir</c> via the trainer's <see cref="ILightGbmBoosterStore" /> — the analog of Python's
     ///     pickle reload (the .NET port persists the ML.NET model + a JSON score sidecar, not a pickle).
     /// </summary>
+    /// <returns>The best completed trial's booster, recovered from the model store when necessary.</returns>
+    /// <exception cref="NumSharp.ValueError">No trial has completed, the best model cannot be found locally or in the shared model store, or CV models were not requested.</exception>
     public Booster GetBestBooster()
     {
         if (BestBoosterWithTrialNumber is { } bb && bb.TrialNumber == Study.BestTrial.Number)
@@ -103,6 +112,20 @@ public sealed class LightGBMTuner : LightGbmBaseTuner
     ///     Port of <c>optuna_integration.lightgbm.train</c> — the drop-in wrapper that builds a
     ///     <see cref="LightGBMTuner" />, runs the full stepwise tuning, and returns the best booster.
     /// </summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="trainSet">The dataset used for training or cross-validation.</param>
+    /// <param name="validSets">The validation datasets whose metrics are recorded.</param>
+    /// <param name="numBoostRound">The requested number of boosting rounds for each trial.</param>
+    /// <param name="validNames">Names aligned with the validation datasets; omitted names are resolved by the tuner.</param>
+    /// <param name="timeBudget">The total tuning budget in seconds, or null for no time limit.</param>
+    /// <param name="sampleSize">An optional maximum number of trailing training rows used for tuning.</param>
+    /// <param name="study">An existing study with a direction consistent with the selected metric, or null to create one.</param>
+    /// <param name="optunaCallbacks">Optional callbacks invoked by Study.Optimize after each trial.</param>
+    /// <param name="modelDir">An optional directory shared by workers for persisted trial boosters.</param>
+    /// <param name="showProgressBar">Whether the caller requests progress output during tuning.</param>
+    /// <param name="optunaSeed">The seed for OptunaSharp samplers used by the tuning steps.</param>
+    /// <param name="trainer">The training implementation, or null to use the ML.NET LightGBM adapter.</param>
+    /// <returns>The booster with the best validation score after stepwise tuning.</returns>
     public static Booster Train(
         IReadOnlyDictionary<string, object?> @params,
         Dataset trainSet,

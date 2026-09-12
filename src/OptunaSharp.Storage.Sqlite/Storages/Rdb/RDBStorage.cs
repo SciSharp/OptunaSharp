@@ -105,6 +105,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     ///     <see cref="SqliteConnectionStringBuilder" /> — the convenience form of
     ///     <see cref="SqliteRdbOptions.ConfigureConnectionString" />.
     /// </summary>
+    /// <param name="url">The database connection URL to resolve.</param>
+    /// <param name="configureConnectionString">The callback applied to the connection-string builder before opening the database.</param>
     public RDBStorage(string url, Action<SqliteConnectionStringBuilder> configureConnectionString)
         : this(url, new SqliteRdbOptions { ConfigureConnectionString = configureConnectionString })
     {
@@ -114,6 +116,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     ///     Create an RDB storage from a URL with the full <see cref="SqliteRdbOptions" /> surface —
     ///     every connection-string option and load-bearing <c>PRAGMA</c>, beyond Optuna's own API.
     /// </summary>
+    /// <param name="url">The database connection URL to resolve.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
     public RDBStorage(string url, SqliteRdbOptions options)
     {
         ArgumentNullException.ThrowIfNull(url);
@@ -128,6 +132,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     ///     connection string). Any typed connection-string options on <paramref name="options" /> are
     ///     layered on top of the builder.
     /// </summary>
+    /// <param name="connectionStringBuilder">The native provider connection-string builder, customized before the connection opens.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
     public RDBStorage(SqliteConnectionStringBuilder connectionStringBuilder, SqliteRdbOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(connectionStringBuilder);
@@ -158,6 +164,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
     // ------------------------------------------------------------------ connection bootstrap
 
+    /// <summary>Opens and configures the storage resources, then initializes or verifies the Optuna schema.</summary>
+    /// <param name="connection">The database or Redis connection used by the backend.</param>
+    /// <param name="ownsConnection">Whether the storage should dispose the supplied connection when it is disposed.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
+    /// <param name="url">The database connection URL to resolve.</param>
     private void Initialize(SqliteConnection connection, bool ownsConnection, SqliteRdbOptions options, string url)
     {
         ValidateOptions(options);
@@ -188,6 +199,9 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     // Port of the heartbeat validation + warnings block of `RDBStorage.__init__`
     // (optuna/storages/_rdb/storage.py) — the exact order matters (the experimental warning fires
     // before the grace-period check; the deprecation warning fires after the "specify only one" check).
+    /// <summary>Rejects invalid heartbeat settings and conflicting callback aliases before opening storage.</summary>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
+    /// <exception cref="NumSharp.ValueError">A heartbeat interval or grace period is nonpositive, or both callback aliases are supplied.</exception>
     private static void ValidateOptions(SqliteRdbOptions options)
     {
         if (options.HeartbeatInterval is not null)
@@ -210,9 +224,15 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
                 WarningCategory.FutureWarning);
     }
 
+    /// <summary>Substitutes the supported schema version into an Optuna storage URL template.</summary>
+    /// <param name="template">A storage URL that may contain the schema-version placeholder.</param>
+    /// <returns>The URL with the schema-version placeholder replaced.</returns>
     private static string FillStorageUrlTemplate(string template)
         => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(CultureInfo.InvariantCulture));
 
+    /// <summary>Extracts the SQLite file or in-memory target from an Optuna-style URL.</summary>
+    /// <param name="url">The database connection URL to resolve.</param>
+    /// <returns>The SQLite data-source name used to open the connection.</returns>
     private static string ResolveDataSource(string url)
     {
         const string prefix = "sqlite:///";
@@ -223,6 +243,10 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return url; // tolerate a bare file path
     }
 
+    /// <summary>Builds the SQLite connection string from the resolved URL and typed options.</summary>
+    /// <param name="filledUrl">The storage URL after schema-version template substitution.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
+    /// <returns>The configured native SQLite connection string.</returns>
     private static string BuildConnectionStringFromUrl(string filledUrl, SqliteRdbOptions options)
     {
         string dataSource = ResolveDataSource(filledUrl);
@@ -234,6 +258,9 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return builder.ConnectionString;
     }
 
+    /// <summary>Applies explicitly configured SQLite connection settings and the customization callback.</summary>
+    /// <param name="builder">The native connection-string builder receiving the parsed options.</param>
+    /// <param name="o">The configured storage options; null-valued settings leave provider defaults unchanged.</param>
     private static void ApplyConnectionStringOptions(SqliteConnectionStringBuilder builder, SqliteRdbOptions o)
     {
         if (o.Mode is not null)
@@ -251,12 +278,15 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         o.ConfigureConnectionString?.Invoke(builder);
     }
 
+    /// <summary>Creates the missing Optuna tables and indexes using the pinned SQLite schema.</summary>
     private void CreateSchema()
     {
         foreach (var stmt in RdbModels.SchemaStatements)
             Exec(stmt, null);
     }
 
+    /// <summary>Applies opted-in SQLite runtime settings before schema initialization.</summary>
+    /// <param name="o">The configured storage options; null-valued settings leave provider defaults unchanged.</param>
     private void ApplyPragmas(SqliteRdbOptions o)
     {
         // page_size / auto_vacuum only take effect on a fresh database, so apply them before any table.
@@ -286,12 +316,15 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         o.ConfigureConnection?.Invoke(_conn);
     }
 
+    /// <summary>Executes one implementation-selected SQLite PRAGMA body.</summary>
+    /// <param name="body">The trusted PRAGMA expression executed after the PRAGMA keyword.</param>
     private void ExecPragma(string body) => Exec("PRAGMA " + body, null);
 
     // Port of `_VersionManager._init_version_info_model`. The version tables are created here (not only
     // in CreateSchema) so the two version-tracking tables exist even under `skip_table_creation` — the
     // mode the CLI's `storage upgrade` opens with — mirroring Python, where the ORM insert / alembic
     // stamp materialize them regardless. Both are IF NOT EXISTS no-ops on the normal fresh-DB path.
+    /// <summary>Creates the informational schema/library version record if it is absent.</summary>
     private void InitVersionInfo()
     {
         Exec(RdbModels.VersionInfoTableDdl, null);
@@ -311,6 +344,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     // database that must be migrated forward". The current OptunaSharp code always stamped head, which
     // silently mislabelled an old database as up-to-date; stamping the base is what lets the
     // compatibility check (and `storage upgrade`) see it needs migrating.
+    /// <summary>Initializes the Alembic migration marker for a newly created or legacy database.</summary>
     private void InitAlembic()
     {
         Exec(RdbModels.AlembicVersionTableDdl, null);
@@ -324,10 +358,14 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     // Port of `_VersionManager._is_alembic_supported`: `version_info` is guaranteed to exist by the
     // preceding InitVersionInfo, so this is true when the stored schema_version equals the current one
     // (a new or already-current DB) and false for a pre-alembic database (an older schema_version).
+    /// <summary>Checks whether the legacy schema version can be associated with the supported Alembic chain.</summary>
+    /// <returns>Whether the database's legacy schema version is supported by the migration chain.</returns>
     private bool IsAlembicSupported()
         => ScalarNullableLong("SELECT schema_version FROM version_info WHERE version_info_id = 1", null)
             == RdbModels.SchemaVersion;
 
+    /// <summary>Checks that the database migration revision is compatible with this storage implementation.</summary>
+    /// <exception cref="NumSharp.RuntimeError">The Alembic marker is absent or the schema revision is incompatible.</exception>
     private void CheckTableSchemaCompatibility()
     {
         string? libraryVersion = ScalarString("SELECT library_version FROM version_info", null);
@@ -348,6 +386,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
     // ------------------------------------------------------------------ study manipulation
 
+    /// <inheritdoc />
+    /// <exception cref="DuplicatedStudyError">Another study already uses the requested name.</exception>
     public override int CreateNewStudy(IReadOnlyList<StudyDirection> directions, string? studyName = null)
     {
         lock (_lock)
@@ -379,6 +419,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Generates a study name and checks the database until the name is unused.</summary>
+    /// <returns>A generated name that is not currently present in the studies table.</returns>
     private string CreateUniqueStudyName()
     {
         while (true)
@@ -390,6 +432,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <inheritdoc />
     public override void DeleteStudy(int studyId)
     {
         lock (_lock)
@@ -415,12 +458,19 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <inheritdoc />
     public override void SetStudyUserAttr(int studyId, string key, object? value)
         => SetStudyAttr("study_user_attributes", studyId, key, value);
 
+    /// <inheritdoc />
     public override void SetStudySystemAttr(int studyId, string key, object? value)
         => SetStudyAttr("study_system_attributes", studyId, key, value);
 
+    /// <summary>Upserts a JSON-serializable attribute after verifying that its study exists.</summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="key">The attribute name or exact storage key to access.</param>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
     private void SetStudyAttr(string table, int studyId, string key, object? value)
     {
         lock (_lock)
@@ -435,6 +485,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">No study has the requested name.</exception>
     public override int GetStudyIdFromName(string studyName)
     {
         lock (_lock)
@@ -446,6 +498,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">The study identifier does not exist.</exception>
     public override string GetStudyNameFromId(int studyId)
     {
         lock (_lock)
@@ -457,6 +511,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <inheritdoc />
     public override List<StudyDirection> GetStudyDirections(int studyId)
     {
         lock (_lock)
@@ -472,12 +527,19 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> GetStudyUserAttrs(int studyId)
         => GetStudyAttrs("study_user_attributes", "study_user_attribute_id", studyId);
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> GetStudySystemAttrs(int studyId)
         => GetStudyAttrs("study_system_attributes", "study_system_attribute_id", studyId);
 
+    /// <summary>Loads and decodes all attributes of the selected kind for a study.</summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <param name="idColumn">The trusted identifier column used to group records.</param>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <returns>Decoded attributes in their stored traversal order.</returns>
     private OrderedDict<string, object?> GetStudyAttrs(string table, string idColumn, int studyId)
     {
         lock (_lock)
@@ -493,6 +555,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <inheritdoc />
     public override List<FrozenStudy> GetAllStudies()
     {
         lock (_lock)
@@ -533,6 +596,10 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Loads decoded study attributes in one pass, grouped by storage-wide study identifier.</summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <param name="idColumn">The trusted identifier column used to group records.</param>
+    /// <returns>A dictionary mapping study identifiers to decoded attribute dictionaries.</returns>
     private Dictionary<int, OrderedDict<string, object?>> LoadAllStudyAttrs(string table, string idColumn)
     {
         var byStudy = new Dictionary<int, OrderedDict<string, object?>>();
@@ -551,9 +618,14 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
     // ------------------------------------------------------------------ trial creation
 
+    /// <inheritdoc />
     public override int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null)
         => CreateNewTrialFull(studyId, templateTrial).TrialId;
 
+    /// <summary>Creates a trial and returns its complete stored snapshot, optionally copied from a template.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="templateTrial">An optional trial snapshot whose attributes, parameters, values, and state initialize the new record.</param>
+    /// <returns>The newly stored trial including its assigned identifier and study-local number.</returns>
     public FrozenTrial CreateNewTrialFull(int studyId, FrozenTrial? templateTrial = null)
     {
         lock (_lock)
@@ -646,10 +718,17 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
     // ------------------------------------------------------------------ trial params
 
+    /// <inheritdoc />
     public override void SetTrialParam(
         int trialId, string paramName, double paramValueInternal, BaseDistribution distribution)
         => SetTrialParamWithCachedDistribution(trialId, paramName, paramValueInternal, distribution, null);
 
+    /// <summary>Stores a parameter after checking trial mutability and distribution compatibility.</summary>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="paramName">The case-sensitive parameter name.</param>
+    /// <param name="paramValueInternal">The numeric internal representation defined by the parameter distribution.</param>
+    /// <param name="distribution">The distribution describing the parameter and its internal representation.</param>
+    /// <param name="cachedDistribution">A previously validated distribution for this parameter, or null when storage must check compatibility.</param>
     public void SetTrialParamWithCachedDistribution(
         int trialId,
         string paramName,
@@ -665,6 +744,13 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Upserts a compatible parameter inside the caller-owned transaction without committing it.</summary>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="paramName">The case-sensitive parameter name.</param>
+    /// <param name="paramValueInternal">The numeric internal representation defined by the parameter distribution.</param>
+    /// <param name="distribution">The distribution describing the parameter and its internal representation.</param>
+    /// <param name="cachedDistribution">A previously validated distribution for this parameter, or null when storage must check compatibility.</param>
     private void SetTrialParamNoCommit(
         SqliteTransaction tx,
         int trialId,
@@ -706,6 +792,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">The trial or requested parameter does not exist.</exception>
     public override double GetTrialParam(int trialId, string paramName)
     {
         lock (_lock)
@@ -722,6 +810,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
     // ------------------------------------------------------------------ trial state / values
 
+    /// <inheritdoc />
     public override bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null)
     {
         lock (_lock)
@@ -763,6 +852,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Upserts a tagged objective value inside the caller-owned transaction.</summary>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="objective">The zero-based objective index.</param>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
     private void SetTrialValueNoCommit(SqliteTransaction tx, int trialId, int objective, double value)
     {
         var (stored, type) = RdbModels.ValueToStoredRepr(value);
@@ -772,6 +866,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
             tx, trialId, objective, (object?)stored, type);
     }
 
+    /// <inheritdoc />
     public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
     {
         lock (_lock)
@@ -782,6 +877,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Upserts a tagged intermediate report inside the caller-owned transaction.</summary>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="step">The nonnegative intermediate-report step.</param>
+    /// <param name="intermediateValue">The reported value, including nonfinite values represented by separate database tags.</param>
     private void SetTrialIntermediateValueNoCommit(SqliteTransaction tx, int trialId, int step, double intermediateValue)
     {
         var trial = FindTrialOrRaise(trialId, tx);
@@ -796,12 +896,19 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
             tx, trialId, step, (object?)stored, type);
     }
 
+    /// <inheritdoc />
     public override void SetTrialUserAttr(int trialId, string key, object? value)
         => SetTrialAttr("trial_user_attributes", trialId, key, value);
 
+    /// <inheritdoc />
     public override void SetTrialSystemAttr(int trialId, string key, object? value)
         => SetTrialAttr("trial_system_attributes", trialId, key, value);
 
+    /// <summary>Upserts a JSON-serializable attribute after verifying that its trial is still mutable.</summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="key">The attribute name or exact storage key to access.</param>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
     private void SetTrialAttr(string table, int trialId, string key, object? value)
     {
         lock (_lock)
@@ -812,6 +919,12 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Upserts a trial attribute inside the caller-owned transaction without committing it.</summary>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="key">The attribute name or exact storage key to access.</param>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
     private void SetTrialAttrNoCommit(SqliteTransaction tx, string table, int trialId, string key, object? value)
     {
         var trial = FindTrialOrRaise(trialId, tx);
@@ -824,6 +937,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
     // ------------------------------------------------------------------ trial access
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">The requested trial number does not exist in the study.</exception>
     public override int GetTrialIdFromStudyIdTrialNumber(int studyId, int trialNumber)
     {
         lock (_lock)
@@ -837,6 +952,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <inheritdoc />
     public override FrozenTrial GetTrial(int trialId)
     {
         lock (_lock)
@@ -848,6 +964,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <inheritdoc />
     public override List<FrozenTrial> GetAllTrials(
         int studyId, bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
     {
@@ -860,6 +977,12 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Loads explicitly included trials and trials newer than an incremental trial-id cursor.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="states">The allowed trial states, or null to include every state.</param>
+    /// <param name="includedTrialIds">Trial identifiers to include even when they are at or below the incremental cursor.</param>
+    /// <param name="trialIdGreaterThan">The exclusive lower trial-id bound for incremental reads.</param>
+    /// <returns>Matching trial snapshots, ordered by trial number.</returns>
     public List<FrozenTrial> GetTrialsPartial(
         int studyId,
         IReadOnlyCollection<TrialState>? states,
@@ -873,6 +996,13 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Materializes matching trial records and their parameters, values, and attributes.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="singleTrialId">An optional identifier restricting the query to one trial.</param>
+    /// <param name="states">The allowed trial states, or null to include every state.</param>
+    /// <param name="includedTrialIds">Trial identifiers to include even when they are at or below the incremental cursor.</param>
+    /// <param name="trialIdGreaterThan">The exclusive lower trial-id bound for incremental reads.</param>
+    /// <returns>Matching trial snapshots with their child records materialized.</returns>
     private List<FrozenTrial> GetTrialsInternal(
         int? studyId,
         int? singleTrialId,
@@ -972,6 +1102,18 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return result;
     }
 
+    /// <summary>Combines a trial row and its child rows into the public trial snapshot.</summary>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="number">The zero-based trial number within its study.</param>
+    /// <param name="state">The trial lifecycle state to convert or persist.</param>
+    /// <param name="datetimeStart">The stored trial-start timestamp, or null if the trial has not started.</param>
+    /// <param name="datetimeComplete">The stored completion timestamp, or null for an unfinished trial.</param>
+    /// <param name="paramRows">The parameter rows and serialized distributions belonging to this trial, or null when absent.</param>
+    /// <param name="valueRows">Objective rows indexed by their objective number, or null when absent.</param>
+    /// <param name="intermediateRows">Intermediate-report rows indexed by step, or null when absent.</param>
+    /// <param name="userRows">Serialized user attributes for the trial, or null when absent.</param>
+    /// <param name="systemRows">Serialized system attributes for the trial, or null when absent.</param>
+    /// <returns>A detached snapshot carrying the supplied trial data.</returns>
     private FrozenTrial BuildFrozenTrial(
         int trialId,
         int number,
@@ -1034,6 +1176,9 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
             trialId: trialId);
     }
 
+    /// <summary>Loads serialized distributions and parameter values grouped by trial identifier.</summary>
+    /// <param name="trialIds">The storage-wide identifiers whose child records are read.</param>
+    /// <returns>Parameter rows grouped by storage-wide trial identifier.</returns>
     private Dictionary<int, List<(long ParamId, string Name, double Value, string DistJson)>> LoadTrialParams(
         IReadOnlyList<int> trialIds)
     {
@@ -1050,6 +1195,9 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return byTrial;
     }
 
+    /// <summary>Loads objective values and their nonfinite-value tags grouped by trial identifier.</summary>
+    /// <param name="trialIds">The storage-wide identifiers whose child records are read.</param>
+    /// <returns>Objective rows grouped by storage-wide trial identifier.</returns>
     private Dictionary<int, List<(int Objective, double? Value, string Type)>> LoadTrialValues(
         IReadOnlyList<int> trialIds)
     {
@@ -1066,6 +1214,9 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return byTrial;
     }
 
+    /// <summary>Loads intermediate reports and their nonfinite-value tags grouped by trial identifier.</summary>
+    /// <param name="trialIds">The storage-wide identifiers whose child records are read.</param>
+    /// <returns>Intermediate-report rows grouped by storage-wide trial identifier.</returns>
     private Dictionary<int, List<(int Step, double? Value, string Type)>> LoadTrialIntermediateValues(
         IReadOnlyList<int> trialIds)
     {
@@ -1082,6 +1233,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return byTrial;
     }
 
+    /// <summary>Loads serialized trial attributes grouped by trial identifier.</summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <param name="idColumn">The trusted identifier column used to group records.</param>
+    /// <param name="trialIds">The storage-wide identifiers whose child records are read.</param>
+    /// <returns>Attribute rows grouped by storage-wide trial identifier.</returns>
     private Dictionary<int, List<(string Key, string Json)>> LoadTrialAttrs(
         string table, string idColumn, IReadOnlyList<int> trialIds)
     {
@@ -1101,6 +1257,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
     // ------------------------------------------------------------------ best trial
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The study has more than one objective.</exception>
     public override FrozenTrial GetBestTrial(int studyId)
     {
         var directions = GetStudyDirections(studyId);
@@ -1110,6 +1268,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return GetTrial(trialId);
     }
 
+    /// <summary>Finds the completed trial with the best first-objective value for the requested direction.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="direction">The objective direction used for ordering or representation conversion.</param>
+    /// <returns>The storage-wide identifier of the best completed trial.</returns>
+    /// <exception cref="NumSharp.ValueError">No completed trial has an objective value to compare.</exception>
     public int GetBestTrialId(int studyId, StudyDirection direction)
     {
         lock (_lock)
@@ -1134,6 +1297,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
     // ------------------------------------------------------------------ heartbeat
 
+    /// <summary>Inserts or refreshes the trial heartbeat using the database clock or storage timestamp convention.</summary>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
     public void RecordHeartbeat(int trialId)
     {
         lock (_lock)
@@ -1145,6 +1310,9 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Finds running trials whose recorded heartbeat is older than the configured grace period.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <returns>Identifiers of running trials whose existing heartbeat has expired.</returns>
     public List<int> GetStaleTrialIds(int studyId)
     {
         lock (_lock)
@@ -1173,12 +1341,20 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Returns the configured heartbeat recording interval.</summary>
+    /// <returns>The heartbeat interval in seconds, or null when heartbeat recording is disabled.</returns>
     public int? GetHeartbeatInterval() => _heartbeatInterval;
 
+    /// <summary>Returns the callback invoked after a heartbeat-stale trial is failed.</summary>
+    /// <returns>The configured stale-trial callback, or null if no callback was supplied.</returns>
     public Action<Study, FrozenTrial>? GetHeartbeatStaleTrialCallback() => _heartbeatStaleTrialCallback;
 
     // ------------------------------------------------------------------ helpers
 
+    /// <summary>Verifies that the requested study record exists before accessing its children.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <exception cref="NumSharp.KeyError">The study identifier does not exist.</exception>
     private void EnsureStudyExists(int studyId, SqliteTransaction? tx)
     {
         long? id = ScalarNullableLong("SELECT study_id FROM studies WHERE study_id = $p0", tx, studyId);
@@ -1186,6 +1362,10 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
             throw new KeyError(RdbModels.NotFoundMsg);
     }
 
+    /// <summary>Verifies that the requested trial record exists before accessing its children.</summary>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <exception cref="NumSharp.KeyError">The trial identifier does not exist.</exception>
     private void EnsureTrialExists(int trialId, SqliteTransaction? tx)
     {
         long? id = ScalarNullableLong("SELECT trial_id FROM trials WHERE trial_id = $p0", tx, trialId);
@@ -1193,6 +1373,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
             throw new KeyError(RdbModels.NotFoundMsg);
     }
 
+    /// <summary>Reads the trial number, state, and owning study needed to validate an update.</summary>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <returns>The trial's study-local number, state, and owning study identifier.</returns>
+    /// <exception cref="NumSharp.KeyError">The trial identifier does not exist.</exception>
     private (int Number, TrialState State, int StudyId) FindTrialOrRaise(int trialId, SqliteTransaction? tx)
     {
         (int, TrialState, int)? found = null;
@@ -1208,6 +1393,9 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return found.Value;
     }
 
+    /// <summary>Rejects mutations of a trial that has reached a finished state.</summary>
+    /// <param name="trial">The trial snapshot or database record being read or validated.</param>
+    /// <exception cref="UpdateFinishedTrialError">The trial is already complete, pruned, or failed.</exception>
     private static void CheckTrialIsUpdatableOrRaise((int Number, TrialState State, int StudyId) trial)
     {
         if (trial.State.IsFinished())
@@ -1215,13 +1403,25 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
                 $"Trial#{trial.Number} has already finished and can not be updated.");
     }
 
+    /// <summary>Converts an optional timestamp to its database representation without inventing a missing date.</summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The serialized timestamp or null when the timestamp is absent.</returns>
     private static object? OrNull(DateTime? value)
         => value is null ? null : RdbModels.FormatDatetime(value.Value);
 
+    /// <summary>Recognizes provider-specific uniqueness failures so duplicate studies can be translated consistently.</summary>
+    /// <param name="e">The provider exception to classify or translate.</param>
+    /// <returns>Whether the exception denotes a uniqueness-constraint violation.</returns>
     private static bool IsUniqueViolation(SqliteException e)
         // SQLITE_CONSTRAINT (19) — includes the UNIQUE-constraint sub-code 2067.
         => e.SqliteErrorCode == 19;
 
+    /// <summary>Reads trial child rows in bounded identifier batches to respect SQLite parameter limits.</summary>
+    /// <param name="columns">The trusted projection columns selected from the schema.</param>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <param name="trialIds">The storage-wide identifiers whose child records are read.</param>
+    /// <param name="onRow">The callback consuming each current reader row before the reader advances or is disposed.</param>
+    /// <param name="orderBy">An optional trusted ordering clause applied to child-row queries.</param>
     private void ReadChildrenInChunks(
         string columns, string table, IReadOnlyList<int> trialIds, Action<SqliteDataReader> onRow, string? orderBy = null)
     {
@@ -1246,6 +1446,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         }
     }
 
+    /// <summary>Creates a parameterized SQLite command associated with the selected transaction.</summary>
+    /// <param name="sql">The implementation-owned SQL command text with positional parameter placeholders.</param>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="args">Values bound to the SQL command parameters in placeholder order.</param>
+    /// <returns>A command owned by the caller, which must dispose it after execution.</returns>
     private SqliteCommand NewCommand(string sql, SqliteTransaction? tx, params object?[] args)
     {
         var cmd = _conn.CreateCommand();
@@ -1257,12 +1462,21 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return cmd;
     }
 
+    /// <summary>Executes a parameterized non-query and disposes its command.</summary>
+    /// <param name="sql">The implementation-owned SQL command text with positional parameter placeholders.</param>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="args">Values bound to the SQL command parameters in placeholder order.</param>
     private void Exec(string sql, SqliteTransaction? tx, params object?[] args)
     {
         using var cmd = NewCommand(sql, tx, args);
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Invokes a callback for each result row while the SQLite reader remains open.</summary>
+    /// <param name="sql">The implementation-owned SQL command text with positional parameter placeholders.</param>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="onRow">The callback consuming each current reader row before the reader advances or is disposed.</param>
+    /// <param name="args">Values bound to the SQL command parameters in placeholder order.</param>
     private void Query(string sql, SqliteTransaction? tx, Action<SqliteDataReader> onRow, params object?[] args)
     {
         using var cmd = NewCommand(sql, tx, args);
@@ -1271,12 +1485,22 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
             onRow(reader);
     }
 
+    /// <summary>Reads a required integer scalar from a parameterized SQLite query.</summary>
+    /// <param name="sql">The implementation-owned SQL command text with positional parameter placeholders.</param>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="args">Values bound to the SQL command parameters in placeholder order.</param>
+    /// <returns>The first scalar converted to a 64-bit integer.</returns>
     private long ScalarLong(string sql, SqliteTransaction? tx, params object?[] args)
     {
         using var cmd = NewCommand(sql, tx, args);
         return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
+    /// <summary>Reads an optional integer scalar from a parameterized SQLite query.</summary>
+    /// <param name="sql">The implementation-owned SQL command text with positional parameter placeholders.</param>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="args">Values bound to the SQL command parameters in placeholder order.</param>
+    /// <returns>The first scalar converted to a 64-bit integer, or null for SQL NULL or no result.</returns>
     private long? ScalarNullableLong(string sql, SqliteTransaction? tx, params object?[] args)
     {
         using var cmd = NewCommand(sql, tx, args);
@@ -1284,6 +1508,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return value is null or DBNull ? null : Convert.ToInt64(value, CultureInfo.InvariantCulture);
     }
 
+    /// <summary>Reads an optional floating-point scalar from a parameterized SQLite query.</summary>
+    /// <param name="sql">The implementation-owned SQL command text with positional parameter placeholders.</param>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="args">Values bound to the SQL command parameters in placeholder order.</param>
+    /// <returns>The first scalar converted to a double, or null for SQL NULL or no result.</returns>
     private double? ScalarNullableDouble(string sql, SqliteTransaction? tx, params object?[] args)
     {
         using var cmd = NewCommand(sql, tx, args);
@@ -1291,6 +1520,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return value is null or DBNull ? null : Convert.ToDouble(value, CultureInfo.InvariantCulture);
     }
 
+    /// <summary>Reads an optional string scalar from a parameterized SQLite query.</summary>
+    /// <param name="sql">The implementation-owned SQL command text with positional parameter placeholders.</param>
+    /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
+    /// <param name="args">Values bound to the SQL command parameters in placeholder order.</param>
+    /// <returns>The first scalar as a string, or null for SQL NULL or no result.</returns>
     private string? ScalarString(string sql, SqliteTransaction? tx, params object?[] args)
     {
         using var cmd = NewCommand(sql, tx, args);

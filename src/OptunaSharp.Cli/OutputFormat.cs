@@ -21,11 +21,22 @@ internal sealed class PyTuple : IReadOnlyList<object?>
 {
     private readonly IReadOnlyList<object?> _items;
 
+    /// <summary>Copies values into a tuple-distinguishing wrapper used by Python-compatible output rendering.</summary>
+    /// <param name="items">The sequence copied into tuple storage in its current order.</param>
     internal PyTuple(IEnumerable<object?> items) => _items = items.ToList();
 
+    /// <summary>The number of values stored in the tuple.</summary>
     public int Count => _items.Count;
+    /// <summary>The tuple element at the requested index.</summary>
+    /// <param name="index">The zero-based tuple element index.</param>
+    /// <returns>The stored value, including null when that tuple element is None.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The index is negative or is not less than Count.</exception>
     public object? this[int index] => _items[index];
+    /// <summary>Enumerates tuple elements in their stored order.</summary>
+    /// <returns>An enumerator over the tuple values in order.</returns>
     public IEnumerator<object?> GetEnumerator() => _items.GetEnumerator();
+    /// <summary>Enumerates tuple elements in their stored order.</summary>
+    /// <returns>An enumerator over the tuple values in order.</returns>
     IEnumerator IEnumerable.GetEnumerator() => _items.GetEnumerator();
 }
 
@@ -43,9 +54,21 @@ internal static class OutputFormat
 
     // A column key: (name, nested). `nested` is "" (non-nested), a string (param / user_attr / metric
     // name), or a boxed int index (objective `values`). A record maps column keys to raw cell values.
+    /// <summary>Identifies one output field and its optional nested key or objective index.</summary>
+    /// <param name="Name">The top-level output column name.</param>
+    /// <param name="Nested">The nested name, objective index, or empty string for an unnested column.</param>
     internal readonly record struct Column(string Name, object Nested);
 
-    internal enum ValueType { None = 0, Numeric = 1, String = 2 }
+    /// <summary>Classifies table cells for column alignment and missing-value rendering.</summary>
+    internal enum ValueType
+    {
+        /// <summary>An absent value rendered as a blank table cell.</summary>
+        None = 0,
+        /// <summary>A numeric or Boolean value, eligible for right-aligned output.</summary>
+        Numeric = 1,
+        /// <summary>A textual or composite value requiring left-aligned output.</summary>
+        String = 2
+    }
 
     // ------------------------------------------------------------------ _format_value
 
@@ -54,6 +77,8 @@ internal static class OutputFormat
     ///     string; recurse into lists/tuples/dicts; everything else (incl. <c>timedelta</c>) to
     ///     <c>str(value)</c>.
     /// </summary>
+    /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
+    /// <returns>The recursively formatted value, retaining numeric, Boolean, and null values.</returns>
     internal static object? FormatValue(object? value)
     {
         switch (value)
@@ -93,12 +118,18 @@ internal static class OutputFormat
     // ------------------------------------------------------------------ str()
 
     /// <summary>CPython <c>str(value)</c>, tuple-aware (a <see cref="PyTuple" /> renders as <c>(a,)</c>).</summary>
+    /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
+    /// <returns>The Python-style string representation.</returns>
     internal static string PyStr(object? value)
         => value is PyTuple tup ? PythonRepr.TupleRepr(tup) : PythonRepr.Str(value);
 
     // ------------------------------------------------------------------ _convert_to_dict
 
     /// <summary>Python <c>_convert_to_dict</c>: (records, columns) -> (row dicts keyed by header, header).</summary>
+    /// <param name="records">The output records in row order.</param>
+    /// <param name="columns">The ordered top-level and nested column keys to include.</param>
+    /// <param name="flatten">Whether nested mappings and objective arrays become separate named columns.</param>
+    /// <returns>Ordered row dictionaries and their common display header.</returns>
     internal static (List<OrderedDictionary> Values, List<string> Header) ConvertToDict(
         List<Dictionary<Column, object?>> records, List<Column> columns, bool flatten)
     {
@@ -198,17 +229,32 @@ internal static class OutputFormat
         return (ret, header);
     }
 
+    /// <summary>Checks whether a column key denotes a nested field rather than the empty sentinel.</summary>
+    /// <param name="nested">The second component of an output column key.</param>
+    /// <returns>Whether the nested component is not the empty-string sentinel.</returns>
     private static bool NestedNonEmpty(object nested) => !(nested is string s && s.Length == 0);
+    /// <summary>Formats a nested key using invariant culture for stable flattened column names.</summary>
+    /// <param name="nested">The second component of an output column key.</param>
+    /// <returns>The invariant-culture nested key text.</returns>
     private static string NestedToStr(object nested) => Convert.ToString(nested, CultureInfo.InvariantCulture)!;
 
     // Python's `isinstance(v, (list, tuple))` — a dict is neither, so it must NOT be expanded by index
     // (a nested="" dict column such as `user_attrs` stays a dict in the flatten path).
+    /// <summary>Recognizes sequences that expand by position while excluding strings and dictionaries.</summary>
+    /// <param name="v">The value inspected for list/tuple formatting.</param>
+    /// <returns>Whether the value expands as a positional sequence.</returns>
     private static bool IsListOrTuple(object? v) => v is PyTuple || (v is IEnumerable && v is not string && v is not IDictionary);
+    /// <summary>Counts elements in a previously classified list or tuple value.</summary>
+    /// <param name="v">The value inspected for list/tuple formatting.</param>
+    /// <returns>The sequence element count.</returns>
     private static int SeqLen(object? v) => ((IEnumerable)v!).Cast<object?>().Count();
 
     // ------------------------------------------------------------------ _dump_value
 
     /// <summary>Python <c>_dump_value</c>: space-joined cells per row, None -> "".</summary>
+    /// <param name="records">The output records in row order.</param>
+    /// <param name="header">The ordered output column labels.</param>
+    /// <returns>Rows rendered as space-separated cells with newline separators.</returns>
     private static string DumpValue(List<OrderedDictionary> records, List<string> header)
     {
         var rows = new List<string>();
@@ -228,9 +274,13 @@ internal static class OutputFormat
 
     private sealed class CellValue
     {
+        /// <summary>The raw cell value retained for rendering.</summary>
         internal readonly object? Value;
+        /// <summary>The cell classification used when computing column alignment.</summary>
         internal readonly ValueType Type;
 
+        /// <summary>Classifies a raw value once so table width and alignment can be computed consistently.</summary>
+        /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
         internal CellValue(object? value)
         {
             Value = value;
@@ -243,8 +293,14 @@ internal static class OutputFormat
             };
         }
 
+        /// <summary>Measures the Python-style rendering of the cell in characters.</summary>
+        /// <returns>The character count of the cell's Python-style representation.</returns>
         internal int Width() => PyStr(Value).Length;
 
+        /// <summary>Pads the cell to the requested width using the column-wide alignment rule.</summary>
+        /// <param name="valueType">The column-wide alignment classification.</param>
+        /// <param name="width">The output column width in characters.</param>
+        /// <returns>The padded cell text, or spaces for a missing value.</returns>
         internal string GetString(ValueType valueType, int width)
         {
             if (Value is null)
@@ -255,6 +311,9 @@ internal static class OutputFormat
     }
 
     /// <summary>Python <c>_dump_table</c>: the boxed, per-column-aligned ASCII table.</summary>
+    /// <param name="records">The output records in row order.</param>
+    /// <param name="header">The ordered output column labels.</param>
+    /// <returns>The bordered, aligned ASCII table.</returns>
     private static string DumpTable(List<OrderedDictionary> records, List<string> header)
     {
         var rows = records
@@ -298,13 +357,33 @@ internal static class OutputFormat
     // ------------------------------------------------------------------ _format_output
 
     /// <summary>Python <c>_format_output</c> for a list of records.</summary>
+    /// <param name="records">The output records in row order.</param>
+    /// <param name="columns">The ordered top-level and nested column keys to include.</param>
+    /// <param name="format">The output format: value, table, json, or yaml.</param>
+    /// <param name="flatten">Whether nested mappings and objective arrays become separate named columns.</param>
+    /// <returns>The selected representation of all output records.</returns>
+    /// <exception cref="CLIUsageError">The requested output format is unsupported.</exception>
     internal static string FormatList(List<Dictionary<Column, object?>> records, List<Column> columns, string format, bool flatten)
         => Format(records, columns, format, flatten, single: false);
 
     /// <summary>Python <c>_format_output</c> for a single record (json/yaml emit the bare object).</summary>
+    /// <param name="record">The single output record to format.</param>
+    /// <param name="columns">The ordered top-level and nested column keys to include.</param>
+    /// <param name="format">The output format: value, table, json, or yaml.</param>
+    /// <param name="flatten">Whether nested mappings and objective arrays become separate named columns.</param>
+    /// <returns>The selected representation of the single output record.</returns>
+    /// <exception cref="CLIUsageError">The requested output format is unsupported.</exception>
     internal static string FormatSingle(Dictionary<Column, object?> record, List<Column> columns, string format, bool flatten)
         => Format(new List<Dictionary<Column, object?>> { record }, columns, format, flatten, single: true);
 
+    /// <summary>Dispatches output records to the selected value, table, JSON, or YAML renderer.</summary>
+    /// <param name="records">The output records in row order.</param>
+    /// <param name="columns">The ordered top-level and nested column keys to include.</param>
+    /// <param name="format">The output format: value, table, json, or yaml.</param>
+    /// <param name="flatten">Whether nested mappings and objective arrays become separate named columns.</param>
+    /// <param name="single">Whether JSON and YAML should emit one bare object rather than an array.</param>
+    /// <returns>The selected output representation with surrounding whitespace trimmed.</returns>
+    /// <exception cref="CLIUsageError">The requested output format is unsupported.</exception>
     private static string Format(List<Dictionary<Column, object?>> records, List<Column> columns, string format, bool flatten, bool single)
     {
         var (values, header) = ConvertToDict(records, columns, flatten);
@@ -331,10 +410,16 @@ internal static class OutputFormat
     private static readonly ISerializer YamlSerializer =
         new SerializerBuilder().WithQuotingNecessaryStrings(quoteYaml1_1Strings: true).Build();
 
+    /// <summary>Serializes a plain managed collection tree through the configured YAML serializer.</summary>
+    /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
+    /// <returns>The serialized YAML text.</returns>
     private static string DumpYaml(object value) => YamlSerializer.Serialize(ToPlainForYaml(value));
 
     // YamlDotNet serializes generic collections; convert the OrderedDictionary/list/tuple tree to
     // Dictionary/List (keys sorted, approximating PyYAML's sort_keys=True default).
+    /// <summary>Converts ordered dictionaries and tuple wrappers to sorted-key dictionaries and lists for YAML serialization.</summary>
+    /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
+    /// <returns>A plain managed value tree suitable for YAML serialization.</returns>
     private static object? ToPlainForYaml(object? value)
     {
         switch (value)

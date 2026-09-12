@@ -32,6 +32,9 @@ internal static class Python
     internal static class optuna
     {
         /// <summary><c>optuna.create_study(directions=[...])</c> — the in-memory shadow study.</summary>
+        /// <param name="directions">One direction per objective, in objective-index order.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
         internal static PyObject create_study(IReadOnlyList<StudyDirection> directions)
         {
             using var createStudy = OptunaHubRuntime.Optuna.GetAttr("create_study");
@@ -49,6 +52,7 @@ internal static class Python
         internal static class logging
         {
             /// <summary><c>optuna.logging.set_verbosity(optuna.logging.WARNING)</c>.</summary>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static void set_verbosity_warning()
             {
                 using var logging = OptunaHubRuntime.Optuna.GetAttr("logging");
@@ -66,6 +70,13 @@ internal static class Python
             ///     — a finished trial for the shadow study. <paramref name="intermediateValues" /> is omitted
             ///     (as Optuna defaults it) when <c>null</c> — the sampler bridge passes none, the pruner bridge does.
             /// </summary>
+            /// <param name="state">The trial lifecycle state represented by the Python trial.</param>
+            /// <param name="values">The objective values or borrowed Python array assigned to the corresponding field.</param>
+            /// <param name="parameters">The named parameter values passed to the Python trial or benchmark.</param>
+            /// <param name="distributions">The distributions corresponding to the supplied trial parameters.</param>
+            /// <param name="intermediateValues">Optional intermediate reports keyed by step, copied into the Python trial.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject create_trial(
                 OptunaSharp.TrialState state,
                 IReadOnlyList<double>? values,
@@ -112,6 +123,9 @@ internal static class Python
             }
 
             /// <summary><c>optuna.trial.TrialState.&lt;NAME&gt;</c> — the Python enum member for an OptunaSharp state.</summary>
+            /// <param name="state">The trial lifecycle state represented by the Python trial.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject TrialState(OptunaSharp.TrialState state)
             {
                 string name = state switch
@@ -132,6 +146,12 @@ internal static class Python
         internal static class distributions
         {
             /// <summary><c>optuna.distributions.FloatDistribution(low=, high=, log=, step=)</c>.</summary>
+            /// <param name="low">The inclusive lower distribution bound.</param>
+            /// <param name="high">The inclusive upper distribution bound, subject to step alignment.</param>
+            /// <param name="log">Whether the numerical distribution is sampled on a logarithmic scale.</param>
+            /// <param name="step">The discretization interval, or the reported trial step for report operations.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject FloatDistribution(double low, double high, bool log, double? step)
             {
                 using var dists = OptunaHubRuntime.Optuna.GetAttr("distributions");
@@ -145,6 +165,12 @@ internal static class Python
             }
 
             /// <summary><c>optuna.distributions.IntDistribution(low=, high=, log=, step=)</c>.</summary>
+            /// <param name="low">The inclusive lower distribution bound.</param>
+            /// <param name="high">The inclusive upper distribution bound, subject to step alignment.</param>
+            /// <param name="log">Whether the numerical distribution is sampled on a logarithmic scale.</param>
+            /// <param name="step">The discretization interval, or the reported trial step for report operations.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject IntDistribution(long low, long high, bool log, long step)
             {
                 using var dists = OptunaHubRuntime.Optuna.GetAttr("distributions");
@@ -158,6 +184,9 @@ internal static class Python
             }
 
             /// <summary><c>optuna.distributions.CategoricalDistribution(choices)</c> — choices marshaled via <see cref="PyConvert" />.</summary>
+            /// <param name="choices">The categorical values in stable choice order.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject CategoricalDistribution(IReadOnlyList<CategoricalChoice> choices)
             {
                 using var dists = OptunaHubRuntime.Optuna.GetAttr("distributions");
@@ -175,6 +204,9 @@ internal static class Python
         internal static class Study
         {
             /// <summary><c>study.ask()</c> — open a RUNNING trial. Dispose the result.</summary>
+            /// <param name="study">The borrowed Python shadow-study handle; use it only while holding the GIL.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject ask(PyObject study)
             {
                 using var ask = study.GetAttr("ask");
@@ -182,6 +214,9 @@ internal static class Python
             }
 
             /// <summary><c>study.add_trial(trial)</c>.</summary>
+            /// <param name="study">The borrowed Python shadow-study handle; use it only while holding the GIL.</param>
+            /// <param name="trial">The borrowed Python trial handle; use it only while holding the GIL.</param>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static void add_trial(PyObject study, PyObject trial)
             {
                 using var addTrial = study.GetAttr("add_trial");
@@ -189,6 +224,10 @@ internal static class Python
             }
 
             /// <summary><c>study.get_trials(deepcopy=)</c>. Dispose the result.</summary>
+            /// <param name="study">The borrowed Python shadow-study handle; use it only while holding the GIL.</param>
+            /// <param name="deepcopy">Whether Python should return independent copies of its stored frozen trials.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject get_trials(PyObject study, bool deepcopy)
             {
                 using var getTrials = study.GetAttr("get_trials");
@@ -202,6 +241,9 @@ internal static class Python
         internal static class Trial
         {
             /// <summary><c>trial.number</c> as a CLR <see cref="int" />.</summary>
+            /// <param name="trial">The borrowed Python trial handle; use it only while holding the GIL.</param>
+            /// <returns>The zero-based trial number within the Python study.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static int number_t(PyObject trial)
             {
                 using var n = trial.GetAttr("number");
@@ -209,6 +251,10 @@ internal static class Python
             }
 
             /// <summary><c>trial.report(value, step)</c>.</summary>
+            /// <param name="trial">The borrowed Python trial handle; use it only while holding the GIL.</param>
+            /// <param name="value">The parameter value or borrowed Python scalar to convert.</param>
+            /// <param name="step">The discretization interval, or the reported trial step for report operations.</param>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static void report(PyObject trial, double value, int step)
             {
                 using var report = trial.GetAttr("report");
@@ -229,6 +275,11 @@ internal static class Python
             internal static class BaseSampler
             {
                 /// <summary><c>sampler.infer_relative_search_space(study, trial)</c>. Dispose the result.</summary>
+                /// <param name="sampler">The Python sampler handle owned by the wrapper, or borrowed by a low-level invocation.</param>
+                /// <param name="study">The borrowed Python shadow-study handle; use it only while holding the GIL.</param>
+                /// <param name="trial">The borrowed Python trial handle; use it only while holding the GIL.</param>
+                /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
                 internal static PyObject infer_relative_search_space(PyObject sampler, PyObject study, PyObject trial)
                 {
                     using var infer = sampler.GetAttr("infer_relative_search_space");
@@ -236,6 +287,12 @@ internal static class Python
                 }
 
                 /// <summary><c>sampler.sample_relative(study, trial, search_space)</c>. Dispose the result.</summary>
+                /// <param name="sampler">The Python sampler handle owned by the wrapper, or borrowed by a low-level invocation.</param>
+                /// <param name="study">The borrowed Python shadow-study handle; use it only while holding the GIL.</param>
+                /// <param name="trial">The borrowed Python trial handle; use it only while holding the GIL.</param>
+                /// <param name="searchSpace">The ordered distributions defining the relative parameter coordinates.</param>
+                /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
                 internal static PyObject sample_relative(PyObject sampler, PyObject study, PyObject trial, PyObject searchSpace)
                 {
                     using var sampleRelative = sampler.GetAttr("sample_relative");
@@ -243,6 +300,13 @@ internal static class Python
                 }
 
                 /// <summary><c>sampler.sample_independent(study, trial, param_name, param_distribution)</c>. Dispose the result.</summary>
+                /// <param name="sampler">The Python sampler handle owned by the wrapper, or borrowed by a low-level invocation.</param>
+                /// <param name="study">The borrowed Python shadow-study handle; use it only while holding the GIL.</param>
+                /// <param name="trial">The borrowed Python trial handle; use it only while holding the GIL.</param>
+                /// <param name="name">The Python attribute, parameter, or algorithm name required by the operation.</param>
+                /// <param name="dist">The distribution defining value conversion or the borrowed Python distribution object.</param>
+                /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
                 internal static PyObject sample_independent(PyObject sampler, PyObject study, PyObject trial, PyObject name, PyObject dist)
                 {
                     using var sampleIndependent = sampler.GetAttr("sample_independent");
@@ -250,6 +314,8 @@ internal static class Python
                 }
 
                 /// <summary><c>sampler.reseed_rng()</c>.</summary>
+                /// <param name="sampler">The Python sampler handle owned by the wrapper, or borrowed by a low-level invocation.</param>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
                 internal static void reseed_rng(PyObject sampler)
                 {
                     using var reseed = sampler.GetAttr("reseed_rng");
@@ -266,6 +332,11 @@ internal static class Python
             {
                 /// <summary><c>pruner.prune(study, trial)</c> — returns the raw result (use <c>IsTrue()</c>; a
                 /// pruner may return a numpy <c>bool_</c> that <c>As&lt;bool&gt;()</c> rejects). Dispose it.</summary>
+                /// <param name="pruner">The Python pruner handle owned by the wrapper, or borrowed by a low-level invocation.</param>
+                /// <param name="study">The borrowed Python shadow-study handle; use it only while holding the GIL.</param>
+                /// <param name="trial">The borrowed Python trial handle; use it only while holding the GIL.</param>
+                /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
                 internal static PyObject prune(PyObject pruner, PyObject study, PyObject trial)
                 {
                     using var prune = pruner.GetAttr("prune");
@@ -282,6 +353,13 @@ internal static class Python
         ///     <c>optunahub.load_module(package, repo_owner=, repo_name=, ref=, force_reload=, base_url=)</c>.
         ///     May raise <see cref="PythonException" /> — the caller wraps it in <see cref="OptunaHubInteropException" />.
         /// </summary>
+        /// <param name="package">The registry-relative package name to load.</param>
+        /// <param name="repoOwner">The owner of the registry repository.</param>
+        /// <param name="repoName">The registry repository name.</param>
+        /// <param name="gitRef">The branch, tag, or commit to load.</param>
+        /// <param name="forceReload">Whether to fetch the package again instead of reusing the local cache.</param>
+        /// <param name="baseUrl">An optional alternate registry host URL.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
         internal static PyObject load_module(
             string package, string repoOwner, string repoName, string gitRef, bool forceReload, string? baseUrl)
         {
@@ -298,6 +376,10 @@ internal static class Python
         }
 
         /// <summary><c>optunahub.load_local_module(package, registry_root=)</c>.</summary>
+        /// <param name="package">The registry-relative package name to load.</param>
+        /// <param name="registryRoot">The local registry root containing the package tree.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
         internal static PyObject load_local_module(string package, string registryRoot)
         {
             using var loadLocal = OptunaHubRuntime.OptunaHub.GetAttr("load_local_module");
@@ -314,6 +396,10 @@ internal static class Python
             internal static class BaseProblem
             {
                 /// <summary><c>problem.evaluate(params)</c> — score a parameter dict. Dispose the result.</summary>
+                /// <param name="problem">The borrowed Python problem or benchmark instance.</param>
+                /// <param name="parameters">The named parameter values passed to the Python trial or benchmark.</param>
+                /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
                 internal static PyObject evaluate(PyObject problem, PyObject parameters)
                 {
                     using var evaluate = problem.GetAttr("evaluate");
@@ -321,9 +407,15 @@ internal static class Python
                 }
 
                 /// <summary><c>problem.directions</c>. Dispose the result.</summary>
+                /// <param name="problem">The borrowed Python problem or benchmark instance.</param>
+                /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
                 internal static PyObject directions(PyObject problem) => problem.GetAttr("directions");
 
                 /// <summary><c>problem.search_space</c>. Dispose the result.</summary>
+                /// <param name="problem">The borrowed Python problem or benchmark instance.</param>
+                /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
                 internal static PyObject search_space(PyObject problem) => problem.GetAttr("search_space");
             }
         }

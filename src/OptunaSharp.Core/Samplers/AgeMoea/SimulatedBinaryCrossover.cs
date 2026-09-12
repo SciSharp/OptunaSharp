@@ -34,9 +34,17 @@ internal sealed class SimulatedBinaryCrossover
     private readonly double _prob;
     private const double Eps = 1.0e-14;
 
+    /// <summary>Number of parent individuals required by one crossover.</summary>
     public int NParents => 2;
+    /// <summary>Number of children produced per mating.</summary>
     public int NOffsprings => 2;
 
+    /// <summary>Configures mating-level and coordinate-level probabilities for two-child simulated-binary crossover.</summary>
+    /// <param name="prob">Probability of applying the operator to an individual or mating.</param>
+    /// <param name="eta">Distribution index controlling the concentration of crossover or mutation around the parents.</param>
+    /// <param name="probVar">Probability of varying each coordinate.</param>
+    /// <param name="probExch">Probability of enabling child-coordinate exchange for a mating.</param>
+    /// <param name="probBin">Probability of exchanging a child coordinate when exchange is enabled.</param>
     public SimulatedBinaryCrossover(
         double prob = 0.9, double eta = 15, double probVar = 0.5, double probExch = 1.0, double probBin = 0.5)
     {
@@ -53,6 +61,11 @@ internal sealed class SimulatedBinaryCrossover
     ///     the untouched columns from the parents. Returns the <c>2 * n_matings</c> offspring flattened
     ///     C-order: all first-children, then all second-children.
     /// </summary>
+    /// <param name="popX">Decision vectors in population order.</param>
+    /// <param name="parents">Selected parent individuals in crossover order.</param>
+    /// <param name="problem">Decision bounds and objective/constraint evaluation surface.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>Offspring rows grouped in the reference child-major order.</returns>
     public double[][] Do(double[][] popX, int[][] parents, AgeMoeaProblem problem, NumPyRandom rng)
     {
         int nMatings = parents.Length;
@@ -112,6 +125,11 @@ internal sealed class SimulatedBinaryCrossover
     ///     <see cref="CrossSbx" />. With <c>prob_exch = 1.0</c> the drawn values never zero prob_bin,
     ///     but the <c>random((n_matings, 1))</c> draw is still consumed (stream position matters).
     /// </summary>
+    /// <param name="x0">First parent coordinate batch.</param>
+    /// <param name="x1">Second parent coordinate batch.</param>
+    /// <param name="problem">Decision bounds and objective/constraint evaluation surface.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>The two offspring coordinate batches before mating-level child selection.</returns>
     private (double[][] C0, double[][] C1) InnerDo(double[][] x0, double[][] x1, AgeMoeaProblem problem, NumPyRandom rng)
     {
         int nMatings = x0.Length;
@@ -126,6 +144,13 @@ internal sealed class SimulatedBinaryCrossover
     }
 
     /// <summary><c>cross_sbx</c> — the vectorized SBX kernel over the flattened crossed positions.</summary>
+    /// <param name="x0">First parent coordinate batch.</param>
+    /// <param name="x1">Second parent coordinate batch.</param>
+    /// <param name="xl">Lower decision bounds in coordinate order.</param>
+    /// <param name="xu">Upper decision bounds in coordinate order.</param>
+    /// <param name="probBinPerMating">Per-mating exchange probabilities.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>The two numerical offspring batches in corresponding mating order.</returns>
     private (double[][] C0, double[][] C1) CrossSbx(
         double[][] x0, double[][] x1, double[] xl, double[] xu, double[] probBinPerMating, NumPyRandom rng)
     {
@@ -229,6 +254,9 @@ internal sealed class SimulatedBinaryCrossover
     }
 
     /// <summary><c>repair_clamp</c>: clamp each element into <c>[xl, xu]</c>.</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <param name="xl">Lower decision bounds in coordinate order.</param>
+    /// <param name="xu">Upper decision bounds in coordinate order.</param>
     private static void RepairClamp(double[][] x, double[] xl, double[] xu)
     {
         for (int i = 0; i < x.Length; i++)

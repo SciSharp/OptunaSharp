@@ -47,6 +47,10 @@ public static class ImportanceFunctions
     /// <returns>
     ///     A dictionary where the keys are parameter names and the values are assessed importances.
     /// </returns>
+    /// <exception cref="NumSharp.ValueError">The evaluator rejects the requested parameters or target because the study lacks the required completed-trial data.</exception>
+    /// <exception cref="System.InvalidOperationException">The fANOVA evaluator encounters zero integrated variance in every fitted tree.</exception>
+    /// <exception cref="System.Exception">A supplied evaluator or target selector throws; its exception propagates.</exception>
+    /// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.importance.get_param_importances.html" />
     public static OrderedDict<string, double> GetParamImportances(
         Study study,
         BaseImportanceEvaluator? evaluator = null,
@@ -66,6 +70,8 @@ public static class ImportanceFunctions
             var result = new OrderedDict<string, double>(res.Count);
             if (s == 0.0)
             {
+                // Equal importance is the defined fallback when the evaluator finds no relative
+                // evidence. Iterating the existing keys also preserves an empty result unchanged.
                 int nParams = res.Count;
                 foreach (var param in res.Keys)
                     result[param] = 1.0 / nParams;

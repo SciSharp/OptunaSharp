@@ -56,6 +56,7 @@ internal static class Alias
             .ToDictionary(x => x.Alias, x => x.Canonical);
 
     /// <summary>Port of <c>_handling_alias_parameters</c> — rewrite aliases to canonical names in place.</summary>
+    /// <param name="lgbmParams">The mutable ordered LightGBM parameter dictionary, shared with the current tuning step.</param>
     internal static void HandleAliasParameters(OrderedDict<string, object?> lgbmParams)
     {
         foreach (var (paramName, aliasNames) in AliasGroupList)
@@ -80,6 +81,8 @@ internal static class Alias
     }
 
     /// <summary>Port of <c>_handling_alias_metrics</c> — canonicalize the <c>metric</c> value in place.</summary>
+    /// <param name="lgbmParams">The mutable ordered LightGBM parameter dictionary, shared with the current tuning step.</param>
+    /// <exception cref="NumSharp.ValueError">The metric value is neither a string nor a supported iterable.</exception>
     internal static void HandleAliasMetrics(OrderedDict<string, object?> lgbmParams)
     {
         if (!lgbmParams.TryGetValue("metric", out var metric))
@@ -110,6 +113,9 @@ internal static class Alias
             $"{metric?.GetType().Name ?? "None"}.");
     }
 
+    /// <summary>Formats ordered LightGBM parameters for validation diagnostics.</summary>
+    /// <param name="d">The ordered parameter mapping formatted for diagnostics.</param>
+    /// <returns>The Python-style representation of the parameter mapping.</returns>
     private static string FormatDict(OrderedDict<string, object?> d)
         => "{" + string.Join(", ", d.Select(kv => $"'{kv.Key}': {kv.Value}")) + "}";
 }

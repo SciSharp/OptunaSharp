@@ -32,6 +32,7 @@ public static class GrpcProxyServiceExtensions
     /// <param name="services">The app's service collection.</param>
     /// <param name="storage">The storage the proxy service will front. Wrap an RDB backend with
     ///   <c>StorageFunctions.GetStorage</c> first so the server keeps an in-process cache.</param>
+    /// <returns>The gRPC server builder for further service configuration.</returns>
     public static IGrpcServerBuilder AddOptunaStorageProxy(this IServiceCollection services, BaseStorage storage)
     {
         services.TryAddSingleton(storage);
@@ -43,6 +44,7 @@ public static class GrpcProxyServiceExtensions
     ///     add conventions (for example <c>.RequireAuthorization()</c>).
     /// </summary>
     /// <param name="endpoints">The app's endpoint route builder.</param>
+    /// <returns>The convention builder for further endpoint configuration.</returns>
     public static GrpcServiceEndpointConventionBuilder MapOptunaStorageProxy(this IEndpointRouteBuilder endpoints)
         => endpoints.MapGrpcService<OptunaStorageProxyService>();
 }

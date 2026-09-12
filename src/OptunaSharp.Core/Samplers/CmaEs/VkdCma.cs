@@ -125,6 +125,16 @@ internal sealed class VkdCma : ICmaOptimizer
 
     private NumPyRandom _rng;
 
+    /// <summary>Initializes the diagonal-plus-low-rank proposal and optional covariance-rank adaptation.</summary>
+    /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
+    /// <param name="sigma">Initial positive global proposal standard deviation.</param>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
+    /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
+    /// <param name="kInit">Initial low-rank covariance width; null selects the algorithm default.</param>
+    /// <param name="kAdapt">Whether covariance rank may change during optimization.</param>
+    /// <param name="kmin">Optional lower bound on covariance rank.</param>
+    /// <param name="kmax">Optional upper bound on covariance rank.</param>
+    /// <exception cref="System.ArgumentException">The scale or population size is nonpositive, mean dimension is below two, or rank bounds do not satisfy 0 &lt;= kmin &lt;= kmax &lt; dimension.</exception>
     internal VkdCma(
         double[] mean,
         double sigma,
@@ -224,20 +234,35 @@ internal sealed class VkdCma : ICmaOptimizer
         if (seed is not null) _rng.seed(seed.Value);
     }
 
+    /// <summary>Number of numerical decision coordinates.</summary>
     public int Dim => _nDim;
+    /// <summary>Number of evaluated individuals required for one generation.</summary>
     public int PopulationSize => _popsize;
+    /// <summary>Number of completed optimizer updates.</summary>
     public int Generation => _g;
 
+    /// <summary>Current Gaussian proposal center in transformed coordinates.</summary>
     internal double[] Mean => _mean;
+    /// <summary>Global Gaussian proposal step size.</summary>
     internal double Sigma => _sigma;
+    /// <summary>Allocated covariance rank.</summary>
     internal int K => _k;
+    /// <summary>Number of active low-rank covariance directions.</summary>
     internal int KActive => _kActive;
 
+    /// <summary>Resets the optimizer random stream for subsequent proposals.</summary>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
     public void ReseedRng(int seed) => _rng.seed((uint)seed);
 
     // Whitening functions exposed for the live pycma parity gate (VkdCmaSamplerParityTests): the sampled
     // step for a standard normal, and its inverse. Internal — the sampler drives these through Ask/Tell.
+    /// <summary>Applies the optimizer proposal transform to supplied standard-normal coordinates for parity checks.</summary>
+    /// <param name="z">Standardized observation or standard-normal coordinate array.</param>
+    /// <returns>The vector transformed by the current proposal geometry.</returns>
     internal double[] TransformForParity(double[] z) => Transform(z);
+    /// <summary>Applies the inverse proposal transform to supplied coordinates for parity checks.</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>The vector mapped back through the inverse proposal geometry.</returns>
     internal double[] TransformInverseForParity(double[] x) => TransformInverse(x);
 
     // ---- Ask (GaussVkDSampler.sample) ---------------------------------------------------------
@@ -249,6 +274,7 @@ internal sealed class VkdCma : ICmaOptimizer
     ///     <c>m + transform(N(0,I))</c> draws. This is the batch ask/tell path; the per-trial sampler uses
     ///     <see cref="AskCandidate" /> instead.
     /// </summary>
+    /// <returns>One candidate vector in transformed coordinates.</returns>
     public double[] Ask()
     {
         int k = ++_askIndex;   // 1-based candidate index within the generation
@@ -281,6 +307,8 @@ internal sealed class VkdCma : ICmaOptimizer
     ///     even though separately-seeded per-trial asks cannot share the odd candidate's length the way batch
     ///     <see cref="Ask" /> does.
     /// </summary>
+    /// <param name="k">Zero-based candidate slot in the current generation.</param>
+    /// <returns>The proposed decision vector for the requested population slot.</returns>
     internal double[] AskCandidate(int k)
     {
         double[] step;
@@ -299,6 +327,7 @@ internal sealed class VkdCma : ICmaOptimizer
     ///     on the same whitened scale as a <see cref="Transform" /> draw. If no mean shift exists yet
     ///     (‖dx‖ ≈ 0), fall back to an ordinary transformed draw.
     /// </summary>
+    /// <returns>The displacement-scaled paired injection vector.</returns>
     private double[] InjectedStep()
     {
         double mnorm = Norm(_dx);
@@ -316,6 +345,8 @@ internal sealed class VkdCma : ICmaOptimizer
     ///     <c>GaussVkDSampler.transform</c>: whiten a standard normal <paramref name="z" /> into a candidate
     ///     step, <c>y = D·σ·(z + Σⱼ (√(1+Sⱼ) − 1)(z·Vⱼ) Vⱼ)</c> over the active directions.
     /// </summary>
+    /// <param name="z">Standardized observation or standard-normal coordinate array.</param>
+    /// <returns>The standard-normal vector transformed by the current low-rank correlation factors.</returns>
     private double[] Transform(double[] z)
     {
         var y = (double[])z.Clone();
@@ -343,6 +374,8 @@ internal sealed class VkdCma : ICmaOptimizer
     ///     <c>GaussVkDSampler.transform_inverse</c>: the inverse whitening,
     ///     <c>x/(Dσ) + Σⱼ (1/√(1+Sⱼ) − 1)(Vⱼ·(x/(Dσ))) Vⱼ</c>.
     /// </summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>The vector mapped through the inverse proposal transform.</returns>
     private double[] TransformInverse(double[] x)
     {
         var y = new double[_nDim];
@@ -367,6 +400,8 @@ internal sealed class VkdCma : ICmaOptimizer
     }
 
     /// <summary>Mahalanobis norm w.r.t. the statistical model, <c>‖transform⁻¹(x)‖</c>.</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>The Euclidean vector length.</returns>
     private double Norm(double[] x)
     {
         double[] y = TransformInverse(x);
@@ -374,6 +409,9 @@ internal sealed class VkdCma : ICmaOptimizer
         return Math.Sqrt(s);
     }
 
+    /// <summary>Draws a vector of independent standard-normal values from the optimizer stream.</summary>
+    /// <param name="n">Number of vector entries to produce.</param>
+    /// <returns>The newly drawn standard-normal vector.</returns>
     private double[] Randn(int n) => _rng.randn(n).ToArray<double>();
 
     // ---- Tell (GaussVkDSampler.update + the ES mean recombination) ----------------------------
@@ -384,6 +422,8 @@ internal sealed class VkdCma : ICmaOptimizer
     ///     gradient (V/S/D) plus the online k-adaptation — a faithful port of <c>GaussVkDSampler.update</c>
     ///     with the surrounding weighted-mean ES made explicit.
     /// </summary>
+    /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
+    /// <exception cref="System.ArgumentException">The solution count differs from population size.</exception>
     public void Tell(List<(double[] X, double Value)> solutions)
     {
         if (solutions.Count != _popsize)
@@ -569,6 +609,9 @@ internal sealed class VkdCma : ICmaOptimizer
 
     /// <summary>Fill U's first <paramref name="ka" /> columns with the current active directions,
     /// <c>Uᵢⱼ = Vⱼᵢ·√(Sⱼ)·α</c> (GaussVkDSampler.update, the <c>U[:, :ka]</c> assignment).</summary>
+    /// <param name="U">Workspace receiving scaled active low-rank direction columns.</param>
+    /// <param name="ka">Number of active low-rank covariance columns.</param>
+    /// <param name="alpha">Scale applied to active covariance direction columns.</param>
     private void FillActiveVColumns(double[,] U, int ka, double alpha)
     {
         for (int j = 0; j < ka; j++)
@@ -597,6 +640,9 @@ internal sealed class VkdCma : ICmaOptimizer
     ///     dropping under-used directions. The "EMA" changes are the latest one-step deltas (see
     ///     <see cref="Ema" />).
     /// </summary>
+    /// <param name="cc">Evolution-path accumulation coefficient.</param>
+    /// <param name="cone">Rank-one covariance learning coefficient.</param>
+    /// <param name="cmu">Rank-mu covariance learning coefficient.</param>
     private void KAdaptation(double cc, double cone, double cmu)
     {
         int N = _nDim;
@@ -680,6 +726,8 @@ internal sealed class VkdCma : ICmaOptimizer
 
     /// <summary>Return <c>(cc, cone, cmu)</c> for the current rank <paramref name="k" /> — the PPSN-2016
     /// learning rates. μ_eff is fixed by the (positive, sum-1) weights, so only <paramref name="k" /> varies.</summary>
+    /// <param name="k">Active covariance rank.</param>
+    /// <returns>The adaptation coefficients for the current covariance rank.</returns>
     private (double Cc, double Cone, double Cmu) GetParams(int k)
     {
         double mueff = _muEff;
@@ -693,6 +741,8 @@ internal sealed class VkdCma : ICmaOptimizer
     // ---- small helpers ------------------------------------------------------------------------
 
     /// <summary>Indices of <paramref name="a" /> sorted by value DESCENDING (numpy's <c>argsort()[::-1]</c>).</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>Indices ordered from largest to smallest value.</returns>
     private static int[] ArgsortDesc(double[] a)
     {
         var idx = Enumerable.Range(0, a.Length).ToArray();
@@ -701,12 +751,20 @@ internal sealed class VkdCma : ICmaOptimizer
     }
 
     /// <summary>Mean of the eigenvalues ranked <paramref name="k" /> and beyond (the tail), <c>/(N−k)</c>.</summary>
+    /// <param name="dd">Eigenvalues whose trailing entries are averaged.</param>
+    /// <param name="idxeig">Indices ordering covariance eigenvalues and their eigenvectors.</param>
+    /// <param name="k">Number of leading eigenvalues excluded from the tail.</param>
+    /// <param name="n">Number of numerical coordinates.</param>
+    /// <returns>The mean of the selected eigenvalue tail.</returns>
     private static double TailMean(double[] dd, int[] idxeig, int k, int n)
     {
         double s = 0; for (int r = k; r < idxeig.Length; r++) s += dd[idxeig[r]];
         return s / (n - k);
     }
 
+    /// <summary>Counts entries greater than or equal to zero for rank-adaptation bookkeeping.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The number of nonnegative entries.</returns>
     private static int CountNonNegative(double[] a)
     {
         int c = 0; foreach (double v in a) if (v >= 0) c++;
@@ -715,6 +773,8 @@ internal sealed class VkdCma : ICmaOptimizer
 
     // ---- state serialization (own JSON; mirrors the SepCma / LmCma pattern) --------------------
 
+    /// <summary>Captures constructor settings and evolving optimizer arrays in a serializable state object.</summary>
+    /// <returns>A serializable snapshot of optimizer settings and evolving state.</returns>
     internal VkdCmaState ToState() => new()
     {
         NDim = _nDim,
@@ -745,6 +805,10 @@ internal sealed class VkdCma : ICmaOptimizer
         EmaLogSM = (double[])_emaLogS.M.Clone(),
     };
 
+    /// <summary>Recreates optimizer constants and restores evolving state from a serialized snapshot.</summary>
+    /// <param name="s">Serialized optimizer settings and evolving proposal state.</param>
+    /// <returns>An optimizer restored from the supplied snapshot.</returns>
+    /// <exception cref="System.ArgumentException">Stored constructor settings or population dimensions are rejected when the optimizer is recreated.</exception>
     internal static VkdCma FromState(VkdCmaState s)
     {
         var cma = new VkdCma(new double[s.NDim], s.Sigma0, seed: null,
@@ -781,11 +845,16 @@ internal sealed class VkdCma : ICmaOptimizer
     /// </summary>
     private sealed class Ema
     {
+        /// <summary>Mutable vector holding the exponential moving average.</summary>
         public readonly double[] M;
         private readonly double[] _s;
 
+        /// <summary>Allocates the per-coordinate state for an exponential moving average.</summary>
+        /// <param name="dim">Number of numerical coordinates.</param>
         public Ema(int dim) { M = new double[dim]; _s = new double[dim]; }
 
+        /// <summary>Incorporates one vector observation into the exponential moving average.</summary>
+        /// <param name="datum">Vector observation incorporated into the moving average.</param>
         public void Update(double[] datum)
         {
             const double a = 1.0;   // flg_init == 0 (falsy) ⇒ a = decay-if-flg_init-else-1 == 1, always
@@ -802,30 +871,56 @@ internal sealed class VkdCma : ICmaOptimizer
 /// <summary>Serialized evolving state of a <see cref="VkdCma" /> optimizer (own JSON; see <see cref="LmCmaState" />).</summary>
 internal sealed class VkdCmaState
 {
+    /// <summary>Serialized number of numerical decision coordinates.</summary>
     public int NDim { get; set; }
+    /// <summary>Initial proposal step size retained for reconstruction.</summary>
     public double Sigma0 { get; set; }
+    /// <summary>Serialized number of evaluated individuals in one generation.</summary>
     public int Popsize { get; set; }
+    /// <summary>Initial configured covariance rank.</summary>
     public int KInit { get; set; }
+    /// <summary>Whether covariance rank adapts during optimization.</summary>
     public bool KAdapt { get; set; }
+    /// <summary>Minimum permitted covariance rank.</summary>
     public int Kmin { get; set; }
+    /// <summary>Maximum permitted covariance rank.</summary>
     public int Kmax { get; set; }
+    /// <summary>Current Gaussian proposal center in transformed coordinates.</summary>
     public double[] Mean { get; set; } = Array.Empty<double>();
+    /// <summary>Global Gaussian proposal step size.</summary>
     public double Sigma { get; set; }
+    /// <summary>Per-coordinate diagonal scales of the low-rank proposal transform.</summary>
     public double[] D { get; set; } = Array.Empty<double>();
+    /// <summary>Stored inverse-transformed evolution-path vectors.</summary>
     public double[][] V { get; set; } = Array.Empty<double[]>();
+    /// <summary>Low-rank covariance eigenvalue correction strengths.</summary>
     public double[] S { get; set; } = Array.Empty<double>();
+    /// <summary>Evolution path used by the rank-one covariance update.</summary>
     public double[] Pc { get; set; } = Array.Empty<double>();
+    /// <summary>Stored displacement used for paired proposal injection.</summary>
     public double[] Dx { get; set; } = Array.Empty<double>();
+    /// <summary>Allocated covariance rank.</summary>
     public int K { get; set; }
+    /// <summary>Number of active low-rank covariance directions.</summary>
     public int KActive { get; set; }
+    /// <summary>Whether paired mean-displacement proposals are enabled for the next generation.</summary>
     public bool FlgInjection { get; set; }
+    /// <summary>Scalar step-size adaptation path.</summary>
     public double Ps { get; set; }
+    /// <summary>Serialized number of completed optimizer updates.</summary>
     public int G { get; set; }
+    /// <summary>Previous log step size used to estimate adaptation trends.</summary>
     public double LastLogSigma { get; set; }
+    /// <summary>Previous log diagonal scales used to estimate adaptation trends.</summary>
     public double[] LastLogD { get; set; } = Array.Empty<double>();
+    /// <summary>Previous log correlation condition estimates used by rank adaptation.</summary>
     public double[] LastLogCondCorr { get; set; } = Array.Empty<double>();
+    /// <summary>Number of generations since the most recent covariance-rank increase.</summary>
     public int ItrAfterKInc { get; set; }
+    /// <summary>Moving-average state of log step-size changes.</summary>
     public double[] EmaLogSigmaM { get; set; } = Array.Empty<double>();
+    /// <summary>Moving-average state of log diagonal-scale changes.</summary>
     public double[] EmaLogDM { get; set; } = Array.Empty<double>();
+    /// <summary>Moving-average state of low-rank spectral changes.</summary>
     public double[] EmaLogSM { get; set; } = Array.Empty<double>();
 }

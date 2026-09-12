@@ -17,6 +17,15 @@ namespace OptunaSharp.Samplers.Nsgaii;
 /// </summary>
 internal static class NsgaiiCrossover
 {
+    /// <summary>Selects parent trials and retries reproduction until the child is inside its distributions.</summary>
+    /// <param name="crossover">Operator combining the selected numerical parent vectors.</param>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="parentPopulation">Eligible parent trials from the current generation.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="swappingProb">Probability of taking a coordinate from the alternate parent.</param>
+    /// <param name="dominates">Direction-aware dominance predicate used by parent selection.</param>
+    /// <returns>External child parameter values inside the declared distributions.</returns>
     internal static OrderedDict<string, object?> PerformCrossover(
         BaseCrossover crossover,
         Study study,
@@ -60,6 +69,15 @@ internal static class NsgaiiCrossover
     ///     pruned before the containment check (so an inactive value can neither fail it nor reach the
     ///     trial). Parent selection is the same binary tournament as the parity path.
     /// </summary>
+    /// <param name="crossover">Operator combining the selected numerical parent vectors.</param>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="parentPopulation">Eligible parent trials from the current generation.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="swappingProb">Probability of taking a coordinate from the alternate parent.</param>
+    /// <param name="dominates">Direction-aware dominance predicate used by parent selection.</param>
+    /// <param name="conditionalParams">Optional activation and dormant-value policy for conditional parameters.</param>
+    /// <returns>A valid offspring containing only currently active conditional coordinates.</returns>
     internal static OrderedDict<string, object?> PerformConditionalCrossover(
         BaseCrossover crossover,
         Study study,
@@ -112,6 +130,15 @@ internal static class NsgaiiCrossover
     ///     exist. Parameters whose activation cannot yet be decided (an activator still to be drawn, e.g. a
     ///     numerical/int activator) are kept and handled by <see cref="ConditionalParams.Prune" /> as before.</para>
     /// </summary>
+    /// <param name="parents">Selected parent individuals in crossover order.</param>
+    /// <param name="crossover">Operator combining the selected numerical parent vectors.</param>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="swappingProb">Probability of taking a coordinate from the alternate parent.</param>
+    /// <param name="categoricalSearchSpace">Categorical coordinates handled by uniform parent-value inheritance.</param>
+    /// <param name="numericalSearchSpace">Numerical coordinates handled by the configured crossover.</param>
+    /// <param name="conditionalParams">Optional activation and dormant-value policy for conditional parameters.</param>
+    /// <returns>One conditional offspring candidate before distribution containment checks.</returns>
     private static OrderedDict<string, object?> TryConditionalCrossover(
         List<FrozenTrial> parents,
         BaseCrossover crossover,
@@ -200,6 +227,16 @@ internal static class NsgaiiCrossover
         return childParams;
     }
 
+    /// <summary>Combines numerical and categorical parent coordinates into one candidate trial.</summary>
+    /// <param name="parents">Selected parent individuals in crossover order.</param>
+    /// <param name="crossover">Operator combining the selected numerical parent vectors.</param>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="swappingProb">Probability of taking a coordinate from the alternate parent.</param>
+    /// <param name="categoricalSearchSpace">Categorical coordinates handled by uniform parent-value inheritance.</param>
+    /// <param name="numericalSearchSpace">Numerical coordinates handled by the configured crossover.</param>
+    /// <param name="numericalTransform">Transform for numerical parent vectors, or null when no numerical coordinates exist.</param>
+    /// <returns>One candidate child in external parameter representation.</returns>
     private static OrderedDict<string, object?> TryCrossover(
         List<FrozenTrial> parents,
         BaseCrossover crossover,
@@ -248,6 +285,13 @@ internal static class NsgaiiCrossover
         return childParams;
     }
 
+    /// <summary>Chooses the distinct parents required by the crossover using dominance tournaments.</summary>
+    /// <param name="crossover">Operator combining the selected numerical parent vectors.</param>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="parentPopulation">Eligible parent trials from the current generation.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="dominates">Direction-aware dominance predicate used by parent selection.</param>
+    /// <returns>The distinct trial parents required by the configured crossover.</returns>
     private static List<FrozenTrial> SelectParents(
         BaseCrossover crossover,
         Study study,
@@ -267,6 +311,12 @@ internal static class NsgaiiCrossover
         return parents;
     }
 
+    /// <summary>Chooses a parent using a two-trial dominance tournament.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="parentPopulation">Eligible parent trials from the current generation.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="dominates">Direction-aware dominance predicate used by parent selection.</param>
+    /// <returns>The tournament-winning trial.</returns>
     private static FrozenTrial SelectParent(
         Study study,
         IReadOnlyList<FrozenTrial> parentPopulation,
@@ -281,6 +331,10 @@ internal static class NsgaiiCrossover
         return dominates(candidate0, candidate1, study.Directions) ? candidate0 : candidate1;
     }
 
+    /// <summary>Checks whether every proposed external value belongs to its declared distribution.</summary>
+    /// <param name="params">External parameter values recorded along the objective path.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <returns>True if every proposed value belongs to its distribution.</returns>
     private static bool IsContained(OrderedDict<string, object?> @params, OrderedDict<string, BaseDistribution> searchSpace)
     {
         foreach (var (paramName, param) in @params)
@@ -297,6 +351,12 @@ internal static class NsgaiiCrossover
     ///     untransformed, so uniform crossover is done here directly against the two parents'
     ///     external values.
     /// </summary>
+    /// <param name="parent0">First parent trial supplying inherited categorical coordinates.</param>
+    /// <param name="parentLast">Last selected parent used by the crossover.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="swappingProb">Probability of taking a coordinate from the alternate parent.</param>
+    /// <param name="nCategorical">Number of categorical coordinates inherited from the parent arrays.</param>
+    /// <returns>Inherited categorical values in search-space order.</returns>
     private static object?[] InlinedCategoricalUniformCrossover(
         object?[] parent0, object?[] parentLast, NumPyRandom rng, double swappingProb, int nCategorical)
     {

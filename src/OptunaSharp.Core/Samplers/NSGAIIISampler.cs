@@ -38,6 +38,7 @@ namespace OptunaSharp.Samplers;
 ///     values; they then stay in the relative search space and are crossed over, mutated and inherited
 ///     whenever active, and are simply absent whenever not. Off by default (parity untouched).</para>
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.NSGAIIISampler.html">Official Optuna NSGAIIISampler reference.</seealso>
 public class NSGAIIISampler : BaseGASampler
 {
     private readonly RandomSampler _randomSampler;
@@ -95,6 +96,8 @@ public class NSGAIIISampler : BaseGASampler
     ///     <paramref name="childGenerationStrategy" /> receives the widened search space and must cope with
     ///     parents that lack conditional parameters itself.
     /// </param>
+    /// <summary>Configures NSGA-III reference-point selection, reproduction, and trial-completion hooks.</summary>
+    /// <exception cref="NumSharp.ValueError">Population size is below two or the crossover parent count, or a configured reproduction probability is invalid.</exception>
     public NSGAIIISampler(
         int populationSize = 50,
         BaseMutation? mutation = null,
@@ -152,6 +155,7 @@ public class NSGAIIISampler : BaseGASampler
             ?? new NSGAIIAfterTrialStrategy(constraintsFunc).Call;
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         _randomSampler.ReseedRng();
@@ -161,6 +165,7 @@ public class NSGAIIISampler : BaseGASampler
         _rng.Rng.seed(BitConverter.ToUInt32(buffer));
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -175,6 +180,7 @@ public class NSGAIIISampler : BaseGASampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override List<FrozenTrial> SelectParent(Study study, int generation)
     {
         var combined = GetPopulation(study, generation - 1);
@@ -182,6 +188,7 @@ public class NSGAIIISampler : BaseGASampler
         return _elitePopulationSelectionStrategy(study, combined);
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -197,6 +204,7 @@ public class NSGAIIISampler : BaseGASampler
         return child;
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -205,11 +213,14 @@ public class NSGAIIISampler : BaseGASampler
         return _randomSampler.SampleIndependent(study, trial, paramName, paramDistribution);
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
     {
         _randomSampler.BeforeTrial(study, trial);
     }
 
+    /// <inheritdoc />
+    /// <exception cref="System.Exception">A configured after-trial or constraint callback fails; its exception propagates.</exception>
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         System.Diagnostics.Debug.Assert(

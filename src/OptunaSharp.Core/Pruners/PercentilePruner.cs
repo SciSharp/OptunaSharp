@@ -12,6 +12,7 @@ namespace OptunaSharp.Pruners;
 ///     Prune if the best intermediate value is in the bottom percentile among trials at the same
 ///     step.
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.pruners.PercentilePruner.html">Official Optuna PercentilePruner reference.</seealso>
 public class PercentilePruner : BasePruner
 {
     private readonly double _percentile;
@@ -39,6 +40,8 @@ public class PercentilePruner : BasePruner
     ///     number of reported intermediate values from all trials at the current step is less
     ///     than <c>nMinTrials</c>, the trial will not be pruned.
     /// </param>
+    /// <summary>Configures the reference percentile and evidence required before comparing trials.</summary>
+    /// <exception cref="NumSharp.ValueError">The percentile is outside [0, 100], a startup/warmup count is negative, or an interval/minimum count is below one.</exception>
     public PercentilePruner(
         double percentile,
         int nStartupTrials = 5,
@@ -46,6 +49,8 @@ public class PercentilePruner : BasePruner
         int intervalSteps = 1,
         int nMinTrials = 1)
     {
+        // A percentile and a nonempty check interval must be meaningful before any trial history
+        // is observed; retaining these guards also preserves Optuna's eager validation contract.
         if (!(0.0 <= percentile && percentile <= 100))
             throw new ValueError(
                 $"Percentile must be between 0 and 100 inclusive, but got percentile={Internal.PythonRepr.FloatRepr(percentile)}.");
@@ -69,11 +74,14 @@ public class PercentilePruner : BasePruner
         _nMinTrials = nMinTrials;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives and the pruning rule requests its scalar direction.</exception>
     public override bool Prune(Study study, FrozenTrial trial)
     {
         var completedTrials = study.GetTrials(deepcopy: false, states: new[] { TrialState.Complete });
         int nTrials = completedTrials.Count;
 
+        // Startup and warmup gates prevent comparisons before sufficient reference evidence exists.
         if (nTrials == 0)
             return false;
 
@@ -94,6 +102,8 @@ public class PercentilePruner : BasePruner
 
         var direction = study.Direction;
         double bestIntermediateResult = GetBestIntermediateResultOverSteps(trial, direction);
+        // A trial with no numeric progress can be stopped, while a missing reference cutoff below
+        // means there is no evidence against an otherwise usable current trial.
         if (double.IsNaN(bestIntermediateResult))
             return true;
 
@@ -108,6 +118,9 @@ public class PercentilePruner : BasePruner
     }
 
     /// <summary>Python <c>_get_best_intermediate_result_over_steps</c> (np.nanmax / np.nanmin).</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="direction">Whether objective values are minimized or maximized.</param>
+    /// <returns>The best non-NaN report for the direction, or NaN when none exists.</returns>
     internal static double GetBestIntermediateResultOverSteps(FrozenTrial trial, StudyDirection direction)
     {
         double best = double.NaN;
@@ -124,6 +137,13 @@ public class PercentilePruner : BasePruner
     }
 
     /// <summary>Python <c>_get_percentile_intermediate_result_over_trials</c>.</summary>
+    /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
+    /// <param name="direction">Whether objective values are minimized or maximized.</param>
+    /// <param name="step">Positive spacing between adjacent quantized numerical values.</param>
+    /// <param name="percentile">Percentage defining the retained reference cutoff, in [0, 100].</param>
+    /// <param name="nMinTrials">Minimum reference report count required before computing a cutoff.</param>
+    /// <returns>The oriented percentile cutoff, or NaN when reference reports are insufficient.</returns>
+    /// <exception cref="NumSharp.ValueError">The completed-trial collection is empty.</exception>
     internal static double GetPercentileIntermediateResultOverTrials(
         IReadOnlyList<FrozenTrial> completedTrials,
         StudyDirection direction,
@@ -151,6 +171,9 @@ public class PercentilePruner : BasePruner
     }
 
     /// <summary>NumPy <c>np.nanpercentile(values, q)</c> with the default linear interpolation.</summary>
+    /// <param name="values">Numerical observations consumed in their supplied order.</param>
+    /// <param name="percentile">Percentage defining the retained reference cutoff, in [0, 100].</param>
+    /// <returns>The linearly interpolated percentile after excluding NaNs, or NaN for no usable data.</returns>
     internal static double NanPercentile(IEnumerable<double> values, double percentile)
     {
         var data = values.Where(v => !double.IsNaN(v)).ToArray();
@@ -167,6 +190,11 @@ public class PercentilePruner : BasePruner
     }
 
     /// <summary>Python <c>_is_first_in_interval_step</c>.</summary>
+    /// <param name="step">Positive spacing between adjacent quantized numerical values.</param>
+    /// <param name="intermediateSteps">Previously reported steps, which need not be sorted.</param>
+    /// <param name="nWarmupSteps">Resource-step offset before pruning checks begin.</param>
+    /// <param name="intervalSteps">Positive number of steps between scheduled pruning checks.</param>
+    /// <returns>True if no earlier report has already triggered the current scheduled interval.</returns>
     internal static bool IsFirstInIntervalStep(
         int step, IEnumerable<int> intermediateSteps, int nWarmupSteps, int intervalSteps)
     {

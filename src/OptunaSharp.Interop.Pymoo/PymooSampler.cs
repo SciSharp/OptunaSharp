@@ -26,7 +26,7 @@ namespace OptunaSharp.Interop.Pymoo;
 ///     per-family knobs (reference directions / points, RVEA's <c>alpha</c>/<c>adapt_freq</c>, R-NSGA's
 ///     <c>weights</c>/<c>mu</c>/<c>epsilon</c>). Constrained optimization (pymoo's <c>G ≤ 0</c>, matching
 ///     Optuna's constraint sign) is driven by <c>Trial.SetConstraint</c> or the
-///     <paramref name="constraintsFunc" /> — pymoo then optimizes with feasibility-first survival, and
+///     <c>constraintsFunc</c> — pymoo then optimizes with feasibility-first survival, and
 ///     C-TAEA becomes meaningful. Single- <b>and</b> multi-objective studies (1, 2, 3+ objectives) and
 ///     Optuna's full parameter space (float / int with log / step, categoricals, dynamic spaces) are all
 ///     supported.</para>
@@ -120,6 +120,9 @@ public sealed class PymooSampler : BaseSampler
     ///     is fixed by the first completed trial. The sampler is then stateful — do not reuse it across
     ///     studies.
     /// </param>
+    /// <summary>Creates a multi-objective pymoo sampler with a fixed algorithm configuration.</summary>
+    /// <exception cref="NumSharp.ValueError">The requested population size is less than two.</exception>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.PythonInteropException">CPython or the required Python package cannot be initialized or imported.</exception>
     public PymooSampler(
         PymooAlgorithm algorithm = PymooAlgorithm.Nsga2,
         int populationSize = 50,
@@ -147,12 +150,14 @@ public sealed class PymooSampler : BaseSampler
         _constraintsFunc = constraintsFunc;
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         _seed = Random.Shared.Next(1, int.MaxValue);
         _independentSampler.ReseedRng();
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -167,6 +172,7 @@ public sealed class PymooSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -201,15 +207,18 @@ public sealed class PymooSampler : BaseSampler
         });
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
         // The initial generation and any out-of-space parameter are sampled independently — same as the
         // native NSGAIISampler / AgeMoea2Sampler (which do not warn: independent sampling is expected).
         => _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _independentSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         // Compute + store the constraintsFunc values (into system_attrs, read back as FrozenTrial.Constraints),
@@ -221,6 +230,8 @@ public sealed class PymooSampler : BaseSampler
 
     /// <summary>The constraint key set, fixed by the first completed trial (Optuna's convention, as in
     /// BoTorchSampler). Empty when the study is unconstrained.</summary>
+    /// <param name="trials">The available study trial snapshots in study order.</param>
+    /// <returns>The first completed trial's ordered constraint names, or an empty list if none exist.</returns>
     private static IReadOnlyList<string> FirstCompleteConstraintKeys(IReadOnlyList<FrozenTrial> trials)
     {
         foreach (FrozenTrial t in trials)
@@ -253,8 +264,18 @@ public sealed class PymooSampler : BaseSampler
         private PyObject _algo;
         private readonly int _popsize;
 
+        /// <summary>The effective population size reported by the initialized pymoo algorithm.</summary>
         internal int PopulationSize => _popsize;
 
+        /// <summary>Creates the Python optimizer and the fixed coordinate mapping used to replay study history.</summary>
+        /// <param name="algorithm">The pymoo algorithm selected by the caller.</param>
+        /// <param name="options">The algorithm-specific genetic operator and reference-point settings.</param>
+        /// <param name="populationSize">The requested number of individuals; reference-based algorithms may derive their effective size from references.</param>
+        /// <param name="seed">The random seed; where nullable, null leaves seed selection to the documented runtime default.</param>
+        /// <param name="trans">The transformation between Optuna parameter values and continuous optimizer coordinates.</param>
+        /// <param name="searchSpace">The ordered distributions defining the relative parameter coordinates.</param>
+        /// <param name="directions">One direction per objective, in objective-index order.</param>
+        /// <param name="constraintKeys">The ordered constraint names fixed by the first completed trial.</param>
         internal Optimizer(
             PymooAlgorithm algorithm,
             PymooAlgorithmOptions options,
@@ -290,6 +311,8 @@ public sealed class PymooSampler : BaseSampler
         }
 
         /// <summary>The completed, compatible trials, in trial-number (= doling) order.</summary>
+        /// <param name="trials">The available study trial snapshots in study order.</param>
+        /// <returns>Completed snapshots whose parameters match this optimizer.</returns>
         internal List<FrozenTrial> CollectComplete(IReadOnlyList<FrozenTrial> trials)
         {
             List<FrozenTrial> complete = CollectTargetTrials(trials, lastTold: -1, CompleteOnly);
@@ -299,6 +322,7 @@ public sealed class PymooSampler : BaseSampler
 
         /// <summary>Rebuild pymoo with the first <see cref="PopulationSize" /> completed trials injected as
         /// its initial population (their transformed parameters), so the tell-replay is coherent.</summary>
+        /// <param name="complete">Compatible completed trials available for population replay.</param>
         internal void Reinitialize(IReadOnlyList<FrozenTrial> complete)
         {
             // Each trial's transformed parameters are already an NDArray (SearchSpaceTransform.Transform),
@@ -321,6 +345,9 @@ public sealed class PymooSampler : BaseSampler
         ///     trials are grouped into generations by trial-number order, which equals the doling order
         ///     under sequential execution (the bridge's scope).
         /// </summary>
+        /// <param name="complete">Compatible completed trials available for population replay.</param>
+        /// <returns>The study-local number of the last trial consumed by a completed generation, or the prior cursor when no generation is ready.</returns>
+        /// <exception cref="NumSharp.RuntimeError">A completed trial omits a constraint fixed by the optimizer's initial constraint ordering.</exception>
         internal int Tell(IReadOnlyList<FrozenTrial> complete)
         {
             int generation = complete.Count / _popsize;
@@ -374,6 +401,9 @@ public sealed class PymooSampler : BaseSampler
         ///     exceed the population; it is wrapped into the current infill population (a safe clamp — the
         ///     bridge targets sequential / mildly-parallel execution).
         /// </summary>
+        /// <param name="trials">The available study trial snapshots in study order.</param>
+        /// <param name="lastToldTrialNumber">The last study-local trial number already consumed by the optimizer.</param>
+        /// <returns>One suggested configuration mapped back into the original Optuna parameter distributions.</returns>
         internal OrderedDict<string, object?> Ask(IReadOnlyList<FrozenTrial> trials, int lastToldTrialNumber)
         {
             int individualIndex = CollectTargetTrials(trials, lastToldTrialNumber, targetStates: null).Count;
@@ -391,6 +421,8 @@ public sealed class PymooSampler : BaseSampler
 
         /// <summary>Build the pymoo algorithm (with an optional injected initial population) and
         /// <c>setup</c> it against the problem + seed. Under the GIL.</summary>
+        /// <param name="sampling">An optional borrowed NumPy matrix used to seed the initial population.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
         private PyObject BuildAlgorithm(PyObject? sampling)
         {
             (string module, string className) = PymooAlgorithmMap.Resolve(_algorithm);
@@ -411,6 +443,14 @@ public sealed class PymooSampler : BaseSampler
         ///     <c>extreme_points_as_reference_points</c>, or <c>pop_per_ref_point</c>/<c>mu</c>) for the
         ///     reference-point algorithms. The caller disposes the returned dict. Under the GIL.
         /// </summary>
+        /// <param name="algorithm">The pymoo algorithm selected by the caller.</param>
+        /// <param name="options">The algorithm-specific genetic operator and reference-point settings.</param>
+        /// <param name="populationSize">The requested number of individuals; reference-based algorithms may derive their effective size from references.</param>
+        /// <param name="nObj">The number of objective columns.</param>
+        /// <param name="seed">The random seed; where nullable, null leaves seed selection to the documented runtime default.</param>
+        /// <param name="directions">One direction per objective, in objective-index order.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="NumSharp.ValueError">The selected reference-point algorithm has no configured reference points.</exception>
         private static PyDict BuildAlgorithmKwargs(
             PymooAlgorithm algorithm, PymooAlgorithmOptions options, int populationSize, int nObj, int seed,
             IReadOnlyList<StudyDirection> directions)
@@ -493,6 +533,11 @@ public sealed class PymooSampler : BaseSampler
 
         /// <summary><c>get_reference_directions("das-dennis", n_obj, n_partitions=…)</c> or
         /// <c>("energy", n_obj, n_points, seed=…)</c>. Dispose the result. Under the GIL.</summary>
+        /// <param name="options">The algorithm-specific genetic operator and reference-point settings.</param>
+        /// <param name="nObj">The number of objective columns.</param>
+        /// <param name="populationSize">The requested number of individuals; reference-based algorithms may derive their effective size from references.</param>
+        /// <param name="seed">The random seed; where nullable, null leaves seed selection to the documented runtime default.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
         private static PyObject BuildReferenceDirections(
             PymooAlgorithmOptions options, int nObj, int populationSize, int seed)
         {
@@ -515,6 +560,11 @@ public sealed class PymooSampler : BaseSampler
         /// <summary>A <c>double[][]</c> of reference points → an independent numpy <c>(k, n_obj)</c> array
         /// in pymoo's (minimized) objective space, applying the maximize sign flip. Dispose the result.
         /// Under the GIL.</summary>
+        /// <param name="refPoints">Reference-point rows in the study's original objective orientation.</param>
+        /// <param name="nObj">The number of objective columns.</param>
+        /// <param name="directions">One direction per objective, in objective-index order.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="NumSharp.ValueError">A reference point does not have one coordinate per objective.</exception>
         private static PyObject BuildReferencePoints(
             double[][] refPoints, int nObj, IReadOnlyList<StudyDirection> directions)
         {
@@ -534,6 +584,8 @@ public sealed class PymooSampler : BaseSampler
         /// and its value lies inside the distribution (Optuna's <c>_is_compatible</c>). The current
         /// running trial — whose parameters are not yet set — fails the presence check, so it is excluded
         /// from the generation bookkeeping.</summary>
+        /// <param name="trial">The trial being mirrored, sampled, or checked for optimizer compatibility.</param>
+        /// <returns>Whether every required parameter exists with a compatible distribution.</returns>
         private bool IsCompatible(FrozenTrial trial)
         {
             foreach (var (name, distribution) in _searchSpace)
@@ -548,6 +600,11 @@ public sealed class PymooSampler : BaseSampler
             return true;
         }
 
+        /// <summary>Selects compatible trials after the replay cursor and in the requested lifecycle states.</summary>
+        /// <param name="trials">The available study trial snapshots in study order.</param>
+        /// <param name="lastTold">The last study-local trial number already consumed by the optimizer.</param>
+        /// <param name="targetStates">The lifecycle states eligible for replay, or null for all states.</param>
+        /// <returns>The compatible trial snapshots eligible for replay after the cursor.</returns>
         private List<FrozenTrial> CollectTargetTrials(
             IReadOnlyList<FrozenTrial> trials, int lastTold, TrialState[]? targetStates)
         {
@@ -565,6 +622,7 @@ public sealed class PymooSampler : BaseSampler
             return result;
         }
 
+        /// <summary>Releases owned Python references while holding the GIL.</summary>
         public void Dispose()
         {
             _algo.Dispose();

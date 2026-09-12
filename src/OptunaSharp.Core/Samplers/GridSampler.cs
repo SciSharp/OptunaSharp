@@ -41,6 +41,7 @@ namespace OptunaSharp.Samplers;
 ///     optimization different workers may occasionally suggest the same configuration, so the
 ///     total number of actual trials may exceed the size of the grid.
 /// </remarks>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.GridSampler.html">Official Optuna GridSampler reference.</seealso>
 public class GridSampler : BaseSampler
 {
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.samplers._grid");
@@ -66,6 +67,7 @@ public class GridSampler : BaseSampler
     ///     each process is strongly recommended in distributed optimization to avoid duplicated
     ///     suggestions.
     /// </param>
+    /// <summary>Materializes and shuffles the Cartesian product of the supplied candidate values.</summary>
     public GridSampler(IReadOnlyDictionary<string, IReadOnlyList<CategoricalChoice>> searchSpace, int? seed = null)
     {
         // Python calls _check_value on every value; the CategoricalChoice value type makes any
@@ -97,6 +99,7 @@ public class GridSampler : BaseSampler
             _searchSpaceAttr[paramName] = values.Select(v => v.Value).ToList();
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         // Python: self._rng.rng.seed() — reseed from OS entropy.
@@ -105,6 +108,7 @@ public class GridSampler : BaseSampler
         _rng.Rng.seed(BitConverter.ToUInt32(buffer));
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
     {
         // Instead of returning param values, GridSampler puts the target grid id as a system
@@ -149,13 +153,17 @@ public class GridSampler : BaseSampler
         study.Storage.SetTrialSystemAttr(trial.TrialId, "grid_id", gridId);
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
         => new();
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
         => new();
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The trial has no grid identifier or the parameter name is absent from the configured grid.</exception>
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -178,6 +186,8 @@ public class GridSampler : BaseSampler
         return paramValue.Value;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The grid is exhausted and Study.Stop is invoked outside Study.Optimize, as in manual ask-and-tell usage.</exception>
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         var targetGrids = GetUnvisitedGridIds(study);
@@ -195,6 +205,9 @@ public class GridSampler : BaseSampler
         }
     }
 
+    /// <summary>Finds unfinished grids, preferring those not currently assigned to running trials.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>Grid indices still requiring completion, preferring grids without running evaluations.</returns>
     private List<int> GetUnvisitedGridIds(Study study)
     {
         // List up unvisited grids based on already finished ones.
@@ -238,9 +251,15 @@ public class GridSampler : BaseSampler
     }
 
     /// <summary>Python <c>_grid_value_equal</c>: <c>==</c> except that two NaNs compare equal.</summary>
+    /// <param name="value1">First categorical grid choice.</param>
+    /// <param name="value2">Second categorical grid choice.</param>
+    /// <returns>True for Python-equivalent choices, with NaN choices treated as equal.</returns>
     private static bool GridValueEqual(CategoricalChoice value1, CategoricalChoice value2)
         => CategoricalChoice.ChoicesEqual(value1, value2);
 
+    /// <summary>Checks whether stored grid metadata describes the same ordered candidate lists.</summary>
+    /// <param name="searchSpace">Deserialized search-space system attribute, expected to map parameter names to candidate lists.</param>
+    /// <returns>True if parameter names and candidate values match the configured grid.</returns>
     private bool SameSearchSpace(object? searchSpace)
     {
         if (searchSpace is not IReadOnlyDictionary<string, object?> stored)
@@ -269,9 +288,13 @@ public class GridSampler : BaseSampler
     }
 
     /// <summary>Return <c>true</c> if all the possible params are evaluated, otherwise <c>false</c>.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>True if every grid configuration has a finished evaluation.</returns>
     public bool IsExhausted(Study study) => GetUnvisitedGridIds(study).Count == 0;
 
     /// <summary>Port of <c>itertools.product(*axes)</c> — the last axis varies fastest.</summary>
+    /// <param name="axes">Candidate lists in parameter order.</param>
+    /// <returns>All combinations with the last input axis varying fastest.</returns>
     private static List<CategoricalChoice[]> CartesianProduct(List<List<CategoricalChoice>> axes)
     {
         var result = new List<CategoricalChoice[]> { Array.Empty<CategoricalChoice>() };

@@ -41,9 +41,13 @@ internal static class TreeShap
     /// zero (feature absent) and one (feature present) paths.</summary>
     private struct PathElement
     {
+        /// <summary>The feature whose inclusion is represented by this Tree SHAP path element.</summary>
         public int FeatureIndex;
+        /// <summary>The branch probability when this feature is absent from the coalition.</summary>
         public double ZeroFraction;
+        /// <summary>The branch probability when this feature is present in the coalition.</summary>
         public double OneFraction;
+        /// <summary>The accumulated permutation weight of this path element's coalition size.</summary>
         public double Pweight;
     }
 
@@ -53,6 +57,10 @@ internal static class TreeShap
     ///     <c>1 / nTrees</c> so summing the trees yields the forest mean directly (SHAP's linearity),
     ///     exactly as <c>dense_tree_path_dependent</c> accumulates into one buffer.
     /// </summary>
+    /// <param name="forest">The fitted regression trees used for Tree SHAP.</param>
+    /// <param name="x">The feature rows to explain, with one sample per inner array.</param>
+    /// <param name="nFeatures">The number of feature columns in the training matrix.</param>
+    /// <returns>Per-row, per-feature SHAP values averaged over the forest.</returns>
     internal static double[][] ShapValues(SklearnLikeTree[] forest, double[][] x, int nFeatures)
     {
         int nSamples = x.Length;
@@ -90,6 +98,11 @@ internal static class TreeShap
 
     /// <summary><c>tree_shap()</c> for one tree and one sample (condition == 0): seed the recursion at
     /// the root with unit fractions and the sentinel parent feature -1.</summary>
+    /// <param name="tree">The fitted tree whose nodes and split statistics are inspected.</param>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <param name="phi">The per-feature SHAP contributions accumulated in place.</param>
+    /// <param name="scaling">The factor applied to this tree's contributions when combining the ensemble.</param>
+    /// <param name="buffer">The reusable Tree SHAP path workspace.</param>
     private static void TreeShapPathDependent(
         SklearnLikeTree tree, double[] x, double[] phi, double scaling, PathElement[] buffer)
     {
@@ -102,6 +115,17 @@ internal static class TreeShap
     /// missing values). <paramref name="parentBase" /> is the offset of the parent's path slice inside
     /// the shared triangular <paramref name="buffer" /> — the analogue of the pointer
     /// <c>parent_unique_path</c>.</summary>
+    /// <param name="tree">The fitted tree whose nodes and split statistics are inspected.</param>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <param name="phi">The per-feature SHAP contributions accumulated in place.</param>
+    /// <param name="scaling">The factor applied to this tree's contributions when combining the ensemble.</param>
+    /// <param name="buffer">The reusable Tree SHAP path workspace.</param>
+    /// <param name="parentBase">The offset of the parent path in the shared path buffer.</param>
+    /// <param name="nodeIndex">The zero-based node index in the flat tree arrays.</param>
+    /// <param name="uniqueDepth">The number of distinct features on the current Tree SHAP path.</param>
+    /// <param name="parentZeroFraction">The incoming branch fraction when its feature is absent from a coalition.</param>
+    /// <param name="parentOneFraction">The incoming branch fraction when its feature is present in a coalition.</param>
+    /// <param name="parentFeatureIndex">The feature column used by the incoming parent split.</param>
     private static void Recurse(
         SklearnLikeTree tree, double[] x, double[] phi, double scaling, PathElement[] buffer,
         int parentBase, int nodeIndex, int uniqueDepth,
@@ -168,6 +192,12 @@ internal static class TreeShap
 
     /// <summary>Port of <c>extend_path</c>: grow the decision path with one more split, keeping the
     /// permutation weights of every subset size up to date.</summary>
+    /// <param name="path">The Tree SHAP path elements recording features and branch fractions.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <param name="uniqueDepth">The number of distinct features on the current Tree SHAP path.</param>
+    /// <param name="zeroFraction">The probability of following this branch when the split feature is absent from a coalition.</param>
+    /// <param name="oneFraction">The probability of following this branch when the split feature is present in a coalition.</param>
+    /// <param name="featureIndex">The feature column represented by the path element.</param>
     private static void ExtendPath(
         PathElement[] path, int b, int uniqueDepth, double zeroFraction, double oneFraction, int featureIndex)
     {
@@ -184,6 +214,10 @@ internal static class TreeShap
 
     /// <summary>Port of <c>unwind_path</c>: undo a previous <see cref="ExtendPath" /> so the split can
     /// be reapplied at a deeper node.</summary>
+    /// <param name="path">The Tree SHAP path elements recording features and branch fractions.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <param name="uniqueDepth">The number of distinct features on the current Tree SHAP path.</param>
+    /// <param name="pathIndex">The path entry to remove or inspect.</param>
     private static void UnwindPath(PathElement[] path, int b, int uniqueDepth, int pathIndex)
     {
         double oneFraction = path[b + pathIndex].OneFraction;
@@ -214,6 +248,11 @@ internal static class TreeShap
 
     /// <summary>Port of <c>unwound_path_sum</c>: the total permutation weight that would result from
     /// unwinding the split at <paramref name="pathIndex" /> — used to weight each leaf's contribution.</summary>
+    /// <param name="path">The Tree SHAP path elements recording features and branch fractions.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <param name="uniqueDepth">The number of distinct features on the current Tree SHAP path.</param>
+    /// <param name="pathIndex">The path entry to remove or inspect.</param>
+    /// <returns>The total coalition weight after omitting the selected path feature.</returns>
     private static double UnwoundPathSum(PathElement[] path, int b, int uniqueDepth, int pathIndex)
     {
         double oneFraction = path[b + pathIndex].OneFraction;
@@ -241,6 +280,8 @@ internal static class TreeShap
 
     /// <summary>Depth of the deepest root-to-leaf path (root = 0), matching
     /// <c>sklearn.tree._tree.Tree.max_depth</c>; used only to size the path buffer.</summary>
+    /// <param name="tree">The fitted tree whose nodes and split statistics are inspected.</param>
+    /// <returns>The greatest root-to-leaf depth in the supplied tree.</returns>
     private static int MaxDepth(SklearnLikeTree tree)
     {
         int[] left = tree.ChildrenLeft;

@@ -3,6 +3,7 @@ using System.Globalization;
 
 namespace OptunaSharp.Internal;
 
+/// <summary>Floating-point and reduction helpers preserving the numerical conventions expected by the Optuna port.</summary>
 internal static class MathUtil
 {
     /// <summary>
@@ -11,10 +12,15 @@ internal static class MathUtil
     ///     trailing-zero stripping, min-2-digit exponent) except for the uppercase <c>E</c>, so
     ///     lowercasing it makes the two byte-identical (verified against CPython's <c>format</c>).
     /// </summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The invariant three-significant-figure representation with a lowercase exponent marker.</returns>
     internal static string FormatG3(double x)
         => x.ToString("G3", CultureInfo.InvariantCulture).Replace("E", "e");
 
     /// <summary>C99 / NumPy <c>nextafter(x, y)</c>: the next representable double after <paramref name="x" /> toward <paramref name="y" />.</summary>
+    /// <param name="x">The starting floating-point value.</param>
+    /// <param name="y">The value defining the direction in which to take one representable step.</param>
+    /// <returns>The adjacent representable double toward the second value, or that value when equal.</returns>
     internal static double NextAfter(double x, double y)
     {
         if (double.IsNaN(x) || double.IsNaN(y))
@@ -25,6 +31,10 @@ internal static class MathUtil
     }
 
     /// <summary>NumPy <c>np.clip(value, low, high)</c> for scalars (NaN propagates).</summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <param name="low">The lower endpoint of the allowed range.</param>
+    /// <param name="high">The upper endpoint of the allowed range.</param>
+    /// <returns>The value clamped to the interval; NaN propagates.</returns>
     internal static double Clip(double value, double low, double high)
         => Math.Min(Math.Max(value, low), high);
 
@@ -34,6 +44,8 @@ internal static class MathUtil
     ///     is bit-identical to NumPy's <c>log1p</c> because <see cref="Math.Log(double)" /> already
     ///     matches NumPy's <c>np.log</c> bit-for-bit (verified over 220k points, 0 ULP).
     /// </summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The natural logarithm of one plus the argument, with correction near zero.</returns>
     internal static double Log1p(double x)
     {
         if (double.IsNaN(x))
@@ -57,6 +69,8 @@ internal static class MathUtil
     ///     already match NumPy's <c>np.exp</c>/<c>np.log</c> bit-for-bit (verified against Python over
     ///     the TPE truncnorm input range).
     /// </summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The exponential of the argument minus one, with correction near zero.</returns>
     internal static double Expm1(double x)
     {
         if (double.IsNaN(x))
@@ -78,6 +92,9 @@ internal static class MathUtil
     ///     handles the infinities); bit-identical to Python because it rides on the bit-exact
     ///     <see cref="Log1p" /> and <see cref="Math.Exp(double)" />.
     /// </summary>
+    /// <param name="a">The logarithm of the first nonnegative addend.</param>
+    /// <param name="b">The logarithm of the second nonnegative addend.</param>
+    /// <returns>The natural logarithm of exp(a) + exp(b), computed without unnecessary overflow.</returns>
     internal static double LogAddExp(double a, double b)
     {
         if (a == b)
@@ -94,9 +111,15 @@ internal static class MathUtil
     ///     NumPy's <c>np.add.reduce</c> pairwise summation for a contiguous float64 array — the
     ///     exact accumulation order of <c>ndarray.sum()</c>, so reductions stay bit-identical.
     /// </summary>
+    /// <param name="a">The contiguous float64 values to sum in NumPy's accumulation order.</param>
+    /// <returns>The sum using NumPy's contiguous float64 pairwise accumulation order.</returns>
     internal static double PairwiseSum(double[] a) => PairwiseSum(a, 0, a.Length);
 
     /// <inheritdoc cref="PairwiseSum(double[])" />
+    /// <param name="a">The contiguous values containing the slice to sum.</param>
+    /// <param name="offset">The zero-based inclusive start of the slice.</param>
+    /// <param name="n">The number of values to sum from the offset; the slice must fit in the array.</param>
+    /// <returns>The slice sum using NumPy's pairwise accumulation order.</returns>
     internal static double PairwiseSum(double[] a, int offset, int n)
     {
         if (n < 8)
@@ -141,6 +164,10 @@ internal static class MathUtil
     ///     the common case: <c>y[i] = i * step + start</c> with <c>step = (stop - start) / (num - 1)</c>,
     ///     and the final element pinned to <paramref name="stop" /> exactly.
     /// </summary>
+    /// <param name="start">The inclusive start of the interval or slice.</param>
+    /// <param name="stop">The final value of the generated numerical interval.</param>
+    /// <param name="num">The number of values in the output grid.</param>
+    /// <returns>An evenly spaced grid including both endpoints when at least two values are requested.</returns>
     internal static double[] Linspace(double start, double stop, int num)
     {
         if (num <= 0)
@@ -161,6 +188,8 @@ internal static class MathUtil
     ///     NumPy <c>np.mean</c> over a float64 array — <c>PairwiseSum(a) / a.Length</c>, so the
     ///     accumulation order matches NumPy's <c>add.reduce</c> bit-for-bit. Empty → NaN (as NumPy).
     /// </summary>
+    /// <param name="a">The observations whose arithmetic mean is computed.</param>
+    /// <returns>The arithmetic mean of the input values.</returns>
     internal static double Mean(double[] a)
         => a.Length == 0 ? double.NaN : PairwiseSum(a) / a.Length;
 
@@ -170,6 +199,8 @@ internal static class MathUtil
     ///     <c>**2</c> is a multiply, not <see cref="Math.Pow(double,double)" />); variance is the
     ///     pairwise sum of those over <c>n</c>; then <see cref="Math.Sqrt(double)" />. Empty → NaN.
     /// </summary>
+    /// <param name="a">The observations whose population standard deviation is computed.</param>
+    /// <returns>The population standard deviation of the input values.</returns>
     internal static double Std(double[] a)
     {
         int n = a.Length;

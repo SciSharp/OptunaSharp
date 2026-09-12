@@ -32,6 +32,7 @@ namespace OptunaSharp.Samplers;
 ///     the same bound documented for PED-ANOVA. RNG draw order and count are identical, so the study
 ///     trajectory stays aligned. See also the argsort tie-break note on <see cref="Tpe.ParzenEstimator" />.</para>
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.TPESampler.html">Official Optuna TPESampler reference.</seealso>
 public class TPESampler : BaseSampler
 {
     private const string RelativeParamsKey = "tpe:relative_params";
@@ -77,6 +78,8 @@ public class TPESampler : BaseSampler
     /// <param name="warnIndependentSampling">Deprecated (v4.9.0). Falls back to <c>false</c>.</param>
     /// <param name="constantLiar">Penalize running trials to avoid nearby suggestions. Defaults to <c>true</c>.</param>
     /// <param name="constraintsFunc">Deprecated (v5.0.0). Optional constraint function evaluated after each trial.</param>
+    /// <summary>Configures density estimation, startup sampling, and optional joint search-space groups.</summary>
+    /// <exception cref="NumSharp.ValueError">Grouping is enabled while multivariate estimation is explicitly disabled.</exception>
     public TPESampler(
         bool? considerPrior = null,
         double? priorWeight = null,
@@ -143,6 +146,7 @@ public class TPESampler : BaseSampler
         }
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         // Python: self._rng.rng.seed() — reseed from OS entropy.
@@ -153,6 +157,8 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>Python <c>_is_multivariate</c>.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>True if this study uses joint TPE estimation under the configured policy.</returns>
     private bool IsMultivariate(Study study)
     {
         if (_multivariate is not null)
@@ -173,6 +179,7 @@ public class TPESampler : BaseSampler
         return !study.IsMultiObjective();
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         bool multivariate = IsMultivariate(study);
@@ -209,6 +216,7 @@ public class TPESampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -258,6 +266,10 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>Python <c>_sample_relative</c> (called once per subspace in the <c>group</c> path).</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <returns>Joint TPE values, or an empty map when startup history or the subspace is insufficient.</returns>
     private OrderedDict<string, object?> SampleRelativeCore(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -273,6 +285,7 @@ public class TPESampler : BaseSampler
         return Sample(study, trial, searchSpace);
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -302,6 +315,9 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>Python <c>_get_params</c>.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>Recorded external parameters supplemented with readable shared relative-sampling attributes.</returns>
     private OrderedDict<string, object?> GetParams(FrozenTrial trial, Study study)
     {
         if (trial.State.IsFinished() || !IsMultivariate(study))
@@ -335,6 +351,10 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>Python <c>_get_internal_repr</c>.</summary>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>Encoded observation columns from trials carrying every search-space parameter.</returns>
     private OrderedDict<string, double[]> GetInternalRepr(
         IReadOnlyList<FrozenTrial> trials, OrderedDict<string, BaseDistribution> searchSpace, Study study)
     {
@@ -360,6 +380,10 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>Python <c>_sample</c>.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <returns>External values of the candidate maximizing the preferred-versus-remaining density ratio.</returns>
     private OrderedDict<string, object?> Sample(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -398,6 +422,11 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>Python <c>_build_parzen_estimator</c>.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <param name="handleBelow">Whether this estimator represents the preferred trial group.</param>
+    /// <returns>The mixture estimator fitted to the selected trial group.</returns>
     private ParzenEstimator BuildParzenEstimator(
         Study study, OrderedDict<string, BaseDistribution> searchSpace,
         IReadOnlyList<FrozenTrial> trials, bool handleBelow)
@@ -415,6 +444,10 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>Python <c>_compute_acquisition_func</c>.</summary>
+    /// <param name="samples">Candidate values whose density or acquisition scores are evaluated.</param>
+    /// <param name="mpeBelow">Density estimator fitted to the preferred trial group.</param>
+    /// <param name="mpeAbove">Density estimator fitted to the remaining trial group.</param>
+    /// <returns>Log-density ratios aligned with the candidate samples.</returns>
     private static double[] ComputeAcquisitionFunc(
         OrderedDict<string, double[]> samples, ParzenEstimator mpeBelow, ParzenEstimator mpeAbove)
     {
@@ -427,6 +460,10 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>Python <c>_compare</c>: pick the candidate maximizing the acquisition function.</summary>
+    /// <param name="samples">Candidate values whose density or acquisition scores are evaluated.</param>
+    /// <param name="acquisitionFuncVals">Acquisition values aligned with the candidate sample rows.</param>
+    /// <returns>The candidate with maximum acquisition value, keyed by parameter name.</returns>
+    /// <exception cref="NumSharp.ValueError">There are no candidates or the candidate and acquisition arrays have different lengths.</exception>
     private static OrderedDict<string, double> Compare(
         OrderedDict<string, double[]> samples, double[] acquisitionFuncVals)
     {
@@ -448,6 +485,8 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>NumPy <c>np.argmax</c>: the first index of the maximum (NaN-max semantics excluded — acq values are finite).</summary>
+    /// <param name="values">Scores compared to choose the first maximum.</param>
+    /// <returns>The first maximum index.</returns>
     private static int ArgMax(double[] values)
     {
         int best = 0;
@@ -463,9 +502,12 @@ public class TPESampler : BaseSampler
         return best;
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _randomSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
+    /// <exception cref="System.Exception">A configured after-trial or constraint callback fails; its exception propagates.</exception>
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         System.Diagnostics.Debug.Assert(
@@ -476,6 +518,13 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>Python <c>_warn_if_deprecated_argument</c> — reference-typed arguments (<c>gamma</c>/<c>weights</c>).</summary>
+    /// <param name="name">Argument name included in deprecation diagnostics.</param>
+    /// <param name="value">Input value used by the comparison or compatibility fallback.</param>
+    /// <param name="defaultValue">Fallback used when the deprecated argument was omitted.</param>
+    /// <param name="dVer">Version in which the argument was deprecated.</param>
+    /// <param name="rVer">Version scheduled to remove the deprecated argument.</param>
+    /// <typeparam name="T">Type of the compatibility argument whose supplied value or default is returned.</typeparam>
+    /// <returns>The supplied compatibility value, or its default when omitted.</returns>
     private static T? WarnDeprecatedRef<T>(string name, T? value, T? defaultValue, string dVer, string rVer)
         where T : class
     {
@@ -488,6 +537,13 @@ public class TPESampler : BaseSampler
     }
 
     /// <summary>Python <c>_warn_if_deprecated_argument</c> — value-typed arguments (bool / double).</summary>
+    /// <param name="name">Argument name included in deprecation diagnostics.</param>
+    /// <param name="value">Input value used by the comparison or compatibility fallback.</param>
+    /// <param name="defaultValue">Fallback used when the deprecated argument was omitted.</param>
+    /// <param name="dVer">Version in which the argument was deprecated.</param>
+    /// <param name="rVer">Version scheduled to remove the deprecated argument.</param>
+    /// <typeparam name="T">Type of the compatibility argument whose supplied value or default is returned.</typeparam>
+    /// <returns>The supplied compatibility value, or its default when omitted.</returns>
     private static T WarnDeprecatedVal<T>(string name, T? value, T defaultValue, string dVer, string rVer)
         where T : struct
     {
@@ -503,6 +559,7 @@ public class TPESampler : BaseSampler
 /// <summary>Shared deprecation message template (<c>optuna/_deprecated.py</c>).</summary>
 internal static class Deprecations
 {
+    /// <summary>Versioned deprecation message shared by compatibility arguments.</summary>
     internal const string Template =
         "{0} has been deprecated in v{1}. " +
         "This feature will be removed in v{2}. " +

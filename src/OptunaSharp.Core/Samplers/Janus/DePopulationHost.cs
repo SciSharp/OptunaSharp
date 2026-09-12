@@ -21,7 +21,7 @@ using OptunaSharp.Samplers.Differential;
 namespace OptunaSharp.Samplers.Janus;
 
 /// <summary>
-///     The Differential Evolution <see cref="IPopulationHost" /> for <see cref="JanusInfill" />: a
+///     The Differential Evolution <see cref="IPopulationHost" /> for <see cref="JanusOptimizer" />: a
 ///     <see cref="De" /> optimizer that supplies native offspring (one per target, cycled across the
 ///     generation), consumes a coherent generation via greedy selection, and reports the covariance-free
 ///     proposal statistics JANUS's GN-only infill reads — the population centroid (mean), a per-dimension
@@ -43,6 +43,7 @@ internal sealed class DePopulationHost : IPopulationHost
     /// <param name="f">Differential weight F.</param>
     /// <param name="cr">Crossover rate CR.</param>
     /// <param name="strategy">DE mutation strategy.</param>
+    /// <summary>Creates a differential-evolution host for JANUS using the transformed search-space box.</summary>
     internal DePopulationHost(SearchSpaceTransform trans, int? popsize, int seed, double f, double cr, DeStrategy strategy)
     {
         double[] boundsFlat = trans.Bounds.ToArray<double>();
@@ -74,9 +75,12 @@ internal sealed class DePopulationHost : IPopulationHost
         _askPtr = 0;
     }
 
+    /// <summary>Number of evaluated individuals required for one generation.</summary>
     public int PopulationSize => _de.PopulationSize;
+    /// <summary>Population centroid used as the JANUS injection center in transformed coordinates.</summary>
     public double[] Mean => _de.Mean();
 
+    /// <summary>Mean population standard deviation across coordinates, floored away from zero for step clipping.</summary>
     public double Sigma
     {
         get
@@ -88,6 +92,8 @@ internal sealed class DePopulationHost : IPopulationHost
         }
     }
 
+    /// <summary>Draws one candidate from the current proposal without advancing the generation.</summary>
+    /// <returns>One candidate vector in transformed coordinates.</returns>
     public double[] Ask()
     {
         int target = _askPtr % _de.PopulationSize;
@@ -99,6 +105,8 @@ internal sealed class DePopulationHost : IPopulationHost
         return x;
     }
 
+    /// <summary>Updates the optimizer using evaluated candidates from one coherent generation.</summary>
+    /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
     public void Tell(IReadOnlyList<(double[] X, double Value)> solutions)
     {
         // The driver delivers a coherent generation in trial/ask order, whose per-slot target order is a
@@ -110,8 +118,10 @@ internal sealed class DePopulationHost : IPopulationHost
         _askPtr = 0;
     }
 
+    /// <summary>Whether this population host can expose and replace a proposal covariance.</summary>
     public bool HasProposalCovariance => false;
 
+    /// <summary>Sum of proposal covariance diagonal entries used to match exploration scale.</summary>
     public double ProposalCovarianceTrace
     {
         // Not read while HasProposalCovariance is false (the driver guards on it); kept meaningful anyway.
@@ -124,6 +134,9 @@ internal sealed class DePopulationHost : IPopulationHost
         }
     }
 
+    /// <summary>Measures a displacement in the host proposal scale for bounded JANUS injection.</summary>
+    /// <param name="diff">Displacement from the proposal center in transformed coordinates.</param>
+    /// <returns>The host-scaled step norm; a nonpositive result signals unavailable whitening.</returns>
     public double WhitenedStepNorm(double[] diff)
     {
         // DE's covariance-free analogue of the Mahalanobis norm: the step measured in per-dimension
@@ -140,7 +153,12 @@ internal sealed class DePopulationHost : IPopulationHost
     }
 
     // DE has no Gaussian proposal covariance, so the reshape mode is a no-op here.
+    /// <summary>Obtains a detached proposal covariance when the host supplies one.</summary>
+    /// <returns>A detached covariance matrix, or null for a covariance-free host.</returns>
     public double[,]? GetProposalCovariance() => null;
 
+    /// <summary>Updates a covariance-capable host and invalidates factors derived from its previous covariance.</summary>
+    /// <param name="c">Replacement proposal covariance in transformed coordinates.</param>
+    /// <returns>True when the host accepted a proposal covariance; false when unsupported.</returns>
     public bool TrySetProposalCovariance(double[,] c) => false;
 }

@@ -24,6 +24,7 @@ namespace OptunaSharp.Pruners;
 ///     never pruned. The scipy dependency is replaced by a self-contained signed-rank test
 ///     (plan 2.3), verified against scipy.
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.pruners.WilcoxonPruner.html">Official Optuna WilcoxonPruner reference.</seealso>
 public class WilcoxonPruner : BasePruner
 {
     private readonly int _nStartupSteps;
@@ -42,6 +43,8 @@ public class WilcoxonPruner : BasePruner
     ///     current trial and the best trial. Note the trial is not pruned at the first and
     ///     second steps even if set to 0 or 1, due to the lack of enough data.
     /// </param>
+    /// <summary>Configures a paired signed-rank test against the current best trial.</summary>
+    /// <exception cref="NumSharp.ValueError">The startup count is negative or the p-value threshold is outside [0, 1].</exception>
     public WilcoxonPruner(double pThreshold = 0.1, int nStartupSteps = 2)
     {
         if (nStartupSteps < 0)
@@ -53,6 +56,8 @@ public class WilcoxonPruner : BasePruner
         _pThreshold = pThreshold;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives and cannot supply a scalar best trial or direction.</exception>
     public override bool Prune(Study study, FrozenTrial trial)
     {
         if (trial.IntermediateValues.Count == 0)
@@ -76,6 +81,8 @@ public class WilcoxonPruner : BasePruner
         }
         catch (ValueError)
         {
+            // Without a usable incumbent there is no paired reference; missing evidence keeps
+            // the current evaluation running instead of turning into a pruning failure.
             return false;
         }
 
@@ -149,6 +156,10 @@ public class WilcoxonPruner : BasePruner
         return p < _pThreshold;
     }
 
+    /// <summary>Pairs equal instance identifiers in sorted order, using their first occurrence in each input.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="b">Second numerical array operand.</param>
+    /// <returns>Paired source indices ordered by their shared instance identifier.</returns>
     private static (List<int> Idx1, List<int> Idx2) Intersect1d(int[] a, int[] b)
     {
         var bIndex = new Dictionary<int, int>();

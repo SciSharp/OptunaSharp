@@ -18,6 +18,10 @@ internal static class OptimizationHistoryPlot
     private static readonly Logger Logger =
         OptunaLogging.GetLogger("optuna.visualization._optimization_history");
 
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="infoList">Optimization history data in study order.</param>
+    /// <param name="targetName">Label used for the selected objective on axes, hover text, or the colorbar.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(IReadOnlyList<OptimizationHistoryInfo> infoList, string targetName)
     {
         var layout = Fig.Layout(

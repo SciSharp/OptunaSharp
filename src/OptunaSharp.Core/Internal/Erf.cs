@@ -79,13 +79,20 @@ internal static class Erf
     private const double SB6 = 4.74528541206955367215e+02;
     private const double SB7 = -2.24409524465858183362e+01;
 
+    /// <summary>Returns the signed high 32 bits of the IEEE-754 representation.</summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The signed high 32 bits of the IEEE-754 representation.</returns>
     private static int HighWord(double x) => (int)(BitConverter.DoubleToInt64Bits(x) >> 32);
 
     /// <summary>Clear the low 32 bits of the mantissa (FreeBSD <c>SET_LOW_WORD(z, 0)</c>).</summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The input with its low 32 representation bits cleared.</returns>
     private static double ClearLowWord(double x)
         => BitConverter.Int64BitsToDouble(BitConverter.DoubleToInt64Bits(x) & unchecked((long)0xFFFFFFFF00000000));
 
     /// <summary>The error function, matching C99 <c>erf</c> (FreeBSD <c>s_erf.c</c>).</summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The error function evaluated at the supplied argument.</returns>
     internal static double Compute(double x)
     {
         int hx = HighWord(x);
@@ -158,6 +165,8 @@ internal static class Erf
     }
 
     /// <summary>The complementary error function, matching C99 <c>erfc</c> (FreeBSD <c>s_erf.c</c>).</summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The complementary error function evaluated at the supplied argument.</returns>
     internal static double Erfc(double x)
     {
         int hx = HighWord(x);
@@ -242,6 +251,8 @@ internal static class Erf
     ///     elements — reproduced so large-study TPE stays bit-comparable with Python. Smaller
     ///     inputs go through <see cref="Compute" /> exactly like Python calls <c>math.erf</c>.
     /// </summary>
+    /// <param name="x">The numerical input values, in the order used by the operation.</param>
+    /// <returns>The elementwise error-function values in input order.</returns>
     internal static double[] ComputeArray(double[] x)
     {
         var result = new double[x.Length];
@@ -312,6 +323,8 @@ internal static class Erf
     ///     is safe (no overflow, no underflow); beyond that the asymptotic series
     ///     <c>1/(x√π)·Σ(-1)ᵏ(2k-1)!!/(2x²)ᵏ</c> is used. Rides the erf/ucrt tolerance class.
     /// </summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The scaled complementary error function exp(x*x) * erfc(x).</returns>
     internal static double Erfcx(double x)
     {
         if (x < 0.0)
@@ -331,8 +344,12 @@ internal static class Erf
     }
 
     /// <summary>Standard normal CDF: <c>0.5 * erfc(-z / sqrt(2))</c>.</summary>
+    /// <param name="z">The standardized normal argument.</param>
+    /// <returns>The lower-tail standard-normal probability at the supplied argument.</returns>
     internal static double NormCdf(double z) => 0.5 * Erfc(-z / Math.Sqrt(2.0));
 
     /// <summary>Standard normal survival function: <c>0.5 * erfc(z / sqrt(2))</c>.</summary>
+    /// <param name="z">The standardized normal argument.</param>
+    /// <returns>The upper-tail standard-normal probability at the supplied argument.</returns>
     internal static double NormSf(double z) => 0.5 * Erfc(z / Math.Sqrt(2.0));
 }

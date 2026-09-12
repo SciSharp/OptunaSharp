@@ -12,6 +12,7 @@ namespace OptunaSharp.Distributions;
 ///     (<c>distribution_to_json</c> / <c>json_to_distribution</c>) and
 ///     <c>check_distribution_compatibility</c>. The storage layer depends on the JSON forms.
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/distributions.html">Official Optuna distribution API.</seealso>
 public static class Distribution
 {
     /// <summary>
@@ -34,6 +35,12 @@ public static class Distribution
     /// </summary>
     /// <param name="jsonStr">A JSON-serialized distribution.</param>
     /// <returns>A deserialized distribution.</returns>
+    /// <exception cref="NumSharp.ValueError">The distribution format, class name, bounds, step, or choices are invalid.</exception>
+    /// <exception cref="System.InvalidCastException">A JSON field has an incompatible runtime type.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required distribution field is absent.</exception>
+    /// <exception cref="System.FormatException">A numeric field cannot be converted.</exception>
+    /// <exception cref="System.OverflowException">A numeric field exceeds the supported conversion range.</exception>
+    /// <exception cref="NumSharp.TypeError">A categorical choice is not a supported scalar.</exception>
     public static BaseDistribution FromJson(string jsonStr)
     {
         if (PyJson.Loads(jsonStr) is not OrderedDict<string, object?> jsonDict)
@@ -129,6 +136,7 @@ public static class Distribution
     /// </summary>
     /// <param name="distOld">A distribution previously recorded in storage.</param>
     /// <param name="distNew">A distribution newly added to storage.</param>
+    /// <exception cref="NumSharp.ValueError">Distribution types or log scales differ, or categorical choices changed.</exception>
     public static void CheckDistributionCompatibility(BaseDistribution distOld, BaseDistribution distNew)
     {
         if (distOld.GetType() != distNew.GetType())
@@ -154,6 +162,9 @@ public static class Distribution
     }
 
     /// <summary>Python <c>_get_single_value(distribution)</c>.</summary>
+    /// <param name="distribution">Distribution defining the parameter representation and allowed values.</param>
+    /// <returns>The numeric lower endpoint or the sole categorical value.</returns>
+    /// <exception cref="System.InvalidOperationException">The distribution has an unsupported concrete type.</exception>
     internal static object? GetSingleValue(BaseDistribution distribution)
     {
         System.Diagnostics.Debug.Assert(distribution.Single());
@@ -171,6 +182,10 @@ public static class Distribution
     ///     Python <c>_convert_old_distribution_to_new_distribution</c> — maps deprecated aliases
     ///     onto <see cref="FloatDistribution" /> / <see cref="IntDistribution" />.
     /// </summary>
+    /// <param name="distribution">Distribution defining the parameter representation and allowed values.</param>
+    /// <param name="suppressWarning">Whether to suppress the FutureWarning when a deprecated alias is replaced.</param>
+    /// <returns>The modern replacement, or the original instance if no conversion is needed.</returns>
+    /// <exception cref="NumSharp.ValueError">A mutable legacy distribution contains invalid bounds or step.</exception>
     internal static BaseDistribution ConvertOldDistributionToNewDistribution(
         BaseDistribution distribution, bool suppressWarning = false)
     {
@@ -216,6 +231,11 @@ public static class Distribution
         return newDistribution;
     }
 
+    /// <summary>Converts a decoded JSON list into categorical choices.</summary>
+    /// <param name="value">Decoded JSON array containing categorical candidate scalars.</param>
+    /// <returns>A lazy sequence of normalized scalar choices.</returns>
+    /// <exception cref="System.InvalidCastException">The decoded value is not a list.</exception>
+    /// <exception cref="NumSharp.TypeError">A list item is not a supported categorical scalar.</exception>
     private static IEnumerable<CategoricalChoice> ToChoices(object? value)
     {
         var list = (List<object?>)value!;
@@ -223,6 +243,12 @@ public static class Distribution
             yield return CategoricalChoice.From(item);
     }
 
+    /// <summary>Converts a decoded JSON scalar using invariant numeric conventions.</summary>
+    /// <param name="value">Decoded JSON scalar to convert to the requested numeric representation.</param>
+    /// <returns>The scalar converted to a double.</returns>
+    /// <exception cref="System.InvalidCastException">The value does not support the conversion.</exception>
+    /// <exception cref="System.FormatException">A string does not represent the requested number.</exception>
+    /// <exception cref="System.OverflowException">The number exceeds the conversion range.</exception>
     private static double ToDouble(object? value) => value switch
     {
         double d => d,
@@ -231,6 +257,12 @@ public static class Distribution
         _ => Convert.ToDouble(value, CultureInfo.InvariantCulture),
     };
 
+    /// <summary>Converts a decoded JSON scalar using invariant numeric conventions.</summary>
+    /// <param name="value">Decoded JSON scalar to convert to the requested numeric representation.</param>
+    /// <returns>The scalar converted to a 64-bit integer.</returns>
+    /// <exception cref="System.InvalidCastException">The value does not support the conversion.</exception>
+    /// <exception cref="System.FormatException">A string does not represent the requested number.</exception>
+    /// <exception cref="System.OverflowException">The number exceeds the conversion range.</exception>
     private static long ToLong(object? value) => value switch
     {
         long l => l,
@@ -239,22 +271,49 @@ public static class Distribution
         _ => Convert.ToInt64(value, CultureInfo.InvariantCulture),
     };
 
+    /// <summary>Reads a numeric or Boolean distribution attribute from a decoded JSON object.</summary>
+    /// <param name="dict">Decoded attribute object.</param>
+    /// <param name="key">Name of the numeric or Boolean attribute.</param>
+    /// <returns>The converted attribute, or the overload's fallback for a missing or null optional attribute.</returns>
+    /// <exception cref="System.InvalidCastException">The attribute has an incompatible scalar type.</exception>
     private static double GetDouble(OrderedDict<string, object?> dict, string key) => ToDouble(dict[key]);
 
+    /// <summary>Reads a numeric or Boolean distribution attribute from a decoded JSON object.</summary>
+    /// <param name="dict">Decoded attribute object.</param>
+    /// <param name="key">Name of the numeric or Boolean attribute.</param>
+    /// <returns>The converted attribute, or the overload's fallback for a missing or null optional attribute.</returns>
+    /// <exception cref="System.InvalidCastException">The attribute has an incompatible scalar type.</exception>
     private static double? GetNullableDouble(OrderedDict<string, object?> dict, string key)
     {
         var value = dict.GetValueOrDefault(key);
         return value is null ? null : ToDouble(value);
     }
 
+    /// <summary>Reads a numeric or Boolean distribution attribute from a decoded JSON object.</summary>
+    /// <param name="dict">Decoded attribute object.</param>
+    /// <param name="key">Name of the numeric or Boolean attribute.</param>
+    /// <returns>The converted attribute, or the overload's fallback for a missing or null optional attribute.</returns>
+    /// <exception cref="System.InvalidCastException">The attribute has an incompatible scalar type.</exception>
     private static long GetLong(OrderedDict<string, object?> dict, string key) => ToLong(dict[key]);
 
+    /// <summary>Reads a numeric or Boolean distribution attribute from a decoded JSON object.</summary>
+    /// <param name="dict">Decoded attribute object.</param>
+    /// <param name="key">Name of the numeric or Boolean attribute.</param>
+    /// <param name="defaultValue">Value used when the optional attribute is absent or null.</param>
+    /// <returns>The converted attribute, or the overload's fallback for a missing or null optional attribute.</returns>
+    /// <exception cref="System.InvalidCastException">The attribute has an incompatible scalar type.</exception>
     private static long GetLong(OrderedDict<string, object?> dict, string key, long defaultValue)
     {
         var value = dict.GetValueOrDefault(key);
         return value is null ? defaultValue : ToLong(value);
     }
 
+    /// <summary>Reads a numeric or Boolean distribution attribute from a decoded JSON object.</summary>
+    /// <param name="dict">Decoded attribute object.</param>
+    /// <param name="key">Name of the numeric or Boolean attribute.</param>
+    /// <param name="defaultValue">Value used when the optional attribute is absent or null.</param>
+    /// <returns>The converted attribute, or the overload's fallback for a missing or null optional attribute.</returns>
+    /// <exception cref="System.InvalidCastException">The attribute has an incompatible scalar type.</exception>
     private static bool GetBool(OrderedDict<string, object?> dict, string key, bool defaultValue)
     {
         var value = dict.GetValueOrDefault(key);

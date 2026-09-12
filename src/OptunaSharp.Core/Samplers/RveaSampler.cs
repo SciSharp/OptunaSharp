@@ -110,6 +110,8 @@ public class RveaSampler : BaseGASampler
     /// <param name="conditionalParams">OptunaSharp extension (no Optuna analog): activation rules for
     ///     parameters that only exist under some values of other parameters — see <see cref="ConditionalParams" />.
     ///     <c>null</c> (default) keeps the parity behavior.</param>
+    /// <summary>Configures reference-vector survival, progress-dependent angular penalties, and reproduction.</summary>
+    /// <exception cref="NumSharp.ValueError">Population size is too small, alpha is negative, adaptation frequency is outside [0, 1], or the maximum generation count is below one.</exception>
     public RveaSampler(
         int populationSize = 50,
         BaseMutation? mutation = null,
@@ -172,6 +174,7 @@ public class RveaSampler : BaseGASampler
             ?? new NSGAIIAfterTrialStrategy(null).Call;
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         _randomSampler.ReseedRng();
@@ -180,6 +183,7 @@ public class RveaSampler : BaseGASampler
         _rng.Rng.seed(BitConverter.ToUInt32(buffer));
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -192,6 +196,7 @@ public class RveaSampler : BaseGASampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override List<FrozenTrial> SelectParent(Study study, int generation)
     {
         EnsureReferenceVectors(study.Directions.Count);
@@ -200,6 +205,7 @@ public class RveaSampler : BaseGASampler
         return _apdSurvival!.Select(study, combined, generation);
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -233,13 +239,17 @@ public class RveaSampler : BaseGASampler
         return child;
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
         => _randomSampler.SampleIndependent(study, trial, paramName, paramDistribution);
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _randomSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
+    /// <exception cref="System.Exception">A configured after-trial or constraint callback fails; its exception propagates.</exception>
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         System.Diagnostics.Debug.Assert(
@@ -254,6 +264,8 @@ public class RveaSampler : BaseGASampler
     ///     vector, so the generation size is the vector count). The objective count is available from the
     ///     study directions before any trial finishes, so this can run for the very first trial.
     /// </summary>
+    /// <param name="m">Number of objective or residual components.</param>
+    /// <exception cref="NumSharp.ValueError">The supplied reference-point width differs from the study objective count.</exception>
     private void EnsureReferenceVectors(int m)
     {
         if (_apdSurvival is not null)

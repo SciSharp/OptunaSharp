@@ -49,6 +49,7 @@ public interface ICrossValidationEstimator
     ///     The number of cross-validation splits — scikit-learn's <c>cv.get_n_splits(...)</c>, surfaced by
     ///     <see cref="OptunaSearchCV.NSplits" />.
     /// </summary>
+    /// <returns>The number of training/test partitions produced by this cross-validator or estimator.</returns>
     int GetNumSplits();
 
     /// <summary>

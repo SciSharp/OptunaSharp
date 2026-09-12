@@ -28,6 +28,16 @@ internal sealed class AgeMoea2Optimizer
     private readonly AgeMoeaSurvival _survival;
     private readonly DuplicateElimination? _eliminateDuplicates;
 
+    /// <summary>Builds the sampling, mating, and survival pipeline for a bounded AGE-MOEA-2 run.</summary>
+    /// <param name="problem">Decision bounds and objective/constraint evaluation surface.</param>
+    /// <param name="popSize">Number of individuals retained per generation.</param>
+    /// <param name="nGen">Number of generations to execute.</param>
+    /// <param name="seed">Seed for subsequent random draws; null uses the generator default when permitted.</param>
+    /// <param name="survival">Optional replacement survival strategy.</param>
+    /// <param name="crossoverProb">Probability of applying crossover to a mating.</param>
+    /// <param name="crossoverEta">Distribution index controlling simulated-binary crossover spread.</param>
+    /// <param name="mutationEta">Distribution index controlling polynomial mutation spread.</param>
+    /// <param name="eliminateDuplicates">Duplicate filter or flag controlling whether duplicate offspring are removed.</param>
     internal AgeMoea2Optimizer(
         AgeMoeaProblem problem, int popSize, int nGen, int? seed,
         AgeMoeaSurvival? survival = null,
@@ -54,6 +64,7 @@ internal sealed class AgeMoea2Optimizer
     ///     (<c>advance_after_initial_infill</c>); each subsequent generation mates, evaluates, and
     ///     re-applies survival to the merged parents+offspring.
     /// </summary>
+    /// <returns>The population snapshots collected during the optimization run.</returns>
     public List<Population> Run()
     {
         NumPyRandom rng = new LazyRandomState(_seed).Rng;
@@ -82,6 +93,8 @@ internal sealed class AgeMoea2Optimizer
         return history;
     }
 
+    /// <summary>Populates objective and constraint columns by evaluating each decision vector.</summary>
+    /// <param name="pop">Population whose decision and evaluation columns are consumed or updated.</param>
     private void Evaluate(Population pop)
     {
         var (f, cv) = _problem.Evaluate(pop.X);

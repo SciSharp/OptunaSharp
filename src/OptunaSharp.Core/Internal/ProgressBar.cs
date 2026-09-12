@@ -16,6 +16,10 @@ internal sealed class ProgressBar
     private int _count;
     private string _postfix = string.Empty;
 
+    /// <summary>Configures count- or timeout-based console progress reporting for an optimization run.</summary>
+    /// <param name="enabled">Whether progress output should be emitted.</param>
+    /// <param name="nTrials">The trial-count limit; null leaves the count unlimited.</param>
+    /// <param name="timeout">The optimization time limit in seconds; null leaves time unlimited.</param>
     internal ProgressBar(bool enabled, int? nTrials, double? timeout)
     {
         // Match optuna/progress_bar.py: _ProgressBar.__init__ — warn (on the raw `enabled`, before
@@ -29,6 +33,9 @@ internal sealed class ProgressBar
         _timeout = timeout;
     }
 
+    /// <summary>Refreshes elapsed progress and the best completed objective value when display is enabled.</summary>
+    /// <param name="elapsedSeconds">The time elapsed since optimization started, in seconds.</param>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
     internal void Update(double elapsedSeconds, Study study)
     {
         if (!_enabled)
@@ -63,6 +70,7 @@ internal sealed class ProgressBar
         Console.Error.Write($"\r{_postfix} [{progress}]");
     }
 
+    /// <summary>Ends the current console progress line when any progress was displayed.</summary>
     internal void Close()
     {
         if (_enabled && _count > 0)

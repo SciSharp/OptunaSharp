@@ -17,6 +17,7 @@ namespace OptunaSharp.Pruners;
 ///     2. During the pruning calculations, NaN values are ignored. Only valid numeric values are
 ///        considered.
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.pruners.PatientPruner.html">Official Optuna PatientPruner reference.</seealso>
 public class PatientPruner : BasePruner
 {
     private readonly BasePruner? _wrappedPruner;
@@ -35,6 +36,8 @@ public class PatientPruner : BasePruner
     /// <param name="minDelta">
     ///     Tolerance value to check whether or not the objective improves. Must be non-negative.
     /// </param>
+    /// <summary>Configures the report-history tolerance required before allowing a wrapped pruning decision.</summary>
+    /// <exception cref="NumSharp.ValueError">Patience or the minimum improvement tolerance is negative.</exception>
     public PatientPruner(BasePruner? wrappedPruner, int patience, double minDelta = 0.0)
     {
         if (patience < 0)
@@ -48,6 +51,9 @@ public class PatientPruner : BasePruner
         _minDelta = minDelta;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives and the pruning rule requests its scalar direction.</exception>
+    /// <exception cref="System.Exception">The wrapped pruner fails; its exception propagates once the patience rule permits pruning.</exception>
     public override bool Prune(Study study, FrozenTrial trial)
     {
         int? stepNullable = trial.LastStep;
@@ -61,6 +67,8 @@ public class PatientPruner : BasePruner
         if (steps.Length <= _patience + 1)
             return false;
 
+        // Reports may arrive out of step order; patience follows ordered observations rather than
+        // dictionary insertion order, so the recent window must be selected after sorting.
         Array.Sort(steps);
         // This is the score patience steps ago:
         var stepsBeforePatience = steps.Take(steps.Length - _patience - 1);
@@ -85,6 +93,9 @@ public class PatientPruner : BasePruner
         return false;
     }
 
+    /// <summary>Finds the smallest non-NaN report without treating missing numeric evidence as an improvement.</summary>
+    /// <param name="values">Numerical observations consumed in their supplied order.</param>
+    /// <returns>The smallest non-NaN value, or NaN when no usable values exist.</returns>
     private static double NanMin(double[] values)
     {
         double result = double.NaN;
@@ -97,6 +108,9 @@ public class PatientPruner : BasePruner
         return result;
     }
 
+    /// <summary>Finds the largest non-NaN report without treating missing numeric evidence as an improvement.</summary>
+    /// <param name="values">Numerical observations consumed in their supplied order.</param>
+    /// <returns>The largest non-NaN value, or NaN when no usable values exist.</returns>
     private static double NanMax(double[] values)
     {
         double result = double.NaN;

@@ -11,6 +11,7 @@ namespace OptunaSharp.Samplers.Nsgaii;
 /// </summary>
 public abstract class BaseMutation
 {
+    /// <inheritdoc />
     public override string ToString() => GetType().Name;
 
     /// <summary>Mutate the given parameter.</summary>

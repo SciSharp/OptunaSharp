@@ -48,6 +48,13 @@ public sealed class Dataset
     internal int NumGroups => Group?.Length ?? 0;
 
     /// <summary>Construct from a jagged feature matrix (each inner array is one row's features).</summary>
+    /// <param name="data">The feature rows retained by the dataset; every row must have the same number of columns.</param>
+    /// <param name="label">Optional target values, one per feature row; absent labels are treated as zeros by the default trainer.</param>
+    /// <param name="weight">Optional per-row weights retained in the dataset.</param>
+    /// <param name="featureName">Optional ordered feature names retained in the dataset.</param>
+    /// <param name="group">Positive contiguous query-group sizes whose sum equals the row count; null when ranking groups are not supplied.</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="data" /> is null.</exception>
+    /// <exception cref="NumSharp.ValueError">Rows have inconsistent feature counts, labels or weights do not match the row count, or query-group sizes are nonpositive or do not sum to the row count.</exception>
     public Dataset(
         float[][] data, double[]? label = null, double[]? weight = null,
         IReadOnlyList<string>? featureName = null, int[]? group = null)
@@ -81,6 +88,12 @@ public sealed class Dataset
     }
 
     /// <summary>Convenience overload accepting a rectangular <c>double[,]</c> matrix (copied to floats).</summary>
+    /// <param name="data">The rectangular feature matrix copied into float32 row arrays.</param>
+    /// <param name="label">Optional target values, one per feature row; absent labels are treated as zeros by the default trainer.</param>
+    /// <param name="weight">Optional per-row weights retained in the dataset.</param>
+    /// <param name="featureName">Optional ordered feature names retained in the dataset.</param>
+    /// <param name="group">Positive contiguous query-group sizes whose sum equals the row count; null when ranking groups are not supplied.</param>
+    /// <exception cref="NumSharp.ValueError">Rows have inconsistent feature counts, labels or weights do not match the row count, or query-group sizes are nonpositive or do not sum to the row count.</exception>
     public Dataset(
         double[,] data, double[]? label = null, double[]? weight = null,
         IReadOnlyList<string>? featureName = null, int[]? group = null)
@@ -89,10 +102,13 @@ public sealed class Dataset
     }
 
     /// <summary>The label, or a zero vector when this set is unlabeled (mirrors an all-zero target).</summary>
+    /// <returns>The stored label array, or a zero-filled array with one entry per row.</returns>
     internal double[] GetLabelOrZeros()
         => Label ?? new double[NumRows];
 
     /// <summary>Per-row group id (0-based), expanded from <see cref="Group" /> sizes — for ML.NET ranking.</summary>
+    /// <returns>Zero-based query-group identifiers for every dataset row.</returns>
+    /// <exception cref="NumSharp.ValueError">The dataset has no ranking query-group sizes.</exception>
     internal uint[] RowGroupIds()
     {
         if (Group is null)
@@ -108,6 +124,9 @@ public sealed class Dataset
     }
 
     /// <summary>A contiguous row slice <c>[offset, offset + count)</c>, with group sizes recomputed for it.</summary>
+    /// <param name="offset">The zero-based first row included in the slice.</param>
+    /// <param name="count">The number of consecutive rows to retain.</param>
+    /// <returns>A dataset containing the requested consecutive rows and aligned metadata.</returns>
     internal Dataset Slice(int offset, int count)
     {
         var data = new float[count][];
@@ -143,6 +162,9 @@ public sealed class Dataset
     ///     Select whole query groups by group index (order preserved), recomputing <see cref="Group" />
     ///     for the selection — the fold builder for ranking cross-validation, which must never split a group.
     /// </summary>
+    /// <param name="groupIndices">The zero-based query-group indices to retain as complete groups.</param>
+    /// <returns>A dataset containing complete selected query groups in the requested order.</returns>
+    /// <exception cref="NumSharp.ValueError">The source dataset is not grouped.</exception>
     internal Dataset SelectGroups(IReadOnlyList<int> groupIndices)
     {
         if (Group is null)
@@ -177,6 +199,9 @@ public sealed class Dataset
         return new Dataset(data, label, weight, FeatureName, sizes);
     }
 
+    /// <summary>Copies a rectangular double-precision feature matrix into float32 feature rows.</summary>
+    /// <param name="data">The feature rows or ML.NET data view used by the operation.</param>
+    /// <returns>Independent float32 row arrays containing the converted features.</returns>
     private static float[][] ToJagged(double[,] data)
     {
         int n = data.GetLength(0), d = data.GetLength(1);

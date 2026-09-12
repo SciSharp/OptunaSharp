@@ -38,6 +38,8 @@ internal static class OptunaWarnings
     internal static event Action<string, WarningCategory>? WarningRaised;
 
     /// <summary>Python: <c>optuna_warn(message, category)</c>.</summary>
+    /// <param name="message">The diagnostic text to display or emit.</param>
+    /// <param name="category">The warning category used by subscribers to classify the diagnostic.</param>
     internal static void Warn(string message, WarningCategory category = WarningCategory.UserWarning)
     {
         WarningRaised?.Invoke(message, category);

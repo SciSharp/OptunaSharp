@@ -26,6 +26,16 @@ namespace OptunaSharp.Samplers.Moead;
 /// </summary>
 internal static class MoeadOffspring
 {
+    /// <summary>Creates a bounded offspring from neighborhood parents using crossover and mutation.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <param name="matingPool">Trial population from which reproduction may select parents.</param>
+    /// <param name="crossover">Operator combining the selected numerical parent vectors.</param>
+    /// <param name="mutation">Numerical mutation operator used when an offspring coordinate is selected for mutation.</param>
+    /// <param name="mutationProb">Per-parameter mutation probability; null selects the operator default.</param>
+    /// <param name="swappingProb">Probability of taking a coordinate from the alternate parent.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>External offspring parameter values produced by the configured reproduction strategy.</returns>
     internal static OrderedDict<string, object?> Generate(
         Study study,
         OrderedDict<string, BaseDistribution> searchSpace,
@@ -102,6 +112,10 @@ internal static class MoeadOffspring
 
     /// <summary>Draw <paramref name="nParents" /> distinct members of <paramref name="pool" /> uniformly at
     ///     random (repeats only if the pool is smaller than the requested count).</summary>
+    /// <param name="pool">Eligible mating population.</param>
+    /// <param name="nParents">Number of parents required for each mating.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>The distinct trial parents required by the configured crossover.</returns>
     private static List<FrozenTrial> SelectParents(IReadOnlyList<FrozenTrial> pool, int nParents, NumPyRandom rng)
     {
         int n = pool.Count;

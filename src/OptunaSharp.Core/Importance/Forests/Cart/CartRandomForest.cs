@@ -18,6 +18,14 @@ namespace OptunaSharp.Importance.Forests.Internal.Cart;
 /// </summary>
 internal static class CartRandomForest
 {
+    /// <summary>Returns the bootstrap-trained regression trees in ensemble order.</summary>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <param name="y">Target values aligned with the feature rows.</param>
+    /// <param name="nFeatures">The number of feature columns in the training matrix.</param>
+    /// <param name="nTrees">The number of trees to fit in the ensemble.</param>
+    /// <param name="maxDepth">The maximum tree depth; the root has depth zero.</param>
+    /// <param name="seed">The seed controlling the reproducible random stream.</param>
+    /// <returns>The bootstrap-trained regression trees in ensemble order.</returns>
     internal static SklearnLikeTree[] Fit(float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed)
     {
         int n = y.Length;

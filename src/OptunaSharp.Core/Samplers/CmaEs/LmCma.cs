@@ -101,6 +101,13 @@ internal sealed class LmCma : ICmaOptimizer
 
     private NumPyRandom _rng;
 
+    /// <summary>Initializes the limited-memory evolution-path representation of the Gaussian proposal.</summary>
+    /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
+    /// <param name="sigma">Initial positive global proposal standard deviation.</param>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
+    /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
+    /// <param name="nVectors">Maximum number of stored evolution-path vectors; null selects the algorithm default.</param>
+    /// <exception cref="System.ArgumentException">The scale is nonpositive, mean dimension is below two, or population size is nonpositive.</exception>
     internal LmCma(
         double[] mean,
         double sigma,
@@ -170,13 +177,20 @@ internal sealed class LmCma : ICmaOptimizer
         if (seed is not null) _rng.seed(seed.Value);
     }
 
+    /// <summary>Number of numerical decision coordinates.</summary>
     public int Dim => _nDim;
+    /// <summary>Number of evaluated individuals required for one generation.</summary>
     public int PopulationSize => _popsize;
+    /// <summary>Number of completed optimizer updates.</summary>
     public int Generation => _t;
 
+    /// <summary>Current Gaussian proposal center in transformed coordinates.</summary>
     internal double[] Mean => _mean;
+    /// <summary>Global Gaussian proposal step size.</summary>
     internal double Sigma => _sigma;
 
+    /// <summary>Resets the optimizer random stream for subsequent proposals.</summary>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
     public void ReseedRng(int seed) => _rng.seed((uint)seed);
 
     // ---- Ask (Loshchilov 2015, Algorithm 7 lines 5–10) ----------------------------------------
@@ -187,6 +201,7 @@ internal sealed class LmCma : ICmaOptimizer
     ///     <b>mirrored</b> reflection of the preceding odd one, <c>m^t - (x_{k-1} - m^t)</c> (§4.6). This is
     ///     the batch ask/tell path; the per-trial sampler uses <see cref="AskCandidate" /> instead.
     /// </summary>
+    /// <returns>One candidate vector in transformed coordinates.</returns>
     public double[] Ask()
     {
         int k = ++_askIndex;   // 1-based candidate index within the generation
@@ -217,6 +232,8 @@ internal sealed class LmCma : ICmaOptimizer
     ///     for the generation's first candidate. This is the original (2014) un-mirrored LM-CMA; mirroring
     ///     (§4.6) is an evaluation-halving efficiency add-on, not needed for convergence.
     /// </summary>
+    /// <param name="k">Zero-based candidate slot in the current generation.</param>
+    /// <returns>The proposed decision vector for the requested population slot.</returns>
     internal double[] AskCandidate(int k) => OddCandidate(k);
 
     /// <summary>
@@ -224,6 +241,8 @@ internal sealed class LmCma : ICmaOptimizer
     ///     vectors → <c>x = m^t + σ^t A z</c>. RNG order follows the paper: Rademacher() first (l.6), then
     ///     SelectSubset() (l.7).
     /// </summary>
+    /// <param name="k">Zero-based candidate slot in the current generation.</param>
+    /// <returns>The unmirrored proposal used to construct its antithetic pair.</returns>
     private double[] OddCandidate(int k)
     {
         double[] z = Rademacher(_nDim);
@@ -235,6 +254,8 @@ internal sealed class LmCma : ICmaOptimizer
     }
 
     /// <summary>Rademacher sampling (Loshchilov 2015, §4.4): each component is −1 or +1 with equal probability.</summary>
+    /// <param name="n">Number of vector entries to produce.</param>
+    /// <returns>A vector of independent values equal to minus one or plus one.</returns>
     private double[] Rademacher(int n)
     {
         int[] bits = _rng.randint(0, 2, new Shape(n), typeof(int)).ToArray<int>();
@@ -249,6 +270,8 @@ internal sealed class LmCma : ICmaOptimizer
     ///     fewer than <c>_mVec</c> vectors exist); <c>m*=0 ⇒</c> isotropic sampling, which falls out naturally
     ///     (an empty subset makes <see cref="Az" /> return <c>z</c>).
     /// </summary>
+    /// <param name="k">Zero-based candidate slot in the current generation.</param>
+    /// <returns>Stored evolution-path indices participating in the proposal transform.</returns>
     private int[] SelectSubset(int k)
     {
         double mSigma = 4.0;                 // m_σ = 4
@@ -265,6 +288,9 @@ internal sealed class LmCma : ICmaOptimizer
     ///     The dot product uses the ORIGINAL <c>z</c> at every step (the unrolled <c>A^t z</c> expansion of
     ///     §4.1), not the running <c>x</c>.
     /// </summary>
+    /// <param name="z">Standardized observation or standard-normal coordinate array.</param>
+    /// <param name="subset">Ordered indices of stored evolution paths used by the transform.</param>
+    /// <returns>The vector after applying the selected limited-memory covariance factors.</returns>
     private double[] Az(double[] z, int[] subset)
     {
         var x = (double[])z.Clone();
@@ -283,6 +309,9 @@ internal sealed class LmCma : ICmaOptimizer
     ///     <paramref name="count" /> ordering positions. The dot uses the RUNNING <c>x</c> (a sequential
     ///     dependency), and the update subtracts along <c>V</c> (not <c>P</c>).
     /// </summary>
+    /// <param name="p">Numerical coordinates used by the operator.</param>
+    /// <param name="count">Number of active inverse-transform factors to apply.</param>
+    /// <returns>The vector after applying the active inverse covariance factors.</returns>
     private double[] Ainvz(double[] p, int count)
     {
         var x = (double[])p.Clone();
@@ -303,6 +332,8 @@ internal sealed class LmCma : ICmaOptimizer
     ///     new mean (l.12), update the evolution path (l.13), refresh the direction-vector store every
     ///     <c>T</c> iterations (l.14–16), and adapt the step-size by the Population Success Rule (§4.5, l.17–20).
     /// </summary>
+    /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
+    /// <exception cref="System.ArgumentException">The solution count differs from population size.</exception>
     public void Tell(List<(double[] X, double Value)> solutions)
     {
         if (solutions.Count != _popsize)
@@ -354,6 +385,9 @@ internal sealed class LmCma : ICmaOptimizer
     ///     stored vectors spaced ~<c>N_i = n</c> iterations apart. Returns the ordering position from which
     ///     inverse vectors must be recomputed.
     /// </summary>
+    /// <param name="pc">New covariance evolution-path vector.</param>
+    /// <param name="tOrig">Generation timestamp attached to the stored path.</param>
+    /// <returns>The earliest changed position in the ordered evolution-path set.</returns>
     private int UpdateSet(double[] pc, int tOrig)
     {
         int changePos;
@@ -398,6 +432,7 @@ internal sealed class LmCma : ICmaOptimizer
     ///     per-vector <c>b</c>, <c>d</c> coefficients for every ordering position ≥ <paramref name="changePos" />
     ///     (those whose set of older vectors changed).
     /// </summary>
+    /// <param name="changePos">Earliest changed position whose dependent inverse factors must be recomputed.</param>
     private void UpdateInverses(int changePos)
     {
         for (int pos = changePos; pos < _nStored; pos++)
@@ -426,6 +461,9 @@ internal sealed class LmCma : ICmaOptimizer
     ///     Population Success Rule (Loshchilov 2015, §4.5): rank the mixed set <c>f^{t-1} ∪ f^t</c>, then
     ///     <c>z_PSR = (Σ_i r^{t-1}(i) − r^t(i))/λ² − z*</c>.
     /// </summary>
+    /// <param name="fPrev">Previous generation objective scores.</param>
+    /// <param name="fCur">Current generation objective scores.</param>
+    /// <returns>The population success-ranking statistic comparing consecutive generations.</returns>
     private double ComputePsr(double[] fPrev, double[] fCur)
     {
         int lam = _popsize;
@@ -453,6 +491,11 @@ internal sealed class LmCma : ICmaOptimizer
 
     // ---- helpers ------------------------------------------------------------------------------
 
+    /// <summary>Computes a scalar dot product using the reference accumulation order.</summary>
+    /// <param name="mat">Matrix whose specified row participates in the operation.</param>
+    /// <param name="row">Zero-based matrix row.</param>
+    /// <param name="vec">Vector with entries aligned to the matrix coordinates.</param>
+    /// <returns>The scalar inner product.</returns>
     private double Dot(double[,] mat, int row, double[] vec)
     {
         double s = 0;
@@ -460,6 +503,10 @@ internal sealed class LmCma : ICmaOptimizer
         return s;
     }
 
+    /// <summary>Copies a matrix row into a contiguous vector.</summary>
+    /// <param name="mat">Matrix whose specified row participates in the operation.</param>
+    /// <param name="row">Zero-based matrix row.</param>
+    /// <returns>A detached copy of the selected row.</returns>
     private double[] GetRow(double[,] mat, int row)
     {
         var r = new double[_nDim];
@@ -467,6 +514,10 @@ internal sealed class LmCma : ICmaOptimizer
         return r;
     }
 
+    /// <summary>Writes a vector into the specified matrix row.</summary>
+    /// <param name="mat">Matrix whose specified row participates in the operation.</param>
+    /// <param name="row">Zero-based matrix row.</param>
+    /// <param name="vec">Vector with entries aligned to the matrix coordinates.</param>
     private void SetRow(double[,] mat, int row, double[] vec)
     {
         for (int i = 0; i < _nDim; i++) mat[row, i] = vec[i];
@@ -474,6 +525,8 @@ internal sealed class LmCma : ICmaOptimizer
 
     // ---- state serialization (own JSON; mirrors the SepCma pattern) ---------------------------
 
+    /// <summary>Captures constructor settings and evolving optimizer arrays in a serializable state object.</summary>
+    /// <returns>A serializable snapshot of optimizer settings and evolving state.</returns>
     internal LmCmaState ToState() => new()
     {
         NDim = _nDim,
@@ -495,6 +548,10 @@ internal sealed class LmCma : ICmaOptimizer
         PrevFitness = _prevFitness is null ? null : (double[])_prevFitness.Clone(),
     };
 
+    /// <summary>Recreates optimizer constants and restores evolving state from a serialized snapshot.</summary>
+    /// <param name="s">Serialized optimizer settings and evolving proposal state.</param>
+    /// <returns>An optimizer restored from the supplied snapshot.</returns>
+    /// <exception cref="System.ArgumentException">Stored constructor settings or population dimensions are rejected when the optimizer is recreated.</exception>
     internal static LmCma FromState(LmCmaState s)
     {
         var cma = new LmCma(new double[s.NDim], s.Sigma0, seed: null,
@@ -515,6 +572,9 @@ internal sealed class LmCma : ICmaOptimizer
         return cma;
     }
 
+    /// <summary>Copies a rectangular matrix into row arrays for serialization.</summary>
+    /// <param name="m">Rectangular matrix operand.</param>
+    /// <returns>A detached row-array copy of the rectangular matrix.</returns>
     private double[][] ToJagged(double[,] m)
     {
         int rows = m.GetLength(0), cols = m.GetLength(1);
@@ -527,6 +587,9 @@ internal sealed class LmCma : ICmaOptimizer
         return j;
     }
 
+    /// <summary>Copies serialized row arrays into rectangular matrix storage.</summary>
+    /// <param name="j">Serialized matrix row arrays.</param>
+    /// <param name="m">Rectangular matrix operand.</param>
     private static void FromJagged(double[][] j, double[,] m)
     {
         for (int i = 0; i < j.Length; i++)
@@ -537,21 +600,38 @@ internal sealed class LmCma : ICmaOptimizer
 /// <summary>Serialized evolving state of an <see cref="LmCma" /> optimizer (own JSON; see <see cref="SepCmaState" />).</summary>
 internal sealed class LmCmaState
 {
+    /// <summary>Serialized number of numerical decision coordinates.</summary>
     public int NDim { get; set; }
+    /// <summary>Initial proposal step size retained for reconstruction.</summary>
     public double Sigma0 { get; set; }
+    /// <summary>Serialized number of evaluated individuals in one generation.</summary>
     public int Popsize { get; set; }
+    /// <summary>Maximum number of evolution-path vectors retained by limited-memory CMA.</summary>
     public int MVec { get; set; }
+    /// <summary>Current Gaussian proposal center in transformed coordinates.</summary>
     public double[] Mean { get; set; } = Array.Empty<double>();
+    /// <summary>Global Gaussian proposal step size.</summary>
     public double Sigma { get; set; }
+    /// <summary>Evolution path used by the rank-one covariance update.</summary>
     public double[] Pc { get; set; } = Array.Empty<double>();
+    /// <summary>Accumulated success-ranking statistic used for limited-memory step-size control.</summary>
     public double S { get; set; }
+    /// <summary>Serialized generation/update counter.</summary>
     public int T { get; set; }
+    /// <summary>Stored evolution-path vectors used by the limited-memory transform.</summary>
     public double[][] P { get; set; } = Array.Empty<double[]>();
+    /// <summary>Stored inverse-transformed evolution-path vectors.</summary>
     public double[][] V { get; set; } = Array.Empty<double[]>();
+    /// <summary>Coefficients of the forward limited-memory covariance transform.</summary>
     public double[] B { get; set; } = Array.Empty<double>();
+    /// <summary>Coefficients of the inverse limited-memory covariance transform.</summary>
     public double[] D { get; set; } = Array.Empty<double>();
+    /// <summary>Stored evolution-path timestamps used by replacement scheduling.</summary>
     public int[] L { get; set; } = Array.Empty<int>();
+    /// <summary>Indices defining the active evolution-path order.</summary>
     public int[] Jarr { get; set; } = Array.Empty<int>();
+    /// <summary>Number of evolution-path vectors currently retained.</summary>
     public int NStored { get; set; }
+    /// <summary>Previous generation objective values used for step-size adaptation.</summary>
     public double[]? PrevFitness { get; set; }
 }

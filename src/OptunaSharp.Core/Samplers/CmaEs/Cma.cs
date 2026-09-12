@@ -76,6 +76,16 @@ internal class Cma : ICmaOptimizer
     private readonly int _funhistTerm;
     private readonly double[] _funhistValues;
 
+    /// <summary>Initializes a Gaussian proposal, evolution paths, and covariance learning rates.</summary>
+    /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
+    /// <param name="sigma">Initial positive global proposal standard deviation.</param>
+    /// <param name="bounds">Optional box with one row per decision coordinate and lower/upper bound columns.</param>
+    /// <param name="nMaxResampling">Maximum rejected box-infeasible proposals before coordinate repair.</param>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
+    /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
+    /// <param name="cov">Initial covariance matrix, or null for the identity default.</param>
+    /// <param name="lrAdapt">Whether to adapt mean and covariance learning rates from their measured signal-to-noise ratios.</param>
+    /// <exception cref="System.ArgumentException">The scale is nonpositive, the mean is empty or exceeds the supported magnitude, population size is nonpositive, or covariance shape differs from the decision dimension.</exception>
     internal Cma(
         double[] mean,
         double sigma,
@@ -190,11 +200,17 @@ internal class Cma : ICmaOptimizer
         _funhistValues = new double[_funhistTerm * 2];
     }
 
+    /// <summary>Number of numerical decision coordinates.</summary>
     public int Dim => _nDim;
+    /// <summary>Number of evaluated individuals required for one generation.</summary>
     public int PopulationSize => _popsize;
+    /// <summary>Number of completed optimizer updates.</summary>
     public int Generation => _g;
+    /// <summary>Current Gaussian proposal center in transformed coordinates.</summary>
     internal double[] Mean => _mean;
+    /// <summary>Global Gaussian proposal step size.</summary>
     internal double Sigma => _sigma;
+    /// <summary>Current proposal covariance representation.</summary>
     internal double[,] Cov => _c;
 
     /// <summary>
@@ -205,6 +221,7 @@ internal class Cma : ICmaOptimizer
     ///     inverse-curvature term into the proposal covariance; it is not part of the ordinary CMA-ES loop
     ///     (a seeded ask/tell run that never calls it is byte-for-byte unchanged).
     /// </summary>
+    /// <param name="c">Replacement proposal covariance in transformed coordinates.</param>
     internal void SetCovariance(double[,] c)
     {
         _c = (double[,])c.Clone();
@@ -212,15 +229,25 @@ internal class Cma : ICmaOptimizer
         _d = null;
     }
 
+    /// <summary>Optional lower/upper proposal bounds in coordinate order.</summary>
     internal double[,]? Bounds => _bounds;      // needed by CmaWm to rebuild its decomposition on restore
+    /// <summary>Maximum rejected proposals before box repair is applied.</summary>
     internal int NMaxResampling => _nMaxResampling;
+    /// <summary>Evolution path used to adapt the global step size.</summary>
     internal double[] PSigma => _pSigma;
+    /// <summary>Evolution path used by the rank-one covariance update.</summary>
     internal double[] Pc => _pc;
+    /// <summary>Rank-ordered recombination weights, including negative active-covariance weights.</summary>
     internal double[] Weights => _weights;
+    /// <summary>Variance-effective number of recombination parents.</summary>
     internal double MuEff => _muEff;
+    /// <summary>Learning rate for the rank-one covariance update.</summary>
     internal double C1 => _c1;
+    /// <summary>Learning rate for the rank-mu covariance update.</summary>
     internal double Cmu => _cmu;
 
+    /// <summary>Resets the optimizer random stream for subsequent proposals.</summary>
+    /// <param name="seed">Seed used to reset the optimizer random stream.</param>
     public void ReseedRng(int seed) => _rng.seed((uint)seed);
 
     // ---- state serialization ------------------------------------------------------------------
@@ -231,6 +258,8 @@ internal class Cma : ICmaOptimizer
     // is re-derived by hand. The RNG is not persisted (Optuna drops it too); the sampler reseeds
     // the optimizer every trial before ask().
 
+    /// <summary>Captures constructor settings and evolving optimizer arrays in a serializable state object.</summary>
+    /// <returns>A serializable snapshot of optimizer settings and evolving state.</returns>
     internal CmaState ToState() => new()
     {
         NDim = _nDim,
@@ -259,6 +288,10 @@ internal class Cma : ICmaOptimizer
         EtaSigma = _etaSigma,
     };
 
+    /// <summary>Recreates optimizer constants and restores evolving state from a serialized snapshot.</summary>
+    /// <param name="s">Serialized optimizer settings and evolving proposal state.</param>
+    /// <returns>An optimizer restored from the supplied snapshot.</returns>
+    /// <exception cref="System.ArgumentException">Stored constructor settings or population dimensions are rejected when the optimizer is recreated.</exception>
     internal static Cma FromState(CmaState s)
     {
         var cma = new Cma(new double[s.NDim], s.Sigma0, FromJagged(s.Bounds), s.NMaxResampling,
@@ -267,6 +300,8 @@ internal class Cma : ICmaOptimizer
         return cma;
     }
 
+    /// <summary>Restores proposal state and adaptation statistics after constructor constants have been rebuilt.</summary>
+    /// <param name="s">Serialized optimizer settings and evolving proposal state.</param>
     private void RestoreEvolvingState(CmaState s)
     {
         _g = s.G;
@@ -290,6 +325,7 @@ internal class Cma : ICmaOptimizer
     }
 
     /// <summary>Sample a parameter.</summary>
+    /// <returns>One candidate vector in transformed coordinates.</returns>
     public double[] Ask()
     {
         for (int i = 0; i < _nMaxResampling; i++)
@@ -302,6 +338,8 @@ internal class Cma : ICmaOptimizer
         return RepairInfeasibleParams(last);
     }
 
+    /// <summary>Refreshes the covariance factorization used to sample and whiten proposal vectors.</summary>
+    /// <returns>Orthogonal eigenvector columns B and square roots D of the covariance eigenvalues.</returns>
     private (double[,] B, double[] D) EigenDecomposition()
     {
         if (_b is not null && _d is not null)
@@ -333,6 +371,7 @@ internal class Cma : ICmaOptimizer
     /// <summary>Python <c>CMA._sample_solution()</c> — one raw draw <c>~ N(m, σ² C)</c> (no bounds
     /// check/repair). <see cref="CmaWm" /> calls this directly, bypassing <see cref="Ask" />'s
     /// feasibility loop, because it does its own continuous-only feasibility handling.</summary>
+    /// <returns>A proposal vector before box-feasibility repair.</returns>
     internal double[] SampleSolution()
     {
         var (b, d) = EigenDecomposition();
@@ -344,6 +383,9 @@ internal class Cma : ICmaOptimizer
         return x;
     }
 
+    /// <summary>Checks whether every proposal coordinate lies within its configured box.</summary>
+    /// <param name="param">Decision vector whose box feasibility is checked or repaired.</param>
+    /// <returns>True if every coordinate lies inside its configured bounds.</returns>
     private bool IsFeasible(double[] param)
     {
         if (_bounds is null) return true;
@@ -353,6 +395,9 @@ internal class Cma : ICmaOptimizer
         return true;
     }
 
+    /// <summary>Clamps a proposal to the configured box after rejection sampling is exhausted.</summary>
+    /// <param name="param">Decision vector whose box feasibility is checked or repaired.</param>
+    /// <returns>The proposal with out-of-box coordinates clamped to the nearest bound.</returns>
     private double[] RepairInfeasibleParams(double[] param)
     {
         if (_bounds is null) return param;
@@ -368,6 +413,8 @@ internal class Cma : ICmaOptimizer
     }
 
     /// <summary>Tell evaluation values.</summary>
+    /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
+    /// <exception cref="System.ArgumentException">The solution count differs from population size or a coordinate exceeds the supported magnitude.</exception>
     public void Tell(List<(double[] X, double Value)> solutions)
     {
         if (solutions.Count != _popsize)
@@ -497,6 +544,11 @@ internal class Cma : ICmaOptimizer
             LrAdaptation(oldMean!, oldSigma, oldSigmaMat!, oldInvSqrtC!);
     }
 
+    /// <summary>Adjusts mean and covariance learning rates using measured update signal-to-noise ratios.</summary>
+    /// <param name="oldMean">Proposal center before the current generation update.</param>
+    /// <param name="oldSigma">Global proposal scale before the current generation update.</param>
+    /// <param name="oldSigmaMat">Scaled covariance before the current generation update.</param>
+    /// <param name="oldInvSqrtC">Inverse covariance square root before the current generation update.</param>
     private void LrAdaptation(double[] oldMean, double oldSigma, double[,] oldSigmaMat, double[,] oldInvSqrtC)
     {
         // one-step difference of the parameters
@@ -564,6 +616,8 @@ internal class Cma : ICmaOptimizer
         _sigma *= beforeEtaMean / _etaMean;
     }
 
+    /// <summary>Checks numerical and progress criteria that indicate the current optimizer has converged or stalled.</summary>
+    /// <returns>True when a numerical or convergence stopping criterion is met.</returns>
     internal bool ShouldStop()
     {
         var (b, d) = EigenDecomposition();
@@ -597,10 +651,26 @@ internal class Cma : ICmaOptimizer
 
     // ---- small numpy-shaped helpers -----------------------------------------------------------
 
+    /// <summary>Accumulates a vector using the NumPy-compatible pairwise reduction order.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The accumulated value using the reference pairwise reduction order.</returns>
     private static double PairwiseSum(double[] a) => MathUtil.PairwiseSum(a);
+    /// <summary>Accumulates a vector using the NumPy-compatible pairwise reduction order.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="offset">Zero-based start of the active vector slice.</param>
+    /// <param name="n">Number of entries in the active vector slice.</param>
+    /// <returns>The accumulated value using the reference pairwise reduction order.</returns>
     private static double PairwiseSum(double[] a, int offset, int n) => MathUtil.PairwiseSum(a, offset, n);
+    /// <summary>Computes the scalar second power used by adaptation equations.</summary>
+    /// <param name="x">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>The product of the scalar with itself.</returns>
     private static double Square(double x) => x * x;
 
+    /// <summary>Copies a vector slice while squaring each entry.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="offset">Zero-based start of the active vector slice.</param>
+    /// <param name="n">Number of entries in the active vector slice.</param>
+    /// <returns>A newly allocated vector of squared slice entries.</returns>
     private static double[] Squared(double[] a, int offset, int n)
     {
         var r = new double[n];
@@ -608,6 +678,9 @@ internal class Cma : ICmaOptimizer
         return r;
     }
 
+    /// <summary>Allocates a square identity matrix.</summary>
+    /// <param name="n">Number of numerical coordinates.</param>
+    /// <returns>The square identity matrix.</returns>
     private static double[,] Eye(int n)
     {
         var m = new double[n, n];
@@ -615,6 +688,9 @@ internal class Cma : ICmaOptimizer
         return m;
     }
 
+    /// <summary>Allocates a diagonal matrix with the supplied vector on its diagonal.</summary>
+    /// <param name="v">Vector operand aligned with the matrix coordinates.</param>
+    /// <returns>A square matrix whose off-diagonal entries are zero.</returns>
     private static double[,] Diag(double[] v)
     {
         int n = v.Length;
@@ -623,6 +699,9 @@ internal class Cma : ICmaOptimizer
         return m;
     }
 
+    /// <summary>Extracts the main diagonal of a square matrix.</summary>
+    /// <param name="m">Rectangular matrix operand.</param>
+    /// <returns>A newly allocated main-diagonal vector.</returns>
     private static double[] DiagOf(double[,] m)
     {
         int n = m.GetLength(0);
@@ -631,6 +710,9 @@ internal class Cma : ICmaOptimizer
         return v;
     }
 
+    /// <summary>Allocates a matrix with its row and column axes exchanged.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>A newly allocated transposed matrix.</returns>
     private static double[,] Transpose(double[,] a)
     {
         int rows = a.GetLength(0), cols = a.GetLength(1);
@@ -641,6 +723,10 @@ internal class Cma : ICmaOptimizer
         return t;
     }
 
+    /// <summary>Allocates a matrix multiplied by a scalar factor.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="s">Scalar multiplier applied to every matrix entry.</param>
+    /// <returns>A newly allocated scaled matrix.</returns>
     private static double[,] Scale(double[,] a, double s)
     {
         int rows = a.GetLength(0), cols = a.GetLength(1);
@@ -652,6 +738,9 @@ internal class Cma : ICmaOptimizer
     }
 
     /// <summary>Elementwise <c>a / s</c> — numpy's <c>ndarray / scalar</c> is a divide, not <c>a * (1/s)</c>.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="s">Scalar multiplier applied to every matrix entry.</param>
+    /// <returns>A matrix copy divided entry-wise by the scalar.</returns>
     private static double[,] DivideScalar(double[,] a, double s)
     {
         int rows = a.GetLength(0), cols = a.GetLength(1);
@@ -662,6 +751,9 @@ internal class Cma : ICmaOptimizer
         return r;
     }
 
+    /// <summary>Computes the Euclidean norm of a column-shaped matrix.</summary>
+    /// <param name="col">Zero-based column index or column-shaped matrix.</param>
+    /// <returns>The Euclidean length of the supplied column.</returns>
     private static double NormCol(double[,] col)
     {
         int n = col.GetLength(0);
@@ -670,8 +762,19 @@ internal class Cma : ICmaOptimizer
         return LinAlg.Norm(v);
     }
 
+    /// <summary>Clamps a scalar to an inclusive interval.</summary>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <param name="lo">Inclusive lower clipping bound.</param>
+    /// <param name="hi">Inclusive upper clipping bound.</param>
+    /// <returns>The value restricted to the inclusive interval.</returns>
     private static double Clip(double v, double lo, double hi) => Math.Min(Math.Max(v, lo), hi);
+    /// <summary>Finds the largest vector entry using the reference reduction semantics.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The largest vector entry.</returns>
     private static double Max(double[] a) { double m = a[0]; foreach (double v in a) if (v > m) m = v; return m; }
+    /// <summary>Finds the smallest vector entry using the reference reduction semantics.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The smallest vector entry.</returns>
     private static double Min(double[] a) { double m = a[0]; foreach (double v in a) if (v < m) m = v; return m; }
 
     /// <summary>
@@ -679,6 +782,8 @@ internal class Cma : ICmaOptimizer
     ///     from its UPPER triangle (<c>r[i,j] = r[j,i] = m[i,j]</c> for <c>i ≤ j</c>) — the exact
     ///     effect of Optuna's <c>_compress_symmetric</c>/<c>_decompress_symmetric</c> pickle pair.
     /// </summary>
+    /// <param name="m">Rectangular matrix operand.</param>
+    /// <returns>A symmetric matrix formed by mirroring the upper triangle.</returns>
     private static double[,] SymmetrizeFromUpper(double[,] m)
     {
         int n = m.GetLength(0);
@@ -692,6 +797,9 @@ internal class Cma : ICmaOptimizer
         return r;
     }
 
+    /// <summary>Copies a rectangular matrix into row arrays for serialization.</summary>
+    /// <param name="m">Rectangular matrix operand.</param>
+    /// <returns>Copied matrix rows, or null when the source matrix is null.</returns>
     private static double[][]? ToJagged(double[,]? m)
     {
         if (m is null) return null;
@@ -705,6 +813,9 @@ internal class Cma : ICmaOptimizer
         return j;
     }
 
+    /// <summary>Copies serialized row arrays into rectangular matrix storage.</summary>
+    /// <param name="j">Serialized matrix row arrays.</param>
+    /// <returns>A rectangular copy of the rows, or null when the source is null.</returns>
     private static double[,]? FromJagged(double[][]? j)
     {
         if (j is null) return null;
@@ -724,23 +835,42 @@ internal class Cma : ICmaOptimizer
 /// </summary>
 internal sealed class CmaState
 {
+    /// <summary>Serialized number of numerical decision coordinates.</summary>
     public int NDim { get; set; }
+    /// <summary>Initial proposal step size retained for reconstruction.</summary>
     public double Sigma0 { get; set; }
+    /// <summary>Optional lower/upper proposal bounds in coordinate order.</summary>
     public double[][]? Bounds { get; set; }
+    /// <summary>Maximum rejected proposals before box repair is applied.</summary>
     public int NMaxResampling { get; set; }
+    /// <summary>Serialized number of evaluated individuals in one generation.</summary>
     public int Popsize { get; set; }
+    /// <summary>Whether signal-to-noise learning-rate adaptation is enabled.</summary>
     public bool LrAdapt { get; set; }
+    /// <summary>Serialized number of completed optimizer updates.</summary>
     public int G { get; set; }
+    /// <summary>Current Gaussian proposal center in transformed coordinates.</summary>
     public double[] Mean { get; set; } = System.Array.Empty<double>();
+    /// <summary>Global Gaussian proposal step size.</summary>
     public double Sigma { get; set; }
+    /// <summary>Serialized covariance representation used to restore the proposal geometry.</summary>
     public double[][] C { get; set; } = System.Array.Empty<double[]>();
+    /// <summary>Evolution path used to adapt the global step size.</summary>
     public double[] PSigma { get; set; } = System.Array.Empty<double>();
+    /// <summary>Evolution path used by the rank-one covariance update.</summary>
     public double[] Pc { get; set; } = System.Array.Empty<double>();
+    /// <summary>Recent objective-value history used by convergence checks.</summary>
     public double[] FunhistValues { get; set; } = System.Array.Empty<double>();
+    /// <summary>Moving-average state of normalized mean updates.</summary>
     public double[][] EMean { get; set; } = System.Array.Empty<double[]>();
+    /// <summary>Moving-average state of normalized covariance updates.</summary>
     public double[][] ESigma { get; set; } = System.Array.Empty<double[]>();
+    /// <summary>Estimated variance of the normalized mean-update signal.</summary>
     public double VMean { get; set; }
+    /// <summary>Estimated variance of the normalized covariance-update signal.</summary>
     public double VSigma { get; set; }
+    /// <summary>Adaptive learning-rate multiplier for mean updates.</summary>
     public double EtaMean { get; set; }
+    /// <summary>Adaptive learning-rate multiplier for covariance updates.</summary>
     public double EtaSigma { get; set; }
 }

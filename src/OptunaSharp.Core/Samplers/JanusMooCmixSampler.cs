@@ -27,7 +27,7 @@ namespace OptunaSharp.Samplers;
 
 /// <summary>
 ///     Multi-objective JANUS: NSGA-II selection with JANUS-style CMIX candidate generation. Past a
-///     warm-up, a small fraction (<paramref name="cmixProb" />) of children are replaced by an
+///     warm-up, a small fraction (the constructor's <c>cmixProb</c> option) of children are replaced by an
 ///     inverse-curvature Gaussian sample drawn from a metric estimated over the recent window — either
 ///     from <c>component_losses</c> residuals (the recommended mode) or a diagonal-quadratic scalar
 ///     fallback — centered on a crowding-ranked point. NSGA-II keeps full control of Pareto selection, so
@@ -77,6 +77,7 @@ public class JanusMooCmixSampler : NSGAIISampler
     /// <param name="crossover">NSGA-II crossover (forwarded).</param>
     /// <param name="crossoverProb">NSGA-II crossover probability (forwarded, default 0.9).</param>
     /// <param name="swappingProb">NSGA-II swapping probability (forwarded, default 0.5).</param>
+    /// <summary>Configures curvature-informed candidate injection into an NSGA-II population.</summary>
     public JanusMooCmixSampler(
         int populationSize = 100,
         int? seed = null,
@@ -102,6 +103,7 @@ public class JanusMooCmixSampler : NSGAIISampler
             cmixStartGeneration, cmixStartTrial, componentAttr, scalarFallback);
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {

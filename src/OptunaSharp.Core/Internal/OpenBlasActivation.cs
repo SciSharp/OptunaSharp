@@ -23,6 +23,7 @@ namespace OptunaSharp.Internal;
 /// </summary>
 internal static class OpenBlasActivation
 {
+    /// <summary>Loads the OpenBLAS interop assembly early enough for NumSharp to discover its linear-algebra backend.</summary>
     [ModuleInitializer]
     internal static void Activate()
     {

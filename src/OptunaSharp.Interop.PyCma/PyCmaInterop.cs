@@ -10,7 +10,7 @@ namespace OptunaSharp.Interop.PyCma;
 ///     — rather than per-element Python-object loops. A <c>double[]</c>/<c>double[,]</c> is wrapped as an
 ///     <see cref="NDArray" /> view over the pinned managed array (<c>np.array(x, copy: false)</c> →
 ///     <c>GCHandle.Alloc(x, Pinned)</c>) and crosses to numpy as a VIEW via
-///     <see cref="NDArrayPythonInterop.ToNumpy" />; a numpy result crosses back to an independent
+///     <see cref="NDArrayPythonInterop.ToNumpy(NDArray, bool?)" />; a numpy result crosses back to an independent
 ///     <see cref="NDArray" /> in one bulk copy via <see cref="NDArrayPythonInterop.ToNDArray" />.
 ///     <para><b>Why the inputs cross as Python <c>list</c>s, not numpy arrays.</b> pycma's
 ///     <c>CMAEvolutionStrategy.tell</c> is numerically sensitive to the <em>type</em> of its
@@ -30,6 +30,9 @@ internal static class PyCmaInterop
 {
     /// <summary>A 1-D vector → a Python <c>list</c> of floats (via a numpy view + <c>tolist()</c>, bit-exact,
     /// no per-element C# loop). Dispose the returned list. Under the GIL.</summary>
+    /// <param name="data">Managed float64 candidate coordinates to expose as a Python list.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">NumPy array conversion or its tolist call fails.</exception>
     internal static PyObject ToPyList(double[] data)
     {
         using PyObject numpy = np.array(data, copy: false).ToNumpy();
@@ -38,6 +41,9 @@ internal static class PyCmaInterop
 
     /// <summary>A <c>(rows, cols)</c> matrix → a Python <c>list</c> of <c>list</c>s of floats (via a numpy
     /// view + <c>tolist()</c>). Dispose the returned list. Under the GIL.</summary>
+    /// <param name="data">Managed float64 matrix whose rows become nested Python lists.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">NumPy array conversion or its tolist call fails.</exception>
     internal static PyObject ToPyList(double[,] data)
     {
         using PyObject numpy = np.array(data, copy: false).ToNumpy();
@@ -47,5 +53,8 @@ internal static class PyCmaInterop
     /// <summary>A numpy 1-D array (one candidate solution from <c>es.ask()</c>) → an independent
     /// <see cref="double" /> array in one bulk copy (no per-element loop), detached so the source may be
     /// disposed afterwards. Under the GIL.</summary>
+    /// <param name="numpyVector">The borrowed one-dimensional NumPy candidate vector.</param>
+    /// <returns>An independent managed copy of the NumPy candidate coordinates.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">Reading the NumPy array through the interop bridge fails.</exception>
     internal static double[] ToArray(PyObject numpyVector) => numpyVector.ToNDArray().ToArray<double>();
 }

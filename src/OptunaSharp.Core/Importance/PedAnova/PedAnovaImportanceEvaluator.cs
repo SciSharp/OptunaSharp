@@ -17,6 +17,10 @@ internal sealed class QuantileFilter
     private readonly bool _isLowerBetter;
     private readonly Func<FrozenTrial, double>? _target;
 
+    /// <summary>Configures the target direction and quantile cutoff used to retain better-performing trials.</summary>
+    /// <param name="quantile">The fraction of best observations defining the selected region.</param>
+    /// <param name="isLowerBetter">Whether smaller target values identify the preferred trials.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
     internal QuantileFilter(double quantile, bool isLowerBetter, Func<FrozenTrial, double>? target)
     {
         System.Diagnostics.Debug.Assert(0 < quantile && quantile <= 1, "quantile must be in (0, 1].");
@@ -25,6 +29,9 @@ internal sealed class QuantileFilter
         _target = target;
     }
 
+    /// <summary>Returns the trials meeting the configured best-target quantile cutoff, including cutoff ties.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <returns>The trials meeting the configured best-target quantile cutoff, including cutoff ties.</returns>
     internal List<FrozenTrial> Filter(IReadOnlyList<FrozenTrial> trials)
     {
         double sign = _isLowerBetter ? 1.0 : -1.0;
@@ -80,6 +87,7 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
     /// <param name="evaluateOnLocal">
     ///     Whether the importance is measured in the local (<c>true</c>) or global space.
     /// </param>
+    /// <summary>Configures the baseline region, reference-region convention, and smoothing used by PED-ANOVA.</summary>
     public PedAnovaImportanceEvaluator(
         double targetQuantile = 0.1, double regionQuantile = 1.0, bool evaluateOnLocal = true)
     {
@@ -94,6 +102,12 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
         _evaluateOnLocal = evaluateOnLocal;
     }
 
+    /// <summary>Returns the trials retained by the evaluator's best-region quantile filter.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="quantile">The fraction of best observations defining the selected region.</param>
+    /// <param name="target">A scalar target selector; null allows the multi-objective TPE/Pareto selection rule.</param>
+    /// <returns>The trials retained by the evaluator's best-region quantile filter.</returns>
     private List<FrozenTrial> GetTopQuantileTrials(
         Study study, IReadOnlyList<FrozenTrial> trials, double quantile, Func<FrozenTrial, double>? target)
     {
@@ -119,6 +133,12 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
         return new QuantileFilter(quantile, isLowerBetter, target).Filter(trials);
     }
 
+    /// <summary>Returns the Pearson divergence between the better-performing and reference parameter densities.</summary>
+    /// <param name="paramName">The parameter name identifying the distribution or values to process.</param>
+    /// <param name="dist">The parameter distribution defining the values and support of the grid.</param>
+    /// <param name="targetTrials">The trials defining the better-performing region whose density is compared.</param>
+    /// <param name="regionTrials">The trials defining the reference region for density estimation.</param>
+    /// <returns>The Pearson divergence between the better-performing and reference parameter densities.</returns>
     private double ComputePearsonDivergence(
         string paramName, BaseDistribution dist,
         IReadOnlyList<FrozenTrial> targetTrials, IReadOnlyList<FrozenTrial> regionTrials)
@@ -161,6 +181,12 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
     }
 
     /// <inheritdoc />
+    /// <param name="study">The study supplying completed trials and optimization directions.</param>
+    /// <param name="params">The parameter names to assess, or null for every parameter appearing in any completed trial.</param>
+    /// <param name="target">A scalar target selector, or null to use the study objectives, including multi-objective Pareto/TPE selection.</param>
+    /// <returns>Descending parameter-importance values before optional normalization by GetParamImportances.</returns>
+    /// <exception cref="NumSharp.ValueError">An explicitly requested parameter does not occur in any completed trial.</exception>
+    /// <remarks>Unlike the base evaluator default, a null parameter list includes parameters that appear in any completed trial, including conditional parameters. A null target also supports multi-objective studies through Pareto/TPE trial selection.</remarks>
     public override OrderedDict<string, double> Evaluate(
         Study study, IReadOnlyList<string>? @params = null, Func<FrozenTrial, double>? target = null)
     {
@@ -222,6 +248,9 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
         return ImportanceBase.SortDictByImportance(scaled);
     }
 
+    /// <summary>Returns a parameter-name-ordered mapping assigning zero importance to each selected parameter.</summary>
+    /// <param name="params">The selected parameter names to initialize with zero importance.</param>
+    /// <returns>A parameter-name-ordered mapping assigning zero importance to each selected parameter.</returns>
     private static OrderedDict<string, double> ZeroImportances(IReadOnlyList<string> @params)
     {
         var result = new OrderedDict<string, double>(@params.Count);
@@ -231,6 +260,10 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
     }
 
     /// <summary>Python <c>_partition_by_regime(param_name, trials, min_n_trials_in_regime)</c>.</summary>
+    /// <param name="paramName">The parameter name identifying the distribution or values to process.</param>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="minNTrialsInRegime">The minimum number of trials required before estimating a conditional regime.</param>
+    /// <returns>Trial groups sharing the parameter's distribution, including a group for absent parameters.</returns>
     private static List<(BaseDistribution? Dist, List<FrozenTrial> Trials)> PartitionByRegime(
         string paramName, IReadOnlyList<FrozenTrial> trials, int minNTrialsInRegime)
     {
@@ -264,6 +297,9 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
     }
 
     /// <summary>Python <c>_get_filtered_trials(study, target)</c> (the evaluator-local variant).</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="target">A scalar target selector; null requires finite values for all objectives and allows multi-objective trial selection.</param>
+    /// <returns>Completed trials containing the required parameters and a finite selected target value.</returns>
     private static List<FrozenTrial> GetFilteredTrials(Study study, Func<FrozenTrial, double>? target)
     {
         var trials = study.GetTrials(deepcopy: false, states: new[] { TrialState.Complete });
@@ -275,6 +311,10 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
     }
 
     /// <summary>Python <c>_resolve_params(study, params)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="params">Parameter names to include; null selects the parameters supported by this operation.</param>
+    /// <returns>The validated parameter names to evaluate, in deterministic order.</returns>
+    /// <exception cref="NumSharp.ValueError">An explicitly requested parameter never appears in a completed trial.</exception>
     private static List<string> ResolveParams(Study study, IReadOnlyList<string>? @params)
     {
         var trials = study.GetTrials(deepcopy: false, states: new[] { TrialState.Complete });

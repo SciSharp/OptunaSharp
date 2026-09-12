@@ -31,13 +31,24 @@ internal static class PyJson
     /// <summary>
     ///     Python <c>json.dumps(value)</c> with the default separators <c>(", ", ": ")</c>.
     /// </summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <returns>The Python-compatible JSON representation of the value.</returns>
+    /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
     internal static string Dumps(object? value) => Dumps(value, compact: false);
 
     /// <summary>
     ///     Python <c>json.dumps(value, separators=(",", ":"))</c> — the journal-file format.
     /// </summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <returns>The JSON representation with compact separators.</returns>
+    /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
     internal static string DumpsCompact(object? value) => Dumps(value, compact: true);
 
+    /// <summary>Returns the Python-compatible JSON representation of the value.</summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <param name="compact">Whether separators omit the spaces used by Python's default JSON formatting.</param>
+    /// <returns>The Python-compatible JSON representation of the value.</returns>
+    /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
     private static string Dumps(object? value, bool compact)
     {
         var sb = new StringBuilder();
@@ -50,6 +61,10 @@ internal static class PyJson
     ///     step, the separators <c>(",", ": ")</c>, and <c>{}</c>/<c>[]</c> for empty containers. Leaves
     ///     reuse the same writers as <see cref="Dumps(object)" />, so floats/strings/NaN stay Python-identical.
     /// </summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <param name="indent">The number of spaces per JSON nesting level.</param>
+    /// <returns>The JSON representation with the requested indentation width.</returns>
+    /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
     internal static string DumpsIndented(object? value, int indent)
     {
         var sb = new StringBuilder();
@@ -57,6 +72,12 @@ internal static class PyJson
         return sb.ToString();
     }
 
+    /// <summary>Dispatches a JSON-compatible value to the indented scalar, list, or mapping writer.</summary>
+    /// <param name="sb">The text buffer to append serialized output to.</param>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <param name="indent">The number of spaces per JSON nesting level.</param>
+    /// <param name="level">The current JSON nesting depth.</param>
+    /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
     private static void WriteValueIndented(StringBuilder sb, object? value, int indent, int level)
     {
         switch (value)
@@ -76,6 +97,12 @@ internal static class PyJson
         }
     }
 
+    /// <summary>Appends an insertion-ordered JSON object with indentation at the current nesting depth.</summary>
+    /// <param name="sb">The text buffer to append serialized output to.</param>
+    /// <param name="dict">The dictionary whose insertion-ordered keys and values are processed.</param>
+    /// <param name="indent">The number of spaces per JSON nesting level.</param>
+    /// <param name="level">The current JSON nesting depth.</param>
+    /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
     private static void WriteObjectIndented(StringBuilder sb, IDictionary dict, int indent, int level)
     {
         if (dict.Count == 0)
@@ -99,6 +126,12 @@ internal static class PyJson
         sb.Append('\n').Append(' ', indent * level).Append('}');
     }
 
+    /// <summary>Appends an indented JSON array in source enumeration order.</summary>
+    /// <param name="sb">The text buffer to append serialized output to.</param>
+    /// <param name="seq">The sequence whose elements are serialized in enumeration order.</param>
+    /// <param name="indent">The number of spaces per JSON nesting level.</param>
+    /// <param name="level">The current JSON nesting depth.</param>
+    /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
     private static void WriteArrayIndented(StringBuilder sb, IEnumerable seq, int indent, int level)
     {
         var e = seq.GetEnumerator();
@@ -121,6 +154,11 @@ internal static class PyJson
         sb.Append('\n').Append(' ', indent * level).Append(']');
     }
 
+    /// <summary>Dispatches a JSON-compatible value to the scalar, list, or mapping writer.</summary>
+    /// <param name="sb">The text buffer to append serialized output to.</param>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <param name="compact">Whether separators omit the spaces used by Python's default JSON formatting.</param>
+    /// <exception cref="NumSharp.TypeError">A supplied value has no supported JSON representation.</exception>
     private static void WriteValue(StringBuilder sb, object? value, bool compact)
     {
         switch (value)
@@ -168,6 +206,9 @@ internal static class PyJson
         }
     }
 
+    /// <summary>Appends a floating-point token using Python-compatible finite and nonfinite spellings.</summary>
+    /// <param name="sb">The text buffer to append serialized output to.</param>
+    /// <param name="d">The floating-point value whose JSON token is appended.</param>
     private static void WriteDouble(StringBuilder sb, double d)
     {
         // Python: allow_nan=True writes the (non-standard) literals NaN / Infinity / -Infinity.
@@ -181,6 +222,9 @@ internal static class PyJson
             sb.Append(PythonRepr.FloatRepr(d));
     }
 
+    /// <summary>Appends a quoted JSON string with the required control-character and Unicode escapes.</summary>
+    /// <param name="sb">The text buffer to append serialized output to.</param>
+    /// <param name="s">The unescaped text to quote and encode as a JSON string.</param>
     private static void WriteString(StringBuilder sb, string s)
     {
         // Python default: ensure_ascii=True — non-ASCII escapes to \uXXXX.
@@ -221,6 +265,11 @@ internal static class PyJson
         sb.Append('"');
     }
 
+    /// <summary>Appends an insertion-ordered JSON mapping with the requested separator spacing.</summary>
+    /// <param name="sb">The text buffer to append serialized output to.</param>
+    /// <param name="dict">The dictionary whose insertion-ordered keys and values are processed.</param>
+    /// <param name="compact">Whether separators omit the spaces used by Python's default JSON formatting.</param>
+    /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
     private static void WriteObject(StringBuilder sb, IDictionary dict, bool compact)
     {
         sb.Append('{');
@@ -237,6 +286,11 @@ internal static class PyJson
         sb.Append('}');
     }
 
+    /// <summary>Appends a JSON array with the requested separator spacing.</summary>
+    /// <param name="sb">The text buffer to append serialized output to.</param>
+    /// <param name="seq">The sequence whose elements are serialized in enumeration order.</param>
+    /// <param name="compact">Whether separators omit the spaces used by Python's default JSON formatting.</param>
+    /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
     private static void WriteArray(StringBuilder sb, IEnumerable seq, bool compact)
     {
         sb.Append('[');
@@ -252,6 +306,8 @@ internal static class PyJson
     }
 
     /// <summary>Python json key coercion: str as-is, int/float/bool/None keys stringified Python-style.</summary>
+    /// <param name="key">The key whose associated entry is requested.</param>
+    /// <returns>The JSON object-key text using Python-compatible scalar formatting.</returns>
     private static string KeyToString(object? key) => key switch
     {
         string s => s,
@@ -268,6 +324,9 @@ internal static class PyJson
     // ------------------------------------------------------------------ reading
 
     /// <summary>Python <c>json.loads(text)</c>.</summary>
+    /// <param name="text">The Python-compatible JSON document to parse.</param>
+    /// <returns>The parsed scalar, list, or insertion-ordered dictionary; JSON null becomes null.</returns>
+    /// <exception cref="NumSharp.ValueError">The document is malformed or contains trailing data after its first value.</exception>
     internal static object? Loads(string text)
     {
         int pos = 0;
@@ -278,12 +337,20 @@ internal static class PyJson
         return value;
     }
 
+    /// <summary>Advances the parse cursor past JSON whitespace characters.</summary>
+    /// <param name="s">The source text being parsed or formatted.</param>
+    /// <param name="pos">The current character position; parsing advances it past consumed input.</param>
     private static void SkipWhitespace(string s, ref int pos)
     {
         while (pos < s.Length && (s[pos] == ' ' || s[pos] == '\t' || s[pos] == '\n' || s[pos] == '\r'))
             pos++;
     }
 
+    /// <summary>Returns the parsed value, with the cursor advanced past its token.</summary>
+    /// <param name="s">The JSON source text containing the value at the current cursor.</param>
+    /// <param name="pos">The current character position; parsing advances it past consumed input.</param>
+    /// <returns>The parsed value, with the cursor advanced past its token.</returns>
+    /// <exception cref="NumSharp.ValueError">The cursor does not begin a valid JSON value or the nested value is malformed.</exception>
     private static object? ParseValue(string s, ref int pos)
     {
         SkipWhitespace(s, ref pos);
@@ -325,6 +392,11 @@ internal static class PyJson
         }
     }
 
+    /// <summary>Consumes the expected literal or rejects the malformed JSON token.</summary>
+    /// <param name="s">The source text being parsed or formatted.</param>
+    /// <param name="pos">The current character position; parsing advances it past consumed input.</param>
+    /// <param name="literal">The exact JSON token expected at the current parse position.</param>
+    /// <exception cref="NumSharp.ValueError">The expected literal does not occur at the current cursor.</exception>
     private static void Expect(string s, ref int pos, string literal)
     {
         if (pos + literal.Length > s.Length || string.CompareOrdinal(s, pos, literal, 0, literal.Length) != 0)
@@ -332,6 +404,11 @@ internal static class PyJson
         pos += literal.Length;
     }
 
+    /// <summary>Returns the parsed insertion-ordered mapping, with the cursor advanced past the closing brace.</summary>
+    /// <param name="s">The JSON source text containing the object at the current cursor.</param>
+    /// <param name="pos">The current character position; parsing advances it past consumed input.</param>
+    /// <returns>The parsed insertion-ordered mapping, with the cursor advanced past the closing brace.</returns>
+    /// <exception cref="NumSharp.ValueError">An object key, delimiter, or nested value is malformed.</exception>
     private static OrderedDict<string, object?> ParseObject(string s, ref int pos)
     {
         var result = new OrderedDict<string, object?>();
@@ -370,6 +447,11 @@ internal static class PyJson
         }
     }
 
+    /// <summary>Returns the parsed list, with the cursor advanced past the closing bracket.</summary>
+    /// <param name="s">The JSON source text containing the array at the current cursor.</param>
+    /// <param name="pos">The current character position; parsing advances it past consumed input.</param>
+    /// <returns>The parsed list, with the cursor advanced past the closing bracket.</returns>
+    /// <exception cref="NumSharp.ValueError">An array delimiter or nested value is malformed.</exception>
     private static List<object?> ParseArray(string s, ref int pos)
     {
         var result = new List<object?>();
@@ -400,6 +482,11 @@ internal static class PyJson
         }
     }
 
+    /// <summary>Returns the decoded string, with the cursor advanced past the closing quote.</summary>
+    /// <param name="s">The JSON source text containing the quoted string at the current cursor.</param>
+    /// <param name="pos">The current character position; parsing advances it past consumed input.</param>
+    /// <returns>The decoded string, with the cursor advanced past the closing quote.</returns>
+    /// <exception cref="NumSharp.ValueError">The string is unterminated or contains an unsupported or incomplete escape.</exception>
     private static string ParseString(string s, ref int pos)
     {
         pos++;  // opening '"'
@@ -443,6 +530,11 @@ internal static class PyJson
         }
     }
 
+    /// <summary>Returns the parsed integer or floating-point value, with the cursor advanced past its token.</summary>
+    /// <param name="s">The JSON source text containing the number at the current cursor.</param>
+    /// <param name="pos">The current character position; parsing advances it past consumed input.</param>
+    /// <returns>The parsed integer or floating-point value, with the cursor advanced past its token.</returns>
+    /// <exception cref="NumSharp.ValueError">No supported numeric token begins at the current cursor.</exception>
     private static object ParseNumber(string s, ref int pos)
     {
         int start = pos;
@@ -485,6 +577,8 @@ internal static class PyJson
     /// <summary>
     ///     Deep-copies a JSON-model value (Python <c>copy.deepcopy</c> over json-serializable data).
     /// </summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <returns>A recursively copied JSON-compatible value; immutable scalar values are reused.</returns>
     internal static object? DeepCopy(object? value) => value switch
     {
         List<object?> list => DeepCopyList(list),
@@ -492,6 +586,9 @@ internal static class PyJson
         _ => value,  // null / bool / long / double / string / immutable values copy by reference.
     };
 
+    /// <summary>Returns a new list containing recursively copied element values.</summary>
+    /// <param name="list">The list whose nested values are copied recursively.</param>
+    /// <returns>A new list containing recursively copied element values.</returns>
     private static List<object?> DeepCopyList(List<object?> list)
     {
         var copy = new List<object?>(list.Count);
@@ -500,6 +597,9 @@ internal static class PyJson
         return copy;
     }
 
+    /// <summary>Returns a new insertion-ordered dictionary containing recursively copied values.</summary>
+    /// <param name="dict">The dictionary whose insertion-ordered keys and values are processed.</param>
+    /// <returns>A new insertion-ordered dictionary containing recursively copied values.</returns>
     private static OrderedDict<string, object?> DeepCopyDict(OrderedDict<string, object?> dict)
     {
         var copy = new OrderedDict<string, object?>(dict.Count);
@@ -512,6 +612,9 @@ internal static class PyJson
     ///     Python-<c>==</c> equality over the JSON object model (used by attr comparisons in tests
     ///     and by <c>FrozenTrial.__eq__</c>).
     /// </summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <returns>True when the JSON-compatible values are structurally equal under Python-compatible numeric comparison.</returns>
     internal static bool ValueEquals(object? a, object? b)
     {
         if (a is null || b is null)

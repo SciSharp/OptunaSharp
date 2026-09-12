@@ -10,6 +10,9 @@ namespace OptunaSharp.Cli;
 /// </summary>
 internal static class PyTimedelta
 {
+    /// <summary>Formats a trial duration in the Python timedelta display convention.</summary>
+    /// <param name="ts">The trial duration rendered using Python timedelta conventions.</param>
+    /// <returns>The formatted duration, with day and fractional-second components when needed.</returns>
     internal static string Str(TimeSpan ts)
     {
         // CPython: hh:mm:ss from the intra-day seconds; days carried separately; microseconds appended.

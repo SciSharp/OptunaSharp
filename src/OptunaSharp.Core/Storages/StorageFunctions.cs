@@ -15,6 +15,8 @@ public static class StorageFunctions
     ///     <c>get_storage</c>, which returns <c>_CachedStorage(RDBStorage(...))</c>. Everything else
     ///     (in-memory, journal, an already-wrapped cache) is returned as-is.
     /// </summary>
+    /// <param name="storage">Storage backend holding study and trial records.</param>
+    /// <returns>A fresh in-memory backend for null, an RDB cache wrapper, or the supplied storage instance.</returns>
     public static BaseStorage GetStorage(BaseStorage? storage)
     {
         if (storage is null)
@@ -25,6 +27,10 @@ public static class StorageFunctions
     }
 
     /// <summary>URL-based overload mirroring Python's signature; RDB storages are Tier X packages.</summary>
+    /// <param name="storageUrl">Storage URL; Core rejects URL dispatch and requires a satellite backend instance.</param>
+    /// <returns>This overload always throws; use a backend instance from a storage satellite package.</returns>
+    /// <exception cref="NumSharp.ValueError">The URL overload is given a removed RedisStorage URL.</exception>
+    /// <exception cref="System.NotSupportedException">The URL overload is used; construct a backend from a satellite storage package.</exception>
     public static BaseStorage GetStorage(string storageUrl)
     {
         if (storageUrl.StartsWith("redis", System.StringComparison.Ordinal))

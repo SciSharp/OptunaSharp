@@ -29,6 +29,10 @@ internal static class ReferenceDirections
     ///     <paramref name="nPartitions" /> parts per axis, as a jagged <c>n × nDim</c> array. With
     ///     <c>H = 0</c> pymoo returns the single centroid direction <c>[1/m, …, 1/m]</c>.
     /// </summary>
+    /// <param name="nPartitions">The number of equally spaced simplex partitions.</param>
+    /// <param name="nDim">The number of coordinates in a reference direction.</param>
+    /// <returns>The reference directions on the unit simplex.</returns>
+    /// <exception cref="System.ArgumentOutOfRangeException">The number of objectives is not positive.</exception>
     internal static double[][] DasDennis(int nPartitions, int nDim)
     {
         if (nDim <= 0)
@@ -52,6 +56,11 @@ internal static class ReferenceDirections
     ///     the rest is recursed. <paramref name="refDir" /> is copied at each branch so completed rows are
     ///     independent.
     /// </summary>
+    /// <param name="refDirs">The destination collection receiving completed reference-direction vectors.</param>
+    /// <param name="refDir">The mutable reference-direction vector being filled recursively.</param>
+    /// <param name="nPartitions">The number of equally spaced simplex partitions.</param>
+    /// <param name="beta">The remaining integer partition mass to distribute among the unfinished coordinates.</param>
+    /// <param name="depth">The coordinate or tree depth currently being processed.</param>
     private static void Recurse(List<double[]> refDirs, double[] refDir, int nPartitions, int beta, int depth)
     {
         if (depth == refDir.Length - 1)
@@ -73,6 +82,9 @@ internal static class ReferenceDirections
     ///     <paramref name="nPartitions" /> partitions and <paramref name="nDim" /> objectives —
     ///     <c>C(nDim + nPartitions − 1, nPartitions)</c>.
     /// </summary>
+    /// <param name="nPartitions">The number of equally spaced simplex partitions.</param>
+    /// <param name="nDim">The number of coordinates in a reference direction.</param>
+    /// <returns>The number of simplex lattice directions for the given partition count.</returns>
     internal static long NumberOfUniformPoints(int nPartitions, int nDim)
         => Binomial(nDim + nPartitions - 1, nPartitions);
 
@@ -81,6 +93,9 @@ internal static class ReferenceDirections
     ///     size does not exceed <paramref name="nPoints" /> (so callers can request a target population
     ///     size and get the closest structured lattice at or below it). Always at least 1.
     /// </summary>
+    /// <param name="nPoints">The requested approximate number of uniform reference directions.</param>
+    /// <param name="nDim">The number of coordinates in a reference direction.</param>
+    /// <returns>The partition count chosen to approximate the requested number of directions.</returns>
     internal static int PartitionClosestToPoints(long nPoints, int nDim)
     {
         if (nDim == 1)
@@ -98,6 +113,9 @@ internal static class ReferenceDirections
 
     /// <summary>Binomial coefficient <c>C(n, k)</c> via the multiplicative formula (exact for the modest
     ///     lattice sizes used here; guards against overflow by working in <see cref="long" />).</summary>
+    /// <param name="n">The number of elements or points to process.</param>
+    /// <param name="k">The integer index or combinatorial selection count used by this operation.</param>
+    /// <returns>The binomial coefficient for the supplied nonnegative integers.</returns>
     private static long Binomial(int n, int k)
     {
         if (k < 0 || k > n) return 0;

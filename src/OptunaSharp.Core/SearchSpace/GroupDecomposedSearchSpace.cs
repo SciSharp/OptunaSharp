@@ -11,8 +11,11 @@ internal sealed class SearchSpaceGroup
 {
     private List<OrderedDict<string, BaseDistribution>> _searchSpaces = new();
 
+    /// <summary>The disjoint parameter-distribution groups inferred from observed trial co-occurrence.</summary>
     public List<OrderedDict<string, BaseDistribution>> SearchSpaces => _searchSpaces;
 
+    /// <summary>Splits existing groups so every resulting group has the same presence pattern in the incoming trial.</summary>
+    /// <param name="distributions">The parameter distributions being incorporated into the decomposed search space.</param>
     public void AddDistributions(OrderedDict<string, BaseDistribution> distributions)
     {
         var distKeys = new HashSet<string>(distributions.Keys);
@@ -48,6 +51,8 @@ internal sealed class SearchSpaceGroup
         _searchSpaces = nextSearchSpaces.Where(searchSpace => searchSpace.Count > 0).ToList();
     }
 
+    /// <summary>Returns a new group containing independently copied distribution dictionaries.</summary>
+    /// <returns>A new group containing independently copied distribution dictionaries.</returns>
     internal SearchSpaceGroup DeepCopy()
     {
         var copy = new SearchSpaceGroup();
@@ -64,11 +69,18 @@ internal sealed class GroupDecomposedSearchSpace
     private int? _studyId;
     private readonly bool _includePruned;
 
+    /// <summary>Creates an incremental co-occurrence decomposition for one study's parameter distributions.</summary>
+    /// <param name="includePruned">Whether pruned trials contribute their recorded parameter distributions.</param>
     public GroupDecomposedSearchSpace(bool includePruned = false)
     {
         _includePruned = includePruned;
     }
 
+    /// <summary>Returns the cached decomposition of the study's observed parameter distributions.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="useCache">Whether the study may reuse its cached trial snapshots for this calculation.</param>
+    /// <returns>The cached decomposition of the study's observed parameter distributions.</returns>
+    /// <exception cref="NumSharp.ValueError">This cache is reused with a different study identifier.</exception>
     public SearchSpaceGroup Calculate(Study study, bool useCache = false)
     {
         if (_studyId is null)

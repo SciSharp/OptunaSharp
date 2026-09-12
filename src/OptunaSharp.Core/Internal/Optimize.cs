@@ -13,6 +13,17 @@ internal static class OptimizeLoop
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.study._optimize");
 
     /// <summary>Python <c>_optimize</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="func">The objective callback returning one value per study objective for each running trial.</param>
+    /// <param name="nTrials">The trial-count limit; null leaves the count unlimited.</param>
+    /// <param name="timeout">The optimization time limit in seconds; null leaves time unlimited.</param>
+    /// <param name="nJobs">The requested worker count; minus one uses the processor count.</param>
+    /// <param name="catchExceptions">Exception types that mark a failed objective trial without stopping optimization.</param>
+    /// <param name="callbacks">Delegates invoked after each trial has been recorded in its final state.</param>
+    /// <param name="gcAfterTrial">Whether to request garbage collection after each objective invocation.</param>
+    /// <param name="showProgressBar">Whether optimization should render progress to the console.</param>
+    /// <exception cref="NumSharp.RuntimeError">Optimization is invoked recursively for a study already being optimized on the current execution context.</exception>
+    /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
     internal static void Optimize(
         Study study,
         Func<Trial, IReadOnlyList<double>> func,
@@ -90,6 +101,17 @@ internal static class OptimizeLoop
     }
 
     /// <summary>Python <c>_optimize_sequential</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="func">The objective callback returning one value per study objective for each running trial.</param>
+    /// <param name="nTrials">The trial-count limit; null leaves the count unlimited.</param>
+    /// <param name="timeout">The optimization time limit in seconds; null leaves time unlimited.</param>
+    /// <param name="catchTypes">Exception types permitted to fail a trial while optimization continues.</param>
+    /// <param name="callbacks">Delegates invoked after each trial has been recorded in its final state.</param>
+    /// <param name="gcAfterTrial">Whether to request garbage collection after each objective invocation.</param>
+    /// <param name="reseedSamplerRng">Whether the worker should reseed its sampler before starting sequential trials.</param>
+    /// <param name="timeStart">The start time shared by workers when enforcing the overall timeout.</param>
+    /// <param name="progressBar">The progress renderer shared with this optimization loop, or null when no progress is displayed.</param>
+    /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
     private static void OptimizeSequential(
         Study study,
         Func<Trial, IReadOnlyList<double>> func,
@@ -160,6 +182,11 @@ internal static class OptimizeLoop
     }
 
     /// <summary>Python <c>_run_trial</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="func">The objective callback returning one value per study objective for the new trial.</param>
+    /// <param name="catchTypes">Exception types permitted to fail a trial while optimization continues.</param>
+    /// <returns>The storage identifier of the executed trial, suitable for a subsequent storage GetTrial call.</returns>
+    /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
     internal static int RunTrial(Study study, Func<Trial, IReadOnlyList<double>> func, Type[] catchTypes)
     {
         if (HeartbeatHelpers.IsHeartbeatEnabled(study.Storage))
@@ -193,6 +220,8 @@ internal static class OptimizeLoop
         }
         finally
         {
+            // The heartbeat must finish before Tell changes the trial state, including when the
+            // objective throws, so the worker cannot keep advertising a finalized trial as running.
             heartbeatThread.Join();
         }
 
@@ -224,6 +253,14 @@ internal static class OptimizeLoop
         return trial.TrialId;
     }
 
+    /// <summary>Routes a finalized trial to the completed, pruned, or failed diagnostic path.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="trial">The trial whose recorded state and values are used.</param>
+    /// <param name="updatedState">The final state recorded for the trial.</param>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <param name="funcErr">The exception captured from the objective, or null when it returned normally.</param>
+    /// <param name="warningMessage">The diagnostic produced while validating objective values, or null when none was needed.</param>
+    /// <param name="valueOrValues">The values returned by the objective before completion-state validation.</param>
     private static void LogTrialOutcome(
         Study study,
         Trial trial,
@@ -258,10 +295,19 @@ internal static class OptimizeLoop
         }
     }
 
+    /// <summary>Returns true when the exception is assignable to one of the allowed failure types.</summary>
+    /// <param name="error">The exception being tested against the allowed failure types.</param>
+    /// <param name="catchTypes">Exception types permitted to fail a trial while optimization continues.</param>
+    /// <returns>True when the exception is assignable to one of the allowed failure types.</returns>
     private static bool IsCaught(Exception error, Type[] catchTypes)
         => catchTypes.Any(t => t.IsInstanceOfType(error));
 
     /// <summary>Python <c>_log_failed_trial</c>.</summary>
+    /// <param name="trialNumber">The study-local trial number, rather than the storage's internal trial identifier.</param>
+    /// <param name="trialParams">The recorded external parameter values of the failed trial, keyed by parameter name.</param>
+    /// <param name="message">The diagnostic text to display or emit.</param>
+    /// <param name="excInfo">The exception whose details should accompany the failed-trial message.</param>
+    /// <param name="valueOrValues">The values returned by the objective before completion-state validation.</param>
     private static void LogFailedTrial(
         int trialNumber,
         IReadOnlyDictionary<string, object?> trialParams,

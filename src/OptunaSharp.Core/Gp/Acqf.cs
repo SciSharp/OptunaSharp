@@ -7,7 +7,7 @@ namespace OptunaSharp.Gp;
 /// <summary>
 ///     GP acquisition-function primitives — port of the log-expected-improvement helpers in
 ///     <c>optuna/_gp/acqf.py</c> (<c>standard_logei</c> / <c>logei</c>). LogEI is the acquisition
-///     function <see cref="GPSampler" /> maximizes for single-objective optimization; these are the
+///     function <see cref="OptunaSharp.Samplers.GPSampler" /> maximizes for single-objective optimization; these are the
 ///     numerically stable log forms from "Unexpected Improvements to Expected Improvement"
 ///     (arxiv 2310.20708). They ride <see cref="Erf" /> (erfc/erfcx) → the erf/ucrt tolerance class.
 /// </summary>
@@ -24,6 +24,8 @@ internal static class Acqf
     ///     branch is <c>log(z·Φ(z) + φ(z))</c>; for <c>z &lt; -25</c> the <c>erfcx</c> form avoids the
     ///     <c>0/0</c> as the improvement vanishes (Eq. 9 of arxiv 2310.20708).
     /// </summary>
+    /// <param name="z">The standardized normal argument.</param>
+    /// <returns>The log expected positive improvement for the standardized normal argument.</returns>
     internal static double StandardLogEi(double z)
     {
         if (z < -25.0)
@@ -41,6 +43,8 @@ internal static class Acqf
     ///     <c>Φ(z)/EI(z)</c> (the sufficient-decrease cancellation); the <c>z &lt; -25</c> branch
     ///     differentiates the <c>erfcx</c> form directly.
     /// </summary>
+    /// <param name="z">The standardized normal argument.</param>
+    /// <returns>The log expected improvement and its derivative with respect to the standardized argument.</returns>
     internal static (double Value, double Grad) StandardLogEiAndGrad(double z)
     {
         if (z < -25.0)
@@ -60,6 +64,10 @@ internal static class Acqf
     }
 
     /// <summary><c>logei(mean, var, f0) = standard_logei((mean − f0)/σ) + log σ</c>, σ = √var.</summary>
+    /// <param name="mean">The predictive mean in the standardized objective coordinate system.</param>
+    /// <param name="var">The nonnegative predictive variance.</param>
+    /// <param name="f0">The incumbent objective threshold in the maximization convention.</param>
+    /// <returns>The logarithm of expected improvement above the incumbent threshold.</returns>
     internal static double LogEi(double mean, double var, double f0)
     {
         double sigma = Math.Sqrt(var);
@@ -72,6 +80,8 @@ internal static class Acqf
     ///     (<c>logsumexp − log(n_qmc)</c>). <paramref name="logUtil" /> is <c>(n_qmc, q_batch)</c>; the
     ///     result is scalar.
     /// </summary>
+    /// <param name="logUtil">Per-sample log utilities with shape (QMC samples, batch points).</param>
+    /// <returns>The log mean of the per-sample maximum utility across batch points.</returns>
     internal static double MeanMaxUtility(double[,] logUtil)
     {
         int nQmc = logUtil.GetLength(0);
@@ -100,6 +110,9 @@ internal static class Acqf
     ///     selection (per-sample argmax) and the <c>logsumexp</c> softmax — nonzero only where the query
     ///     column wins that sample's max.
     /// </summary>
+    /// <param name="logUtil">Per-sample log utilities with shape (QMC samples, batch points).</param>
+    /// <param name="dQuery">The derivative of the query-point log utility with shape (QMC samples, dimensions).</param>
+    /// <returns>The log mean maximum utility and its gradient with respect to the query coordinates.</returns>
     internal static (double Value, double[] Grad) MeanMaxUtilityWithGrad(double[,] logUtil, double[,] dQuery)
     {
         int nQmc = logUtil.GetLength(0);
@@ -146,16 +159,24 @@ internal static class Acqf
 /// </summary>
 internal interface IAcquisitionFunc
 {
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     double[] EvalAcqfNoGrad(double[,] x);
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point <c>(dim,)</c> — the discrete searches.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     double EvalAcqfNoGrad(double[] x);
 
     /// <summary><c>eval_acqf_with_grad</c> — value + ∂/∂x at a single point <c>(dim,)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     (double Value, double[] Grad) EvalAcqfWithGrad(double[] x);
 }
 
@@ -173,6 +194,11 @@ internal sealed class LogEI : IAcquisitionFunc
     private readonly double _threshold;
     private readonly double _stabilizingNoise;
 
+    /// <summary>Configures log expected improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="threshold">The incumbent objective value that a candidate must improve upon, in the model's maximization convention.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
     internal LogEI(GPRegressor gpr, GpSearchSpace searchSpace, double threshold, double stabilizingNoise = 1e-12)
     {
         _gpr = gpr;
@@ -182,10 +208,14 @@ internal sealed class LogEI : IAcquisitionFunc
         LengthScales = gpr.LengthScales;
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> — LogEI at each row of <paramref name="x" /> (<c>(B, dim)</c>).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0);
@@ -199,6 +229,8 @@ internal sealed class LogEI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point — the 0-d form used by the discrete searches.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x)
     {
         if (double.IsNegativeInfinity(_threshold))
@@ -212,6 +244,8 @@ internal sealed class LogEI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_with_grad</c> — LogEI and ∂LogEI/∂x at a single point <paramref name="x" /> (<c>(dim,)</c>).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         int dim = x.Length;
@@ -237,7 +271,7 @@ internal sealed class LogEI : IAcquisitionFunc
 
 /// <summary>
 ///     The q-batch log-expected-improvement acquisition function — port of <c>acqf.qLogEI</c>, the acqf
-///     <see cref="GPSampler" /> maximizes for single-objective optimization <b>with running trials</b>
+///     <see cref="OptunaSharp.Samplers.GPSampler" /> maximizes for single-objective optimization <b>with running trials</b>
 ///     (PORTING_PLAN Phase 3.2 part 3e-6). It conditions on the running fantasies via a
 ///     <see cref="ConditionalGPRegressor" /> and, per QMC draw, forms the joint-posterior sample vector
 ///     over the running trials plus the query point, takes the improvement <c>log(y − threshold)</c>,
@@ -257,6 +291,14 @@ internal sealed class QLogEI : IAcquisitionFunc
     private readonly ConditionalGPRegressor _condGpr;
     private readonly double _threshold;
 
+    /// <summary>Configures batch log expected improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="threshold">The incumbent objective value that a candidate must improve upon, in the model's maximization convention.</param>
+    /// <param name="nQmcSamples">The number of fixed quasi-Monte Carlo draws used to approximate posterior expectations.</param>
+    /// <param name="qmcSeed">The seed used to scramble the quasi-Monte Carlo normal samples.</param>
+    /// <param name="normalizedParamsOfRunningTrials">The normalized parameter rows of running trials to include as pending candidates.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
     internal QLogEI(
         GPRegressor gpr, GpSearchSpace searchSpace, double threshold,
         int nQmcSamples, int qmcSeed, double[,] normalizedParamsOfRunningTrials,
@@ -269,10 +311,14 @@ internal sealed class QLogEI : IAcquisitionFunc
         LengthScales = gpr.LengthScales;
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
     /// <summary><c>compute_per_sample_log_utility</c> — <c>log(clamp_min(y_post − threshold, EPS))</c>, shape <c>(n_qmc, r+1)</c>.</summary>
+    /// <param name="yPost">Posterior objective draws with rows for QMC samples and columns for pending/query points.</param>
+    /// <returns>A matrix of log utilities with one row per posterior sample and one column per batch point.</returns>
     internal double[,] PerSampleLogUtility(double[,] yPost)
     {
         int nQmc = yPost.GetLength(0), q = yPost.GetLength(1);
@@ -287,6 +333,8 @@ internal sealed class QLogEI : IAcquisitionFunc
     }
 
     /// <summary>The per-sample log utility at a single query point (used by <see cref="QLogCEI" /> to compose feasible improvement).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The fixed-sample log utilities of pending points and the query point.</returns>
     internal double[,] ComputePerSampleLogUtility(double[] x)
     {
         if (double.IsNegativeInfinity(_threshold))
@@ -295,6 +343,8 @@ internal sealed class QLogEI : IAcquisitionFunc
     }
 
     /// <summary>The per-sample log utility and its x-gradient (the gradient flows through the query column only).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The per-sample log utilities and query-coordinate derivatives.</returns>
     internal (double[,] LogUtil, double[,] DQuery) ComputePerSampleLogUtilityWithGrad(double[] x)
     {
         if (double.IsNegativeInfinity(_threshold))
@@ -307,6 +357,9 @@ internal sealed class QLogEI : IAcquisitionFunc
     ///     <c>∂ log_util[s, query]/∂x_d = mask[s]·(1/(y_post[s,query] − threshold))·∂samples[s]/∂x_d</c>
     ///     (the <c>clamp_min</c> mask zeroes it where the improvement ≤ EPS); the fantasy columns are 0.
     /// </summary>
+    /// <param name="yPost">Posterior objective draws with rows for QMC samples and columns for pending/query points.</param>
+    /// <param name="dSamples">The derivative of query posterior samples with respect to normalized coordinates.</param>
+    /// <returns>The derivative of each query sample's log utility in normalized coordinate order.</returns>
     private double[,] QueryLogUtilGrad(double[,] yPost, double[,] dSamples)
     {
         int nQmc = yPost.GetLength(0);
@@ -326,6 +379,8 @@ internal sealed class QLogEI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0), dim = x.GetLength(1);
@@ -340,9 +395,13 @@ internal sealed class QLogEI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x) => Acqf.MeanMaxUtility(ComputePerSampleLogUtility(x));
 
     /// <summary><c>eval_acqf_with_grad</c> — value and the hand-derived gradient through amax/logsumexp.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         (double[,] logUtil, double[,] dQuery) = ComputePerSampleLogUtilityWithGrad(x);
@@ -352,7 +411,7 @@ internal sealed class QLogEI : IAcquisitionFunc
 
 /// <summary>
 ///     The q-batch log probability-of-improvement acquisition function — port of <c>acqf.qLogPI</c>. It
-///     is the running-trial analogue of <see cref="LogPI" />: <see cref="GPSampler" /> uses it, summed
+///     is the running-trial analogue of <see cref="LogPI" />: <see cref="OptunaSharp.Samplers.GPSampler" /> uses it, summed
 ///     over the constraint GPs, as the feasibility term of <see cref="QLogCEI" /> (single-objective
 ///     constrained optimization with running trials, PORTING_PLAN Phase 3.2 part 3e-6). Per QMC draw it
 ///     forms the joint-posterior sample over the running trials plus the query point
@@ -365,6 +424,15 @@ internal sealed class QLogPI : IAcquisitionFunc
     private readonly double _threshold;
     private readonly double _tau;
 
+    /// <summary>Configures batch log probability of improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="threshold">The incumbent objective value that a candidate must improve upon, in the model's maximization convention.</param>
+    /// <param name="nQmcSamples">The number of fixed quasi-Monte Carlo draws used to approximate posterior expectations.</param>
+    /// <param name="qmcSeed">The seed used to scramble the quasi-Monte Carlo normal samples.</param>
+    /// <param name="normalizedParamsOfRunningTrials">The normalized parameter rows of running trials to include as pending candidates.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
+    /// <param name="tau">The positive temperature controlling the smooth probability-of-improvement approximation.</param>
     internal QLogPI(
         GPRegressor gpr, GpSearchSpace searchSpace, double threshold, int nQmcSamples, int qmcSeed,
         double[,] normalizedParamsOfRunningTrials, double stabilizingNoise = 1e-12, double tau = 1e-2)
@@ -377,9 +445,14 @@ internal sealed class QLogPI : IAcquisitionFunc
         LengthScales = gpr.LengthScales;
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
+    /// <summary>Returns a matrix of log utilities with one row per posterior sample and one column per batch point.</summary>
+    /// <param name="yPost">Posterior objective draws with rows for QMC samples and columns for pending/query points.</param>
+    /// <returns>A matrix of log utilities with one row per posterior sample and one column per batch point.</returns>
     private double[,] PerSampleLogUtility(double[,] yPost)
     {
         int nQmc = yPost.GetLength(0), q = yPost.GetLength(1);
@@ -391,10 +464,14 @@ internal sealed class QLogPI : IAcquisitionFunc
     }
 
     /// <summary><c>compute_per_sample_log_utility(x)</c> — <c>logsigmoid((y_post − threshold)/τ)</c>, shape <c>(n_qmc, r+1)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The fixed-sample log utilities of pending points and the query point.</returns>
     internal double[,] ComputePerSampleLogUtility(double[] x)
         => PerSampleLogUtility(_condGpr.SampleJointPosterior(x));
 
     /// <summary>The per-sample log utility and its x-gradient (through the query column only).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The per-sample log utilities and query-coordinate derivatives.</returns>
     internal (double[,] LogUtil, double[,] DQuery) ComputePerSampleLogUtilityWithGrad(double[] x)
     {
         (double[,] yPost, double[,] dSamples) = _condGpr.SampleJointPosteriorWithGrad(x);
@@ -414,6 +491,8 @@ internal sealed class QLogPI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0), dim = x.GetLength(1);
@@ -428,9 +507,13 @@ internal sealed class QLogPI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x) => Acqf.MeanMaxUtility(ComputePerSampleLogUtility(x));
 
     /// <summary><c>eval_acqf_with_grad</c> — value and the hand-derived gradient through amax/logsumexp.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         (double[,] logUtil, double[,] dQuery) = ComputePerSampleLogUtilityWithGrad(x);
@@ -438,13 +521,15 @@ internal sealed class QLogPI : IAcquisitionFunc
     }
 
     /// <summary><c>torch.nn.functional.logsigmoid(v) = min(0,v) − log1p(e^(−|v|))</c> — the numerically stable log σ.</summary>
+    /// <param name="v">The values used by the numerical reduction or transformation.</param>
+    /// <returns>The logarithm of the logistic sigmoid, evaluated without unnecessary exponential overflow.</returns>
     private static double LogSigmoid(double v)
         => v >= 0 ? -MathUtil.Log1p(Math.Exp(-v)) : v - MathUtil.Log1p(Math.Exp(v));
 }
 
 /// <summary>
 ///     The q-batch log constrained-expected-improvement acquisition function — port of
-///     <c>acqf.qLogCEI</c>, the acqf <see cref="GPSampler" /> maximizes for single-objective
+///     <c>acqf.qLogCEI</c>, the acqf <see cref="OptunaSharp.Samplers.GPSampler" /> maximizes for single-objective
 ///     <b>constrained</b> optimization <b>with running trials</b> (PORTING_PLAN Phase 3.2 part 3e-6). It
 ///     composes the per-QMC-sample log feasible improvement — the <see cref="QLogEI" /> objective utility
 ///     plus the summed <see cref="QLogPI" /> constraint utilities — and reduces the sum with
@@ -458,6 +543,17 @@ internal sealed class QLogCEI : IAcquisitionFunc
     private readonly QLogEI _acqf;
     private readonly QLogPI[] _constraintsAcqfList;
 
+    /// <summary>Configures batch log constrained expected improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="threshold">The incumbent objective value that a candidate must improve upon, in the model's maximization convention.</param>
+    /// <param name="nQmcSamples">The number of fixed quasi-Monte Carlo draws used to approximate posterior expectations.</param>
+    /// <param name="qmcSeed">The seed used to scramble the quasi-Monte Carlo normal samples.</param>
+    /// <param name="constraintsGprList">One Gaussian-process model per modeled constraint.</param>
+    /// <param name="constraintsThresholdList">The feasibility threshold for each constraint model, in matching order.</param>
+    /// <param name="normalizedParamsOfRunningTrials">The normalized parameter rows of running trials to include as pending candidates.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
+    /// <exception cref="System.ArgumentException">The constraint-model and threshold lists are empty or have different lengths.</exception>
     internal QLogCEI(
         GPRegressor gpr, GpSearchSpace searchSpace, double threshold, int nQmcSamples, int qmcSeed,
         IReadOnlyList<GPRegressor> constraintsGprList, IReadOnlyList<double> constraintsThresholdList,
@@ -478,10 +574,14 @@ internal sealed class QLogCEI : IAcquisitionFunc
         LengthScales = gpr.LengthScales;
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0), dim = x.GetLength(1);
@@ -496,6 +596,8 @@ internal sealed class QLogCEI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x)
     {
         double[,] logUtil = _acqf.ComputePerSampleLogUtility(x);
@@ -505,6 +607,8 @@ internal sealed class QLogCEI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_with_grad</c> — value and gradient of the composed feasible-improvement utility.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         (double[,] logUtil, double[,] dQuery) = _acqf.ComputePerSampleLogUtilityWithGrad(x);
@@ -517,6 +621,9 @@ internal sealed class QLogCEI : IAcquisitionFunc
         return Acqf.MeanMaxUtilityWithGrad(logUtil, dQuery);
     }
 
+    /// <summary>Adds matching log-utility arrays so independent objective and feasibility factors combine multiplicatively.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
     private static void AddInPlace(double[,] a, double[,] b)
     {
         int rows = a.GetLength(0), cols = a.GetLength(1);
@@ -529,7 +636,7 @@ internal sealed class QLogCEI : IAcquisitionFunc
 /// <summary>
 ///     The log probability-of-improvement acquisition function — port of <c>acqf.LogPI</c>. It scores
 ///     a point by <c>log Φ((mean − threshold)/σ)</c> (the log of the feasible probability of the GP
-///     posterior over <c>threshold</c>). <see cref="GPSampler" /> uses it, summed over the constraint
+///     posterior over <c>threshold</c>). <see cref="OptunaSharp.Samplers.GPSampler" /> uses it, summed over the constraint
 ///     GPs, as the feasibility term of <see cref="LogCEI" /> (single-objective constrained
 ///     optimization) and of <see cref="LogCEHVI" /> (multi-objective constrained). It rides
 ///     <c>log_ndtr</c> → the erf/ucrt tolerance class.
@@ -546,6 +653,12 @@ internal sealed class LogPI : IAcquisitionFunc
     private readonly double _threshold;
     private readonly double _stabilizingNoise;
 
+    /// <summary>Configures log probability of improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="threshold">The incumbent objective value that a candidate must improve upon, in the model's maximization convention.</param>
+    /// <param name="normalizedParamsOfRunningTrials">The normalized parameter rows of running trials to include as pending candidates.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
     internal LogPI(
         GPRegressor gpr, GpSearchSpace searchSpace, double threshold,
         double[,]? normalizedParamsOfRunningTrials = null, double stabilizingNoise = 1e-12)
@@ -564,10 +677,14 @@ internal sealed class LogPI : IAcquisitionFunc
         LengthScales = gpr.LengthScales;
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> — <c>log_ndtr((mean − threshold)/σ)</c> over a batch <c>(B, dim)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0);
@@ -579,6 +696,8 @@ internal sealed class LogPI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point — the discrete searches.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x)
     {
         int dim = x.Length;
@@ -594,6 +713,8 @@ internal sealed class LogPI : IAcquisitionFunc
     ///     exp(norm_logpdf(u) − log_ndtr(u))</c>, chained through the posterior gradient
     ///     (<c>∂u/∂x = ∂mean/∂x / σ − u·∂σ/∂x / σ</c>, <c>∂σ/∂x = ∂var/∂x / (2σ)</c>).
     /// </summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         int dim = x.Length;
@@ -616,7 +737,7 @@ internal sealed class LogPI : IAcquisitionFunc
 
 /// <summary>
 ///     The log constrained-expected-improvement acquisition function — port of <c>acqf.LogCEI</c>, the
-///     acqf <see cref="GPSampler" /> maximizes for single-objective <b>constrained</b> optimization.
+///     acqf <see cref="OptunaSharp.Samplers.GPSampler" /> maximizes for single-objective <b>constrained</b> optimization.
 ///     It assumes independence between the objective and each constraint, so the log feasible
 ///     improvement is the objective log-EI plus the summed log feasible-probabilities:
 ///     <c>LogCEI(x) = LogEI(x) + Σ_c LogPI_c(x)</c>. (When there is no feasible trial the objective
@@ -630,6 +751,14 @@ internal sealed class LogCEI : IAcquisitionFunc
     private readonly LogEI _acqf;
     private readonly LogPI[] _constraintsAcqfList;
 
+    /// <summary>Configures log constrained expected improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="threshold">The incumbent objective value that a candidate must improve upon, in the model's maximization convention.</param>
+    /// <param name="constraintsGprList">One Gaussian-process model per modeled constraint.</param>
+    /// <param name="constraintsThresholdList">The feasibility threshold for each constraint model, in matching order.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
+    /// <exception cref="System.ArgumentException">The constraint-model and threshold lists are empty or have different lengths.</exception>
     internal LogCEI(
         GPRegressor gpr, GpSearchSpace searchSpace, double threshold,
         IReadOnlyList<GPRegressor> constraintsGprList, IReadOnlyList<double> constraintsThresholdList,
@@ -648,10 +777,14 @@ internal sealed class LogCEI : IAcquisitionFunc
         LengthScales = gpr.LengthScales;
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> — <c>LogEI(x) + Σ LogPI_c(x)</c> over a batch.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         double[] result = _acqf.EvalAcqfNoGrad(x);
@@ -665,6 +798,8 @@ internal sealed class LogCEI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x)
     {
         double v = _acqf.EvalAcqfNoGrad(x);
@@ -674,6 +809,8 @@ internal sealed class LogCEI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_with_grad</c> — the summed value and gradient of the objective + constraint terms.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         (double value, double[] grad) = _acqf.EvalAcqfWithGrad(x);
@@ -690,7 +827,7 @@ internal sealed class LogCEI : IAcquisitionFunc
 
 /// <summary>
 ///     The log expected-hypervolume-improvement acquisition function — port of <c>acqf.LogEHVI</c>, the
-///     acqf <see cref="GPSampler" /> maximizes for <b>multi-objective</b> optimization (PORTING_PLAN
+///     acqf <see cref="OptunaSharp.Samplers.GPSampler" /> maximizes for <b>multi-objective</b> optimization (PORTING_PLAN
 ///     Phase 3.2 part 3e-4). It is a Sobol'-QMC Monte-Carlo estimate (Eq. (1) of arxiv 2006.05078) of
 ///     the expected improvement in dominated hypervolume: the non-dominated region below the current
 ///     Pareto front (and dominated by a reference point) is decomposed into boxes
@@ -726,6 +863,14 @@ internal sealed class LogEHVI : IAcquisitionFunc
     private readonly int _nQmc;
     private readonly int _nBoxes;
 
+    /// <summary>Configures log expected hypervolume improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gprList">One Gaussian-process model per objective, in objective order.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="yTrain">The observed objective values used to train or condition the model.</param>
+    /// <param name="nQmcSamples">The number of fixed quasi-Monte Carlo draws used to approximate posterior expectations.</param>
+    /// <param name="qmcSeed">The seed used to scramble the quasi-Monte Carlo normal samples.</param>
+    /// <param name="normalizedParamsOfRunningTrials">The normalized parameter rows of running trials to include as pending candidates.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
     internal LogEHVI(
         GPRegressor[] gprList, GpSearchSpace searchSpace, double[,] yTrain,
         int nQmcSamples, int qmcSeed, double[,]? normalizedParamsOfRunningTrials = null,
@@ -759,10 +904,14 @@ internal sealed class LogEHVI : IAcquisitionFunc
         LengthScales = MeanLengthScales(_gprList, searchSpace.Dim);
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0);
@@ -779,6 +928,8 @@ internal sealed class LogEHVI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x)
     {
         // Y_post[s, i] = mean_i + stdev_i * fixed_samples[s, i].
@@ -800,6 +951,8 @@ internal sealed class LogEHVI : IAcquisitionFunc
     ///     softmax <c>exp(L[s,b] − value − log n_qmc)</c>... (see body) chained through
     ///     <c>∂Y_post/∂x = ∂mean/∂x + fixed·∂stdev/∂x</c>, with the clamp zeroing the out-of-range terms.
     /// </summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         int dim = x.Length;
@@ -881,6 +1034,8 @@ internal sealed class LogEHVI : IAcquisitionFunc
     }
 
     /// <summary><c>logehvi</c> — the log-sum-exp over boxes/samples of the box-clamped log volumes, given <c>Y_post</c> (n_qmc, n_obj).</summary>
+    /// <param name="yPost">Posterior objective draws with rows for QMC samples and columns for pending/query points.</param>
+    /// <returns>The logarithm of the mean hypervolume improvement over posterior samples.</returns>
     private double LogEhviFromYPost(double[,] yPost)
     {
         double logNQmc = Math.Log(_nQmc);
@@ -907,6 +1062,10 @@ internal sealed class LogEHVI : IAcquisitionFunc
         return maxL + Math.Log(expSum) - logNQmc;
     }
 
+    /// <summary>Returns the scalar posterior mean and variance at the normalized query point.</summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The scalar posterior mean and variance at the normalized query point.</returns>
     private static (double Mean, double Var) PosteriorAt(GPRegressor gpr, double[] x)
     {
         int dim = x.Length;
@@ -921,6 +1080,8 @@ internal sealed class LogEHVI : IAcquisitionFunc
     ///     <c>acqf._get_reference_point(Y)</c> — <c>Y</c> is to be maximized, so <c>loss = −Y</c> is
     ///     minimized: <c>ref = nextafter(max(1.1·m, 0.9·m), +∞)</c> with <c>m = max_row(−Y)</c>.
     /// </summary>
+    /// <param name="yTrain">The observed objective values used to train or condition the model.</param>
+    /// <returns>A reference vector worse than the observed objective extremes in the operation's coordinate convention.</returns>
     internal static double[] GetReferencePoint(double[,] yTrain)
     {
         int n = yTrain.GetLength(0);
@@ -944,6 +1105,9 @@ internal sealed class LogEHVI : IAcquisitionFunc
     ///     losses that dominate the reference point, take their Pareto front, decompose, and flip the
     ///     signs back (<c>lower = −ubs</c>, <c>upper = −lbs</c>).
     /// </summary>
+    /// <param name="yTrain">The observed objective values used to train or condition the model.</param>
+    /// <param name="refPoint">The reference objective vector bounding the dominated region.</param>
+    /// <returns>Lower and upper corner matrices for nondominated boxes in maximization coordinates.</returns>
     internal static (double[,] Lower, double[,] Upper) GetNonDominatedBoxBoundsMax(double[,] yTrain, double[] refPoint)
     {
         int n = yTrain.GetLength(0);
@@ -983,6 +1147,9 @@ internal sealed class LogEHVI : IAcquisitionFunc
     }
 
     /// <summary>Mean over the objective GPs of each per-parameter length scale (the acqf-optimizer preconditioning).</summary>
+    /// <param name="gprList">One Gaussian-process model per objective, in objective order.</param>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <returns>The mean kernel length scale across objective models for each coordinate.</returns>
     internal static double[] MeanLengthScales(GPRegressor[] gprList, int dim)
     {
         var ls = new double[dim];
@@ -999,7 +1166,7 @@ internal sealed class LogEHVI : IAcquisitionFunc
 
 /// <summary>
 ///     The q-batch log expected-hypervolume-improvement acquisition function — port of
-///     <c>acqf.qLogEHVI</c>, the acqf <see cref="GPSampler" /> maximizes for <b>multi-objective</b>
+///     <c>acqf.qLogEHVI</c>, the acqf <see cref="OptunaSharp.Samplers.GPSampler" /> maximizes for <b>multi-objective</b>
 ///     optimization <b>with running trials</b> (PORTING_PLAN Phase 3.2 part 3e-6). Unlike
 ///     <see cref="LogEHVI" /> (independent per-objective sampling + one box decomposition), each QMC
 ///     draw gets its <b>own</b> box decomposition — computed from that draw's running fantasies
@@ -1024,6 +1191,14 @@ internal sealed class QLogEHVI : IAcquisitionFunc
     private readonly double[][,] _lowerBounds;   // per QMC draw: (n_boxes_s, n_obj) box lower bounds
     private readonly double[][,] _intervals;     // per QMC draw: (n_boxes_s, n_obj) box widths, clamped ≥ EPS
 
+    /// <summary>Configures batch log expected hypervolume improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gprList">One Gaussian-process model per objective, in objective order.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="yTrain">The observed objective values used to train or condition the model.</param>
+    /// <param name="nQmcSamples">The number of fixed quasi-Monte Carlo draws used to approximate posterior expectations.</param>
+    /// <param name="qmcSeed">The seed used to scramble the quasi-Monte Carlo normal samples.</param>
+    /// <param name="normalizedParamsOfRunningTrials">The normalized parameter rows of running trials to include as pending candidates.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
     internal QLogEHVI(
         GPRegressor[] gprList, GpSearchSpace searchSpace, double[,] yTrain, int nQmcSamples, int qmcSeed,
         double[,] normalizedParamsOfRunningTrials, double stabilizingNoise = 1e-12)
@@ -1068,10 +1243,14 @@ internal sealed class QLogEHVI : IAcquisitionFunc
         LengthScales = LogEHVI.MeanLengthScales(gprList, searchSpace.Dim);
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0), dim = x.GetLength(1);
@@ -1086,6 +1265,8 @@ internal sealed class QLogEHVI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x)
     {
         var samplesByObj = new double[_nObjectives][];
@@ -1096,6 +1277,8 @@ internal sealed class QLogEHVI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_with_grad</c> — value and the hand-derived nested-softmax gradient.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         int dim = x.Length;
@@ -1144,6 +1327,9 @@ internal sealed class QLogEHVI : IAcquisitionFunc
     ///     <c>logsumexp_b Σ_o log(clamp(samples[o][s] − lower[s,b,o], EPS, interval[s,b,o]))</c>. Also
     ///     returns the per-draw box terms (for the gradient's box softmax).
     /// </summary>
+    /// <param name="samplesByObj">Posterior draws grouped by objective, with matching QMC/sample order.</param>
+    /// <param name="termsPerS">The per-QMC-sample log hypervolume contributions to reduce.</param>
+    /// <returns>The log hypervolume improvement for each posterior draw.</returns>
     private double[] PerSampleLogHvi(double[][] samplesByObj, out double[][] termsPerS)
     {
         var hvi = new double[_nQmc];
@@ -1172,6 +1358,9 @@ internal sealed class QLogEHVI : IAcquisitionFunc
         return hvi;
     }
 
+    /// <summary>Returns the logarithm of the sum of exponentials, computed stably.</summary>
+    /// <param name="vals">The terms to combine with a stable logarithmic reduction.</param>
+    /// <returns>The logarithm of the sum of exponentials, computed stably.</returns>
     private static double LogSumExp(double[] vals)
     {
         double m = double.NegativeInfinity;
@@ -1182,12 +1371,15 @@ internal sealed class QLogEHVI : IAcquisitionFunc
         return m + Math.Log(sum);
     }
 
+    /// <summary>Returns the logarithm of the mean of exponentials, computed stably.</summary>
+    /// <param name="vals">The terms to combine with a stable logarithmic reduction.</param>
+    /// <returns>The logarithm of the mean of exponentials, computed stably.</returns>
     private static double LogMeanExp(double[] vals) => LogSumExp(vals) - Math.Log(vals.Length);
 }
 
 /// <summary>
 ///     The log constrained-expected-hypervolume-improvement acquisition function — port of
-///     <c>acqf.LogCEHVI</c>, the acqf <see cref="GPSampler" /> maximizes for <b>multi-objective
+///     <c>acqf.LogCEHVI</c>, the acqf <see cref="OptunaSharp.Samplers.GPSampler" /> maximizes for <b>multi-objective
 ///     constrained</b> optimization (PORTING_PLAN Phase 3.2 part 3e-5). Assuming independence between
 ///     the objectives and each constraint, it is the log expected hypervolume improvement over the
 ///     <b>feasible</b> trials plus the summed log feasible-probabilities:
@@ -1206,6 +1398,17 @@ internal sealed class LogCEHVI : IAcquisitionFunc
     private readonly LogEHVI? _acqf;
     private readonly LogPI[] _constraintsAcqfList;
 
+    /// <summary>Configures log constrained expected hypervolume improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gprList">One Gaussian-process model per objective, in objective order.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="yFeasible">The objective rows of feasible completed observations.</param>
+    /// <param name="nQmcSamples">The number of fixed quasi-Monte Carlo draws used to approximate posterior expectations.</param>
+    /// <param name="qmcSeed">The seed used to scramble the quasi-Monte Carlo normal samples.</param>
+    /// <param name="constraintsGprList">One Gaussian-process model per modeled constraint.</param>
+    /// <param name="constraintsThresholdList">The feasibility threshold for each constraint model, in matching order.</param>
+    /// <param name="normalizedParamsOfRunningTrials">The normalized parameter rows of running trials to include as pending candidates.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
+    /// <exception cref="System.ArgumentException">The constraint-model and threshold lists are empty or have different lengths.</exception>
     internal LogCEHVI(
         GPRegressor[] gprList, GpSearchSpace searchSpace, double[,]? yFeasible,
         int nQmcSamples, int qmcSeed,
@@ -1229,10 +1432,14 @@ internal sealed class LogCEHVI : IAcquisitionFunc
         LengthScales = LogEHVI.MeanLengthScales(gprList, searchSpace.Dim);
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> — <c>Σ LogPI_c(x)</c> (+ <c>LogEHVI(x)</c> when there is a feasible term) over a batch.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0);
@@ -1253,6 +1460,8 @@ internal sealed class LogCEHVI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x)
     {
         double v = 0.0;
@@ -1264,6 +1473,8 @@ internal sealed class LogCEHVI : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_with_grad</c> — the summed value and gradient of the constraint terms (and the feasible EHVI term when present).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         double value = 0.0;
@@ -1297,6 +1508,10 @@ internal sealed class UCB : IAcquisitionFunc
     private readonly GPRegressor _gpr;
     private readonly double _beta;
 
+    /// <summary>Configures the upper confidence bound from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="beta">The nonnegative confidence-width coefficient.</param>
     internal UCB(GPRegressor gpr, GpSearchSpace searchSpace, double beta)
     {
         _gpr = gpr;
@@ -1305,10 +1520,14 @@ internal sealed class UCB : IAcquisitionFunc
         LengthScales = gpr.LengthScales;
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> — <c>mean + √(β·var)</c> at each row of <paramref name="x" /> (<c>(B, dim)</c>).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0);
@@ -1320,6 +1539,8 @@ internal sealed class UCB : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x)
     {
         int dim = x.Length;
@@ -1331,6 +1552,8 @@ internal sealed class UCB : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_with_grad</c> — value and ∂UCB/∂x (autograd's inherited path; unused by the terminator).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         (double mean, double var, double[] dMean, double[] dVar, bool _) = _gpr.PosteriorWithGrad(x);
@@ -1353,6 +1576,10 @@ internal sealed class LCB : IAcquisitionFunc
     private readonly GPRegressor _gpr;
     private readonly double _beta;
 
+    /// <summary>Configures the lower confidence bound from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="beta">The nonnegative confidence-width coefficient.</param>
     internal LCB(GPRegressor gpr, GpSearchSpace searchSpace, double beta)
     {
         _gpr = gpr;
@@ -1361,10 +1588,14 @@ internal sealed class LCB : IAcquisitionFunc
         LengthScales = gpr.LengthScales;
     }
 
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
     public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
 
     /// <summary><c>eval_acqf_no_grad</c> — <c>mean − √(β·var)</c> at each row of <paramref name="x" /> (<c>(B, dim)</c>).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double[] EvalAcqfNoGrad(double[,] x)
     {
         int b = x.GetLength(0);
@@ -1376,6 +1607,8 @@ internal sealed class LCB : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
     public double EvalAcqfNoGrad(double[] x)
     {
         int dim = x.Length;
@@ -1387,6 +1620,8 @@ internal sealed class LCB : IAcquisitionFunc
     }
 
     /// <summary><c>eval_acqf_with_grad</c> — value and ∂LCB/∂x (autograd's inherited path; unused by the terminator).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
         (double mean, double var, double[] dMean, double[] dVar, bool _) = _gpr.PosteriorWithGrad(x);

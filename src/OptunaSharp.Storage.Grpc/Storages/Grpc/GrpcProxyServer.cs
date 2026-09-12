@@ -47,6 +47,7 @@ public static class GrpcProxyServer
     /// <param name="configureBuilder">Optional: full access to the <see cref="WebApplicationBuilder" />
     ///   before <c>Build()</c> — add TLS endpoints / authentication / your own services / logging, etc. For
     ///   embedding the proxy in an app you already host, prefer <see cref="GrpcProxyServiceExtensions" />.</param>
+    /// <returns>An unstarted application; the caller controls starting, stopping, and disposing it.</returns>
     public static WebApplication MakeServer(
         BaseStorage storage, string host = "localhost", int port = 13000,
         Action<GrpcServiceOptions>? configureGrpc = null,
@@ -93,6 +94,8 @@ public static class GrpcProxyServer
     ///     Like Optuna, the gRPC storage proxy does not support <c>JournalStorage</c>; use the SQLite
     ///     <c>RDBStorage</c> (wrapped via <c>StorageFunctions.GetStorage</c>) instead.
     /// </remarks>
+    /// <param name="configureGrpc">An optional callback configuring ASP.NET Core gRPC service options.</param>
+    /// <param name="configureBuilder">An optional callback configuring the ASP.NET Core application builder.</param>
     public static void RunGrpcProxyServer(
         BaseStorage storage, string host = "localhost", int port = 13000,
         Action<GrpcServiceOptions>? configureGrpc = null,
@@ -109,6 +112,9 @@ public static class GrpcProxyServer
     }
 
     /// <summary>Resolve <paramref name="host" /> (a name, an IP, <c>0.0.0.0</c>, or <c>::</c>) to a bind endpoint.</summary>
+    /// <param name="host">The server hostname or literal IP address.</param>
+    /// <param name="port">The server TCP port, or its provider default when nullable and omitted.</param>
+    /// <returns>The resolved address and requested port.</returns>
     private static IPEndPoint ResolveEndpoint(string host, int port)
     {
         IPAddress address;

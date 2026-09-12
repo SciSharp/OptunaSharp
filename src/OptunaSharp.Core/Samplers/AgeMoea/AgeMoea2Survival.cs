@@ -18,6 +18,9 @@ internal sealed class AgeMoea2Survival : AgeMoeaSurvival
     ///     <c>project_on_manifold(point, p)</c>: scale the whole point by <c>1 / ‖point⁺‖_p</c>, where
     ///     the p-norm is taken over the strictly-positive components only.
     /// </summary>
+    /// <param name="point">Objective-space point used for projection or distance measurement.</param>
+    /// <param name="p">Minkowski norm exponent describing the front geometry.</param>
+    /// <returns>The point scaled onto the positive-coordinate unit p-norm manifold.</returns>
     internal static double[] ProjectOnManifold(double[] point, double p)
     {
         double acc = 0.0;
@@ -42,6 +45,10 @@ internal sealed class AgeMoea2Survival : AgeMoeaSurvival
     ///     break test is effectively <c>|x − 1| ≤ precision</c> (not "change since the last iterate").
     ///     Reproducing this is required for byte-exactness.</para>
     /// </summary>
+    /// <param name="point">Objective-space point used for projection or distance measurement.</param>
+    /// <param name="n">Number of numerical coordinates.</param>
+    /// <param name="precision">Tolerance used by the geometry-exponent iteration.</param>
+    /// <returns>The geometry exponent found by the bounded Newton iteration.</returns>
     internal static double FindZero(double[] point, int n, double precision)
     {
         double x = 1.0;
@@ -83,6 +90,7 @@ internal sealed class AgeMoea2Survival : AgeMoeaSurvival
     ///     an extreme) and solve <c>p = find_zero(point, n, 1e-3)</c>; clamp <c>p ≤ 0.1 / NaN → 1</c>,
     ///     <c>p &gt; 20 → 20</c>.
     /// </summary>
+    /// <inheritdoc />
     internal override double ComputeGeometry(double[][] front, int[] extreme, int n)
     {
         int m = front.Length;
@@ -113,6 +121,7 @@ internal sealed class AgeMoea2Survival : AgeMoeaSurvival
     ///     plain Euclidean distance when <c>0.95 &lt; p &lt; 1.05</c>, otherwise the two-segment geodesic
     ///     through the projected midpoint. Returned symmetric (<c>distances + distancesᵀ</c>).
     /// </summary>
+    /// <inheritdoc />
     internal override double[][] PairwiseDistances(double[][] front, double p)
     {
         int m = front.Length;

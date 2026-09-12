@@ -16,6 +16,10 @@ namespace OptunaSharp.Terminator;
 public abstract class BaseErrorEvaluator
 {
     /// <summary>Evaluate the statistical error of the objective function.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="studyDirection">Whether larger or smaller objective values are preferred.</param>
+    /// <returns>The estimated statistical error in objective-value units.</returns>
+    /// <remarks>Concrete evaluators define their data prerequisites and may propagate failures from user-supplied evaluators or trial storage.</remarks>
     public abstract double Evaluate(IReadOnlyList<FrozenTrial> trials, StudyDirection studyDirection);
 }
 
@@ -39,6 +43,11 @@ public class CrossValidationErrorEvaluator : BaseErrorEvaluator
     ///
     ///     The best trial in <paramref name="trials" /> is used to compute the statistical error.
     /// </summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="studyDirection">Whether larger or smaller objective values are preferred.</param>
+    /// <returns>The corrected standard error calculated from the best trial's cross-validation scores.</returns>
+    /// <exception cref="NumSharp.ValueError">The best completed trial does not contain reported cross-validation scores.</exception>
+    /// <exception cref="NumSharp.TypeError">A stored cross-validation score is not numeric.</exception>
     public override double Evaluate(IReadOnlyList<FrozenTrial> trials, StudyDirection studyDirection)
     {
         var completeTrials = trials.Where(t => t.State == TrialState.Complete).ToList();
@@ -81,6 +90,8 @@ public class CrossValidationErrorEvaluator : BaseErrorEvaluator
     ///     cross-validation produces (&lt; 128 elements), NumPy sums sequentially, so this naive
     ///     two-pass sum is bit-identical.
     /// </summary>
+    /// <param name="x">The numerical input values, in the order used by the operation.</param>
+    /// <returns>The population variance using the port's specified accumulation order.</returns>
     private static double NumpyVar(IReadOnlyList<double> x)
     {
         int n = x.Count;
@@ -97,6 +108,10 @@ public class CrossValidationErrorEvaluator : BaseErrorEvaluator
         return squared / n;
     }
 
+    /// <summary>Returns the numeric items of the supplied score sequence, or an empty list for a non-sequence value.</summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <returns>The numeric items of the supplied score sequence, or an empty list for a non-sequence value.</returns>
+    /// <exception cref="NumSharp.TypeError">A score sequence contains a nonnumeric item.</exception>
     private static List<double> ToDoubleList(object? value)
     {
         var result = new List<double>();
@@ -126,11 +141,16 @@ public class StaticErrorEvaluator : BaseErrorEvaluator
     private readonly double _constant;
 
     /// <param name="constant">A user-specified constant value to always return as an error estimate.</param>
+    /// <summary>Stores a fixed error threshold for comparison with an improvement estimate.</summary>
     public StaticErrorEvaluator(double constant)
     {
         _constant = constant;
     }
 
+    /// <summary>Returns the constant error threshold supplied to the constructor.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="studyDirection">Whether larger or smaller objective values are preferred.</param>
+    /// <returns>The constant error threshold supplied to the constructor.</returns>
     public override double Evaluate(IReadOnlyList<FrozenTrial> trials, StudyDirection studyDirection)
         => _constant;
 }
@@ -150,6 +170,7 @@ public static class TerminatorFunctions
     /// </summary>
     /// <param name="trial">A <see cref="Trial" /> object to report the cross-validation scores.</param>
     /// <param name="scores">The cross-validation scores of the trial.</param>
+    /// <exception cref="NumSharp.ValueError">Fewer than two cross-validation scores are supplied.</exception>
     public static void ReportCrossValidationScores(Trial trial, IReadOnlyList<double> scores)
     {
         OptunaWarnings.Warn(TerminatorModule.DeprecationWarningMessage, WarningCategory.FutureWarning);

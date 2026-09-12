@@ -68,6 +68,13 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     <c>postgresql[+driver]://…</c> → PostgreSQL (Npgsql), <c>mysql[+driver]://…</c> → MySQL
     ///     (Pomelo). SQLite URLs are rejected (use <c>OptunaSharp.Storage.Sqlite</c>).
     /// </summary>
+    /// <param name="url">The database connection URL to resolve.</param>
+    /// <param name="skipCompatibilityCheck">Whether to skip checking the stored Alembic revision against the supported schema.</param>
+    /// <param name="skipTableCreation">Whether to assume schema tables already exist.</param>
+    /// <param name="heartbeatInterval">Heartbeat recording interval in seconds, or null to disable recording; positive when supplied.</param>
+    /// <param name="gracePeriod">Seconds after the latest heartbeat before a running trial is stale; defaults to twice the heartbeat interval.</param>
+    /// <param name="heartbeatStaleTrialCallback">Callback invoked after a stale trial is failed, or null for no callback.</param>
+    /// <param name="failedTrialCallback">Deprecated alias of the stale-trial callback; cannot be supplied together with its replacement.</param>
     public RDBStorage(
         string url,
         bool skipCompatibilityCheck = false,
@@ -89,6 +96,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     }
 
     /// <summary>Create an RDB storage from a URL with the full <see cref="EFCoreRdbOptions" /> surface.</summary>
+    /// <param name="url">The database connection URL to resolve.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
     public RDBStorage(string url, EFCoreRdbOptions options)
     {
         ArgumentNullException.ThrowIfNull(url);
@@ -103,6 +112,9 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     Create an RDB storage from an explicit provider + native ADO.NET connection string (BYO
     ///     connection string). The "feel like the client, not Optuna" form.
     /// </summary>
+    /// <param name="provider">The relational database dialect whose connection and SQL rules apply.</param>
+    /// <param name="connectionString">The native provider connection string.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
     public RDBStorage(RdbProvider provider, string connectionString, EFCoreRdbOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(connectionString);
@@ -116,6 +128,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     the golden-standard "feel like Npgsql" form. Every Npgsql connection-string knob (pooling,
     ///     SSL, timeouts, …) is yours to set on the builder.
     /// </summary>
+    /// <param name="connectionStringBuilder">The native provider connection-string builder, customized before the connection opens.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
     public RDBStorage(NpgsqlConnectionStringBuilder connectionStringBuilder, EFCoreRdbOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(connectionStringBuilder);
@@ -129,6 +143,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     Create a MySQL RDB storage from a native <see cref="MySqlConnectionStringBuilder" /> — the
     ///     golden-standard "feel like MySqlConnector" form.
     /// </summary>
+    /// <param name="connectionStringBuilder">The native provider connection-string builder, customized before the connection opens.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
     public RDBStorage(MySqlConnectionStringBuilder connectionStringBuilder, EFCoreRdbOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(connectionStringBuilder);
@@ -154,6 +170,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     When <c>true</c>, <see cref="Dispose" /> disposes the data source; when <c>false</c>
     ///     (default), the caller retains ownership.
     /// </param>
+    /// <param name="dataSource">The PostgreSQL data source providing pooled connections and enum mappings.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
     public RDBStorage(NpgsqlDataSource dataSource, EFCoreRdbOptions? options = null, bool ownsDataSource = false)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
@@ -171,6 +189,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     // ------------------------------------------------------------------ bootstrap
 
+    /// <summary>Resolves heartbeat configuration and the deprecated callback alias.</summary>
+    /// <param name="o">The configured storage options; null-valued settings leave provider defaults unchanged.</param>
     private void SetHeartbeat(EFCoreRdbOptions o)
     {
         _heartbeatInterval = o.HeartbeatInterval;
@@ -180,6 +200,11 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         _heartbeatStaleTrialCallback = o.HeartbeatStaleTrialCallback ?? o.FailedTrialCallback;
     }
 
+    /// <summary>Builds provider resources from a native connection string and initializes the storage.</summary>
+    /// <param name="provider">The relational database dialect whose connection and SQL rules apply.</param>
+    /// <param name="connString">The native provider connection string.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
+    /// <param name="url">The database connection URL to resolve.</param>
     private void InitFromConnectionString(RdbProvider provider, string connString, EFCoreRdbOptions options, string url)
     {
         _provider = provider;
@@ -212,6 +237,10 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         Initialize(options);
     }
 
+    /// <summary>Builds EF Core options with PostgreSQL enum mappings and user configuration.</summary>
+    /// <param name="dataSource">The PostgreSQL data source providing pooled connections and enum mappings.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
+    /// <returns>Configured PostgreSQL EF Core options shared by operation-scoped contexts.</returns>
     private static DbContextOptions<OptunaRdbContext> BuildPostgresOptions(NpgsqlDataSource dataSource, EFCoreRdbOptions options)
     {
         var ob = new DbContextOptionsBuilder<OptunaRdbContext>();
@@ -224,6 +253,10 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return ob.Options;
     }
 
+    /// <summary>Builds EF Core options for MySQL, detecting its server version when none is supplied.</summary>
+    /// <param name="connString">The native provider connection string.</param>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
+    /// <returns>Configured MySQL EF Core options shared by operation-scoped contexts.</returns>
     private static DbContextOptions<OptunaRdbContext> BuildMySqlOptions(string connString, EFCoreRdbOptions options)
     {
         var ob = new DbContextOptionsBuilder<OptunaRdbContext>();
@@ -236,6 +269,9 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     // Port of the heartbeat validation + warnings block of `RDBStorage.__init__`
     // (optuna/storages/_rdb/storage.py) — the exact order matters (the experimental warning fires
     // before the grace-period check; the deprecation warning fires after the "specify only one" check).
+    /// <summary>Rejects invalid heartbeat settings and conflicting callback aliases before opening storage.</summary>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
+    /// <exception cref="NumSharp.ValueError">A heartbeat interval or grace period is nonpositive, or both callback aliases are supplied.</exception>
     private static void ValidateOptions(EFCoreRdbOptions options)
     {
         if (options.HeartbeatInterval is not null)
@@ -258,6 +294,9 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
                 WarningCategory.FutureWarning);
     }
 
+    /// <summary>Substitutes the supported schema version into an Optuna storage URL template.</summary>
+    /// <param name="template">A storage URL that may contain the schema-version placeholder.</param>
+    /// <returns>The URL with the schema-version placeholder replaced.</returns>
     private static string FillStorageUrlTemplate(string template)
         => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(RdbModels.Inv));
 
@@ -269,6 +308,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     <see cref="NpgsqlDataSourceBuilder" />, using the enum labels' verbatim names. Call this when
     ///     building a data source to pass to <see cref="RDBStorage(NpgsqlDataSource, EFCoreRdbOptions?, bool)" />.
     /// </summary>
+    /// <param name="b">The provider builder on which Optuna database enum mappings are registered.</param>
     public static void MapOptunaEnums(NpgsqlDataSourceBuilder b)
     {
         ArgumentNullException.ThrowIfNull(b);
@@ -278,6 +318,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         b.MapEnum<DbTrialIntermediateValueType>("trialintermediatevaluetype", _verbatim);
     }
 
+    /// <summary>Registers the Optuna schema enum types on the PostgreSQL EF Core provider.</summary>
+    /// <param name="b">The provider builder on which Optuna database enum mappings are registered.</param>
     private static void MapPostgresEnums(Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure.NpgsqlDbContextOptionsBuilder b)
     {
         b.MapEnum<DbStudyDirection>("studydirection", nameTranslator: _verbatim);
@@ -286,6 +328,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         b.MapEnum<DbTrialIntermediateValueType>("trialintermediatevaluetype", nameTranslator: _verbatim);
     }
 
+    /// <summary>Creates an operation-scoped EF Core context using the immutable storage configuration.</summary>
+    /// <returns>A new context that the caller must dispose after the operation.</returns>
     private OptunaRdbContext NewContext() => new(_ctxOptions);
 
     /// <summary>
@@ -296,6 +340,9 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     change tracker is cleared before each attempt so a retry starts clean. With the default
     ///     (non-retrying) strategy this runs the body exactly once.
     /// </summary>
+    /// <param name="body">The operation executed in the current context or scope; its exceptions propagate to the caller.</param>
+    /// <returns>The callback's result after the transaction commits successfully.</returns>
+    /// <typeparam name="T">The managed result returned by the transaction callback.</typeparam>
     private T Mutate<T>(Func<OptunaRdbContext, T> body)
     {
         using var ctx = NewContext();
@@ -306,12 +353,16 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         });
     }
 
+    /// <summary>Runs a database mutation with the configured execution strategy and transaction ownership.</summary>
+    /// <param name="body">The operation executed in the current context or scope; its exceptions propagate to the caller.</param>
     private void Mutate(Action<OptunaRdbContext> body) => Mutate<object?>(ctx =>
     {
         body(ctx);
         return null;
     });
 
+    /// <summary>Opens and configures the storage resources, then initializes or verifies the Optuna schema.</summary>
+    /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
     private void Initialize(EFCoreRdbOptions options)
     {
         using var ctx = NewContext();
@@ -330,6 +381,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             CheckTableSchemaCompatibility(ctx);
     }
 
+    /// <summary>Creates the informational schema/library version record if it is absent.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
     private void InitVersionInfo(OptunaRdbContext ctx)
     {
         if (ctx.VersionInfos.Any())
@@ -351,6 +404,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         }
     }
 
+    /// <summary>Initializes the Alembic migration marker for a newly created or legacy database.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
     private void InitAlembic(OptunaRdbContext ctx)
     {
         if (ctx.AlembicVersions.Any())
@@ -366,6 +421,9 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         }
     }
 
+    /// <summary>Checks that the database migration revision is compatible with this storage implementation.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <exception cref="NumSharp.RuntimeError">The Alembic marker is absent or the schema revision is incompatible.</exception>
     private static void CheckTableSchemaCompatibility(OptunaRdbContext ctx)
     {
         string? libraryVersion = ctx.VersionInfos.AsNoTracking().Select(v => v.LibraryVersion).FirstOrDefault();
@@ -386,6 +444,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     // ------------------------------------------------------------------ study manipulation
 
+    /// <inheritdoc />
+    /// <exception cref="DuplicatedStudyError">Another study already uses the requested name.</exception>
     public override int CreateNewStudy(IReadOnlyList<StudyDirection> directions, string? studyName = null)
     {
         string? name = studyName;
@@ -422,6 +482,9 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return studyId;
     }
 
+    /// <summary>Generates a study name and checks the database until the name is unused.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <returns>A generated name that is not currently present in the studies table.</returns>
     private static string CreateUniqueStudyName(OptunaRdbContext ctx)
     {
         while (true)
@@ -432,6 +495,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         }
     }
 
+    /// <inheritdoc />
     public override void DeleteStudy(int studyId) => Mutate(ctx =>
     {
         using var tx = ctx.Database.BeginTransaction();
@@ -459,12 +523,19 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         tx.Commit();
     });
 
+    /// <inheritdoc />
     public override void SetStudyUserAttr(int studyId, string key, object? value)
         => SetStudyAttr(isUser: true, studyId, key, value);
 
+    /// <inheritdoc />
     public override void SetStudySystemAttr(int studyId, string key, object? value)
         => SetStudyAttr(isUser: false, studyId, key, value);
 
+    /// <summary>Upserts a JSON-serializable attribute after verifying that its study exists.</summary>
+    /// <param name="isUser">Whether to use user-attribute records instead of system-attribute records.</param>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="key">The attribute name or exact storage key to access.</param>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
     private void SetStudyAttr(bool isUser, int studyId, string key, object? value) => Mutate(ctx =>
     {
         using var tx = ctx.Database.BeginTransaction();
@@ -491,6 +562,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         tx.Commit();
     });
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">No study has the requested name.</exception>
     public override int GetStudyIdFromName(string studyName)
     {
         using var ctx = NewContext();
@@ -501,6 +574,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return id.Value;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">The study identifier does not exist.</exception>
     public override string GetStudyNameFromId(int studyId)
     {
         using var ctx = NewContext();
@@ -511,6 +586,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return name;
     }
 
+    /// <inheritdoc />
     public override List<StudyDirection> GetStudyDirections(int studyId)
     {
         using var ctx = NewContext();
@@ -521,6 +597,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             .Select(RdbModels.DirectionFromDb).ToList();
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> GetStudyUserAttrs(int studyId)
     {
         using var ctx = NewContext();
@@ -532,6 +609,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return attrs;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> GetStudySystemAttrs(int studyId)
     {
         using var ctx = NewContext();
@@ -543,6 +621,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return attrs;
     }
 
+    /// <inheritdoc />
     public override List<FrozenStudy> GetAllStudies()
     {
         using var ctx = NewContext();
@@ -575,6 +654,10 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return result;
     }
 
+    /// <summary>Loads decoded study attributes in one pass, grouped by storage-wide study identifier.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <param name="isUser">Whether to use user-attribute records instead of system-attribute records.</param>
+    /// <returns>A dictionary mapping study identifiers to decoded attribute dictionaries.</returns>
     private static Dictionary<int, OrderedDict<string, object?>> LoadAllStudyAttrs(OptunaRdbContext ctx, bool isUser)
     {
         var byStudy = new Dictionary<int, OrderedDict<string, object?>>();
@@ -595,9 +678,14 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     // ------------------------------------------------------------------ trial creation
 
+    /// <inheritdoc />
     public override int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null)
         => CreateNewTrialFull(studyId, templateTrial).TrialId;
 
+    /// <summary>Creates a trial and returns its complete stored snapshot, optionally copied from a template.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="templateTrial">An optional trial snapshot whose attributes, parameters, values, and state initialize the new record.</param>
+    /// <returns>The newly stored trial including its assigned identifier and study-local number.</returns>
     public FrozenTrial CreateNewTrialFull(int studyId, FrozenTrial? templateTrial = null) => Mutate(ctx =>
     {
         using var tx = ctx.Database.BeginTransaction();
@@ -685,10 +773,17 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     // ------------------------------------------------------------------ trial params
 
+    /// <inheritdoc />
     public override void SetTrialParam(
         int trialId, string paramName, double paramValueInternal, BaseDistribution distribution)
         => SetTrialParamWithCachedDistribution(trialId, paramName, paramValueInternal, distribution, null);
 
+    /// <summary>Stores a parameter after checking trial mutability and distribution compatibility.</summary>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="paramName">The case-sensitive parameter name.</param>
+    /// <param name="paramValueInternal">The numeric internal representation defined by the parameter distribution.</param>
+    /// <param name="distribution">The distribution describing the parameter and its internal representation.</param>
+    /// <param name="cachedDistribution">A previously validated distribution for this parameter, or null when storage must check compatibility.</param>
     public void SetTrialParamWithCachedDistribution(
         int trialId,
         string paramName,
@@ -735,6 +830,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         }
     });
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">The trial or requested parameter does not exist.</exception>
     public override double GetTrialParam(int trialId, string paramName)
     {
         using var ctx = NewContext();
@@ -749,6 +846,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     // ------------------------------------------------------------------ trial state / values
 
+    /// <inheritdoc />
     public override bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null) => Mutate(ctx =>
     {
         using var tx = ctx.Database.BeginTransaction();
@@ -786,6 +884,11 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return true;
     });
 
+    /// <summary>Adds a tagged objective-value entity to the current context without saving it.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="objective">The zero-based objective index.</param>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
     private static void AddTrialValue(OptunaRdbContext ctx, int trialId, int objective, double value)
     {
         var (stored, type) = RdbModels.ValueToStoredRepr(value);
@@ -798,6 +901,11 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         });
     }
 
+    /// <summary>Inserts or updates a tagged objective-value entity in the current context.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="objective">The zero-based objective index.</param>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
     private static void SetTrialValueUpsert(OptunaRdbContext ctx, int trialId, int objective, double value)
     {
         var (stored, type) = RdbModels.ValueToStoredRepr(value);
@@ -811,6 +919,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         }
     }
 
+    /// <inheritdoc />
     public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue) => Mutate(ctx =>
     {
         using var tx = ctx.Database.BeginTransaction();
@@ -833,6 +942,11 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         tx.Commit();
     });
 
+    /// <summary>Adds a tagged intermediate-report entity to the current context without saving it.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="step">The nonnegative intermediate-report step.</param>
+    /// <param name="intermediateValue">The reported value, including nonfinite values represented by separate database tags.</param>
     private static void AddTrialIntermediateValue(OptunaRdbContext ctx, int trialId, int step, double intermediateValue)
     {
         var (stored, type) = RdbModels.IntermediateValueToStoredRepr(intermediateValue);
@@ -842,12 +956,19 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         });
     }
 
+    /// <inheritdoc />
     public override void SetTrialUserAttr(int trialId, string key, object? value)
         => SetTrialAttr(isUser: true, trialId, key, value);
 
+    /// <inheritdoc />
     public override void SetTrialSystemAttr(int trialId, string key, object? value)
         => SetTrialAttr(isUser: false, trialId, key, value);
 
+    /// <summary>Upserts a JSON-serializable attribute after verifying that its trial is still mutable.</summary>
+    /// <param name="isUser">Whether to use user-attribute records instead of system-attribute records.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="key">The attribute name or exact storage key to access.</param>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
     private void SetTrialAttr(bool isUser, int trialId, string key, object? value) => Mutate(ctx =>
     {
         using var tx = ctx.Database.BeginTransaction();
@@ -877,6 +998,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     // ------------------------------------------------------------------ trial access
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">The requested trial number does not exist in the study.</exception>
     public override int GetTrialIdFromStudyIdTrialNumber(int studyId, int trialNumber)
     {
         using var ctx = NewContext();
@@ -889,6 +1012,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return trialId.Value;
     }
 
+    /// <inheritdoc />
     public override FrozenTrial GetTrial(int trialId)
     {
         using var ctx = NewContext();
@@ -898,6 +1022,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return trials[0];
     }
 
+    /// <inheritdoc />
     public override List<FrozenTrial> GetAllTrials(
         int studyId, bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
     {
@@ -906,6 +1031,12 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return GetTrialsInternal(ctx, studyId, singleTrialId: null, states, includedTrialIds: null, trialIdGreaterThan: -1);
     }
 
+    /// <summary>Loads explicitly included trials and trials newer than an incremental trial-id cursor.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="states">The allowed trial states, or null to include every state.</param>
+    /// <param name="includedTrialIds">Trial identifiers to include even when they are at or below the incremental cursor.</param>
+    /// <param name="trialIdGreaterThan">The exclusive lower trial-id bound for incremental reads.</param>
+    /// <returns>Matching trial snapshots, ordered by trial number.</returns>
     public List<FrozenTrial> GetTrialsPartial(
         int studyId,
         IReadOnlyCollection<TrialState>? states,
@@ -917,6 +1048,14 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return GetTrialsInternal(ctx, studyId, singleTrialId: null, states, includedTrialIds, trialIdGreaterThan);
     }
 
+    /// <summary>Materializes matching trial records and their parameters, values, and attributes.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="singleTrialId">An optional identifier restricting the query to one trial.</param>
+    /// <param name="states">The allowed trial states, or null to include every state.</param>
+    /// <param name="includedTrialIds">Trial identifiers to include even when they are at or below the incremental cursor.</param>
+    /// <param name="trialIdGreaterThan">The exclusive lower trial-id bound for incremental reads.</param>
+    /// <returns>Matching trial snapshots with their child records materialized.</returns>
     private static List<FrozenTrial> GetTrialsInternal(
         OptunaRdbContext ctx,
         int? studyId,
@@ -1051,6 +1190,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     // ------------------------------------------------------------------ best trial
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The study has more than one objective.</exception>
     public override FrozenTrial GetBestTrial(int studyId)
     {
         var directions = GetStudyDirections(studyId);
@@ -1060,6 +1201,11 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return GetTrial(trialId);
     }
 
+    /// <summary>Finds the completed trial with the best first-objective value for the requested direction.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="direction">The objective direction used for ordering or representation conversion.</param>
+    /// <returns>The storage-wide identifier of the best completed trial.</returns>
+    /// <exception cref="NumSharp.ValueError">No completed trial has an objective value to compare.</exception>
     public int GetBestTrialId(int studyId, StudyDirection direction)
     {
         using var ctx = NewContext();
@@ -1088,6 +1234,10 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return best.TrialId;
     }
 
+    /// <summary>Recovers the objective value represented by its database column and nonfinite-value tag.</summary>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <param name="type">The database tag distinguishing finite values, infinities, and, for intermediate reports, NaN.</param>
+    /// <returns>The finite or infinite objective value used for comparison.</returns>
     private static double EffectiveValue(double? value, DbTrialValueType type) => type switch
     {
         DbTrialValueType.INF_POS => double.PositiveInfinity,
@@ -1097,6 +1247,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     // ------------------------------------------------------------------ heartbeat
 
+    /// <summary>Inserts or refreshes the trial heartbeat using the database clock or storage timestamp convention.</summary>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
     public void RecordHeartbeat(int trialId)
     {
         using var ctx = NewContext();
@@ -1108,6 +1260,9 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         ctx.Database.ExecuteSqlRaw(sql, trialId);
     }
 
+    /// <summary>Finds running trials whose recorded heartbeat is older than the configured grace period.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <returns>Identifiers of running trials whose existing heartbeat has expired.</returns>
     public List<int> GetStaleTrialIds(int studyId)
     {
         int gracePeriod = _gracePeriod ?? 2 * _heartbeatInterval!.Value;
@@ -1147,6 +1302,10 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return ids;
     }
 
+    /// <summary>Adds a provider-created command parameter with its name and value.</summary>
+    /// <param name="cmd">The command that receives the newly created parameter.</param>
+    /// <param name="name">The identifier used by the provider or schema operation.</param>
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
     private static void AddParam(DbCommand cmd, string name, object value)
     {
         var p = cmd.CreateParameter();
@@ -1155,18 +1314,30 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         cmd.Parameters.Add(p);
     }
 
+    /// <summary>Returns the configured heartbeat recording interval.</summary>
+    /// <returns>The heartbeat interval in seconds, or null when heartbeat recording is disabled.</returns>
     public int? GetHeartbeatInterval() => _heartbeatInterval;
 
+    /// <summary>Returns the callback invoked after a heartbeat-stale trial is failed.</summary>
+    /// <returns>The configured stale-trial callback, or null if no callback was supplied.</returns>
     public Action<Study, FrozenTrial>? GetHeartbeatStaleTrialCallback() => _heartbeatStaleTrialCallback;
 
     // ------------------------------------------------------------------ helpers
 
+    /// <summary>Verifies that the requested study record exists before accessing its children.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <exception cref="NumSharp.KeyError">The study identifier does not exist.</exception>
     private static void EnsureStudyExists(OptunaRdbContext ctx, int studyId)
     {
         if (!ctx.Studies.AsNoTracking().Any(s => s.StudyId == studyId))
             throw new KeyError(RdbModels.NotFoundMsg);
     }
 
+    /// <summary>Verifies that the requested trial record exists before accessing its children.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <exception cref="NumSharp.KeyError">The trial identifier does not exist.</exception>
     private static void EnsureTrialExists(OptunaRdbContext ctx, int trialId)
     {
         if (!ctx.Trials.AsNoTracking().Any(t => t.TrialId == trialId))
@@ -1175,6 +1346,11 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
 
     // SELECT * ... FOR UPDATE row lock (PostgreSQL/MySQL) — Optuna's TrialModel.find_or_raise_by_id(
     // for_update=True). AsEnumerable() keeps the SQL unwrapped so the FOR UPDATE actually locks.
+    /// <summary>Loads the tracked trial record needed to validate and apply a mutation.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <returns>The tracked entity used for update validation.</returns>
+    /// <exception cref="NumSharp.KeyError">The trial identifier does not exist.</exception>
     private static TrialEntity FindTrialForUpdate(OptunaRdbContext ctx, int trialId)
     {
         var trial = ctx.Trials
@@ -1185,6 +1361,9 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         return trial;
     }
 
+    /// <summary>Rejects mutations of a trial that has reached a finished state.</summary>
+    /// <param name="trial">The trial snapshot or database record being read or validated.</param>
+    /// <exception cref="UpdateFinishedTrialError">The trial is already complete, pruned, or failed.</exception>
     private static void CheckTrialIsUpdatableOrRaise(TrialEntity trial)
     {
         if (RdbModels.StateFromDb(trial.State).IsFinished())
@@ -1192,6 +1371,9 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
                 $"Trial#{trial.Number} has already finished and can not be updated.");
     }
 
+    /// <summary>Recognizes provider-specific uniqueness failures so duplicate studies can be translated consistently.</summary>
+    /// <param name="e">The provider exception to classify or translate.</param>
+    /// <returns>Whether the exception denotes a uniqueness-constraint violation.</returns>
     private static bool IsUniqueViolation(DbUpdateException e)
     {
         for (Exception? inner = e; inner is not null; inner = inner.InnerException)

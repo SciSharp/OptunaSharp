@@ -54,6 +54,11 @@ public class R2ArtifactStore : IArtifactStore
         _inner = new Boto3ArtifactStore(bucketName, client, avoidBufCopy);
     }
 
+    /// <summary>Creates the AWS SDK client configured for the selected R2 account.</summary>
+    /// <param name="accountId">The account identifier used in the endpoint hostname.</param>
+    /// <param name="accessKeyId">The R2 access key identifier.</param>
+    /// <param name="secretAccessKey">The R2 secret access key.</param>
+    /// <returns>A client retained by the artifact store for its lifetime.</returns>
     private static AmazonS3Client CreateClient(string accountId, string accessKeyId, string secretAccessKey)
         => new(accessKeyId, secretAccessKey, BuildR2Config(accountId));
 
@@ -62,6 +67,8 @@ public class R2ArtifactStore : IArtifactStore
     ///     path-style addressing, and the SigV4 <c>"auto"</c> region R2 expects. Exposed to the test
     ///     suite so the endpoint format is pinned.
     /// </summary>
+    /// <param name="accountId">The account identifier used in the endpoint hostname.</param>
+    /// <returns>The endpoint, addressing mode, and signing region required by R2.</returns>
     internal static AmazonS3Config BuildR2Config(string accountId) => new()
     {
         ServiceURL = $"https://{accountId}.r2.cloudflarestorage.com",
@@ -71,9 +78,12 @@ public class R2ArtifactStore : IArtifactStore
         AuthenticationRegion = "auto",
     };
 
+    /// <inheritdoc cref="Boto3ArtifactStore.OpenReader" />
     public Stream OpenReader(string artifactId) => _inner.OpenReader(artifactId);
 
+    /// <inheritdoc cref="Boto3ArtifactStore.Write" />
     public void Write(string artifactId, Stream contentBody) => _inner.Write(artifactId, contentBody);
 
+    /// <inheritdoc cref="Boto3ArtifactStore.Remove" />
     public void Remove(string artifactId) => _inner.Remove(artifactId);
 }

@@ -6,8 +6,8 @@ namespace OptunaSharp.Gp;
 
 /// <summary>
 ///     Gaussian-process regressor over a Matérn-5/2 ARD kernel — port of <c>GPRegressor</c> in
-///     <c>optuna/_gp/gp.py</c>, the surrogate <see cref="GPSampler" /> fits to the observed trials.
-///     This type holds the kernel <b>forward</b> pass (<see cref="Kernel" />,
+///     <c>optuna/_gp/gp.py</c>, the surrogate <see cref="OptunaSharp.Samplers.GPSampler" /> fits to the observed trials.
+///     This type holds the kernel <b>forward</b> pass (<see cref="Kernel()" />,
 ///     <see cref="MarginalLogLikelihood" />) and the <b>hand-derived analytic gradient</b> of the
 ///     fit objective (<see cref="LossAndGrad" />) that replaces Optuna's PyTorch autograd.
 ///
@@ -67,6 +67,7 @@ internal sealed class GPRegressor
     /// <summary><c>noise_var</c>. Mutated by the fit loop.</summary>
     internal double NoiseVar { get; set; }
 
+    /// <summary>The number of normalized input coordinates modeled by the GP.</summary>
     internal int Dim => _nParams;
 
     /// <summary><c>length_scales = 1 / √(inverse_squared_lengthscales)</c> — the per-parameter length scales the acqf optimizer preconditions with.</summary>
@@ -81,6 +82,15 @@ internal sealed class GPRegressor
         }
     }
 
+    /// <summary>Creates a GP with fixed training observations and the supplied Matern kernel and noise parameters.</summary>
+    /// <param name="isCategorical">A flag per coordinate indicating that the kernel must use categorical equality instead of numerical distance.</param>
+    /// <param name="xTrain">The training inputs, with one normalized point per row and one parameter per column.</param>
+    /// <param name="yTrain">The observed objective values used to train or condition the model.</param>
+    /// <param name="inverseSquaredLengthscales">The positive inverse squared kernel length scale of each coordinate.</param>
+    /// <param name="kernelScale">The positive amplitude multiplying the kernel covariance.</param>
+    /// <param name="noiseVar">The observation-noise variance added to the training covariance diagonal.</param>
+    /// <exception cref="System.ArgumentException">The training target count, categorical flags, or length-scale count does not agree with the training matrix dimensions.</exception>
+    /// <remarks>Training arrays and categorical flags are retained by reference. Callers must keep their contents stable while this model or its cached covariance is in use.</remarks>
     internal GPRegressor(
         bool[] isCategorical,
         double[,] xTrain,
@@ -99,6 +109,8 @@ internal sealed class GPRegressor
             throw new ArgumentException("inverse_squared_lengthscales length must equal the number of parameters.");
 
         _isCategorical = isCategorical;
+        // The fit owns the training buffers and retains them across posterior queries. Keeping the
+        // same row order is essential because cached distances and covariance factors index them.
         _xTrain = xTrain;
         _yTrain = yTrain;
         _xAll = xTrain;   // == train set until AppendRunningData appends the running (fantasy) data.
@@ -126,6 +138,8 @@ internal sealed class GPRegressor
     ///     <c>dM/dt = -5/6·(u + 1)·e^{-u}</c> (Optuna saves this derivative by hand to avoid the
     ///     autograd divide-by-zero at <c>t = 0</c>).
     /// </summary>
+    /// <param name="t">The nonnegative squared kernel distance between two input points.</param>
+    /// <returns>The Matern-5/2 kernel value and derivative for the supplied distance argument.</returns>
     private static (double Value, double Deriv) Matern52(double t)
     {
         double u = Math.Sqrt(5.0 * t);
@@ -136,6 +150,7 @@ internal sealed class GPRegressor
     }
 
     /// <summary>The squared distance <c>S[i,j] = Σ_d squared_X_diff[i,j,d] · w[d]</c>.</summary>
+    /// <returns>The pairwise length-scale-weighted squared distances between input rows.</returns>
     private double[,] SquaredDistance()
     {
         double[] w = InverseSquaredLengthscales;
@@ -155,6 +170,7 @@ internal sealed class GPRegressor
     ///     The training kernel matrix <c>K = kernel_scale · M(S)</c> (no noise on the diagonal),
     ///     matching <c>GPRegressor.kernel()</c> with no arguments.
     /// </summary>
+    /// <returns>The Matern-5/2 covariance matrix before adding observation noise.</returns>
     internal double[,] Kernel()
     {
         double[,] s = SquaredDistance();
@@ -171,6 +187,9 @@ internal sealed class GPRegressor
     ///     <c>GPRegressor.kernel(X1, X2)</c>, used by the posterior. <paramref name="x1" /> is
     ///     <c>(B, dim)</c>, <paramref name="x2" /> is <c>(N, dim)</c>; the result is <c>(B, N)</c>.
     /// </summary>
+    /// <param name="x1">The first matrix of normalized input rows.</param>
+    /// <param name="x2">The second matrix of normalized input rows.</param>
+    /// <returns>The Matern-5/2 covariance matrix before adding observation noise.</returns>
     internal double[,] Kernel(double[,] x1, double[,] x2)
     {
         int b = x1.GetLength(0);
@@ -202,6 +221,9 @@ internal sealed class GPRegressor
     ///     cached Cholesky factor and <c>C⁻¹y</c> from <see cref="CacheMatrix" />. Consumed by the
     ///     acquisition functions (Phase 3.2 part 3).
     /// </summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The posterior mean and marginal variance at each query row.</returns>
+    /// <exception cref="System.InvalidOperationException">The training covariance has not been prepared by CacheMatrix.</exception>
     internal (double[] Mean, double[] Var) Posterior(double[,] x)
     {
         if (_covYYChol is null)
@@ -242,6 +264,9 @@ internal sealed class GPRegressor
     ///     clamped ≥ 0 (the off-diagonal covariances stay signed). Used by <see cref="ConditionalGPRegressor" />
     ///     to condition on the running fantasies (Phase 3.2 part 3e-6).
     /// </summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The posterior mean vector and joint covariance matrix of the query rows.</returns>
+    /// <exception cref="System.InvalidOperationException">The training covariance has not been prepared by CacheMatrix.</exception>
     internal (double[] Mean, double[,] Cov) PosteriorJoint(double[,] x)
     {
         if (_covYYChol is null)
@@ -287,6 +312,9 @@ internal sealed class GPRegressor
     ///     variance gradient is 0 (torch's <c>clamp_min_</c> backward) — matching autograd, including the
     ///     NaNs Optuna itself produces where the posterior collapses.
     /// </summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The posterior mean, variance, their coordinate derivatives, and whether numerical variance clamping occurred.</returns>
+    /// <exception cref="System.InvalidOperationException">The training covariance has not been prepared by CacheMatrix.</exception>
     internal (double Mean, double Var, double[] DMean, double[] DVar, bool VarClamped) PosteriorWithGrad(double[] x)
     {
         if (_covYYChol is null)
@@ -352,6 +380,8 @@ internal sealed class GPRegressor
     ///     <c>C = K + noise_var·I</c>, exploiting the Cholesky factor <c>C = L·Lᵀ</c>:
     ///     <c>logdet_part = -Σ log(diag L)</c> and <c>quad_part = -½·‖L⁻¹y‖²</c>.
     /// </summary>
+    /// <returns>The Gaussian marginal log likelihood at the current kernel parameters.</returns>
+    /// <exception cref="NumSharp.LinAlgError">The covariance matrix is not numerically positive definite and cannot be Cholesky-factored.</exception>
     internal double MarginalLogLikelihood()
     {
         double[,] c = Kernel();
@@ -380,6 +410,10 @@ internal sealed class GPRegressor
     ///     <paramref name="deterministicObjective" />, <c>ν = exp(raw[n+1]) + minimum_noise</c>
     ///     (else <c>ν = minimum_noise</c>, and the noise gradient is exactly 0).
     /// </summary>
+    /// <param name="rawParams">The unconstrained kernel-optimization coordinates whose value and gradient are evaluated.</param>
+    /// <param name="minimumNoise">The positive floor on observation noise used when fitting the GP.</param>
+    /// <param name="deterministicObjective">Whether the objective is treated as noiseless apart from the minimum variance floor.</param>
+    /// <returns>The negative marginal log likelihood plus prior penalty and its gradient in raw parameter coordinates.</returns>
     internal (double Loss, double[] Grad) LossAndGrad(
         double[] rawParams, double minimumNoise, bool deterministicObjective)
     {
@@ -487,6 +521,7 @@ internal sealed class GPRegressor
     ///     <c>_cache_matrix()</c> — factor <c>C = K + noise_var·I = L·Lᵀ</c> once and precompute
     ///     <c>C⁻¹y</c>, the quantities the posterior (acquisition functions, Phase 3.2 part 3) needs.
     /// </summary>
+    /// <exception cref="NumSharp.LinAlgError">The covariance matrix is not numerically positive definite and cannot be Cholesky-factored.</exception>
     internal void CacheMatrix()
     {
         double[,] c = Kernel();
@@ -507,6 +542,10 @@ internal sealed class GPRegressor
     ///     untouched (only the "all" set and the covariance grow); <b>must be called once</b>, after
     ///     <see cref="CacheMatrix" />. Mirrors Optuna's <c>GPRegressor.append_running_data</c>.
     /// </summary>
+    /// <param name="xRunning">The normalized input rows of pending trials.</param>
+    /// <param name="yRunning">The values assigned to the pending trials, in matching row order.</param>
+    /// <exception cref="System.InvalidOperationException">The training covariance has not been prepared by CacheMatrix.</exception>
+    /// <exception cref="NumSharp.LinAlgError">The covariance matrix is not numerically positive definite and cannot be Cholesky-factored.</exception>
     internal void AppendRunningData(double[,] xRunning, double[] yRunning)
     {
         if (_covYYChol is null)
@@ -538,9 +577,12 @@ internal sealed class GPRegressor
     }
 
     /// <summary>The cached lower Cholesky factor <c>L</c> of <c>C = K + noise_var·I</c> (<see cref="ConditionalGPRegressor" /> conditions on it).</summary>
+    /// <exception cref="System.InvalidOperationException">The training covariance has not been prepared by CacheMatrix.</exception>
     internal double[,] CovYYChol => _covYYChol ?? throw new InvalidOperationException("Call CacheMatrix first.");
 
     /// <summary><c>kernel(X1)</c> — the cross kernel <c>kernel(X1, X_train)</c> against the completed-trial inputs.</summary>
+    /// <param name="x1">The first matrix of normalized input rows.</param>
+    /// <returns>The covariance between each query row and each training row.</returns>
     internal double[,] KernelToTrain(double[,] x1) => Kernel(x1, _xTrain);
 
     /// <summary>
@@ -549,6 +591,9 @@ internal sealed class GPRegressor
     ///     <see cref="ConditionalGPRegressor" /> gradient chains through (<c>∂k/∂x_d =
     ///     kernel_scale·M'(S)·w_d·2(x_d − others[j,d])</c>; categorical/Hamming dims have zero derivative).
     /// </summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <param name="others">The input rows against which the query kernel row is computed.</param>
+    /// <returns>The query-to-input covariance row and its normalized-coordinate derivatives.</returns>
     internal (double[] K, double[,] Dk) KernelRowWithGrad(double[] x, double[,] others)
     {
         int m = others.GetLength(0);
@@ -576,6 +621,8 @@ internal sealed class GPRegressor
     }
 
     /// <summary><c>kernel(x, X_train)</c> row and its x-gradient — <see cref="KernelRowWithGrad" /> against the completed-trial inputs.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The query-to-training covariance row and its normalized-coordinate derivatives.</returns>
     internal (double[] K, double[,] Dk) KernelRowToTrainWithGrad(double[] x) => KernelRowWithGrad(x, _xTrain);
 
     /// <summary>
@@ -583,6 +630,10 @@ internal sealed class GPRegressor
     ///     <c>true</c>) or <c>X (L Lᵀ) = B</c> (<c>false</c>) via two triangular solves, where
     ///     <c>C = L Lᵀ</c>.
     /// </summary>
+    /// <param name="l">The lower-triangular Cholesky factor of the positive-definite coefficient matrix.</param>
+    /// <param name="b">The vector or matrix right-hand side aligned with the Cholesky factor.</param>
+    /// <param name="left">True solves with the coefficient matrix on the left; false solves with it on the right.</param>
+    /// <returns>The solution obtained by applying the two triangular factors of the covariance matrix.</returns>
     internal static double[,] SolveCholesky(double[,] l, double[,] b, bool left = true)
     {
         if (left)
@@ -595,6 +646,9 @@ internal sealed class GPRegressor
     }
 
     /// <summary><c>_solve_cholesky(L, b)</c> for a vector right-hand side (<c>left=True</c>): <c>C⁻¹b = L⁻ᵀ(L⁻¹b)</c>.</summary>
+    /// <param name="l">The lower-triangular Cholesky factor of the positive-definite coefficient matrix.</param>
+    /// <param name="b">The vector or matrix right-hand side aligned with the Cholesky factor.</param>
+    /// <returns>The solution obtained by applying the two triangular factors of the covariance matrix.</returns>
     internal static double[] SolveCholesky(double[,] l, double[] b)
     {
         double[] invLb = LinAlg.SolveTriangular(l, b, upper: false);
@@ -606,6 +660,11 @@ internal sealed class GPRegressor
     ///     <c>[[K11, K21ᵀ], [K21, K22]]</c> given <c>K11 = L11·L11ᵀ</c>:
     ///     <c>L = [[L11, 0], [L21, chol(K22 − L21·L21ᵀ)]]</c> with <c>L21ᵀ = L11⁻¹·K21ᵀ</c>.
     /// </summary>
+    /// <param name="l11">The existing lower-triangular Cholesky factor for the first block.</param>
+    /// <param name="k21">The covariance block between newly appended and existing observations.</param>
+    /// <param name="k22">The lower-right covariance block for the new observations, including any required diagonal noise.</param>
+    /// <returns>The lower-triangular Cholesky factor after appending the new covariance block.</returns>
+    /// <exception cref="NumSharp.LinAlgError">The covariance matrix is not numerically positive definite and cannot be Cholesky-factored.</exception>
     internal static double[,] ExtendCholesky(double[,] l11, double[,] k21, double[,] k22)
     {
         int n1 = l11.GetLength(0);
@@ -641,6 +700,11 @@ internal sealed class GPRegressor
     ///     (the other options keep their defaults: <c>factr = 1e7</c>, <c>m = 10</c>). Throws when the
     ///     optimizer does not converge (Optuna's <c>RuntimeError("Optimization failed: ...")</c>).
     /// </summary>
+    /// <param name="minimumNoise">The positive floor on observation noise used when fitting the GP.</param>
+    /// <param name="deterministicObjective">Whether the objective is treated as noiseless apart from the minimum variance floor.</param>
+    /// <param name="gtol">The gradient-norm tolerance used to stop the kernel-parameter optimizer.</param>
+    /// <returns>A GP fitted from the supplied initial kernel parameters.</returns>
+    /// <exception cref="System.InvalidOperationException">The numerical optimizer terminates without a successful kernel fit.</exception>
     private GPRegressor FitInner(double minimumNoise, bool deterministicObjective, double gtol)
     {
         int nParams = _nParams;
@@ -674,6 +738,14 @@ internal sealed class GPRegressor
     ///     Hamming-distance dimensions; <paramref name="x" /> is the normalized training inputs and
     ///     <paramref name="y" /> the standardized objective.
     /// </summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <param name="y">The second numerical input, aligned with the first input where both are sequences.</param>
+    /// <param name="isCategorical">A flag per coordinate indicating that the kernel must use categorical equality instead of numerical distance.</param>
+    /// <param name="minimumNoise">The positive floor on observation noise used when fitting the GP.</param>
+    /// <param name="deterministicObjective">Whether the objective is treated as noiseless apart from the minimum variance floor.</param>
+    /// <param name="gprCache">A previously fitted GP whose kernel parameters provide a warm start, or null for the default initialization.</param>
+    /// <param name="gtol">The gradient-norm tolerance used to stop the kernel-parameter optimizer.</param>
+    /// <returns>A fitted GP with cached training covariance factors.</returns>
     internal static GPRegressor FitKernelParams(
         double[,] x, double[] y, bool[] isCategorical,
         double minimumNoise, bool deterministicObjective,
@@ -715,6 +787,9 @@ internal sealed class GPRegressor
         return fallback;
     }
 
+    /// <summary>Returns a new vector of the requested length filled with one.</summary>
+    /// <param name="n">The number of elements or points to process.</param>
+    /// <returns>A new vector of the requested length filled with one.</returns>
     private static double[] Ones(int n)
     {
         var a = new double[n];
@@ -722,6 +797,9 @@ internal sealed class GPRegressor
         return a;
     }
 
+    /// <summary>Returns a new matrix with rows and columns exchanged.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <returns>A new matrix with rows and columns exchanged.</returns>
     private static double[,] Transpose(double[,] a)
     {
         int rows = a.GetLength(0), cols = a.GetLength(1);

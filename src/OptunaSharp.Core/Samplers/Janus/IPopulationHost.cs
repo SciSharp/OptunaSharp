@@ -3,7 +3,7 @@
 // JANUS is, in the paper's words, *host-agnostic infill*: it estimates a local Jacobian from the
 // recent evaluation trace and contributes a few Jacobian-aligned candidates into an evolutionary
 // population, while the population host keeps full control of selection and its own proposal
-// adaptation. This interface captures the minimum a host must expose so <see cref="JanusInfill" />
+// adaptation. This interface captures the minimum a host must expose so JanusOptimizer
 // can drive it without knowing whether the host is CMA-ES, DE, or a future MOO optimizer:
 //   • sample a native offspring (Ask) and be told a coherent generation (Tell), and
 //   • expose the proposal statistics the JANUS infill needs — the injection center (Mean), the step
@@ -20,7 +20,7 @@ using System.Collections.Generic;
 namespace OptunaSharp.Samplers.Janus;
 
 /// <summary>
-///     The population host <see cref="JanusInfill" /> drives: an evolutionary optimizer that proposes
+///     The population host <see cref="JanusOptimizer" /> drives: an evolutionary optimizer that proposes
 ///     a native generation and consumes a coherent one, plus the proposal statistics JANUS's infill
 ///     reads. <see cref="CmaPopulationHost" /> is the single-objective CMA-ES implementation; DE and
 ///     MOO hosts (Plan 05 Phases 2/3) plug into the same seam.
@@ -43,12 +43,14 @@ internal interface IPopulationHost
     /// <summary>Draw one native offspring in the transformed box, using the host's own feasibility
     ///     handling (CMA-ES resample-then-repair). With JANUS infill contributing nothing, a run over
     ///     these draws reduces to the bare host.</summary>
+    /// <returns>One candidate vector in transformed coordinates.</returns>
     double[] Ask();
 
     /// <summary>Tell the host exactly one coherent generation — <see cref="PopulationSize" /> solutions
     ///     drawn from a single proposal distribution — so the host's adaptation never mixes samples
     ///     from different distributions. JANUS batches its asked-and-completed trials into these
     ///     generations before calling this.</summary>
+    /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
     void Tell(IReadOnlyList<(double[] X, double Value)> solutions);
 
     /// <summary>Whether the host exposes a proposal covariance. When <c>false</c>, JANUS offers no CMIX
@@ -69,6 +71,8 @@ internal interface IPopulationHost
     ///     ≤ 0 to signal "no whitening available", in which case the driver injects the candidate
     ///     unclipped (still box-clamped).
     /// </summary>
+    /// <param name="diff">Displacement from the proposal center in transformed coordinates.</param>
+    /// <returns>The host-scaled step norm; a nonpositive result signals unavailable whitening.</returns>
     double WhitenedStepNorm(double[] diff);
 
     /// <summary>
@@ -76,6 +80,7 @@ internal interface IPopulationHost
     ///     none. Only meaningful when <see cref="HasProposalCovariance" /> is <c>true</c>; used by JANUS's
     ///     <c>cmix_mode="reshape"</c> to mix an inverse-curvature term into it.
     /// </summary>
+    /// <returns>A detached covariance matrix, or null for a covariance-free host.</returns>
     double[,]? GetProposalCovariance();
 
     /// <summary>
@@ -84,5 +89,7 @@ internal interface IPopulationHost
     ///     set — the reshape mode is then a no-op there. Only called when <see cref="HasProposalCovariance" />
     ///     is <c>true</c>.
     /// </summary>
+    /// <param name="c">Replacement proposal covariance in transformed coordinates.</param>
+    /// <returns>True when the host accepted a proposal covariance; false when unsupported.</returns>
     bool TrySetProposalCovariance(double[,] c);
 }

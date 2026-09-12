@@ -43,6 +43,7 @@ namespace OptunaSharp.Samplers;
 ///     to try the entire search space when the suggestion ranges or parameters are changed in the
 ///     same <see cref="Study" />.
 /// </remarks>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.BruteForceSampler.html">Official Optuna BruteForceSampler reference.</seealso>
 public class BruteForceSampler : BaseSampler
 {
     private readonly LazyRandomState _rng;
@@ -60,19 +61,23 @@ public class BruteForceSampler : BaseSampler
     ///     enabled (default), the sampler applies a looser criterion for determining when to stop the
     ///     search, which may result in incomplete coverage of the search space.
     /// </param>
+    /// <summary>Configures traversal of finite parameter choices discovered while the objective runs.</summary>
     public BruteForceSampler(int? seed = null, bool avoidPrematureStop = false)
     {
         _rng = new LazyRandomState(seed);
         _avoidPrematureStop = avoidPrematureStop;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
         => new();
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
         => new();
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -101,6 +106,8 @@ public class BruteForceSampler : BaseSampler
         return paramDistribution.ToExternalRepr(paramVal);
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The search tree is exhausted and Study.Stop is invoked outside Study.Optimize.</exception>
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         bool excludeRunning = !_avoidPrematureStop;
@@ -131,6 +138,10 @@ public class BruteForceSampler : BaseSampler
     }
 
     /// <summary>Python <c>_get_non_waiting_trials_and_current_trial_index</c>.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="currentTrialNumber">Public number identifying the current trial within the history.</param>
+    /// <returns>Non-waiting trial snapshots and the position of the current trial.</returns>
+    /// <exception cref="System.InvalidOperationException">The current trial is absent from non-waiting storage history.</exception>
     private static (List<FrozenTrial> Trials, int CurrentIndex) GetNonWaitingTrialsAndCurrentTrialIndex(
         Study study, int currentTrialNumber)
     {
@@ -152,6 +163,9 @@ public class BruteForceSampler : BaseSampler
 
     /// <summary>Python <c>BruteForceSampler._populate_tree</c> — populate <paramref name="tree" /> under
     /// <paramref name="params" /> from the given trials.</summary>
+    /// <param name="tree">Search tree being populated from observed objective paths.</param>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <param name="params">External parameter values recorded along the objective path.</param>
     private static void PopulateTree(
         TreeNode tree, IReadOnlyList<FrozenTrial> trials, IReadOnlyDictionary<string, object?> @params)
     {
@@ -255,6 +269,9 @@ public class BruteForceSampler : BaseSampler
     }
 
     /// <summary>The <c>choices_args</c> triple for the current trial's distribution.</summary>
+    /// <param name="paramDistribution">Distribution defining the parameter domain and external representation.</param>
+    /// <returns>A finite-choice progression descriptor for the supported distribution.</returns>
+    /// <exception cref="System.InvalidOperationException">The distribution is not one of the supported finite distribution types.</exception>
     private static ChoicesArgs ArgsForDistribution(BaseDistribution paramDistribution) => paramDistribution switch
     {
         CategoricalDistribution cd => new ChoicesArgs(0, cd.Choices.Count - 1, 1, isInt: true),
@@ -268,6 +285,9 @@ public class BruteForceSampler : BaseSampler
     ///     of a choice Python-equal to <paramref name="paramVal" />, or <c>null</c> when none match
     ///     (e.g. <paramref name="paramVal" /> is NaN, since <c>nan != nan</c>).
     /// </summary>
+    /// <param name="choices">Categorical choices in distribution order.</param>
+    /// <param name="paramVal">External categorical value whose last equal choice identifies the dictionary-backed branch.</param>
+    /// <returns>The last matching categorical choice index, or null when the value is absent; duplicate-equal choices follow Python dictionary overwrite order.</returns>
     private static double? CategoricalInternalRepr(IReadOnlyList<CategoricalChoice> choices, object? paramVal)
     {
         object? raw = paramVal is CategoricalChoice cc ? cc.Value : paramVal;
@@ -283,6 +303,8 @@ public class BruteForceSampler : BaseSampler
     }
 
     /// <summary>Python <c>_is_nan</c>: <c>isinstance(v, Real) and math.isnan(float(v))</c>.</summary>
+    /// <param name="v">Boxed value to inspect for floating-point NaN.</param>
+    /// <returns>True when the boxed value is a floating-point NaN.</returns>
     private static bool IsNan(object? v)
     {
         object? x = v is CategoricalChoice cc ? cc.Value : v;
@@ -294,6 +316,10 @@ public class BruteForceSampler : BaseSampler
     ///     uniformly-spaced set of candidate values for one parameter (the children keys of a node).
     /// </summary>
     /// <exception cref="ValueError">When <c>step</c> is <c>null</c> (the search space would be infinite).</exception>
+    /// <param name="args">Finite numerical progression descriptor.</param>
+    /// <returns>All internal numerical choices of the finite progression.</returns>
+    /// <exception cref="System.FormatException">A floating endpoint or step is NaN or infinity and cannot be represented as a decimal.</exception>
+    /// <exception cref="System.OverflowException">A floating endpoint, step, or progression addition exceeds the decimal representation range.</exception>
     internal static List<double> EnumerateCandidates(ChoicesArgs args)
     {
         if (args.Step is null)
@@ -335,6 +361,9 @@ public class BruteForceSampler : BaseSampler
     ///     <c>choices_new = _enumerate_candidates(...)</c> (a tuple, <c>(...)</c>), so the two sides
     ///     bracket differently.
     /// </summary>
+    /// <param name="args">Finite numerical progression descriptor.</param>
+    /// <param name="asTuple">Whether diagnostics use tuple delimiters instead of list delimiters.</param>
+    /// <returns>A Python-style list or tuple representation of the progression.</returns>
     private static string FormatCandidates(ChoicesArgs args, bool asTuple)
     {
         var candidates = EnumerateCandidates(args);
@@ -348,6 +377,9 @@ public class BruteForceSampler : BaseSampler
     }
 
     /// <summary>Python <c>!=</c> on the optional <c>choices_args</c> tuples (<c>None == None</c>).</summary>
+    /// <param name="a">First finite-choice progression descriptor.</param>
+    /// <param name="b">Second finite-choice progression descriptor.</param>
+    /// <returns>True if both nullable progression descriptors agree.</returns>
     private static bool ArgsEqual(ChoicesArgs? a, ChoicesArgs? b)
         => a is null || b is null ? a is null && b is null : a.Value.Equals(b.Value);
 
@@ -355,6 +387,10 @@ public class BruteForceSampler : BaseSampler
     ///     NumPy's <c>np.add.reduce</c> pairwise summation for a contiguous float64 array — the exact
     ///     accumulation order of <c>ndarray.sum()</c>, so weight normalization stays bit-identical.
     /// </summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="offset">Zero-based start of the active vector slice.</param>
+    /// <param name="n">Number of entries in the active vector slice.</param>
+    /// <returns>The accumulated value using the reference pairwise reduction order.</returns>
     private static double PairwiseSum(double[] a, int offset, int n)
     {
         if (n < 8)
@@ -395,6 +431,9 @@ public class BruteForceSampler : BaseSampler
     }
 
     /// <summary>NumPy <c>searchsorted(cdf, v, side='right')</c> for an ascending array (bisect right).</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>The insertion position after all entries equal to the target.</returns>
     private static int BisectRight(double[] a, double v)
     {
         int lo = 0, hi = a.Length;
@@ -418,11 +457,20 @@ public class BruteForceSampler : BaseSampler
     /// </summary>
     internal readonly struct ChoicesArgs : IEquatable<ChoicesArgs>
     {
+        /// <summary>Lower endpoint of the represented numerical domain.</summary>
         internal readonly double Low;
+        /// <summary>Upper endpoint of the represented numerical domain.</summary>
         internal readonly double High;
+        /// <summary>Quantization spacing; null or zero denotes an unquantized domain where supported.</summary>
         internal readonly double? Step;
+        /// <summary>Whether finite choices are converted back to integer values.</summary>
         internal readonly bool IsInt;
 
+        /// <summary>Stores the arithmetic progression describing a finite numerical search-space branch.</summary>
+        /// <param name="low">Lower endpoint of the numerical domain.</param>
+        /// <param name="high">Upper endpoint of the numerical domain.</param>
+        /// <param name="step">Positive spacing between adjacent quantized numerical values.</param>
+        /// <param name="isInt">Whether finite numerical values are represented externally as integers.</param>
         internal ChoicesArgs(double low, double high, double? step, bool isInt)
         {
             Low = low;
@@ -431,6 +479,9 @@ public class BruteForceSampler : BaseSampler
             IsInt = isInt;
         }
 
+        /// <summary>Tests whether finite-choice progression descriptors have matching endpoints, spacing, and numeric kind.</summary>
+        /// <param name="other">Second finite-choice progression descriptor.</param>
+        /// <returns>True when all finite-choice descriptor fields compare equal.</returns>
         public bool Equals(ChoicesArgs other)
         {
             bool stepEqual = Step is null && other.Step is null
@@ -438,8 +489,10 @@ public class BruteForceSampler : BaseSampler
             return Low == other.Low && High == other.High && stepEqual;
         }
 
+        /// <inheritdoc />
         public override bool Equals(object? obj) => obj is ChoicesArgs other && Equals(other);
 
+        /// <inheritdoc />
         public override int GetHashCode() => HashCode.Combine(Low, High, Step);
     }
 
@@ -447,10 +500,17 @@ public class BruteForceSampler : BaseSampler
     private abstract class TreeNodeBase
     {
         // `is_running` is exposed on both node kinds; only running `_TreeNode`s ever set it.
+        /// <summary>Whether the branch is currently assigned to an unfinished evaluation.</summary>
         internal bool IsRunning;
 
+        /// <summary>Tests whether a search-tree subtree still contains eligible unexplored choices.</summary>
+        /// <param name="excludeRunning">Whether subtrees assigned to running evaluations are excluded from traversal.</param>
+        /// <returns>True when at least one eligible unexplored descendant exists.</returns>
         internal abstract bool IsAnyExpandable(bool excludeRunning);
 
+        /// <summary>Counts eligible unexplored choices below a search-tree node.</summary>
+        /// <param name="excludeRunning">Whether subtrees assigned to running evaluations are excluded from traversal.</param>
+        /// <returns>The number of eligible unexplored descendants.</returns>
         internal abstract int CountUnexpanded(bool excludeRunning);
     }
 
@@ -460,10 +520,13 @@ public class BruteForceSampler : BaseSampler
     /// </summary>
     private sealed class UnexpandedTreeNode : TreeNodeBase
     {
+        /// <summary>Shared sentinel representing a child whose search-tree path has not been expanded.</summary>
         internal static readonly UnexpandedTreeNode Instance = new();
 
+        /// <inheritdoc />
         internal override bool IsAnyExpandable(bool excludeRunning) => true;
 
+        /// <inheritdoc />
         internal override int CountUnexpanded(bool excludeRunning) => 1;
     }
 
@@ -475,11 +538,18 @@ public class BruteForceSampler : BaseSampler
     /// </summary>
     private sealed class TreeNode : TreeNodeBase
     {
+        /// <summary>Parameter assigned to this search-tree branch, or null for a terminal path.</summary>
         internal string? ParamName;
         // null => Running or Unexpanded; empty => Leaf; non-empty => Internal.
+        /// <summary>Expanded children indexed by encoded parameter value, or null before expansion.</summary>
         internal OrderedDict<double, TreeNodeBase>? Children;
+        /// <summary>Finite numerical progression associated with the expanded branch.</summary>
         internal ChoicesArgs? ChoicesArgsValue;
 
+        /// <summary>Rejects a branch whose parameter name or finite choice progression changed during traversal.</summary>
+        /// <param name="paramName">Name of the parameter being suggested or looked up.</param>
+        /// <param name="choicesArgs">Finite numerical progression assigned to the branch.</param>
+        /// <exception cref="NumSharp.ValueError">An expanded branch is revisited with a different parameter name or choice progression.</exception>
         private void ValidateSearchSpaceConsistency(string? paramName, ChoicesArgs? choicesArgs)
         {
             if (ParamName != paramName)
@@ -492,6 +562,10 @@ public class BruteForceSampler : BaseSampler
             }
         }
 
+        /// <summary>Materializes a branch with one child per finite numerical choice.</summary>
+        /// <param name="paramName">Name of the parameter being suggested or looked up.</param>
+        /// <param name="choicesArgs">Finite numerical progression assigned to the branch.</param>
+        /// <exception cref="NumSharp.ValueError">An expanded branch has incompatible metadata, or its numerical choices are not finite.</exception>
         internal void Expand(string? paramName, ChoicesArgs choicesArgs)
         {
             // If the node is unexpanded, expand it. Otherwise, check compatibility.
@@ -510,8 +584,10 @@ public class BruteForceSampler : BaseSampler
             }
         }
 
+        /// <summary>Marks a search-tree branch as assigned to a running evaluation.</summary>
         internal void SetRunning() => IsRunning = true;
 
+        /// <summary>Marks a search-tree path as a finished objective evaluation.</summary>
         internal void SetLeaf()
         {
             if (Children is not null)
@@ -520,6 +596,8 @@ public class BruteForceSampler : BaseSampler
         }
 
         /// <summary>Add a path (the suggested parameters of one trial) to the tree.</summary>
+        /// <param name="trialPath">Ordered parameter names, progression descriptors, and internal values of the objective path.</param>
+        /// <returns>The resulting path node, or null if an already-finished prefix prevents expansion.</returns>
         internal TreeNode? AddPath(List<(string Name, ChoicesArgs Args, double Value)> trialPath)
         {
             var currentNode = this;
@@ -543,6 +621,7 @@ public class BruteForceSampler : BaseSampler
             return currentNode;
         }
 
+        /// <inheritdoc />
         internal override bool IsAnyExpandable(bool excludeRunning)
         {
             if (Children is null)
@@ -556,6 +635,7 @@ public class BruteForceSampler : BaseSampler
             return false;
         }
 
+        /// <inheritdoc />
         internal override int CountUnexpanded(bool excludeRunning)
         {
             // Count the number of unexpanded nodes in the subtree.
@@ -567,6 +647,10 @@ public class BruteForceSampler : BaseSampler
             return total;
         }
 
+        /// <summary>Chooses a child with probability proportional to its eligible unexplored descendants.</summary>
+        /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+        /// <param name="excludeRunning">Whether subtrees assigned to running evaluations are excluded from traversal.</param>
+        /// <returns>The internal parameter value identifying the selected child.</returns>
         internal double SampleChild(NumPyRandom rng, bool excludeRunning)
         {
             var keys = new List<double>(Children!.Keys);

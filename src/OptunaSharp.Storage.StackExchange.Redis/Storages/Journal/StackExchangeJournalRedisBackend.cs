@@ -79,6 +79,7 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <param name="options">The connection options; passed straight to <see cref="ConnectionMultiplexer" />.</param>
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="options" /> is null.</exception>
     public StackExchangeJournalRedisBackend(ConfigurationOptions options, bool useCluster = false, string prefix = "")
         : this(ConnectionMultiplexer.Connect(options ?? throw new ArgumentNullException(nameof(options))),
                "", useCluster, prefix)
@@ -94,12 +95,17 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <param name="connection">A connected <see cref="IConnectionMultiplexer" />.</param>
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="connection" /> is null.</exception>
     public StackExchangeJournalRedisBackend(IConnectionMultiplexer connection, bool useCluster = false, string prefix = "")
         : this(connection ?? throw new ArgumentNullException(nameof(connection)), "", useCluster, prefix)
     {
     }
 
-    /// <summary>Shared core: every public constructor funnels here (so all raise the experimental warning).</summary>
+    /// <summary>Binds the shared Redis connection, key namespace, and append strategy for all constructor paths.</summary>
+    /// <param name="connection">The database or Redis connection used by the backend.</param>
+    /// <param name="url">The database connection URL to resolve.</param>
+    /// <param name="useCluster">Whether to use separate counter and log writes for a Redis cluster rather than the standalone Lua script.</param>
+    /// <param name="prefix">The journal key namespace, shared by its counter, log records, and snapshot.</param>
     private StackExchangeJournalRedisBackend(IConnectionMultiplexer connection, string url, bool useCluster, string prefix)
     {
         // Optuna decorates JournalRedisBackend with @experimental_class("3.1.0"), which raises an
@@ -113,6 +119,8 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
 
     private IDatabase Db => _connection.GetDatabase();
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">A nonfinal journal record contains malformed JSON.</exception>
     public override IEnumerable<OrderedDict<string, object?>> ReadLogs(int logNumberFrom)
     {
         RedisValue maxLogNumberBytes = Db.StringGet(RedisJournalProtocol.LogNumberKey(_prefix));
@@ -122,6 +130,8 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
 
         for (long logNumber = logNumberFrom; logNumber <= maxLogNumber; logNumber++)
         {
+            // Cluster append reserves a sequence number before writing its record. A visible counter
+            // can therefore lead the record; wait for that writer so replay never skips an operation.
             double sleepSecs = 0.1;
             RedisValue log;
             while (true)
@@ -141,6 +151,8 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
             }
             catch (ValueError)
             {
+                // Only the final record may still be incomplete; corruption earlier in the journal
+                // cannot be deferred without changing the replayed sequence of storage operations.
                 if (logNumber != maxLogNumber)
                     throw;
                 decoded = false;
@@ -152,6 +164,7 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
         }
     }
 
+    /// <inheritdoc />
     public override void AppendLogs(IReadOnlyList<OrderedDict<string, object?>> logs)
     {
         IDatabase db = Db;
@@ -173,9 +186,13 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
         }
     }
 
+    /// <summary>Replaces the Redis journal snapshot with the supplied opaque serialized bytes.</summary>
+    /// <param name="snapshot">The serialized journal-state snapshot to store as opaque bytes.</param>
     public void SaveSnapshot(byte[] snapshot)
         => Db.StringSet(RedisJournalProtocol.SnapshotKey(_prefix), snapshot);
 
+    /// <summary>Reads the latest Redis journal snapshot, if one has been saved.</summary>
+    /// <returns>The saved snapshot bytes, or null when the snapshot key is absent.</returns>
     public byte[]? LoadSnapshot()
     {
         RedisValue snapshotBytes = Db.StringGet(RedisJournalProtocol.SnapshotKey(_prefix));
@@ -183,6 +200,8 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     }
 
     /// <summary>Maps the neutral <see cref="RedisEndpoint" /> onto StackExchange.Redis' options.</summary>
+    /// <param name="ep">The client-neutral, parsed Redis endpoint.</param>
+    /// <returns>Native StackExchange.Redis options representing the parsed endpoint.</returns>
     internal static ConfigurationOptions ToConfiguration(RedisEndpoint ep)
     {
         // StackExchange.Redis defaults AbortOnConnectFail to true (Connect throws if no server is up);
@@ -210,6 +229,10 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     }
 
     /// <summary>Builds the URL's options, then applies the caller's native <paramref name="configure" /> tweak.</summary>
+    /// <param name="ep">The client-neutral, parsed Redis endpoint.</param>
+    /// <param name="configure">The callback that customizes native connection options before opening the connection.</param>
+    /// <returns>The native Redis options after the callback has customized them.</returns>
+    /// <exception cref="System.ArgumentNullException"><paramref name="configure" /> is null.</exception>
     internal static ConfigurationOptions Configure(RedisEndpoint ep, Action<ConfigurationOptions> configure)
     {
         if (configure is null)

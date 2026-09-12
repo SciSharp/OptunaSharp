@@ -28,6 +28,11 @@ internal sealed class PolynomialMutation
     private readonly double _prob;
     private readonly bool _atLeastOnce;
 
+    /// <summary>Configures the polynomial perturbation distribution applied to bounded coordinates.</summary>
+    /// <param name="eta">Distribution index controlling the concentration of crossover or mutation around the parents.</param>
+    /// <param name="prob">Probability of applying the operator to an individual or mating.</param>
+    /// <param name="atLeastOnce">Whether mutation must affect at least one coordinate; the unsupported true path throws.</param>
+    /// <exception cref="System.NotSupportedException">The at-least-once mutation option is enabled.</exception>
     public PolynomialMutation(double eta = 20, double prob = 0.9, bool atLeastOnce = false)
     {
         // AGE-MOEA-2 uses at_least_once=False. The True branch (row_at_least_once_true) draws an
@@ -43,6 +48,10 @@ internal sealed class PolynomialMutation
     ///     <c>Mutation.do</c>: run <see cref="MutPm" /> over all individuals (consuming its two draws),
     ///     then draw the per-individual gate and keep the mutated vector only where the gate fires.
     /// </summary>
+    /// <param name="popX">Decision vectors in population order.</param>
+    /// <param name="problem">Decision bounds and objective/constraint evaluation surface.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>Decision vectors with selected bounded polynomial mutations applied.</returns>
     public double[][] Do(double[][] popX, AgeMoeaProblem problem, NumPyRandom rng)
     {
         int n = popX.Length;
@@ -59,6 +68,12 @@ internal sealed class PolynomialMutation
     }
 
     /// <summary><c>mut_pm</c> — polynomial mutation over the flattened <c>mut_binomial</c>-selected positions.</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <param name="xl">Lower decision bounds in coordinate order.</param>
+    /// <param name="xu">Upper decision bounds in coordinate order.</param>
+    /// <param name="probVar">Probability of varying each coordinate.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>A copy of the coordinates with selected polynomial perturbations applied.</returns>
     private double[][] MutPm(double[][] x, double[] xl, double[] xu, double probVar, NumPyRandom rng)
     {
         int n = x.Length;

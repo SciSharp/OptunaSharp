@@ -30,6 +30,12 @@ public class IntDistribution : BaseDistribution
     /// <summary>Upper endpoint of the range of the distribution. <c>High</c> is included in the range.</summary>
     public long High { get; }
 
+    /// <summary>Creates a numeric distribution and normalizes a stepped upper endpoint.</summary>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <param name="log">Whether to sample in the logarithmic domain, which requires a strictly positive lower endpoint.</param>
+    /// <param name="step">Positive integer grid spacing; logarithmic ranges require one.</param>
+    /// <exception cref="NumSharp.ValueError">The lower endpoint exceeds the upper endpoint, logarithmic bounds are nonpositive, or the step is invalid for the selected scale.</exception>
     public IntDistribution(long low, long high, bool log = false, long step = 1)
     {
         if (log && step != 1)
@@ -53,9 +59,15 @@ public class IntDistribution : BaseDistribution
     }
 
     /// <summary>External representation is a boxed <see cref="long" /> (Python <c>int</c>).</summary>
+    /// <param name="paramValueInInternalRepr">Numeric internal representation: a numeric value or a zero-based categorical index.</param>
+    /// <returns>The internal value cast to a boxed 64-bit integer.</returns>
     public override object? ToExternalRepr(double paramValueInInternalRepr)
         => (long)paramValueInInternalRepr;
 
+    /// <summary>Converts an external value into the numeric representation used by samplers.</summary>
+    /// <param name="paramValueInExternalRepr">External parameter value to convert to the distribution's numeric representation.</param>
+    /// <returns>The converted numeric value; range membership is checked separately by Contains.</returns>
+    /// <exception cref="NumSharp.ValueError">The value cannot be converted to a number, is NaN, or is nonpositive for a logarithmic distribution.</exception>
     public override double ToInternalRepr(object? paramValueInExternalRepr)
     {
         if (!PyFloat.TryConvert(paramValueInExternalRepr, out double internalRepr))
@@ -70,6 +82,8 @@ public class IntDistribution : BaseDistribution
         return internalRepr;
     }
 
+    /// <summary>Tests whether this distribution admits only one candidate.</summary>
+    /// <returns>True when sampling can be replaced by the sole allowed value.</returns>
     public override bool Single()
     {
         if (Log)
@@ -80,12 +94,17 @@ public class IntDistribution : BaseDistribution
         return (High - Low) < Step;
     }
 
+    /// <summary>Tests membership using the stored numeric representation.</summary>
+    /// <param name="paramValueInInternalRepr">Numeric internal representation: a numeric value or a zero-based categorical index.</param>
+    /// <returns>True when the value belongs to the range or categorical index domain.</returns>
     internal override bool Contains(double paramValueInInternalRepr)
     {
         double value = paramValueInInternalRepr;
         return Low <= value && value <= High && (value - Low) % Step == 0;
     }
 
+    /// <summary>Builds the attribute payload used by Optuna JSON serialization.</summary>
+    /// <returns>A new ordered attribute dictionary; values preserve their distribution representation.</returns>
     internal override OrderedDict<string, object?> AsDict() => new()
     {
         // __init__ assignment order: log, step, low, high.
@@ -95,6 +114,9 @@ public class IntDistribution : BaseDistribution
         ["high"] = High,
     };
 
+    /// <summary>Compares distribution types and their defining attributes.</summary>
+    /// <param name="other">Value to compare with this instance; null compares unequal.</param>
+    /// <returns>True when the distributions have compatible types and equal attributes.</returns>
     public override bool Equals(BaseDistribution? other)
     {
         if (other is null || other.GetType() != GetType())
@@ -103,9 +125,16 @@ public class IntDistribution : BaseDistribution
         return Log == o.Log && Step == o.Step && Low == o.Low && High == o.High;
     }
 
+    /// <summary>Computes a hash from the distribution type and defining attributes.</summary>
+    /// <returns>Hash code consistent with distribution equality.</returns>
     public override int GetHashCode() => HashCode.Combine(GetType(), Log, Step, Low, High);
 
     /// <summary>Python <c>_adjust_int_uniform_high</c>.</summary>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <param name="step">Positive grid spacing used to align the upper endpoint.</param>
+    /// <returns>The greatest grid point not exceeding the requested upper endpoint.</returns>
+    /// <exception cref="System.DivideByZeroException">The caller supplies a zero step.</exception>
     internal static long AdjustIntUniformHigh(long low, long high, long step)
     {
         long r = high - low;
@@ -130,9 +159,16 @@ public class IntUniformDistribution : IntDistribution
 {
     // Optuna's @deprecated_class wraps __init__ to warn on construction; mirror that with a
     // runtime FutureWarning carrying the identical message (see DeprecationMessages).
+    /// <summary>Creates a numeric distribution and normalizes a stepped upper endpoint.</summary>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <param name="step">Positive integer grid spacing; logarithmic ranges require one.</param>
+    /// <exception cref="NumSharp.ValueError">The lower endpoint exceeds the upper endpoint, logarithmic bounds are nonpositive, or the step is invalid for the selected scale.</exception>
     public IntUniformDistribution(long low, long high, long step = 1) : base(low, high, log: false, step: step)
         => OptunaWarnings.Warn(DeprecationMessages.IntUniformDistribution, WarningCategory.FutureWarning);
 
+    /// <summary>Builds the attribute payload used by Optuna JSON serialization.</summary>
+    /// <returns>A new ordered attribute dictionary; values preserve their distribution representation.</returns>
     internal override OrderedDict<string, object?> AsDict() => new()
     {
         ["step"] = Step,
@@ -148,9 +184,16 @@ public class IntUniformDistribution : IntDistribution
 [Obsolete(DeprecationMessages.IntLogUniformDistribution)]
 public class IntLogUniformDistribution : IntDistribution
 {
+    /// <summary>Creates a numeric distribution and normalizes a stepped upper endpoint.</summary>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <param name="step">Positive integer grid spacing; logarithmic ranges require one.</param>
+    /// <exception cref="NumSharp.ValueError">The lower endpoint exceeds the upper endpoint, logarithmic bounds are nonpositive, or the step is invalid for the selected scale.</exception>
     public IntLogUniformDistribution(long low, long high, long step = 1) : base(low, high, log: true, step: step)
         => OptunaWarnings.Warn(DeprecationMessages.IntLogUniformDistribution, WarningCategory.FutureWarning);
 
+    /// <summary>Builds the attribute payload used by Optuna JSON serialization.</summary>
+    /// <returns>A new ordered attribute dictionary; values preserve their distribution representation.</returns>
     internal override OrderedDict<string, object?> AsDict() => new()
     {
         ["step"] = Step,

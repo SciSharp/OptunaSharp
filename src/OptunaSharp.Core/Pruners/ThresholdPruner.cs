@@ -10,6 +10,7 @@ namespace OptunaSharp.Pruners;
 ///     Prune if a metric exceeds upper threshold, falls behind lower threshold or reaches
 ///     <c>NaN</c>.
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.pruners.ThresholdPruner.html">Official Optuna ThresholdPruner reference.</seealso>
 public class ThresholdPruner : BasePruner
 {
     private readonly double _lower;
@@ -31,12 +32,16 @@ public class ThresholdPruner : BasePruner
     ///     If no value has been reported at the time of a pruning check, that particular check
     ///     will be postponed until a value is reported. Value must be at least 1.
     /// </param>
+    /// <summary>Configures acceptable report bounds and the schedule on which they are checked.</summary>
+    /// <exception cref="NumSharp.TypeError">Neither bound is supplied.</exception>
+    /// <exception cref="NumSharp.ValueError">The lower bound exceeds the upper bound, warmup is negative, or the interval is below one.</exception>
     public ThresholdPruner(
         double? lower = null,
         double? upper = null,
         int nWarmupSteps = 0,
         int intervalSteps = 1)
     {
+        // An omitted side is unbounded, but omitting both would silently disable the requested rule.
         if (lower is null && upper is null)
             throw new TypeError("Either lower or upper must be specified.");
 
@@ -56,6 +61,7 @@ public class ThresholdPruner : BasePruner
         _intervalSteps = intervalSteps;
     }
 
+    /// <inheritdoc />
     public override bool Prune(Study study, FrozenTrial trial)
     {
         int? stepNullable = trial.LastStep;

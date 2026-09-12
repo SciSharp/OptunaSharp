@@ -15,6 +15,9 @@ namespace OptunaSharp.Visualization.Plotly.Renderers;
 /// </summary>
 internal static class ParallelCoordinatePlot
 {
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(ParallelCoordinateInfo info)
     {
         var layout = Fig.Layout(("title", Fig.Obj(
@@ -97,6 +100,10 @@ internal static class ParallelCoordinatePlot
         return Fig.Figure(traces, layout);
     }
 
+    /// <summary>Builds a legend-only line demonstrating feasibility styling.</summary>
+    /// <param name="dash">Plotly line dash pattern, such as solid or dot.</param>
+    /// <param name="name">Feasibility label displayed in the legend.</param>
+    /// <returns>A line trace with null coordinates and a visible legend entry.</returns>
     private static Trace FeasibilityLegend(string dash, string name)
         => Fig.Trace("scatter",
             ("x", new object?[] { null }),
@@ -107,6 +114,11 @@ internal static class ParallelCoordinatePlot
             ("showlegend", true),
             ("hoverinfo", "skip"));
 
+    /// <summary>Pads rank or constant-value color domains so the color scale has nonzero width.</summary>
+    /// <param name="values">Nonempty scalar color values aligned with plotted trials.</param>
+    /// <param name="isRank">Whether values are integer ranks requiring half-step endpoint padding.</param>
+    /// <returns>The lower and upper color-domain endpoints.</returns>
+    /// <exception cref="System.InvalidOperationException">The color-value sequence is empty.</exception>
     private static (double Min, double Max) GetColorRange(IReadOnlyList<double> values, bool isRank)
     {
         if (isRank)
@@ -115,14 +127,25 @@ internal static class ParallelCoordinatePlot
         return min == max ? (min - 0.5, max + 0.5) : (min, max);
     }
 
+    /// <summary>Maps an axis into the common zero-to-one vertical drawing range.</summary>
+    /// <param name="dim">Axis metadata containing range, values, and optional categorical tick labels.</param>
+    /// <returns>Normalized values, or midpoint values for a constant axis.</returns>
     private static double[] Normalize(DimensionInfo dim)
     {
         var (min, max) = dim.Range;
+        // A constant dimension has no scale width. Center its lines so it remains visible and
+        // avoids division by zero while conveying that this parameter did not vary.
         if (min == max)
             return dim.Values.Select(_ => 0.5).ToArray();
         return dim.Values.Select(v => (v - min) / (max - min)).ToArray();
     }
 
+    /// <summary>Maps each trial's normalized objective or rank to the Blues color scale.</summary>
+    /// <param name="values">Scalar color values in trial order.</param>
+    /// <param name="min">Lower endpoint of the color domain.</param>
+    /// <param name="max">Upper endpoint of the color domain.</param>
+    /// <param name="reverse">Whether better values should use the reverse color direction.</param>
+    /// <returns>RGB strings aligned with the supplied color values.</returns>
     private static string[] GetLineColors(IReadOnlyList<double> values, double min, double max, bool reverse)
     {
         var norm = new double[values.Count];
@@ -134,6 +157,10 @@ internal static class ParallelCoordinatePlot
         return norm.Select(PlotlyColors.BluesLineColor).ToArray();
     }
 
+    /// <summary>Selects a categorical tick label or formats a numeric axis value for hover text.</summary>
+    /// <param name="dim">Axis metadata containing range, values, and optional categorical tick labels.</param>
+    /// <param name="value">Axis-space coordinate, logarithmic when the dimension is logarithmic.</param>
+    /// <returns>Display text in the original parameter units.</returns>
     private static string FormatDimensionValue(DimensionInfo dim, double value)
     {
         for (int i = 0; i < dim.Tickvals.Count; i++)
@@ -142,6 +169,9 @@ internal static class ParallelCoordinatePlot
         return PlotlyColors.FormatG(dim.IsLog ? Math.Pow(10, value) : value, 3);
     }
 
+    /// <summary>Builds labels at normalized tick positions for each parallel-coordinate axis.</summary>
+    /// <param name="dimensions">Objective and parameter axes in left-to-right display order.</param>
+    /// <returns>Plotly annotations in axis and tick order.</returns>
     private static object[] GetAxisAnnotations(List<DimensionInfo> dimensions)
     {
         var annotations = new List<object>();
@@ -183,6 +213,11 @@ internal static class ParallelCoordinatePlot
     }
 
     /// <summary>NumPy <c>np.linspace(min, max, num)</c> — endpoint forced exact.</summary>
+    /// <param name="min">First endpoint.</param>
+    /// <param name="max">Last endpoint.</param>
+    /// <param name="num">Number of samples; must be at least two for the intended spacing.</param>
+    /// <returns>Equally spaced values with the final element set exactly to max.</returns>
+    /// <exception cref="System.IndexOutOfRangeException">No samples are allocated but the endpoint is written.</exception>
     private static double[] Linspace(double min, double max, int num)
     {
         var result = new double[num];
@@ -193,6 +228,10 @@ internal static class ParallelCoordinatePlot
         return result;
     }
 
+    /// <summary>Compares axis values using the renderer's relative tick-matching tolerance.</summary>
+    /// <param name="a">First axis coordinate.</param>
+    /// <param name="b">Second axis coordinate.</param>
+    /// <returns>True when the values differ by at most one billionth of the larger magnitude.</returns>
     private static bool IsClose(double a, double b)
         => Math.Abs(a - b) <= 1e-9 * Math.Max(Math.Abs(a), Math.Abs(b));
 }

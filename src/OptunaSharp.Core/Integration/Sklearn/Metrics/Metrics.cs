@@ -23,6 +23,10 @@ internal static class Metrics
     ///     (the default) a constant <c>y_true</c> yields <c>1.0</c> for perfect predictions (zero numerator)
     ///     or <c>0.0</c> otherwise, instead of <c>NaN</c>/<c>-Inf</c>.
     /// </summary>
+    /// <param name="yTrue">The observed target values, aligned with the predictions.</param>
+    /// <param name="yPred">The predicted target values, aligned with the observations.</param>
+    /// <param name="forceFinite">Whether perfect/imperfect predictions for a constant target return 1/0 instead of nonfinite R-squared values.</param>
+    /// <returns>The coefficient of determination, with the requested treatment of constant-target nonfinite values.</returns>
     internal static double R2Score(double[] yTrue, double[] yPred, bool forceFinite = true)
     {
         int n = yTrue.Length;
@@ -65,6 +69,9 @@ internal static class Metrics
     ///     residuals divided by <c>n</c>. The scikit-learn scorer <c>neg_mean_squared_error</c> is its
     ///     negation (higher-is-better).
     /// </summary>
+    /// <param name="yTrue">The observed target values, aligned with the predictions.</param>
+    /// <param name="yPred">The predicted target values, aligned with the observations.</param>
+    /// <returns>The mean squared residual across the aligned observations and predictions.</returns>
     internal static double MeanSquaredError(double[] yTrue, double[] yPred)
     {
         int n = yTrue.Length;

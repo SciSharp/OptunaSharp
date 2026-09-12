@@ -17,6 +17,9 @@ namespace OptunaSharp.Visualization.Plotly.Renderers;
 /// </summary>
 internal static class SlicePlotRenderer
 {
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(SlicePlotInfo info)
     {
         var layout = Fig.Layout(("title", "Slice Plot"));
@@ -66,6 +69,9 @@ internal static class SlicePlotRenderer
         return Fig.Figure(traces, layout);
     }
 
+    /// <summary>Configures category order or logarithmic scaling for one slice x axis.</summary>
+    /// <param name="xaxis">Mutable x-axis object attached to the plot layout.</param>
+    /// <param name="sub">Extracted data for one parameter or parameter-pair subplot.</param>
     private static void ApplyXType(DObj xaxis, SliceSubplotInfo sub)
     {
         if (!sub.IsNumerical)
@@ -80,6 +86,10 @@ internal static class SlicePlotRenderer
         }
     }
 
+    /// <summary>Separates feasible and infeasible observations and builds slice marker traces.</summary>
+    /// <param name="sub">Extracted data for one parameter or parameter-pair subplot.</param>
+    /// <param name="showscale">Whether to show the trial-number colorbar; null preserves the Plotly default.</param>
+    /// <returns>Feasible trace followed by an infeasible trace when one has points.</returns>
     private static List<Trace> GenerateSubplot(SliceSubplotInfo sub, bool? showscale)
     {
         var fx = new List<object?>();
@@ -146,6 +156,13 @@ internal static class SlicePlotRenderer
     }
 
     // Python _get_categorical_plot_values — regroup points into x_labels order, x = repr(label).
+    /// <summary>Regroups slice points in categorical-label order for stable plotting.</summary>
+    /// <param name="sub">Extracted data for one parameter or parameter-pair subplot.</param>
+    /// <param name="xs">Categorical x values before grouping.</param>
+    /// <param name="ys">Objective values aligned with xs.</param>
+    /// <param name="nums">Trial numbers aligned with xs.</param>
+    /// <returns>Aligned category labels, objective values, and trial-number colors.</returns>
+    /// <exception cref="NumSharp.TypeError">A category is not a supported categorical scalar.</exception>
     private static (object?[] X, double[] Y, int[] C) CategoricalPlotValues(
         SliceSubplotInfo sub, List<object?> xs, List<double> ys, List<int> nums)
     {
@@ -176,6 +193,9 @@ internal static class SlicePlotRenderer
         return (vx.ToArray(), vy.ToArray(), vc.ToArray());
     }
 
+    /// <summary>Formats categorical values using Python repr for stable axis labels.</summary>
+    /// <param name="xLabels">Ordered categorical values appearing on the axis.</param>
+    /// <returns>String labels in the original categorical order.</returns>
     private static string[] CategoricalLabels(IReadOnlyList<CategoricalChoice> xLabels)
         => xLabels.Select(l => PythonRepr.Repr(l.Value)).ToArray();
 }

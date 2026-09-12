@@ -51,6 +51,8 @@ public class EMMREvaluator : BaseImprovementEvaluator
     /// <param name="delta">A float number related to the criterion for termination.</param>
     /// <param name="minNTrials">A minimum number of complete trials to compute the criterion.</param>
     /// <param name="seed">A random seed for EMMREvaluator.</param>
+    /// <summary>Configures the minimum data requirement and deterministic/noisy GP assumptions for EMMR evaluation.</summary>
+    /// <exception cref="NumSharp.ValueError">The minimum trial count is less than two.</exception>
     public EMMREvaluator(
         bool deterministicObjective = false,
         double delta = 0.1,
@@ -66,6 +68,10 @@ public class EMMREvaluator : BaseImprovementEvaluator
         _rng = new LazyRandomState(seed);
     }
 
+    /// <summary>Returns the expected minimum model regret estimate, or a conservative large value before enough trials exist.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="studyDirection">Whether larger or smaller objective values are preferred.</param>
+    /// <returns>The expected minimum model regret estimate, or a conservative large value before enough trials exist.</returns>
     public override double Evaluate(IReadOnlyList<FrozenTrial> trials, StudyDirection studyDirection)
     {
         var optunaSearchSpace = SearchSpaceFunctions.IntersectionSearchSpaceOf(trials);
@@ -168,6 +174,9 @@ public class EMMREvaluator : BaseImprovementEvaluator
     }
 
     /// <summary><c>_compute_gp_posterior</c> — the (scalar) posterior mean and variance at one point.</summary>
+    /// <param name="xParams">The normalized coordinates at which to evaluate the GP posterior.</param>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <returns>The model's mean and variance at the selected input row.</returns>
     private static (double Mean, double Var) ComputeGpPosterior(double[] xParams, GPRegressor gpr)
     {
         var row = new double[1, xParams.Length];
@@ -181,6 +190,11 @@ public class EMMREvaluator : BaseImprovementEvaluator
     ///     <c>_compute_gp_posterior_cov_two_thetas</c> — <c>Cov(f(θ₁), f(θ₂))</c> under the GP posterior
     ///     (the variance when <paramref name="theta1Index" /> == <paramref name="theta2Index" />).
     /// </summary>
+    /// <param name="normalizedParams">Normalized coordinates in search-space order.</param>
+    /// <param name="gpr">The Gaussian-process model supplying posterior predictions and kernel length scales.</param>
+    /// <param name="theta1Index">The first trial-row index whose posterior covariance is requested.</param>
+    /// <param name="theta2Index">The second trial-row index whose posterior covariance is requested.</param>
+    /// <returns>The joint posterior covariance between the two selected input rows.</returns>
     private static double ComputeGpPosteriorCovTwoThetas(
         double[,] normalizedParams, GPRegressor gpr, int theta1Index, int theta2Index)
     {
@@ -199,9 +213,14 @@ public class EMMREvaluator : BaseImprovementEvaluator
     }
 
     /// <summary>scipy's <c>norm.pdf</c> — the standard-normal density <c>exp(−x²/2)/√(2π)</c>.</summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The standard-normal probability density at the supplied argument.</returns>
     private static double NormPdf(double x) => Math.Exp(-Math.Pow(x, 2.0) / 2.0) / NormPdfC;
 
     /// <summary><c>np.argmax</c> over the first <paramref name="count" /> entries (first maximum).</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="count">The number of leading values to include in the search.</param>
+    /// <returns>The index of the first largest value.</returns>
     private static int ArgMax(double[] a, int count)
     {
         int best = 0;
@@ -211,6 +230,10 @@ public class EMMREvaluator : BaseImprovementEvaluator
         return best;
     }
 
+    /// <summary>Returns a copy of the requested matrix row.</summary>
+    /// <param name="mat">The matrix whose rows are copied.</param>
+    /// <param name="r">The zero-based matrix row index.</param>
+    /// <returns>A copy of the requested matrix row.</returns>
     private static double[] Row(double[,] mat, int r)
     {
         int dim = mat.GetLength(1);
@@ -220,6 +243,10 @@ public class EMMREvaluator : BaseImprovementEvaluator
         return row;
     }
 
+    /// <summary>Returns a new matrix containing the requested leading rows.</summary>
+    /// <param name="mat">The matrix whose rows are copied.</param>
+    /// <param name="rows">The number of matrix rows to allocate or copy.</param>
+    /// <returns>A new matrix containing the requested leading rows.</returns>
     private static double[,] HeadRows(double[,] mat, int rows)
     {
         int dim = mat.GetLength(1);
@@ -234,6 +261,8 @@ public class EMMREvaluator : BaseImprovementEvaluator
     ///     <c>gp.warn_and_convert_inf</c> for a 1-D score vector — clip each non-finite entry to the
     ///     finite min/max (or 0 when the whole vector is non-finite). Fast-paths the all-finite case.
     /// </summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>A copy with infinite values replaced by finite extrema after emitting the diagnostic.</returns>
     private static double[] WarnAndConvertInf(double[] values)
     {
         bool allFinite = values.All(double.IsFinite);

@@ -13,12 +13,24 @@ namespace OptunaSharp.Integration.Sklearn;
 ///     <para>
 ///     The <b>scores</b> are byte-exact against scikit-learn (identical folds, forest, and scorer); the
 ///     <b>times</b> are wall-clock and only informational (scikit-learn does not compare them either). A
-///     fold whose fit or score throws is assigned <paramref name="errorScore" /> (scikit-learn's
-///     <c>error_score</c>, default <c>NaN</c>), never failing the whole search.
+///     fold whose fit or score throws is assigned <c>errorScore</c> (scikit-learn's
+///     <c>error_score</c>, default <c>NaN</c>). Fold generation and row-selection failures still
+///     propagate because they prevent construction of a valid train/test partition.
 ///     </para>
 /// </summary>
 public static partial class CrossValidation
 {
+    /// <summary>Returns one validation result per fold, including timing and requested training scores.</summary>
+    /// <param name="estimator">The regressor configuration cloned for each fold or parameter assignment.</param>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <param name="y">Target values aligned with the feature rows.</param>
+    /// <param name="cv">The prepared fold generator used to select training and test rows.</param>
+    /// <param name="scorer">The scoring delegate; greater scores must indicate better predictions.</param>
+    /// <param name="returnTrainScore">Whether each fold also computes and returns its training score.</param>
+    /// <param name="errorScore">The numeric score assigned to a fold whose fitting or scoring raises an exception.</param>
+    /// <returns>One validation result per fold, including timing and requested training scores.</returns>
+    /// <exception cref="System.IndexOutOfRangeException">A split contains a row index outside the supplied features or targets.</exception>
+    /// <exception cref="System.Exception">The cross-validator throws while generating folds; estimator and scorer failures inside an established fold are converted to errorScore.</exception>
     internal static List<CrossValidationFoldResult> CrossValidate(
         IRegressor estimator,
         double[,] x,
@@ -33,6 +45,8 @@ public static partial class CrossValidation
 
         foreach (var (train, test) in cv.Split(nSamples))
         {
+            // Validate the partition by selecting rows before entering fold-level error handling.
+            // An invalid split is a cross-validation setup error, not a failed estimator fit.
             var (xTrain, yTrain) = Take(x, y, train);
             var (xTest, yTest) = Take(x, y, test);
 
@@ -76,6 +90,11 @@ public static partial class CrossValidation
         new Dictionary<string, object?>();
 
     // _safe_indexing(X, indices) / y[indices] — rows in the (ascending) index order the splitter yields.
+    /// <summary>Returns copies of the selected feature rows and matching target values.</summary>
+    /// <param name="x">Feature values with one sample per row and one feature per column.</param>
+    /// <param name="y">Target values aligned with the feature rows.</param>
+    /// <param name="indices">The ordered positions or sample-row indices to use.</param>
+    /// <returns>Copies of the selected feature rows and matching target values.</returns>
     private static (double[,] X, double[] Y) Take(double[,] x, double[] y, int[] indices)
     {
         int cols = x.GetLength(1);

@@ -94,6 +94,7 @@ public sealed class VkdCmaSampler : BaseSampler
     /// <param name="popsize">Population size λ (default <c>4 + ⌊3 ln n⌋</c>).</param>
     /// <param name="kInit">Initial rank k of the low-rank covariance term (default 0 — starts diagonal and grows).</param>
     /// <param name="kAdapt">Whether the rank k adapts online (PPSN-2016 model selection); default <c>true</c>.</param>
+    /// <summary>Configures covariance adaptation with a diagonal-plus-low-rank model of the numerical search space.</summary>
     public VkdCmaSampler(
         int nStartupTrials = 1,
         BaseSampler? independentSampler = null,
@@ -115,12 +116,14 @@ public sealed class VkdCmaSampler : BaseSampler
         _kAdapt = kAdapt;
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         // _cmaRng needs no reseed here: relative sampling reseeds per trial (see SampleRelative).
         _independentSampler.ReseedRng();
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -134,6 +137,8 @@ public sealed class VkdCmaSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -222,10 +227,16 @@ public sealed class VkdCmaSampler : BaseSampler
     private static string AttrKeyGeneration => AttrPrefix + "generation";
     private static string AttrKeyOptimizer => AttrPrefix + "optimizer";
 
+    /// <summary>Reassembles serialized optimizer chunks in numeric chunk order.</summary>
+    /// <param name="optimizerAttrs">Stored serialized optimizer chunks keyed by chunk identifier.</param>
+    /// <returns>The full serialized optimizer string in chunk-index order.</returns>
     private static string ConcatOptimizerAttrs(IReadOnlyDictionary<string, string> optimizerAttrs)
         => string.Concat(Enumerable.Range(0, optimizerAttrs.Count)
             .Select(i => optimizerAttrs[$"{AttrKeyOptimizer}:{i}"]));
 
+    /// <summary>Splits a serialized optimizer into storage-sized system-attribute chunks.</summary>
+    /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
+    /// <returns>Chunk-indexed system attributes within the storage string-length limit.</returns>
     private static Dictionary<string, string> SplitOptimizerStr(string optimizerStr)
     {
         int optimizerLen = optimizerStr.Length;
@@ -240,9 +251,18 @@ public sealed class VkdCmaSampler : BaseSampler
         return attrs;
     }
 
+    /// <summary>Encodes the optimizer type and serializable state for storage on a trial.</summary>
+    /// <param name="optimizer">Optimizer whose proposal and adaptation state are persisted.</param>
+    /// <returns>A tagged JSON representation of the optimizer state.</returns>
     private static string SerializeOptimizer(VkdCma optimizer)
         => "vkdcma\n" + JsonSerializer.Serialize(optimizer.ToState());
 
+    /// <summary>Decodes a persisted optimizer tag and reconstructs its matching state type.</summary>
+    /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
+    /// <returns>The optimizer reconstructed from the tagged state.</returns>
+    /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type.</exception>
+    /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
     private static VkdCma DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
@@ -253,6 +273,9 @@ public sealed class VkdCmaSampler : BaseSampler
         return VkdCma.FromState(JsonSerializer.Deserialize<VkdCmaState>(json)!);
     }
 
+    /// <summary>Finds the newest stored optimizer snapshot in completed trial history.</summary>
+    /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
+    /// <returns>The newest available optimizer, or null when no stored snapshot exists.</returns>
     private static VkdCma? RestoreOptimizer(List<FrozenTrial> completedTrials)
     {
         for (int idx = completedTrials.Count - 1; idx >= 0; idx--)
@@ -267,6 +290,10 @@ public sealed class VkdCmaSampler : BaseSampler
         return null;
     }
 
+    /// <summary>Creates the initial optimizer in the transformed numerical box.</summary>
+    /// <param name="lower">Lower bound of each transformed numerical coordinate.</param>
+    /// <param name="upper">Upper bound of each transformed numerical coordinate.</param>
+    /// <returns>The initialized proposal optimizer.</returns>
     private VkdCma InitOptimizer(double[] lower, double[] upper)
     {
         int nDim = lower.Length;
@@ -281,6 +308,8 @@ public sealed class VkdCmaSampler : BaseSampler
         return new VkdCma(mean, sigma0, seed: seed, populationSize: _popsize, kInit: _kInit, kAdapt: _kAdapt);
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -296,6 +325,9 @@ public sealed class VkdCmaSampler : BaseSampler
         return _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
     }
 
+    /// <summary>Explains why the current parameter is delegated to the independent sampler.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="paramName">Name of the parameter being suggested or looked up.</param>
     private void LogIndependentSampling(FrozenTrial trial, string paramName)
     {
         Logger.Warning(string.Format(
@@ -307,6 +339,9 @@ public sealed class VkdCmaSampler : BaseSampler
             "dynamic search space and `CategoricalDistribution` are not supported by `VkdCmaSampler`"));
     }
 
+    /// <summary>Collects historical trials eligible for this sampler, applying its completed/pruned-trial policy.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>Trial snapshots eligible for the sampler history.</returns>
     private List<FrozenTrial> GetTrials(Study study)
     {
         var completeTrials = new List<FrozenTrial>();
@@ -330,6 +365,10 @@ public sealed class VkdCmaSampler : BaseSampler
         return completeTrials;
     }
 
+    /// <summary>Selects trials belonging to one optimizer generation so adaptation uses a coherent population.</summary>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <param name="generation">Zero-based generation whose individuals or optimizer state are requested.</param>
+    /// <returns>Trials from the requested optimizer generation.</returns>
     private static List<FrozenTrial> GetSolutionTrials(List<FrozenTrial> trials, int generation)
     {
         var result = new List<FrozenTrial>();
@@ -341,9 +380,11 @@ public sealed class VkdCmaSampler : BaseSampler
         return result;
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _independentSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         if (trial.Constraints != null)

@@ -12,6 +12,13 @@ namespace OptunaSharp.Samplers.Nsgaii;
 /// </summary>
 internal static class NsgaiiMutation
 {
+    /// <summary>Transforms one parameter, applies numerical mutation, and restores its external representation.</summary>
+    /// <param name="mutation">Numerical mutation operator used when an offspring coordinate is selected for mutation.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="distribution">Distribution defining the coordinate being transformed or mutated.</param>
+    /// <param name="value">External parameter value before mutation.</param>
+    /// <returns>The mutated external parameter value.</returns>
     internal static object? PerformMutation(
         BaseMutation mutation, NumPyRandom rng, Study study, BaseDistribution distribution, object? value)
     {

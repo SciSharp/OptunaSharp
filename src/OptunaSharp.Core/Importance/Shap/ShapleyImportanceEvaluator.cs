@@ -40,6 +40,7 @@ public sealed class ShapleyImportanceEvaluator : BaseImportanceEvaluator
     /// <param name="nTrees">Number of trees in the random forest.</param>
     /// <param name="maxDepth">The maximum depth of each tree in the random forest.</param>
     /// <param name="seed">Seed for the random forest.</param>
+    /// <summary>Configures the regression forest whose Tree SHAP contributions determine parameter importance.</summary>
     public ShapleyImportanceEvaluator(int nTrees = 64, int maxDepth = 64, int? seed = null)
     {
         // Optuna decorates the class with @experimental_class("3.0.0"), which raises an
@@ -52,6 +53,7 @@ public sealed class ShapleyImportanceEvaluator : BaseImportanceEvaluator
     }
 
     /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The requested parameters lack a consistent completed-trial search space, or a multi-objective study has no scalar target selector.</exception>
     public override OrderedDict<string, double> Evaluate(
         Study study, IReadOnlyList<string>? @params = null, Func<FrozenTrial, double>? target = null)
     {
@@ -110,6 +112,10 @@ public sealed class ShapleyImportanceEvaluator : BaseImportanceEvaluator
     }
 
     /// <summary>scikit-learn casts X to float32 (DTYPE) before fitting the forest.</summary>
+    /// <param name="transParams">The encoded numerical parameter rows in transform order.</param>
+    /// <param name="nRows">The number of rows in the output feature matrix.</param>
+    /// <param name="nCols">The number of columns in the output feature matrix.</param>
+    /// <returns>The encoded feature matrix converted to scikit-learn's float32 input representation.</returns>
     private static float[,] BuildFloat32(double[][] transParams, int nRows, int nCols)
     {
         var x = new float[nRows, nCols];

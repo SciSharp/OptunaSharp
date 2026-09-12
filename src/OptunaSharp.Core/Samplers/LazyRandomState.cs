@@ -16,6 +16,8 @@ public sealed class LazyRandomState
 {
     private NumPyRandom? _rng;
 
+    /// <summary>Creates a random-state holder, initializing immediately only when an explicit seed is supplied.</summary>
+    /// <param name="seed">Seed for subsequent random draws; null uses the generator default when permitted.</param>
     public LazyRandomState(int? seed = null)
     {
         _rng = null;
@@ -23,6 +25,7 @@ public sealed class LazyRandomState
             Rng.seed(seed.Value);
     }
 
+    /// <summary>Allocates the NumPy-compatible random generator on first access.</summary>
     private void SetRng()
     {
         _rng = np.random.RandomState();

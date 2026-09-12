@@ -20,6 +20,9 @@ internal partial class AgeMoeaSurvival
     ///     whole fronts plus the highest-scoring members of the splitting front. Returns the survivors,
     ///     and writes each individual's <see cref="Population.Rank" /> and <see cref="Population.Crowding" />.
     /// </summary>
+    /// <param name="pop">Population whose decision and evaluation columns are consumed or updated.</param>
+    /// <param name="nSurvive">Maximum number of individuals to retain.</param>
+    /// <returns>A population view containing the selected surviving individuals.</returns>
     public Population Do(Population pop, int nSurvive)
         => pop.Subset(SelectMask(pop, nSurvive));
 
@@ -29,6 +32,9 @@ internal partial class AgeMoeaSurvival
     ///     effect). Exposed for Layer 2's elite selection, which needs the survivors' ranks/crowding to
     ///     order the parent population; <see cref="Do" /> is the plain subset.
     /// </summary>
+    /// <param name="pop">Population whose decision and evaluation columns are consumed or updated.</param>
+    /// <param name="nSurvive">Maximum number of individuals to retain.</param>
+    /// <returns>A population-row mask identifying survivors.</returns>
     public bool[] SelectMask(Population pop, int nSurvive)
     {
         double[][] f = pop.F!;
@@ -95,6 +101,9 @@ internal partial class AgeMoeaSurvival
     ///     furthest (their summed, norm-scaled distances). Returns the per-row crowding, the geometry
     ///     exponent <c>p</c>, and the normalization vector.
     /// </summary>
+    /// <param name="front">Objective vectors of one nondominated front.</param>
+    /// <param name="idealPoint">Ideal objective vector used as the normalization origin.</param>
+    /// <returns>Diversity scores, the inferred geometry exponent, and objective normalization factors.</returns>
     public (double[] CrowdDist, double P, double[] Normalization) SurvivalScore(double[][] front, double[] idealPoint)
     {
         int m = front.Length;
@@ -196,6 +205,10 @@ internal partial class AgeMoeaSurvival
     ///     diagonal-nearest interior point. Overridden by <see cref="AgeMoea2Survival" /> with the
     ///     <c>find_zero</c> Newton solve.
     /// </summary>
+    /// <param name="front">Objective vectors of one nondominated front.</param>
+    /// <param name="extreme">Extreme points used to determine objective normalization.</param>
+    /// <param name="n">Number of numerical coordinates.</param>
+    /// <returns>The estimated p-norm exponent describing the front geometry.</returns>
     internal virtual double ComputeGeometry(double[][] front, int[] extreme, int n)
     {
         double[] d = PointToLineDistance(front, new double[n], Enumerable.Repeat(1.0, n).ToArray());
@@ -214,6 +227,9 @@ internal partial class AgeMoeaSurvival
     ///     AGE-MOEA (2019) pairwise distances: the symmetric Minkowski-<c>p</c> distance matrix.
     ///     Overridden by <see cref="AgeMoea2Survival" /> with the manifold-projected geodesic.
     /// </summary>
+    /// <param name="front">Objective vectors of one nondominated front.</param>
+    /// <param name="p">Minkowski norm exponent describing the front geometry.</param>
+    /// <returns>The pairwise distance matrix in the configured front geometry.</returns>
     internal virtual double[][] PairwiseDistances(double[][] front, double p)
     {
         int m = front.Length;
@@ -233,6 +249,10 @@ internal partial class AgeMoeaSurvival
     }
 
     /// <summary><c>minkowski_distances(A, ideal[None,:], p)</c> — the Minkowski-<c>p</c> distance of each row to the ideal point.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="point">Objective-space point used for projection or distance measurement.</param>
+    /// <param name="p">Minkowski norm exponent describing the front geometry.</param>
+    /// <returns>One p-norm distance per input row.</returns>
     internal static double[] MinkowskiDistancesToPoint(double[][] a, double[] point, double p)
     {
         var d = new double[a.Length];
@@ -252,6 +272,9 @@ internal partial class AgeMoeaSurvival
     ///     point), <c>ord==2</c> is the Euclidean norm, and the general branch is
     ///     <c>(Σ|x|^p)^(1/p)</c>.
     /// </summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <param name="p">Minkowski norm exponent describing the front geometry.</param>
+    /// <returns>The vector p-norm.</returns>
     internal static double VectorNorm(double[] x, double p)
     {
         if (double.IsPositiveInfinity(p))
@@ -278,12 +301,18 @@ internal partial class AgeMoeaSurvival
     ///     where <c>rint</c> is round-half-to-even. (This is NOT <c>Math.Round(x, 12)</c>, whose
     ///     decimal-scaling algorithm differs.)
     /// </summary>
+    /// <param name="x">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>The value rounded to twelve decimal places using reference-compatible rounding.</returns>
     internal static double Round12(double x)
     {
         const double scale = 1e12;
         return Math.Round(x * scale, MidpointRounding.ToEven) / scale;
     }
 
+    /// <summary>Collects the indices of entries equal to the requested value, preserving input order.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="value">Integer value whose matching positions are selected.</param>
+    /// <returns>Matching indices in input order.</returns>
     private static int[] Where(int[] a, int value)
     {
         var idx = new List<int>();
@@ -292,6 +321,10 @@ internal partial class AgeMoeaSurvival
         return idx.ToArray();
     }
 
+    /// <summary>Computes coordinate-wise minima across an objective front.</summary>
+    /// <param name="front">Objective vectors of one nondominated front.</param>
+    /// <param name="n">Number of numerical coordinates.</param>
+    /// <returns>The minimum of each requested objective column.</returns>
     private static double[] MinAxis(double[][] front, int n)
     {
         var mn = new double[n];
@@ -305,6 +338,9 @@ internal partial class AgeMoeaSurvival
         return mn;
     }
 
+    /// <summary>Finds the first index attaining the smallest array value.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The first minimum index.</returns>
     private static int ArgMin(double[] a)
     {
         int idx = 0;
@@ -315,6 +351,8 @@ internal partial class AgeMoeaSurvival
     }
 
     /// <summary><c>argsort(x)[::-1]</c> — indices ordered by descending value (ascending stable, reversed).</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>Indices ordered from largest to smallest value.</returns>
     private static int[] ArgsortDescending(double[] x)
     {
         // np.argsort ascending (stable on ties by index), then reversed.

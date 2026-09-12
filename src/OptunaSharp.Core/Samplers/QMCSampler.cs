@@ -28,6 +28,7 @@ namespace OptunaSharp.Samplers;
 ///     <c>_van_der_corput_permutations</c> over NumSharp's <c>Generator.shuffle</c>). Every
 ///     <c>(qmc_type, scramble)</c> combination is supported.</para>
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.QMCSampler.html">Official Optuna QMCSampler reference.</seealso>
 public class QMCSampler : BaseSampler
 {
     private static readonly TrialState[] SuggestedStates = { TrialState.Complete, TrialState.Pruned };
@@ -45,6 +46,8 @@ public class QMCSampler : BaseSampler
     /// <param name="independentSampler">Sampler for the first trial / non-relative params. Defaults to <see cref="RandomSampler" />.</param>
     /// <param name="warnAsynchronousSeeding">Warn when scrambling is on without a manual seed.</param>
     /// <param name="warnIndependentSampling">Warn when a parameter falls back to independent sampling.</param>
+    /// <summary>Configures a Sobol or Halton sequence and its independent fallback sampler.</summary>
+    /// <exception cref="NumSharp.ValueError">The requested sequence type is neither sobol nor halton.</exception>
     public QMCSampler(
         string qmcType = "sobol",
         bool scramble = false,
@@ -81,8 +84,10 @@ public class QMCSampler : BaseSampler
             LogAsynchronousSeeding();
     }
 
+    /// <inheritdoc />
     public override void ReseedRng() => _independentSampler.ReseedRng();
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var pastTrials = study.GetTrialsInternal(deepcopy: false, states: SuggestedStates, useCache: true);
@@ -122,6 +127,7 @@ public class QMCSampler : BaseSampler
         return result;
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -134,6 +140,7 @@ public class QMCSampler : BaseSampler
         return _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -173,13 +180,18 @@ public class QMCSampler : BaseSampler
         return result;
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _independentSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
         => _independentSampler.AfterTrial(study, trial, state, values);
 
     /// <summary>Python <c>_sample_qmc</c>: the QMC point at this trial's <c>sample_id</c>.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <returns>The next low-discrepancy point in the unit cube.</returns>
     private double[] SampleQmc(Study study, OrderedDict<string, BaseDistribution> searchSpace)
     {
         int sampleId = FindSampleId(study, searchSpace);  // `sample_id` starts from 0.
@@ -209,6 +221,9 @@ public class QMCSampler : BaseSampler
     }
 
     /// <summary>Python <c>_find_sample_id</c>: a per-(engine, search space[, seed]) counter in the study attrs.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <returns>The sequence index allocated to this trial.</returns>
     private int FindSampleId(Study study, OrderedDict<string, BaseDistribution> searchSpace)
     {
         // Sort by keys to make the order static.
@@ -243,6 +258,7 @@ public class QMCSampler : BaseSampler
         return sampleId;
     }
 
+    /// <summary>Warns that independently seeded scrambled sequences lose their shared low-discrepancy structure.</summary>
     private static void LogAsynchronousSeeding()
         => _logger.Warning(
             "No seed is provided for `QMCSampler` and the seed is set randomly. " +
@@ -250,6 +266,9 @@ public class QMCSampler : BaseSampler
             " environment, the same seed must be used in all samplers to ensure that resulting " +
             "samples are taken from the same QMC sequence. ");
 
+    /// <summary>Explains why the current parameter is delegated to the independent sampler.</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="paramName">Name of the parameter being suggested or looked up.</param>
     private void LogIndependentSampling(FrozenTrial trial, string paramName)
         => _logger.Warning(string.Format(
             IndependentSamplingWarningTemplate,

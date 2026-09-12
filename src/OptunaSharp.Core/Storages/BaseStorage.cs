@@ -24,8 +24,10 @@ namespace OptunaSharp.Storages;
 ///     be modified; trials in the WAITING state are not allowed to be modified except for the
 ///     state field.</para>
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/storages.html">Official Optuna storage API.</seealso>
 public abstract class BaseStorage
 {
+    /// <summary>Prefix prepended to automatically generated study names.</summary>
     public const string DefaultStudyNamePrefix = "no-name-";
 
     // ------------------------------------------------------------------ study manipulation
@@ -35,43 +37,64 @@ public abstract class BaseStorage
     ///     a name. The returned study ID is unique among all current and deleted studies.
     /// </summary>
     /// <exception cref="DuplicatedStudyError">If a study with the same name already exists.</exception>
+    /// <param name="directions">Objective directions in the same order as the objective values.</param>
+    /// <param name="studyName">Name identifying the study in the selected storage.</param>
+    /// <returns>Unique storage identifier assigned to the created study.</returns>
     public abstract int CreateNewStudy(IReadOnlyList<StudyDirection> directions, string? studyName = null);
 
     /// <summary>Delete a study.</summary>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
     public abstract void DeleteStudy(int studyId);
 
     /// <summary>Register a user-defined attribute to a study, overwriting any existing value.</summary>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
     public abstract void SetStudyUserAttr(int studyId, string key, object? value);
 
     /// <summary>Register an optuna-internal attribute to a study, overwriting any existing value.</summary>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
     public abstract void SetStudySystemAttr(int studyId, string key, object? value);
 
     // ------------------------------------------------------------------ study access
 
     /// <summary>Read the ID of a study.</summary>
     /// <exception cref="KeyError">If no study with the matching name exists.</exception>
+    /// <param name="studyName">Name identifying the study in the selected storage.</param>
+    /// <returns>Storage identifier of the named study.</returns>
     public abstract int GetStudyIdFromName(string studyName);
 
     /// <summary>Read the study name of a study.</summary>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <returns>Registered study name.</returns>
     public abstract string GetStudyNameFromId(int studyId);
 
     /// <summary>Read whether a study maximizes or minimizes an objective.</summary>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <returns>Objective directions in objective-value order; callers must not mutate shared storage records.</returns>
     public abstract List<StudyDirection> GetStudyDirections(int studyId);
 
     /// <summary>Read the user-defined attributes of a study.</summary>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <returns>User metadata snapshot; callers must not mutate shared storage records.</returns>
     public abstract Collections.OrderedDict<string, object?> GetStudyUserAttrs(int studyId);
 
     /// <summary>Read the optuna-internal attributes of a study.</summary>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <returns>Internal metadata snapshot; callers must not mutate shared storage records.</returns>
     public abstract Collections.OrderedDict<string, object?> GetStudySystemAttrs(int studyId);
 
     /// <summary>Read a list of <see cref="FrozenStudy" /> objects, sorted by study ID.</summary>
+    /// <returns>Study metadata records ordered by storage identifier.</returns>
     public abstract List<FrozenStudy> GetAllStudies();
 
     // ------------------------------------------------------------------ trial manipulation
@@ -86,16 +109,26 @@ public abstract class BaseStorage
     ///     intermediate-values, and a state.
     /// </param>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <returns>Unique storage identifier of the created trial.</returns>
     public abstract int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null);
 
     /// <summary>Set a parameter to a trial.</summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
     /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="paramName">Parameter name used as the storage and distribution lookup key.</param>
+    /// <param name="distribution">Distribution defining the parameter representation and allowed values.</param>
+    /// <param name="paramValueInternal">Parameter value in the distribution's internal numeric representation.</param>
+    /// <exception cref="NumSharp.ValueError">The distribution is incompatible with an existing parameter distribution.</exception>
     public abstract void SetTrialParam(
         int trialId, string paramName, double paramValueInternal, BaseDistribution distribution);
 
     /// <summary>Read the trial ID of a trial.</summary>
     /// <exception cref="KeyError">If no trial with the matching study ID and trial number exists.</exception>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="trialNumber">Zero-based trial number within the study, not a storage identifier.</param>
+    /// <returns>Storage identifier corresponding to the per-study trial number.</returns>
+    /// <exception cref="System.ArgumentOutOfRangeException">The trial number is negative.</exception>
     public virtual int GetTrialIdFromStudyIdTrialNumber(int studyId, int trialNumber)
     {
         var trials = GetAllTrials(studyId, deepcopy: false);
@@ -106,10 +139,15 @@ public abstract class BaseStorage
 
     /// <summary>Read the trial number of a trial (unique within a study, and sequential).</summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <returns>Zero-based sequential trial number within its study.</returns>
     public virtual int GetTrialNumberFromId(int trialId) => GetTrial(trialId).Number;
 
     /// <summary>Read the internal representation of a trial parameter.</summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists, or no such parameter exists.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="paramName">Parameter name used as the storage and distribution lookup key.</param>
+    /// <returns>Parameter value converted into its distribution's internal representation.</returns>
     public virtual double GetTrialParam(int trialId, string paramName)
     {
         var trial = GetTrial(trialId);
@@ -126,6 +164,9 @@ public abstract class BaseStorage
     /// </returns>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
     /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="state">Trial state to record or inspect.</param>
+    /// <param name="values">Objective values in study direction order, or null when no objective values are recorded.</param>
     public abstract bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null);
 
     /// <summary>
@@ -134,22 +175,33 @@ public abstract class BaseStorage
     /// </summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
     /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="step">Reporting step whose intermediate objective observation is stored.</param>
+    /// <param name="intermediateValue">Intermediate objective observation to store at the reporting step.</param>
     public abstract void SetTrialIntermediateValue(int trialId, int step, double intermediateValue);
 
     /// <summary>Set a user-defined attribute to a trial, overwriting any existing value.</summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
     /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
     public abstract void SetTrialUserAttr(int trialId, string key, object? value);
 
     /// <summary>Set an optuna-internal attribute to a trial, overwriting any existing value.</summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
     /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="key">Attribute name; a later write replaces its stored value.</param>
+    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
     public abstract void SetTrialSystemAttr(int trialId, string key, object? value);
 
     // ------------------------------------------------------------------ trial access
 
     /// <summary>Read a trial.</summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <returns>Stored trial record; treat it as read-only unless copied.</returns>
     public abstract FrozenTrial GetTrial(int trialId);
 
     /// <summary>
@@ -162,11 +214,15 @@ public abstract class BaseStorage
     /// </param>
     /// <param name="states">Trial states to filter on. If <c>null</c>, include all states.</param>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <returns>Trials in identifier order, optionally filtered by state and copied.</returns>
     public abstract List<FrozenTrial> GetAllTrials(
         int studyId, bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null);
 
     /// <summary>Count the number of trials in a study.</summary>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="states">States to include; null includes every state.</param>
+    /// <returns>Number of trials matching the requested state filter.</returns>
     public virtual int GetNTrials(int studyId, IReadOnlyCollection<TrialState>? states = null)
         => GetAllTrials(studyId, deepcopy: false, states: states).Count;
 
@@ -177,6 +233,8 @@ public abstract class BaseStorage
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
     /// <exception cref="RuntimeError">If the study has more than one direction.</exception>
     /// <exception cref="ValueError">If no trials have been completed.</exception>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <returns>Best completed single-objective trial by objective value; feasibility is handled by Study.</returns>
     public virtual FrozenTrial GetBestTrial(int studyId)
     {
         var allTrials = GetAllTrials(studyId, deepcopy: false, states: new[] { TrialState.Complete });
@@ -196,14 +254,20 @@ public abstract class BaseStorage
 
     /// <summary>Read the parameter dictionary of a trial (external representations).</summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <returns>Parameter names mapped to external values; treat shared data as read-only.</returns>
     public virtual IReadOnlyDictionary<string, object?> GetTrialParams(int trialId) => GetTrial(trialId).Params;
 
     /// <summary>Read the user-defined attributes of a trial.</summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <returns>User attributes of the stored trial.</returns>
     public virtual IReadOnlyDictionary<string, object?> GetTrialUserAttrs(int trialId) => GetTrial(trialId).UserAttrs;
 
     /// <summary>Read the optuna-internal attributes of a trial.</summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <returns>Internal attributes of the stored trial.</returns>
     public virtual IReadOnlyDictionary<string, object?> GetTrialSystemAttrs(int trialId) => GetTrial(trialId).SystemAttrs;
 
     /// <summary>Clean up all connections to a database.</summary>
@@ -215,6 +279,7 @@ public abstract class BaseStorage
     /// <param name="trialId">ID of the trial (only used for an error message).</param>
     /// <param name="trialState">Trial state to check.</param>
     /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    /// <exception cref="NumSharp.KeyError">A finished-state check attempts to load a nonexistent trial.</exception>
     public virtual void CheckTrialIsUpdatable(int trialId, TrialState trialState)
     {
         if (trialState.IsFinished())

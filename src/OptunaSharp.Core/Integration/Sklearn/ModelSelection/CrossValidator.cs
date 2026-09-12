@@ -16,6 +16,8 @@ public abstract class BaseCrossValidator
     /// <summary>
     ///     The number of splitting iterations — scikit-learn's <c>get_n_splits(...)</c>.
     /// </summary>
+    /// <param name="nSamples">The number of observations or generated sample rows.</param>
+    /// <returns>The number of training/test partitions produced by this cross-validator or estimator.</returns>
     public abstract int GetNumSplits(int nSamples);
 
     /// <summary>
@@ -23,6 +25,8 @@ public abstract class BaseCrossValidator
     ///     yields <c>indices[mask]</c> over <c>arange(n)</c>, so ordering is ascending even when the splitter
     ///     shuffles which samples land in each fold).
     /// </summary>
+    /// <param name="nSamples">The number of observations or generated sample rows.</param>
+    /// <returns>The training and test row indices for each fold.</returns>
     public abstract IEnumerable<(int[] Train, int[] Test)> Split(int nSamples);
 }
 
@@ -51,6 +55,8 @@ public sealed class KFold : BaseCrossValidator
     ///     Seed for the shuffle RNG. Must be <c>null</c> unless <paramref name="shuffle" /> is <c>true</c>
     ///     (matching scikit-learn's guard).
     /// </param>
+    /// <summary>Configures equally sized train/test folds with optional deterministic shuffling.</summary>
+    /// <exception cref="NumSharp.ValueError">Fewer than two folds are requested, or a random seed is supplied while shuffling is disabled.</exception>
     public KFold(int nSplits = 5, bool shuffle = false, int? randomState = null)
     {
         if (nSplits <= 1)
@@ -72,6 +78,7 @@ public sealed class KFold : BaseCrossValidator
     public override int GetNumSplits(int nSamples) => NSplits;
 
     /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The number of folds exceeds the number of samples.</exception>
     public override IEnumerable<(int[] Train, int[] Test)> Split(int nSamples)
     {
         if (NSplits > nSamples)
@@ -133,11 +140,21 @@ public sealed class PredefinedSplits : BaseCrossValidator
 {
     private readonly (int[] Train, int[] Test)[] _splits;
 
+    /// <summary>Materializes the supplied train/test partitions for reuse by successive parameter trials.</summary>
+    /// <param name="splits">The training and test row indices for each fold, in fold order.</param>
+    /// <exception cref="System.ArgumentNullException">The split sequence is null.</exception>
     public PredefinedSplits(IEnumerable<(int[] Train, int[] Test)> splits)
         => _splits = splits?.ToArray() ?? throw new ArgumentNullException(nameof(splits));
 
+    /// <summary>Returns the number of training/test partitions produced by this cross-validator or estimator.</summary>
+    /// <param name="nSamples">The number of observations or generated sample rows.</param>
+    /// <returns>The number of training/test partitions produced by this cross-validator or estimator.</returns>
     public override int GetNumSplits(int nSamples) => _splits.Length;
 
+    /// <summary>Returns the training and test row indices for each fold.</summary>
+    /// <param name="nSamples">The number of observations or generated sample rows.</param>
+    /// <returns>The training and test row indices for each fold.</returns>
+    /// <remarks>The returned sequences reuse the stored index arrays; callers must not mutate those arrays while cross-validation is running.</remarks>
     public override IEnumerable<(int[] Train, int[] Test)> Split(int nSamples) => _splits;
 }
 
@@ -153,6 +170,10 @@ public sealed class PredefinedSplits : BaseCrossValidator
 /// </summary>
 public static partial class CrossValidation
 {
+    /// <summary>Returns the normalized cross-validation strategy, using five folds when no strategy is supplied.</summary>
+    /// <param name="cv">The fold count, cross-validator instance, or explicit splits; null uses five-fold cross-validation.</param>
+    /// <returns>The normalized cross-validation strategy, using five folds when no strategy is supplied.</returns>
+    /// <exception cref="NumSharp.ValueError">The value is not a supported fold count, cross-validator, or train/test split sequence.</exception>
     public static BaseCrossValidator CheckCv(object? cv = null)
     {
         switch (cv)

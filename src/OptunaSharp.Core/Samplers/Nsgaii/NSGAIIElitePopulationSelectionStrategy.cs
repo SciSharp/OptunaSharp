@@ -20,14 +20,23 @@ public class NSGAIIElitePopulationSelectionStrategy
     /// <summary>Python <c>&lt;</c> on floats: a &lt; b is the only ordering primitive; -0.0 == 0.0 and NaN compares equal (kept stable).</summary>
     private sealed class PyLessComparer : IComparer<double>
     {
+        /// <summary>Shared stateless instance used by the containing algorithm.</summary>
         internal static readonly PyLessComparer Instance = new();
 
+        /// <summary>Orders objective values using Python less-than semantics, leaving unordered NaNs tied.</summary>
+        /// <param name="a">Scalar operand used in the comparison or numerical transformation.</param>
+        /// <param name="b">Scalar operand used in the comparison or numerical transformation.</param>
+        /// <returns>Negative, zero, or positive according to the Python-style ordering.</returns>
         public int Compare(double a, double b) => a < b ? -1 : (b < a ? 1 : 0);
     }
 
     private readonly int _populationSize;
     private readonly Func<FrozenTrial, IEnumerable<double>>? _constraintsFunc;
 
+    /// <summary>Configures nondomination ranking and crowding-distance truncation to a fixed population size.</summary>
+    /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
+    /// <param name="constraintsFunc">Optional legacy callback returning constraint values; positive values violate a constraint.</param>
+    /// <exception cref="NumSharp.ValueError">Population size is below two.</exception>
     public NSGAIIElitePopulationSelectionStrategy(
         int populationSize, Func<FrozenTrial, IEnumerable<double>>? constraintsFunc = null)
     {
@@ -39,6 +48,9 @@ public class NSGAIIElitePopulationSelectionStrategy
     }
 
     /// <summary>Select the elite population from the given trials (Python <c>__call__</c>).</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <returns>The individuals retained by the configured survival rule, in selection order.</returns>
     public List<FrozenTrial> Select(Study study, List<FrozenTrial> population)
     {
         bool isConstrained = ConstrainedOptimization.IsConstrainedOptimization(population);
@@ -70,6 +82,10 @@ public class NSGAIIElitePopulationSelectionStrategy
     ///     so it is <c>internal static</c> here and shared with
     ///     <see cref="OptunaSharp.Samplers.Nsgaiii.NSGAIIIElitePopulationSelectionStrategy" />.
     /// </summary>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <param name="directions">One optimization direction per objective.</param>
+    /// <param name="isConstrained">Whether constraint feasibility participates in ranking.</param>
+    /// <returns>Trial fronts ordered by nondomination rank.</returns>
     internal static List<List<FrozenTrial>> RankPopulation(
         IReadOnlyList<FrozenTrial> population, IReadOnlyList<StudyDirection> directions, bool isConstrained)
     {
@@ -108,6 +124,7 @@ public class NSGAIIElitePopulationSelectionStrategy
     }
 
     /// <summary>Python <c>_crowding_distance_sort</c>: sort by crowding distance descending (in place).</summary>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
     private static void CrowdingDistanceSort(List<FrozenTrial> population)
     {
         var manhattanDistances = CalcCrowdingDistance(population);
@@ -116,6 +133,8 @@ public class NSGAIIElitePopulationSelectionStrategy
     }
 
     /// <summary>Python <c>_calc_crowding_distance</c>.</summary>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <returns>Diversity distances indexed by trial number.</returns>
     private static Dictionary<int, double> CalcCrowdingDistance(List<FrozenTrial> population)
     {
         var manhattanDistances = new Dictionary<int, double>();
@@ -178,6 +197,8 @@ public class NSGAIIElitePopulationSelectionStrategy
     }
 
     /// <summary>Python <c>list.sort(key=...)</c> — a stable ascending sort under Python's <c>&lt;</c>, in place.</summary>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <param name="key">Callback extracting the scalar sort key for each trial.</param>
     private static void StableSortInPlace(List<FrozenTrial> population, Func<FrozenTrial, double> key)
     {
         var sorted = population.OrderBy(key, PyLessComparer.Instance).ToList();

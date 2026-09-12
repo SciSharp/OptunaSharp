@@ -22,6 +22,7 @@ public enum TrialState
     Waiting = 4,
 }
 
+/// <summary>Provides completion checks and Python-compatible trial state names.</summary>
 public static class TrialStateExtensions
 {
     /// <summary>
@@ -30,10 +31,14 @@ public static class TrialStateExtensions
     ///     The unfinished state is either <see cref="TrialState.Running" /> or
     ///     <see cref="TrialState.Waiting" />.
     /// </summary>
+    /// <param name="state">Trial state to record or inspect.</param>
+    /// <returns>True for every value other than Running or Waiting.</returns>
     public static bool IsFinished(this TrialState state)
         => state != TrialState.Running && state != TrialState.Waiting;
 
     /// <summary>Python <c>state.name</c> (e.g. <c>"COMPLETE"</c>) — used in verbatim messages.</summary>
+    /// <param name="state">Trial state to record or inspect.</param>
+    /// <returns>Uppercase Python state name; unknown values map to WAITING.</returns>
     internal static string PythonName(this TrialState state) => state switch
     {
         TrialState.Running => "RUNNING",
@@ -44,5 +49,7 @@ public static class TrialStateExtensions
     };
 
     /// <summary>Python <c>str(state)</c> (e.g. <c>"TrialState.COMPLETE"</c>).</summary>
+    /// <param name="state">Trial state to record or inspect.</param>
+    /// <returns>The Python state name prefixed by TrialState.</returns>
     internal static string PythonStr(this TrialState state) => "TrialState." + state.PythonName();
 }

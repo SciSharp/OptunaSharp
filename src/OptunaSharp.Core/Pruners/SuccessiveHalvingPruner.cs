@@ -17,6 +17,7 @@ namespace OptunaSharp.Pruners;
 ///     referred to as R in the paper. The maximum resource allocated to a trial is typically
 ///     limited inside the objective function.
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.pruners.SuccessiveHalvingPruner.html">Official Optuna SuccessiveHalvingPruner reference.</seealso>
 public class SuccessiveHalvingPruner : BasePruner
 {
     private int? _minResource;
@@ -38,12 +39,16 @@ public class SuccessiveHalvingPruner : BasePruner
     ///     Minimum number of trials that need to complete a rung before any trial is considered
     ///     for promotion into the next rung.
     /// </param>
+    /// <summary>Configures asynchronous rung promotion and its minimum resource budget.</summary>
+    /// <exception cref="NumSharp.ValueError">The minimum resource is below one, the reduction factor is below two, an early-stopping/bootstrap count is negative, or positive bootstrap is combined with automatic minimum resource.</exception>
     public SuccessiveHalvingPruner(
         int? minResource = null,
         int reductionFactor = 4,
         int minEarlyStoppingRate = 0,
         int bootstrapCount = 0)
     {
+        // Rung budgets must increase, and bootstrap needs an explicit first rung so that every
+        // participant competes under the same resource schedule from its first report.
         if (minResource is not null && minResource < 1)
             throw new ValueError(
                 $"The value of `min_resource` is {minResource}, " +
@@ -75,6 +80,8 @@ public class SuccessiveHalvingPruner : BasePruner
         _bootstrapCount = bootstrapCount;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives and the pruning rule requests its scalar direction.</exception>
     public override bool Prune(Study study, FrozenTrial trial)
     {
         int? stepNullable = trial.LastStep;
@@ -108,6 +115,8 @@ public class SuccessiveHalvingPruner : BasePruner
 
             string rungKey = CompletedRungKey(rung);
 
+            // Publish the rung result before deciding promotion so later asynchronous trials see
+            // this completed competition even when the current trial is about to be pruned.
             study.Storage.SetTrialSystemAttr(trial.TrialId, rungKey, value);
 
             var competing = GetCompetingValues(trials, value, rungKey);
@@ -125,6 +134,8 @@ public class SuccessiveHalvingPruner : BasePruner
     }
 
     /// <summary>Python <c>_estimate_min_resource</c>.</summary>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <returns>The heuristic minimum budget, or null until a completed trial supplies a last step.</returns>
     internal static int? EstimateMinResource(IReadOnlyList<FrozenTrial> trials)
     {
         var nSteps = trials
@@ -141,6 +152,8 @@ public class SuccessiveHalvingPruner : BasePruner
     }
 
     /// <summary>Python <c>_get_current_rung</c> (takes O(log step) iterations).</summary>
+    /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <returns>The first rung for which the trial has no stored completion value.</returns>
     internal static int GetCurrentRung(FrozenTrial trial)
     {
         int rung = 0;
@@ -150,10 +163,16 @@ public class SuccessiveHalvingPruner : BasePruner
     }
 
     /// <summary>Python <c>_completed_rung_key</c>.</summary>
+    /// <param name="rung">Zero-based successive-halving rung.</param>
+    /// <returns>The storage attribute key for this rung.</returns>
     internal static string CompletedRungKey(int rung)
         => string.Format(CultureInfo.InvariantCulture, "completed_rung_{0}", rung);
 
     /// <summary>Python <c>_get_competing_values</c>.</summary>
+    /// <param name="trials">Trial history available to the operation, in its existing order.</param>
+    /// <param name="value">Current trial report competing for promotion at this rung.</param>
+    /// <param name="rungKey">System-attribute key holding the completed rung value.</param>
+    /// <returns>Stored values from the same rung followed by the current trial value.</returns>
     internal static List<double> GetCompetingValues(
         IReadOnlyList<FrozenTrial> trials, double value, string rungKey)
     {
@@ -166,6 +185,11 @@ public class SuccessiveHalvingPruner : BasePruner
     }
 
     /// <summary>Python <c>_is_trial_promotable_to_next_rung</c>.</summary>
+    /// <param name="value">Current trial report competing for promotion at this rung.</param>
+    /// <param name="competingValues">Rung values including the current trial; sorting may reorder this list.</param>
+    /// <param name="reductionFactor">Factor controlling the fraction of individuals promoted at each rung.</param>
+    /// <param name="studyDirection">Whether objective values are minimized or maximized.</param>
+    /// <returns>True when the value meets the direction-aware promotion cutoff.</returns>
     internal static bool IsTrialPromotableToNextRung(
         double value,
         List<double> competingValues,

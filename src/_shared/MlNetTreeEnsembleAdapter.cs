@@ -33,6 +33,11 @@ internal static class MlNetTreeEnsembleAdapter
     ///     DFS (parents before children — sklearn's numbering), then route the training set to fill
     ///     in per-node impurity + weighted counts.
     /// </summary>
+    /// <param name="tree">The fitted ML.NET regression tree to adapt.</param>
+    /// <param name="nFeatures">The number of transformed feature columns in each training row.</param>
+    /// <param name="x">The float32 training matrix, with samples in rows and transformed features in columns.</param>
+    /// <param name="y">One target or class-label value per sample, in training-row order.</param>
+    /// <returns>A flattened tree with full-training-set routed impurity and sample-count statistics.</returns>
     internal static SklearnLikeTree ToSklearnLikeTree(RegressionTreeBase tree, int nFeatures, float[,] x, double[] y)
     {
         int internalNodes = tree.NumberOfNodes;
@@ -85,6 +90,13 @@ internal static class MlNetTreeEnsembleAdapter
     ///     (impurity) and sample count — the statistics MDI reads (approximating scikit-learn's stored
     ///     per-tree bootstrap statistics with the full-training-set variance).
     /// </summary>
+    /// <param name="feature">The split-feature index per node, with a negative value identifying a leaf.</param>
+    /// <param name="threshold">The split threshold per node in the flattened tree.</param>
+    /// <param name="childrenLeft">The left-child index per node, using negative leaf sentinels.</param>
+    /// <param name="childrenRight">The right-child index per node, using negative leaf sentinels.</param>
+    /// <param name="x">The float32 training matrix, with samples in rows and transformed features in columns.</param>
+    /// <param name="y">One target or class-label value per sample, in training-row order.</param>
+    /// <returns>Per-node target variance and routed sample counts, aligned with the flattened node arrays.</returns>
     private static (double[] Impurity, double[] Wnns) RouteStatistics(
         int[] feature, double[] threshold, int[] childrenLeft, int[] childrenRight, float[,] x, double[] y)
     {

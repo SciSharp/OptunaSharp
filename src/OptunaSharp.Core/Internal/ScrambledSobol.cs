@@ -18,6 +18,10 @@ internal static class ScrambledSobol
     ///     The first <paramref name="n" /> points of the scrambled Sobol' sequence in <paramref name="d" />
     ///     dimensions, seeded by <paramref name="seed" /> — <c>Sobol(d, scramble=True, seed).random(n)</c>.
     /// </summary>
+    /// <param name="d">The number of Sobol dimensions.</param>
+    /// <param name="n">The number of elements or points to process.</param>
+    /// <param name="seed">The seed controlling the reproducible random stream.</param>
+    /// <returns>The scrambled Sobol sample matrix with rows for points and columns for dimensions.</returns>
     internal static double[,] Random(int d, int n, int seed)
     {
         int bits = QuasiMonteCarlo.SobolBits;  // 30
@@ -65,6 +69,10 @@ internal static class ScrambledSobol
     ///     <paramref name="sv" />. <paramref name="ltm" /> is the raw <c>(dim, bits, bits)</c> integer
     ///     cube (row-major); only its strict lower triangle is used and the diagonal is forced to 1.
     /// </summary>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <param name="bits">The number of direction-number bits used in the Sobol scramble.</param>
+    /// <param name="ltm">The lower-triangular binary matrices defining the linear scramble.</param>
+    /// <param name="sv">The Sobol direction-number vectors to scramble in place.</param>
     private static void Cscramble(int dim, int bits, long[] ltm, uint[][] sv)
     {
         for (int dd = 0; dd < dim; dd++)
@@ -93,6 +101,12 @@ internal static class ScrambledSobol
     ///     scipy's <c>cdot_pow2</c> over row <paramref name="p" /> of the (tril-masked, unit-diagonal)
     ///     LMS matrix for dimension <paramref name="dd" />: <c>Σ_k a[k]·2^(bits-1-k)</c>.
     /// </summary>
+    /// <param name="ltm">The lower-triangular binary matrices defining the linear scramble.</param>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <param name="bits">The number of direction-number bits used in the Sobol scramble.</param>
+    /// <param name="dd">The dimension whose scramble matrix is being evaluated.</param>
+    /// <param name="p">The bit position or cursor used by the operation.</param>
+    /// <returns>The binary row packed into its corresponding direction-number integer.</returns>
     private static uint CdotPow2(long[] ltm, int dim, int bits, int dd, int p)
     {
         uint z = 0;
@@ -112,6 +126,8 @@ internal static class ScrambledSobol
     }
 
     /// <summary>scipy's <c>low_0_bit</c>: the 1-based position of the right-most zero bit of <paramref name="x" />.</summary>
+    /// <param name="x">The scalar argument.</param>
+    /// <returns>The one-based position of the least significant zero bit.</returns>
     private static int LowZeroBit(uint x)
     {
         int i = 0;

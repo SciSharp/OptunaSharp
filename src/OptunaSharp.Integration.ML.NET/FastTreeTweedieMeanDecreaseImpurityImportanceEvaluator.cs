@@ -31,6 +31,7 @@ public sealed class FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator : Bas
     /// <param name="nTrees">The number of boosting iterations (trees).</param>
     /// <param name="maxDepth">The maximum depth of each tree.</param>
     /// <param name="seed">Controls the randomness of the ensemble. Specify a value for determinism.</param>
+    /// <summary>Creates the FastTree Tweedie mean-decrease-in-impurity evaluator with the requested tree count, depth, and random seed.</summary>
     public FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator(int nTrees = 64, int maxDepth = 64, int? seed = null)
     {
         _nTrees = nTrees;
@@ -50,6 +51,7 @@ public sealed class FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator : Bas
     ///     other field is used as given. For a reproducible result set <c>Seed</c> and
     ///     <c>NumberOfThreads = 1</c>.
     /// </param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="options" /> is null.</exception>
     public FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator(FastTreeTweedieTrainer.Options options)
         => _options = options ?? throw new ArgumentNullException(nameof(options));
 
@@ -63,6 +65,7 @@ public sealed class FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator : Bas
     /// <param name="nTrees">The number of boosting iterations (the options baseline).</param>
     /// <param name="maxDepth">The maximum depth of each tree (derives the baseline leaf count).</param>
     /// <param name="seed">Baseline seed; may be overridden inside <paramref name="configure" />.</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="configure" /> is null.</exception>
     public FastTreeTweedieMeanDecreaseImpurityImportanceEvaluator(
         Action<FastTreeTweedieTrainer.Options> configure, int nTrees = 64, int maxDepth = 64, int? seed = null)
     {

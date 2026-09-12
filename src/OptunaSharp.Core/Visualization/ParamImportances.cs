@@ -11,6 +11,10 @@ namespace OptunaSharp.Visualization;
 ///     a bottom-to-top bar chart). Port of <c>_ImportancesInfo</c> in
 ///     <c>optuna/visualization/_param_importances.py</c>.
 /// </summary>
+/// <param name="ImportanceValues">The parameter-importance magnitudes in display order.</param>
+/// <param name="ParamNames">The parameter names aligned with the importance values.</param>
+/// <param name="ImportanceLabels">The formatted labels aligned with the importance values.</param>
+/// <param name="TargetName">The display label for the selected objective or custom target.</param>
 public sealed record ImportancesInfo(
     IReadOnlyList<double> ImportanceValues,
     IReadOnlyList<string> ParamNames,
@@ -30,6 +34,12 @@ public static class ParamImportances
         OptunaLogging.GetLogger("optuna.visualization._param_importances");
 
     /// <summary>Python <c>_get_importances_info(study, evaluator, params, target, target_name)</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="evaluator">The importance evaluator to run; null selects the library's default evaluator.</param>
+    /// <param name="params">Parameter names to include; null selects the parameters supported by this operation.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="targetName">The display label for the selected objective or custom target.</param>
+    /// <returns>The selected target's parameter names, magnitudes, and formatted importance labels.</returns>
     public static ImportancesInfo GetInfo(
         Study study,
         BaseImportanceEvaluator? evaluator = null,
@@ -68,6 +78,12 @@ public static class ParamImportances
     ///     <see cref="ImportancesInfo" /> for single-objective / an explicit <paramref name="target" />,
     ///     or one per objective for a multi-objective study with <paramref name="target" /> = null.
     /// </summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="evaluator">The importance evaluator to run; null selects the library's default evaluator.</param>
+    /// <param name="params">Parameter names to include; null selects the parameters supported by this operation.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="targetName">The display label for the selected objective or custom target.</param>
+    /// <returns>One importance descriptor per selected study objective.</returns>
     public static List<ImportancesInfo> GetInfos(
         Study study,
         BaseImportanceEvaluator? evaluator = null,

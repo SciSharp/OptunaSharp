@@ -20,7 +20,7 @@ namespace OptunaSharp.Interop.Pymoo;
 ///     This is a typed FACADE (one C# member per pymoo call): every call here is fixed and known at
 ///     compile time. The algorithm CLASS is chosen at runtime from a closed <see cref="PymooAlgorithm" />
 ///     set, so its (module, class) pair is resolved in C# (<see cref="PymooAlgorithmMap" />) and passed
-///     to <see cref="CreateAlgorithm" /> — a fixed constructor family, not an arbitrary user class. The
+///     to <see cref="pymoo.CreateAlgorithm" /> — a fixed constructor family, not an arbitrary user class. The
 ///     array DATA (the problem box, the reference directions, the ask/tell X/F matrices) crosses
 ///     zero-copy through NumSharp's interop (<see cref="PymooInterop" />), never element by element.
 ///     </para>
@@ -35,7 +35,7 @@ internal static class Python
     ///     <c>import pymoo</c> and the handful of fixed pymoo calls the bridge makes, reached as
     ///     <c>Python.pymoo.*</c>: the import guard (<see cref="check" />), the bare
     ///     <see cref="Problem" /> factory, the <see cref="get_reference_directions" /> factory, the
-    ///     <see cref="CreateAlgorithm" /> constructor dispatch, and the nested <see cref="Algorithm" /> /
+    ///     <see cref="pymoo.CreateAlgorithm" /> constructor dispatch, and the nested <see cref="Algorithm" /> /
     ///     <see cref="Population" /> object protocols.
     /// </summary>
     internal static class pymoo
@@ -52,6 +52,13 @@ internal static class Python
         ///     the operators sample and the survival reads is needed. Dispose the returned problem.
         ///     Under the GIL.
         /// </summary>
+        /// <param name="nVar">The number of continuous decision variables.</param>
+        /// <param name="nObj">The number of objective columns.</param>
+        /// <param name="nIeqConstr">The number of inequality constraints using the G &lt;= 0 feasibility convention.</param>
+        /// <param name="xl">The borrowed array of lower decision-variable bounds.</param>
+        /// <param name="xu">The borrowed array of upper decision-variable bounds.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
         internal static PyObject Problem(int nVar, int nObj, int nIeqConstr, PyObject xl, PyObject xu)
         {
             PyObject module = PythonRuntime.Import("pymoo.core.problem");
@@ -68,6 +75,10 @@ internal static class Python
         /// <summary><c>pymoo.operators.crossover.sbx.SBX(prob=…, eta=…)</c> — the simulated-binary
         /// crossover operator. A <c>null</c> argument is omitted so pymoo's own default fills in. Dispose
         /// the returned operator. Under the GIL.</summary>
+        /// <param name="eta">The crossover or mutation distribution index, or null to retain pymoo's default.</param>
+        /// <param name="prob">The operator probability, or null to retain pymoo's default.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
         internal static PyObject SBX(double? eta, double? prob)
         {
             PyObject module = PythonRuntime.Import("pymoo.operators.crossover.sbx");
@@ -83,6 +94,10 @@ internal static class Python
         /// <summary><c>pymoo.operators.mutation.pm.PM(prob=…, eta=…)</c> — the polynomial mutation
         /// operator. A <c>null</c> argument is omitted so pymoo's own default fills in. Dispose the
         /// returned operator. Under the GIL.</summary>
+        /// <param name="eta">The crossover or mutation distribution index, or null to retain pymoo's default.</param>
+        /// <param name="prob">The operator probability, or null to retain pymoo's default.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
         internal static PyObject PM(double? eta, double? prob)
         {
             PyObject module = PythonRuntime.Import("pymoo.operators.mutation.pm");
@@ -102,6 +117,12 @@ internal static class Python
         ///     <c>n_partitions</c> (Das–Dennis) and any <c>seed</c> ride in <paramref name="kwargs" />.
         ///     Dispose the returned array. Under the GIL.
         /// </summary>
+        /// <param name="name">The Python attribute, parameter, or algorithm name required by the operation.</param>
+        /// <param name="nDim">The dimensionality of the generated reference directions.</param>
+        /// <param name="kwargs">The borrowed Python keyword-argument dictionary.</param>
+        /// <param name="extra">An optional positional Python argument preceding keyword options.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
         internal static PyObject get_reference_directions(string name, int nDim, PyDict kwargs, PyObject? extra = null)
         {
             PyObject module = PythonRuntime.Import("pymoo.util.ref_dirs");
@@ -119,6 +140,11 @@ internal static class Python
         ///     keyword arguments (<c>pop_size</c> / <c>ref_dirs</c> / <c>ref_points</c> / …) are built by
         ///     the caller. Dispose the returned algorithm. Under the GIL.
         /// </summary>
+        /// <param name="moduleName">The absolute Python module containing the algorithm class.</param>
+        /// <param name="className">The Python class name looked up in the imported module.</param>
+        /// <param name="kwargs">The borrowed Python keyword-argument dictionary.</param>
+        /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
         internal static PyObject CreateAlgorithm(string moduleName, string className, PyDict kwargs)
         {
             PyObject module = PythonRuntime.Import(moduleName);
@@ -140,6 +166,10 @@ internal static class Python
             ///     population per generation, replayed from storage) and never consults
             ///     <c>has_next()</c>, so termination must never trip.
             /// </summary>
+            /// <param name="algo">The borrowed live pymoo algorithm instance.</param>
+            /// <param name="problem">The borrowed Python problem or benchmark instance.</param>
+            /// <param name="seed">The random seed; where nullable, null leaves seed selection to the documented runtime default.</param>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static void setup(PyObject algo, PyObject problem, int seed)
             {
                 using var kwargs = new PyDict();
@@ -156,6 +186,9 @@ internal static class Python
 
             /// <summary><c>algorithm.pop_size</c> as a CLR <see cref="long" /> — the population size pymoo
             /// resolved (from <c>pop_size</c>, or derived from the reference directions/points).</summary>
+            /// <param name="algo">The borrowed live pymoo algorithm instance.</param>
+            /// <returns>The effective pymoo population size after initialization.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static long pop_size_t(PyObject algo)
             {
                 using PyObject p = algo.GetAttr("pop_size");
@@ -164,11 +197,17 @@ internal static class Python
 
             /// <summary><c>algorithm.ask()</c> — the next infill <c>Population</c> (a full generation of
             /// <c>pop_size</c> individuals for every algorithm this bridge exposes). Dispose it.</summary>
+            /// <param name="algo">The borrowed live pymoo algorithm instance.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject ask(PyObject algo) => algo.InvokeMethod("ask");
 
             /// <summary><c>algorithm.tell(infills=pop)</c> — advance the algorithm with the given
             /// population (whose <c>F</c> the caller has set from the study's objective values). Returns
             /// <c>None</c>. Under the GIL.</summary>
+            /// <param name="algo">The borrowed live pymoo algorithm instance.</param>
+            /// <param name="infills">The borrowed evaluated population returned by the preceding ask operation.</param>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static void tell(PyObject algo, PyObject infills)
             {
                 using PyObject _ = algo.InvokeMethod("tell", infills);
@@ -184,6 +223,10 @@ internal static class Python
         {
             /// <summary><c>population.get(key)</c> — e.g. the stacked design matrix <c>get("X")</c>
             /// (a numpy <c>(pop_size, n_var)</c> array). Dispose the returned object.</summary>
+            /// <param name="pop">The borrowed pymoo population whose fields are read or assigned.</param>
+            /// <param name="key">The population field name, such as X, F, or G.</param>
+            /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static PyObject get(PyObject pop, string key)
             {
                 using PyObject k = new PyString(key);
@@ -193,6 +236,10 @@ internal static class Python
             /// <summary><c>population.set(key, values)</c> — e.g. <c>set("F", f)</c> to stamp the objective
             /// matrix onto the individuals before <c>tell</c>. Returns the population (discarded).
             /// Under the GIL.</summary>
+            /// <param name="pop">The borrowed pymoo population whose fields are read or assigned.</param>
+            /// <param name="key">The population field name, such as X, F, or G.</param>
+            /// <param name="values">The objective values or borrowed Python array assigned to the corresponding field.</param>
+            /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
             internal static void set(PyObject pop, string key, PyObject values)
             {
                 using PyObject k = new PyString(key);

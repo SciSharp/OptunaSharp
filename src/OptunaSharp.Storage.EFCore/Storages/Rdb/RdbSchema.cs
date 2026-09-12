@@ -19,6 +19,8 @@ namespace OptunaSharp.Storages.EFCore;
 internal static class RdbSchema
 {
     /// <summary>Execute the schema DDL for <paramref name="provider" /> against the context's database.</summary>
+    /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
+    /// <param name="provider">The relational database dialect whose connection and SQL rules apply.</param>
     internal static void EnsureCreated(OptunaRdbContext ctx, RdbProvider provider)
     {
         var statements = provider == RdbProvider.PostgreSql ? PostgreSql : MySql;
@@ -188,6 +190,10 @@ internal static class RdbSchema
         """,
     };
 
+    /// <summary>Builds PostgreSQL DDL that creates an enum type only when it does not exist.</summary>
+    /// <param name="name">The identifier used by the provider or schema operation.</param>
+    /// <param name="labels">The SQL enum labels included in the type declaration.</param>
+    /// <returns>The PostgreSQL enum-creation statement.</returns>
     private static string EnumType(string name, string labels) =>
         $"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '{name}') " +
         $"THEN CREATE TYPE {name} AS ENUM ({labels}); END IF; END $$;";

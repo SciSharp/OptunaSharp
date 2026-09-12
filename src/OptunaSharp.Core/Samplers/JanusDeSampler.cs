@@ -38,7 +38,7 @@ namespace OptunaSharp.Samplers;
 ///     components <c>f(x) = mean_i r_i(x)</c>, expose the residual vector on each trial via
 ///     <c>trial.SetUserAttr("component_losses", new double[]{ r1, r2, … })</c>; JANUS then estimates the
 ///     local Jacobian directly from those residuals. Without it, JANUS falls back to a local
-///     linear/quadratic fit on the recent window of scalar objective values (see <paramref name="pseudoMode" />).</para>
+///     linear/quadratic fit on the recent window of scalar objective values (the constructor's <c>pseudoMode</c> option).</para>
 ///
 ///     <para><b>Beyond-core, in-memory state.</b> Like <see cref="JanusSampler" />, JANUS-DE holds its
 ///     optimizer (JANUS window + DE population) in memory for the study's duration; it does not resume its
@@ -104,6 +104,7 @@ public sealed class JanusDeSampler : BaseSampler
     /// <param name="gnPseudoMode">Override <paramref name="pseudoMode" /> for the GN direction (<c>null</c> = same).</param>
     /// <param name="pseudoTarget">Scalar-value transform for the fit: <c>raw</c> (default), <c>rank</c>, or <c>log</c>.</param>
     /// <param name="pcaK">PCA rank for the <c>pca_quadratic</c> fit (<c>auto</c> or an integer string).</param>
+    /// <summary>Configures Jacobian-informed candidates injected into a differential-evolution population.</summary>
     public JanusDeSampler(
         int? seed = null,
         int? popsize = null,
@@ -150,6 +151,9 @@ public sealed class JanusDeSampler : BaseSampler
         _pcaK = pcaK;
     }
 
+    /// <summary>Maps supported differential-evolution strategy names to the internal strategy enum.</summary>
+    /// <param name="strategy">Differential-evolution donor/crossover strategy name or enum.</param>
+    /// <returns>The supported strategy, with unrecognized names resolved to the implementation default.</returns>
     private static DeStrategy ParseStrategy(string strategy)
     {
         string s = (strategy ?? "rand1bin").ToLowerInvariant().Replace("/", "").Replace("_", "").Replace("bin", "");
@@ -160,8 +164,10 @@ public sealed class JanusDeSampler : BaseSampler
         };
     }
 
+    /// <inheritdoc />
     public override void ReseedRng() => _independentSampler.ReseedRng();
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -174,6 +180,8 @@ public sealed class JanusDeSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -224,6 +232,8 @@ public sealed class JanusDeSampler : BaseSampler
         return optimizer.Ask(trial.Number);
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but this sampler requires a scalar objective.</exception>
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -231,12 +241,17 @@ public sealed class JanusDeSampler : BaseSampler
         return _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _independentSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
         => _independentSampler.AfterTrial(study, trial, state, values);
 
+    /// <summary>Collects historical trials eligible for this sampler, applying its completed/pruned-trial policy.</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <returns>Trial snapshots eligible for the sampler history.</returns>
     private List<FrozenTrial> GetTrials(Study study)
     {
         var result = new List<FrozenTrial>();

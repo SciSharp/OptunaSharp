@@ -36,6 +36,7 @@ public sealed class FanovaImportanceEvaluator : BaseImportanceEvaluator
     ///     Controls the randomness of the forest. For deterministic behavior, specify a value other
     ///     than <c>null</c>.
     /// </param>
+    /// <summary>Configures the regression forest used to estimate importance by functional ANOVA.</summary>
     public FanovaImportanceEvaluator(int nTrees = 64, int maxDepth = 64, int? seed = null)
     {
         _nTrees = nTrees;
@@ -44,6 +45,8 @@ public sealed class FanovaImportanceEvaluator : BaseImportanceEvaluator
     }
 
     /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">The requested parameters lack a consistent completed-trial search space, or a multi-objective study has no scalar target selector.</exception>
+    /// <exception cref="System.InvalidOperationException">Every fitted tree has zero integrated prediction variance.</exception>
     public override OrderedDict<string, double> Evaluate(
         Study study, IReadOnlyList<string>? @params = null, Func<FrozenTrial, double>? target = null)
         => ForestImportance.EvaluateFanova(study, @params, target,

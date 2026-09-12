@@ -11,6 +11,15 @@ namespace OptunaSharp.Samplers.Nsgaii;
 /// </summary>
 internal static class SbxLike
 {
+    /// <summary>Chooses child or parent genes to reduce two simulated-binary offspring to one vector.</summary>
+    /// <param name="c1">First child coordinate vector.</param>
+    /// <param name="c2">Second child coordinate vector.</param>
+    /// <param name="parent0">First numerical parent vector.</param>
+    /// <param name="parent1">Second numerical parent vector.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="useChildGeneProb">Probability of retaining a computed child gene instead of a parent gene.</param>
+    /// <param name="uniformCrossoverProb">Probability used to choose which child/parent contributes a coordinate.</param>
+    /// <returns>One numerical offspring assembled from child and parent genes.</returns>
     internal static double[] CollapseTwoChildren(
         double[] c1, double[] c2, double[] parent0, double[] parent1,
         NumPyRandom rng, double useChildGeneProb, double uniformCrossoverProb)

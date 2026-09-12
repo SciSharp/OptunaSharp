@@ -46,6 +46,7 @@ public class MaxTrialsCallback
     ///     default is <c>(TrialState.COMPLETE,)</c> — use the single-argument constructor for that.
     ///     If <c>null</c>, count trials in all states.
     /// </param>
+    /// <summary>Creates a callback that stops after the selected trial-state count reaches the limit.</summary>
     public MaxTrialsCallback(int nTrials, IReadOnlyCollection<TrialState>? states)
     {
         _nTrials = nTrials;
@@ -53,6 +54,9 @@ public class MaxTrialsCallback
     }
 
     /// <summary>Python <c>__call__(study, trial)</c>.</summary>
+    /// <param name="study">Study whose history and storage are used by the operation.</param>
+    /// <param name="trial">Most recently finished trial; the count is read from the entire study history.</param>
+    /// <exception cref="NumSharp.RuntimeError">The limit is reached but the callback was invoked outside an optimization loop.</exception>
     public void Invoke(Study study, FrozenTrial trial)
     {
         var trials = study.GetTrials(deepcopy: false, states: _states);
@@ -62,6 +66,8 @@ public class MaxTrialsCallback
     }
 
     /// <summary>Allows passing the callback where an <see cref="Action{Study, FrozenTrial}" /> is expected.</summary>
+    /// <param name="callback">Callback instance to expose as a delegate.</param>
+    /// <returns>A delegate invoking this callback instance.</returns>
     public static implicit operator Action<Study, FrozenTrial>(MaxTrialsCallback callback)
         => callback.Invoke;
 }

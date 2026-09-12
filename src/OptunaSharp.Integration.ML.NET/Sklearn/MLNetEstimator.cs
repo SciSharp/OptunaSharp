@@ -8,7 +8,7 @@ namespace OptunaSharp.Integration;
 
 /// <summary>
 ///     The default <see cref="ICrossValidationEstimator" /> for <see cref="OptunaSearchCV" />, backed by
-///     ML.NET. It owns an <see cref="IDataView" />, splits it into cross-validation folds, and for each
+///     ML.NET. It retains an <see cref="IDataView" />, splits it into cross-validation folds, and for each
 ///     trial builds a pipeline from the sampled parameters, fits it on each fold's training split, and
 ///     scores it on the validation split.
 ///
@@ -18,7 +18,7 @@ namespace OptunaSharp.Integration;
 ///     hyperparameters — the equivalent of <c>clone(estimator).set_params(**params)</c>) and a
 ///     <b>scorer</b> (evaluate a fitted model on a data view, <b>higher is better</b> — the equivalent of
 ///     scikit-learn's scorer). Folds are produced by <c>MLContext.Data.CrossValidationSplit</c>; pass a
-///     <c>samplingKeyColumnName</c> for stratified splitting.
+///     <c>samplingKeyColumnName</c> to keep rows with the same key together in one fold.
 ///     </para>
 ///
 ///     <para>
@@ -48,14 +48,17 @@ public sealed class MLNetEstimator : ICrossValidationEstimator
     /// </param>
     /// <param name="folds">Number of cross-validation folds. Must be at least 2. Defaults to <c>5</c>.</param>
     /// <param name="samplingKeyColumnName">
-    ///     Optional column to key the fold sampling on (stratified splitting). <c>null</c> uses a random
-    ///     split.
+    ///     Optional grouping column: rows with the same key stay in the same fold to avoid leakage
+    ///     between related examples. <c>null</c> permits independent row assignment.
     /// </param>
     /// <param name="seed">Optional seed for the fold split, for reproducible folds.</param>
     /// <param name="errorScore">
     ///     The score assigned to a fold whose fit or scoring throws. Defaults to <c>NaN</c> (the fold is
     ///     ignored by the NaN-aware mean), matching scikit-learn's default <c>error_score=np.nan</c>.
     /// </param>
+    /// <summary>Creates reusable cross-validation splits and retains the pipeline factory and scorer used by each trial.</summary>
+    /// <exception cref="System.ArgumentNullException"><paramref name="mlContext" /> or <paramref name="data" /> or <paramref name="pipelineFactory" /> or <paramref name="scorer" /> is null.</exception>
+    /// <exception cref="NumSharp.ValueError">The requested fold count is less than two.</exception>
     public MLNetEstimator(
         MLContext mlContext,
         IDataView data,
@@ -88,6 +91,7 @@ public sealed class MLNetEstimator : ICrossValidationEstimator
     public int GetNumSplits() => _folds.Count;
 
     /// <inheritdoc />
+    /// <exception cref="System.Exception">The pipeline factory throws before fitting begins; fit and scorer failures inside a fold instead use the configured error score.</exception>
     public IReadOnlyList<CrossValidationFoldResult> CrossValidate(
         IReadOnlyDictionary<string, object?> parameters, bool returnTrainScore)
     {
@@ -95,6 +99,8 @@ public sealed class MLNetEstimator : ICrossValidationEstimator
 
         foreach (var (train, test) in _folds)
         {
+            // Factory failures identify an invalid pipeline configuration before training starts;
+            // only failures during fitting or scoring receive the configured per-fold error score.
             var pipeline = _pipelineFactory(parameters);
             var stopwatch = Stopwatch.StartNew();
 
@@ -132,6 +138,7 @@ public sealed class MLNetEstimator : ICrossValidationEstimator
     }
 
     /// <inheritdoc />
+    /// <exception cref="System.Exception">The pipeline factory or full-data fit throws; refit failures propagate unchanged.</exception>
     public void Refit(IReadOnlyDictionary<string, object?> parameters)
     {
         BestModel = _pipelineFactory(parameters).Fit(_data);
@@ -141,6 +148,9 @@ public sealed class MLNetEstimator : ICrossValidationEstimator
     ///     Transform <paramref name="data" /> with the refit best model (its scored output view). Available
     ///     only after a refit.
     /// </summary>
+    /// <param name="data">The feature rows or ML.NET data view used by the operation.</param>
+    /// <returns>The best model's transformed data view, evaluated lazily by ML.NET.</returns>
+    /// <exception cref="System.InvalidOperationException">The estimator has not been refitted with its best parameter configuration.</exception>
     public IDataView Predict(IDataView data)
     {
         if (BestModel is null)
@@ -150,9 +160,16 @@ public sealed class MLNetEstimator : ICrossValidationEstimator
     }
 
     /// <summary>Alias of <see cref="Predict" /> — transform <paramref name="data" /> with the refit best model.</summary>
+    /// <param name="data">The feature rows or ML.NET data view used by the operation.</param>
+    /// <returns>The best model's transformed data view, evaluated lazily by ML.NET.</returns>
+    /// <exception cref="System.InvalidOperationException">The estimator has not been refitted with its best parameter configuration.</exception>
     public IDataView Transform(IDataView data) => Predict(data);
 
     /// <summary>Score <paramref name="data" /> with the refit best model, using the configured scorer (higher is better).</summary>
+    /// <param name="data">The feature rows or ML.NET data view used by the operation.</param>
+    /// <returns>The configured scorer's value, where a higher value is preferred.</returns>
+    /// <exception cref="System.InvalidOperationException">The estimator has not been refitted with its best parameter configuration.</exception>
+    /// <exception cref="System.Exception">The supplied scorer throws; its exception propagates unchanged.</exception>
     public double Score(IDataView data)
     {
         if (BestModel is null)

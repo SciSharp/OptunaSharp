@@ -20,6 +20,8 @@ internal sealed class Fanova
     /// <param name="trees">The fitted forest as sklearn-flat trees.</param>
     /// <param name="searchSpaces">Bounds per encoded column, shape <c>(n_encoded, 2)</c>.</param>
     /// <param name="columnToEncodedColumns">Mapping from parameter column to its encoded columns.</param>
+    /// <summary>Prepares per-tree variance integrators and the original-to-encoded feature mapping.</summary>
+    /// <exception cref="System.InvalidOperationException">Every fitted tree has zero integrated prediction variance.</exception>
     internal Fanova(SklearnLikeTree[] trees, double[,] searchSpaces, IReadOnlyList<long[]> columnToEncodedColumns)
     {
         System.Diagnostics.Debug.Assert(searchSpaces.GetLength(1) == 2);
@@ -46,6 +48,9 @@ internal sealed class Fanova
         }
     }
 
+    /// <summary>Returns the mean and population standard deviation of the feature's fANOVA importance across trees.</summary>
+    /// <param name="feature">The zero-based feature column whose splits or importance are requested.</param>
+    /// <returns>The mean and population standard deviation of the feature's fANOVA importance across trees.</returns>
     internal (double Mean, double Std) GetImportance(int feature)
     {
         ComputeVariances(feature);
@@ -62,6 +67,8 @@ internal sealed class Fanova
         return (Mean(arr), Std(arr));
     }
 
+    /// <summary>Caches each tree's marginal variance contribution for the selected original parameter.</summary>
+    /// <param name="feature">The zero-based feature column whose splits or importance are requested.</param>
     private void ComputeVariances(int feature)
     {
         if (_variances.ContainsKey(feature))
@@ -79,10 +86,14 @@ internal sealed class Fanova
     }
 
     /// <summary><c>np.ndarray.mean()</c> — pairwise sum / n, matching numpy bit-for-bit.</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The arithmetic mean of the input values.</returns>
     private static double Mean(double[] values)
         => MathUtil.PairwiseSum(values) / values.Length;
 
     /// <summary><c>np.ndarray.std()</c> — population standard deviation (ddof=0), numpy pairwise.</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The population standard deviation of the input values.</returns>
     private static double Std(double[] values)
     {
         double mean = Mean(values);

@@ -61,6 +61,12 @@ public enum BoTorchCandidatesFunc
 ///     which the bridge keeps off its public surface — callers select an acquisition with the
 ///     <see cref="BoTorchCandidatesFunc" /> enum instead.
 /// </summary>
+/// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+/// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+/// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+/// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+/// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+/// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
 internal delegate PyObject NativeCandidatesFunc(
     PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX);
 
@@ -85,6 +91,12 @@ internal static class BoTorchCandidates
     ///     <c>_get_default_candidates_func</c> for <see cref="BoTorchCandidatesFunc.Auto" />, an explicit
     ///     lookup otherwise.
     /// </summary>
+    /// <param name="selection">The requested acquisition function, including Auto for Optuna-compatible dispatch.</param>
+    /// <param name="nObjectives">The number of objective columns.</param>
+    /// <param name="hasConstraint">Whether completed trials carry inequality constraints.</param>
+    /// <param name="considerRunningTrials">Whether acquisition optimization should account for pending parameter vectors.</param>
+    /// <returns>The acquisition delegate selected explicitly or by the pinned Optuna dispatch rules.</returns>
+    /// <exception cref="System.NotSupportedException">The acquisition-function selection is not recognized.</exception>
     internal static NativeCandidatesFunc Resolve(
         BoTorchCandidatesFunc selection, int nObjectives, bool hasConstraint, bool considerRunningTrials)
     {
@@ -118,6 +130,13 @@ internal static class BoTorchCandidates
     // ---- single-objective ------------------------------------------------------------------------
 
     /// <summary>Log Expected Improvement (LogEI). Port of <c>logei_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject LogEi(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
@@ -128,6 +147,13 @@ internal static class BoTorchCandidates
     }
 
     /// <summary>Quasi-MC batch Expected Improvement (qEI). Port of <c>qei_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject Qei(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
@@ -138,6 +164,13 @@ internal static class BoTorchCandidates
     }
 
     /// <summary>Quasi-MC batch Log Expected Improvement (qLogEI). Port of <c>qlogei_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject QLogEi(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
@@ -148,6 +181,13 @@ internal static class BoTorchCandidates
     }
 
     /// <summary>Quasi-MC batch Noisy Expected Improvement (qNEI). Port of <c>qnei_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject QNei(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
@@ -160,6 +200,13 @@ internal static class BoTorchCandidates
     // ---- multi-objective -------------------------------------------------------------------------
 
     /// <summary>Quasi-MC batch Expected Hypervolume Improvement (qEHVI). Port of <c>qehvi_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject Qehvi(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
         => Python.botorch.evalStmts(QehviBody, "result",
@@ -167,6 +214,14 @@ internal static class BoTorchCandidates
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
 
     /// <summary>Expected Hypervolume Improvement (EHVI). Port of <c>ehvi_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="NumSharp.ValueError">A constraint tensor is supplied to analytic EHVI, which does not support constraints.</exception>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject Ehvi(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
@@ -177,6 +232,13 @@ internal static class BoTorchCandidates
     }
 
     /// <summary>Quasi-MC batch Noisy Expected Hypervolume Improvement (qNEHVI). Port of <c>qnehvi_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject Qnehvi(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
         => Python.botorch.evalStmts(QnehviBody, "result",
@@ -184,6 +246,13 @@ internal static class BoTorchCandidates
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
 
     /// <summary>Quasi-MC extended ParEGO (qParEGO). Port of <c>qparego_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject QParEgo(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
         => Python.botorch.evalStmts(QParEgoBody, "result",
@@ -191,6 +260,13 @@ internal static class BoTorchCandidates
             ("bounds", bounds), ("pending_x", pendingX ?? PyObject.None));
 
     /// <summary>Quasi-MC extended ParEGO backed by qLogEI (qLogEI-ParEGO). Port of <c>qlogei_parego_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject QLogEiParEgo(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
         => Python.botorch.evalStmts(QLogEiParEgoBody, "result",
@@ -200,6 +276,13 @@ internal static class BoTorchCandidates
     // ---- knowledge gradient ----------------------------------------------------------------------
 
     /// <summary>Quasi-MC batch Knowledge Gradient (qKG). Port of <c>qkg_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject Qkg(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
     {
@@ -210,6 +293,13 @@ internal static class BoTorchCandidates
     }
 
     /// <summary>Quasi-MC batch Hypervolume Knowledge Gradient (qHVKG). Port of <c>qhvkg_candidates_func</c>.</summary>
+    /// <param name="trainX">The borrowed float64 training tensor with one transformed parameter vector per completed trial.</param>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="trainCon">The borrowed constraint tensor with positive entries denoting violations, or null for unconstrained optimization.</param>
+    /// <param name="bounds">The borrowed two-row tensor containing lower and upper transformed parameter bounds.</param>
+    /// <param name="pendingX">The borrowed transformed parameters of running trials, or null when pending trials are not considered.</param>
+    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject Qhvkg(
         PyObject trainX, PyObject trainObj, PyObject? trainCon, PyObject bounds, PyObject? pendingX)
         => Python.botorch.evalStmts(QhvkgBody, "result",
@@ -508,6 +598,11 @@ internal static class BoTorchCandidates
 
     // ---- guards ---------------------------------------------------------------------------------
 
+    /// <summary>Rejects a multi-objective training tensor for an acquisition requiring one objective.</summary>
+    /// <param name="trainObj">The borrowed objective tensor with one column per objective, already oriented for maximization.</param>
+    /// <param name="name">The Python attribute, parameter, or algorithm name required by the operation.</param>
+    /// <exception cref="NumSharp.ValueError">The objective tensor has more than one objective column.</exception>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     private static void RequireSingleObjective(PyObject trainObj, string name)
     {
         if (Python.torch.Tensor.size_t(trainObj, -1) != 1)

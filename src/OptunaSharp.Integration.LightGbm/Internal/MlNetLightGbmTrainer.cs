@@ -54,14 +54,22 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     /// <summary>The four task types the default backend maps LightGBM <c>objective</c> values onto.</summary>
     private enum LgbmTask
     {
+        /// <summary>Fits a continuous response using the regression trainer.</summary>
         Regression,
+        /// <summary>Fits a two-class target using the binary classifier.</summary>
         Binary,
+        /// <summary>Fits a keyed multiclass target using the multiclass classifier.</summary>
         Multiclass,
+        /// <summary>Fits query-group relevance using the ranking trainer.</summary>
         Ranking,
     }
 
     private readonly struct FitResult
     {
+        /// <summary>Retains a fitted transformer together with the task and multiclass label count needed for scoring.</summary>
+        /// <param name="model">The fitted model object, or null when no representable model is retained.</param>
+        /// <param name="task">The resolved regression, classification, or ranking trainer family.</param>
+        /// <param name="numClass">The multiclass label count, inferred from labels and bounded below by the configured count.</param>
         public FitResult(ITransformer? model, LgbmTask task, int numClass)
         {
             Model = model;
@@ -71,7 +79,9 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
 
         /// <summary>The trained model, or <c>null</c> for a degenerate stump ML.NET could not represent.</summary>
         public ITransformer? Model { get; }
+        /// <summary>The resolved ML.NET task family used to fit and score this model.</summary>
         public LgbmTask Task { get; }
+        /// <summary>The number of classes represented by a multiclass model.</summary>
         public int NumClass { get; }   // multiclass only
     }
 
@@ -122,6 +132,11 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
 
     // ---- Task resolution ----
 
+    /// <summary>Selects the ML.NET task family from the LightGBM objective, using regression for unrecognized objectives.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="trainSet">The dataset used for training or cross-validation.</param>
+    /// <param name="numClass">Receives the multiclass label count, or zero for other task families.</param>
+    /// <returns>The selected trainer family; multiclass selection also sets the class count.</returns>
     private static LgbmTask ResolveTask(IReadOnlyDictionary<string, object?> @params, Dataset trainSet, out int numClass)
     {
         numClass = 0;
@@ -146,6 +161,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return LgbmTask.Regression;
     }
 
+    /// <summary>Resolves the multiclass count without allowing a configured count to omit observed labels.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="trainSet">The dataset used for training or cross-validation.</param>
+    /// <returns>The class count covering every observed label and any larger configured count.</returns>
     private static int ResolveNumClass(IReadOnlyDictionary<string, object?> @params, Dataset trainSet)
     {
         double[] y = trainSet.GetLabelOrZeros();
@@ -167,6 +186,11 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
 
     // ---- Fitting ----
 
+    /// <summary>Selects and trains the task-specific ML.NET LightGBM pipeline.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="trainSet">The dataset used for training or cross-validation.</param>
+    /// <param name="numBoostRound">The requested number of boosting rounds for each trial.</param>
+    /// <returns>The fitted transformer and scoring metadata, with a null transformer for the tolerated stump failure.</returns>
     private static FitResult FitModel(
         IReadOnlyDictionary<string, object?> @params, Dataset trainSet, int numBoostRound)
     {
@@ -202,6 +226,9 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     ///     arrays). Returning <c>null</c> here makes the caller fall back to constant predictions for the
     ///     fit, so the tuner keeps going exactly as it would with real LightGBM's constant-predicting stump.
     /// </summary>
+    /// <param name="fit">The training callback; ArgumentNullException is treated as the known degenerate-tree failure.</param>
+    /// <returns>The fitted transformer, or null when the adapter tolerates an ArgumentNullException from stump construction.</returns>
+    /// <exception cref="System.Exception">The fit callback throws an exception other than the tolerated ArgumentNullException.</exception>
     private static ITransformer? TryFit(Func<ITransformer> fit)
     {
         try
@@ -214,6 +241,9 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         }
     }
 
+    /// <summary>Maps shared LightGBM regularization and sampling parameters to native booster options.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <returns>Native options for shared tree regularization and sampling.</returns>
     private static GradientBooster.Options BuildBooster(IReadOnlyDictionary<string, object?> @params)
     {
         var booster = new GradientBooster.Options();
@@ -233,6 +263,9 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     // here and set on each concrete Options below).
     private readonly record struct CoreParams(double? Lr, int? Leaves, int? MinChild, int? MaxBin, int Threads, int? Seed);
 
+    /// <summary>Reads the numeric options shared by the task-specific LightGBM trainers.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <returns>The parsed optional learning rate, leaf, bin, and child settings plus thread count and seed.</returns>
     private static CoreParams ReadCore(IReadOnlyDictionary<string, object?> @params) => new(
         TryDouble(@params, "learning_rate", out var lr) ? lr : null,
         TryInt(@params, "num_leaves", out var nl) ? nl : null,
@@ -241,6 +274,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         TryInt(@params, "num_threads", out var nt) ? nt : 1,
         TryInt(@params, "seed", out var seed) ? seed : null);
 
+    /// <summary>Builds the ML.NET regression options from LightGBM parameter names.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="numBoostRound">The requested number of boosting rounds for each trial.</param>
+    /// <returns>Configured native regression trainer options.</returns>
     private static LightGbmRegressionTrainer.Options BuildRegressionOptions(
         IReadOnlyDictionary<string, object?> @params, int numBoostRound)
     {
@@ -262,6 +299,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return o;
     }
 
+    /// <summary>Builds the ML.NET binary-classification options from LightGBM parameter names.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="numBoostRound">The requested number of boosting rounds for each trial.</param>
+    /// <returns>Configured native binary-classification trainer options.</returns>
     private static LightGbmBinaryTrainer.Options BuildBinaryOptions(
         IReadOnlyDictionary<string, object?> @params, int numBoostRound)
     {
@@ -283,6 +324,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return o;
     }
 
+    /// <summary>Builds the ML.NET multiclass options from LightGBM parameter names.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="numBoostRound">The requested number of boosting rounds for each trial.</param>
+    /// <returns>Configured native multiclass trainer options.</returns>
     private static LightGbmMulticlassTrainer.Options BuildMulticlassOptions(
         IReadOnlyDictionary<string, object?> @params, int numBoostRound)
     {
@@ -307,6 +352,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return o;
     }
 
+    /// <summary>Builds the ML.NET ranking options from LightGBM parameter names.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="numBoostRound">The requested number of boosting rounds for each trial.</param>
+    /// <returns>Configured native ranking trainer options.</returns>
     private static LightGbmRankingTrainer.Options BuildRankingOptions(
         IReadOnlyDictionary<string, object?> @params, int numBoostRound)
     {
@@ -331,6 +380,11 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
 
     // ---- Metric evaluation ----
 
+    /// <summary>Scores the fitted model on validation data using the metric family for its task.</summary>
+    /// <param name="fit">The fitted model and task metadata, or the callback that fits a model when a delegate is expected.</param>
+    /// <param name="validSet">The held-out dataset on which metrics are evaluated.</param>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <returns>Metric names mapped to their validation scores.</returns>
     private static IReadOnlyDictionary<string, double> EvaluateMetrics(
         FitResult fit, Dataset validSet, IReadOnlyDictionary<string, object?> @params)
     {
@@ -377,6 +431,12 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
 
     // The constant-predictor scores for a degenerate stump (Model == null): zero for regression / ranking,
     // 0.5 for binary, and a uniform 1/K for multiclass — a valid, poor score so the trial completes.
+    /// <summary>Computes metrics from constant fallback predictions when ML.NET cannot represent the fitted stump.</summary>
+    /// <param name="fit">The fitted model and task metadata, or the callback that fits a model when a delegate is expected.</param>
+    /// <param name="validSet">The held-out dataset on which metrics are evaluated.</param>
+    /// <param name="y">One target or class-label value per sample, in training-row order.</param>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <returns>Metric scores for the task's constant fallback predictions.</returns>
     private static IReadOnlyDictionary<string, double> DegenerateMetrics(
         FitResult fit, Dataset validSet, double[] y, IReadOnlyDictionary<string, object?> @params)
     {
@@ -406,6 +466,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         }
     }
 
+    /// <summary>Computes the supported regression metric values and LightGBM aliases.</summary>
+    /// <param name="y">One target or class-label value per sample, in training-row order.</param>
+    /// <param name="pred">The predicted regression values in validation-row order.</param>
+    /// <returns>The supported regression metric names and their computed values.</returns>
     private static IReadOnlyDictionary<string, double> RegressionMetrics(double[] y, double[] pred)
     {
         int n = y.Length;
@@ -432,6 +496,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         };
     }
 
+    /// <summary>Computes the supported binary classification metrics from positive-class probabilities.</summary>
+    /// <param name="y">One target or class-label value per sample, in training-row order.</param>
+    /// <param name="prob">The predicted positive-class probabilities in validation-row order.</param>
+    /// <returns>The supported binary metric names and their computed values.</returns>
     private static IReadOnlyDictionary<string, double> BinaryMetrics(double[] y, double[] prob)
     {
         int n = y.Length;
@@ -455,6 +523,9 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     }
 
     /// <summary>Multiclass log-loss + error from per-class probabilities (<c>Score[c] = P(class c)</c>, 0-based).</summary>
+    /// <param name="y">One target or class-label value per sample, in training-row order.</param>
+    /// <param name="probs">One class-probability vector per validation row.</param>
+    /// <returns>The supported multiclass metric names and their computed values.</returns>
     internal static IReadOnlyDictionary<string, double> MulticlassMetrics(double[] y, float[][] probs)
     {
         int n = y.Length;
@@ -486,6 +557,11 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     ///     averaged over groups. Adapter metrics: not LightGBM's byte-for-byte, but higher-is-better and
     ///     monotone, which is all the stepwise search needs.
     /// </summary>
+    /// <param name="rel">The relevance label of each ranking row.</param>
+    /// <param name="score">The predicted score of each validation row, with larger scores ranking ahead.</param>
+    /// <param name="group">Positive contiguous query-group sizes whose sum equals the row count; null when ranking groups are not supplied.</param>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <returns>Query-averaged ranking metrics keyed by metric name and cutoff.</returns>
     internal static IReadOnlyDictionary<string, double> RankingMetrics(
         double[] rel, double[] score, int[] group, IReadOnlyDictionary<string, object?> @params)
     {
@@ -513,6 +589,12 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return result;
     }
 
+    /// <summary>Computes normalized discounted cumulative gain for one query at the requested cutoff.</summary>
+    /// <param name="order">Row indices ordered by descending predicted score within one query group.</param>
+    /// <param name="ideal">Row indices ordered by descending relevance for the same query group.</param>
+    /// <param name="rel">The relevance label of each ranking row.</param>
+    /// <param name="k">The maximum ranking position included in the metric.</param>
+    /// <returns>Normalized gain at k, or one when ideal gain is zero.</returns>
     private static double NdcgAtK(int[] order, int[] ideal, double[] rel, int k)
     {
         double dcg = Dcg(order, rel, k);
@@ -520,6 +602,11 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return idcg > 0 ? dcg / idcg : 1.0;   // an all-zero-relevance query is trivially "perfectly" ranked
     }
 
+    /// <summary>Computes exponential-relevance discounted cumulative gain for the first k ranked rows.</summary>
+    /// <param name="order">Row indices ordered by descending predicted score within one query group.</param>
+    /// <param name="rel">The relevance label of each ranking row.</param>
+    /// <param name="k">The maximum ranking position included in the metric.</param>
+    /// <returns>The discounted relevance gain through the requested cutoff.</returns>
     private static double Dcg(int[] order, double[] rel, int k)
     {
         int limit = Math.Min(k, order.Length);
@@ -529,6 +616,11 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return sum;
     }
 
+    /// <summary>Computes average precision at k for one query, treating positive relevance as relevant.</summary>
+    /// <param name="order">Row indices ordered by descending predicted score within one query group.</param>
+    /// <param name="rel">The relevance label of each ranking row.</param>
+    /// <param name="k">The maximum ranking position included in the metric.</param>
+    /// <returns>Average precision at k, or one when the query contains no relevant documents.</returns>
     private static double MapAtK(int[] order, double[] rel, int k)
     {
         int limit = Math.Min(k, order.Length);
@@ -547,6 +639,9 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     }
 
     /// <summary>Port of the <c>eval_at</c> resolution in <c>_metric_with_eval_at</c>, returning the full list.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="metric">The LightGBM metric name used for optimization or reporting.</param>
+    /// <returns>The configured cutoff positions, or the LightGBM-compatible default positions.</returns>
     private static List<int> ResolveEvalAt(IReadOnlyDictionary<string, object?> @params, string metric)
     {
         object? evalAt = @params.GetValueOrDefault("eval_at")
@@ -568,6 +663,9 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     }
 
     /// <summary>Rank-based AUC (Mann–Whitney U); ties get the average rank.</summary>
+    /// <param name="y">One target or class-label value per sample, in training-row order.</param>
+    /// <param name="score">The predicted score of each validation row, with larger scores ranking ahead.</param>
+    /// <returns>The rank-based area under the ROC curve, accounting for tied scores.</returns>
     private static double Auc(double[] y, double[] score)
     {
         int n = y.Length;
@@ -601,6 +699,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
 
     // ---- Data loading ----
 
+    /// <summary>Builds a float-label ML.NET data view for regression training or scoring.</summary>
+    /// <param name="ml">The ML.NET context used to construct the typed data view.</param>
+    /// <param name="set">The dataset whose rows or complete groups are split.</param>
+    /// <returns>A data view with float32 features and continuous labels.</returns>
     private static IDataView LoadRegression(MLContext ml, Dataset set)
     {
         int n = set.NumRows, d = set.NumFeatures;
@@ -614,6 +716,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return ml.Data.LoadFromEnumerable(rows, schema);
     }
 
+    /// <summary>Builds a Boolean-label ML.NET data view for binary training or scoring.</summary>
+    /// <param name="ml">The ML.NET context used to construct the typed data view.</param>
+    /// <param name="set">The dataset whose rows or complete groups are split.</param>
+    /// <returns>A data view with float32 features and Boolean labels.</returns>
     private static IDataView LoadBinary(MLContext ml, Dataset set)
     {
         int n = set.NumRows, d = set.NumFeatures;
@@ -627,6 +733,11 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return ml.Data.LoadFromEnumerable(rows, schema);
     }
 
+    /// <summary>Builds a keyed-label ML.NET data view for multiclass training or scoring.</summary>
+    /// <param name="ml">The ML.NET context used to construct the typed data view.</param>
+    /// <param name="set">The dataset whose rows or complete groups are split.</param>
+    /// <param name="numClass">The multiclass label count, inferred from labels and bounded below by the configured count.</param>
+    /// <returns>A data view with float32 features and one-based keyed class labels.</returns>
     private static IDataView LoadMulticlass(MLContext ml, Dataset set, int numClass)
     {
         int n = set.NumRows, d = set.NumFeatures;
@@ -642,6 +753,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return ml.Data.LoadFromEnumerable(rows, schema);
     }
 
+    /// <summary>Builds a relevance-label and query-group ML.NET data view for ranking.</summary>
+    /// <param name="ml">The ML.NET context used to construct the typed data view.</param>
+    /// <param name="set">The dataset whose rows or complete groups are split.</param>
+    /// <returns>A data view with float32 features, relevance labels, and query-group keys.</returns>
     private static IDataView LoadRanking(MLContext ml, Dataset set)
     {
         int n = set.NumRows, d = set.NumFeatures;
@@ -659,6 +774,13 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
 
     // ---- Folding ----
 
+    /// <summary>Selects row-based or whole-query-group cross-validation according to the training task.</summary>
+    /// <param name="set">The dataset whose rows or complete groups are split.</param>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="nFold">The requested number of cross-validation folds.</param>
+    /// <param name="shuffle">Whether to shuffle row or query-group order before assigning folds.</param>
+    /// <param name="seed">The training or fold-shuffling seed, as specified by the operation.</param>
+    /// <returns>Training and validation datasets for each cross-validation fold.</returns>
     private static List<(Dataset Train, Dataset Val)> BuildFolds(
         Dataset set, IReadOnlyDictionary<string, object?> @params, int nFold, bool shuffle, int seed)
     {
@@ -671,6 +793,10 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
             .ToList();
     }
 
+    /// <summary>Copies selected rows and corresponding labels, weights, and feature metadata into a dataset.</summary>
+    /// <param name="set">The dataset whose rows or complete groups are split.</param>
+    /// <param name="idx">The source row indices retained in the resulting dataset, in output order.</param>
+    /// <returns>The new dataset containing the selected rows in their supplied order.</returns>
     private static Dataset Subset(Dataset set, IReadOnlyList<int> idx)
     {
         var data = new float[idx.Count][];
@@ -685,6 +811,12 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return new Dataset(data, label, weight, set.FeatureName);
     }
 
+    /// <summary>Partitions row indices into complementary training and validation folds with optional seeded shuffling.</summary>
+    /// <param name="n">The number of training rows used to bound leaves or construct folds.</param>
+    /// <param name="nFold">The requested number of cross-validation folds.</param>
+    /// <param name="shuffle">Whether to shuffle row or query-group order before assigning folds.</param>
+    /// <param name="seed">The training or fold-shuffling seed, as specified by the operation.</param>
+    /// <returns>Complementary training and validation row-index arrays for each fold.</returns>
     private static List<(int[] TrainIdx, int[] ValIdx)> MakeRowFolds(int n, int nFold, bool shuffle, int seed)
     {
         var order = Enumerable.Range(0, n).ToArray();
@@ -711,6 +843,13 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     }
 
     // Ranking folds must never split a query group, so they partition whole GROUPS (not rows) into folds.
+    /// <summary>Partitions complete ranking queries so a query never spans training and validation.</summary>
+    /// <param name="set">The dataset whose rows or complete groups are split.</param>
+    /// <param name="nFold">The requested number of cross-validation folds.</param>
+    /// <param name="shuffle">Whether to shuffle row or query-group order before assigning folds.</param>
+    /// <param name="seed">The training or fold-shuffling seed, as specified by the operation.</param>
+    /// <returns>Fold datasets containing disjoint complete query groups.</returns>
+    /// <exception cref="NumSharp.ValueError">The ranking dataset does not provide query-group sizes.</exception>
     private static List<(Dataset Train, Dataset Val)> MakeGroupFolds(Dataset set, int nFold, bool shuffle, int seed)
     {
         int g = set.NumGroups;
@@ -745,6 +884,8 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     // ---- ILightGbmBoosterStore (model_dir persistence) ----
 
     /// <inheritdoc />
+    /// <exception cref="System.IO.IOException">A model or metadata file cannot be read or written.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Access to the model or metadata path is denied.</exception>
     public void SaveBooster(Booster booster, string path)
     {
         // A degenerate stump has no ML.NET model (Booster.Model == null); persist only its scores then.
@@ -759,6 +900,9 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     }
 
     /// <inheritdoc />
+    /// <exception cref="System.IO.IOException">A model or metadata file cannot be read or written.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Access to the model or metadata path is denied.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The metadata JSON is malformed or incompatible with the expected representation.</exception>
     public Booster LoadBooster(string path)
     {
         ITransformer? model = File.Exists(path + ModelExt)
@@ -771,6 +915,8 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     }
 
     /// <inheritdoc />
+    /// <exception cref="System.IO.IOException">A model or metadata file cannot be read or written.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Access to the model or metadata path is denied.</exception>
     public void SaveCvBooster(CvBooster booster, string path)
     {
         var ml = new MLContext();
@@ -781,6 +927,9 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     }
 
     /// <inheritdoc />
+    /// <exception cref="System.IO.IOException">A model or metadata file cannot be read or written.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Access to the model or metadata path is denied.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The metadata JSON is malformed or incompatible with the expected representation.</exception>
     public CvBooster LoadCvBooster(string path)
     {
         var meta = ReadMeta<CvMeta>(path + CvMetaExt);
@@ -798,15 +947,36 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
     public bool BoosterExists(string path)
         => File.Exists(path + MetaExt) || File.Exists(path + CvMetaExt);
 
+    /// <summary>Writes model-scoring metadata as a JSON sidecar.</summary>
+    /// <param name="path">The model store's extensionless base path, or the concrete JSON path for metadata helpers.</param>
+    /// <param name="meta">The managed metadata object serialized beside the model.</param>
+    /// <exception cref="System.IO.IOException">The metadata file cannot be written.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Access to the metadata file is denied.</exception>
     private static void WriteMeta(string path, object meta)
         => File.WriteAllText(path, JsonSerializer.Serialize(meta));
 
+    /// <summary>Reads and deserializes a model-scoring JSON sidecar.</summary>
+    /// <param name="path">The model store's extensionless base path, or the concrete JSON path for metadata helpers.</param>
+    /// <returns>The deserialized model metadata.</returns>
+    /// <typeparam name="T">The metadata DTO type expected in the JSON sidecar.</typeparam>
+    /// <exception cref="NumSharp.ValueError">The metadata JSON deserializes to null.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The sidecar JSON is malformed or does not match the expected metadata shape.</exception>
+    /// <exception cref="System.IO.IOException">The metadata file cannot be read.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Access to the metadata file is denied.</exception>
     private static T ReadMeta<T>(string path)
         => JsonSerializer.Deserialize<T>(File.ReadAllText(path))
            ?? throw new ValueError($"The booster metadata at {path} could not be read.");
 
     // ---- Param access helpers ----
 
+    /// <summary>Reads an optional numeric parameter as a double; malformed present values propagate conversion failures.</summary>
+    /// <param name="p">The LightGBM parameter dictionary to query.</param>
+    /// <param name="key">The native LightGBM parameter name to read.</param>
+    /// <param name="value">Receives the converted numeric value, or zero when the entry is missing or null.</param>
+    /// <returns>Whether a nonnull parameter was found and converted successfully.</returns>
+    /// <exception cref="System.FormatException">A present parameter string cannot be parsed as the requested number.</exception>
+    /// <exception cref="System.InvalidCastException">A present parameter value does not support the requested numeric conversion.</exception>
+    /// <exception cref="System.OverflowException">The parameter value is outside the requested numeric type's range.</exception>
     private static bool TryDouble(IReadOnlyDictionary<string, object?> p, string key, out double value)
     {
         if (p.TryGetValue(key, out var v) && v is not null)
@@ -818,6 +988,14 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
         return false;
     }
 
+    /// <summary>Reads an optional numeric parameter as an integer; malformed present values propagate conversion failures.</summary>
+    /// <param name="p">The LightGBM parameter dictionary to query.</param>
+    /// <param name="key">The native LightGBM parameter name to read.</param>
+    /// <param name="value">Receives the converted numeric value, or zero when the entry is missing or null.</param>
+    /// <returns>Whether a nonnull parameter was found and converted successfully.</returns>
+    /// <exception cref="System.FormatException">A present parameter string cannot be parsed as the requested number.</exception>
+    /// <exception cref="System.InvalidCastException">A present parameter value does not support the requested numeric conversion.</exception>
+    /// <exception cref="System.OverflowException">The parameter value is outside the requested numeric type's range.</exception>
     private static bool TryInt(IReadOnlyDictionary<string, object?> p, string key, out int value)
     {
         if (p.TryGetValue(key, out var v) && v is not null)
@@ -831,59 +1009,76 @@ public sealed class MlNetLightGbmTrainer : ILightGbmTrainer, ILightGbmBoosterSto
 
     private sealed class RegInputRow
     {
+        /// <summary>The row's ordered float32 feature vector exposed to the ML.NET schema.</summary>
         public float[] Features { get; set; } = Array.Empty<float>();
+        /// <summary>The training label encoded in the trainer's required scalar type.</summary>
         public float Label { get; set; }
     }
 
     private sealed class BinInputRow
     {
+        /// <summary>The row's ordered float32 feature vector exposed to the ML.NET schema.</summary>
         public float[] Features { get; set; } = Array.Empty<float>();
+        /// <summary>The training label encoded in the trainer's required scalar type.</summary>
         public bool Label { get; set; }
     }
 
     private sealed class MultiInputRow
     {
+        /// <summary>The row's ordered float32 feature vector exposed to the ML.NET schema.</summary>
         public float[] Features { get; set; } = Array.Empty<float>();
+        /// <summary>The training label encoded in the trainer's required scalar type.</summary>
         public uint Label { get; set; }
     }
 
     private sealed class RankInputRow
     {
+        /// <summary>The row's ordered float32 feature vector exposed to the ML.NET schema.</summary>
         public float[] Features { get; set; } = Array.Empty<float>();
+        /// <summary>The training label encoded in the trainer's required scalar type.</summary>
         public float Label { get; set; }
+        /// <summary>The dataset's zero-based query-group identifier carried by the ML.NET ranking row.</summary>
         public uint GroupId { get; set; }
     }
 
     private sealed class RegOut
     {
+        /// <summary>The model's predicted response or ranking score.</summary>
         public float Score { get; set; }
     }
 
     private sealed class BinOut
     {
+        /// <summary>The predicted positive-class probability.</summary>
         public float Probability { get; set; }
     }
 
     private sealed class MultiOut
     {
+        /// <summary>The predicted class-score vector.</summary>
         [VectorType]
         public float[] Score { get; set; } = Array.Empty<float>();
     }
 
     private sealed class RankOut
     {
+        /// <summary>The model's predicted response or ranking score.</summary>
         public float Score { get; set; }
     }
 
     private sealed class BoosterMeta
     {
+        /// <summary>The boosting-round count persisted with a single fitted model.</summary>
         public int CurrentIteration { get; set; }
+        /// <summary>Validation scores grouped by validation-set name and metric name.</summary>
         public Dictionary<string, Dictionary<string, double>> BestScore { get; set; } = new();
     }
 
     private sealed class CvMeta
     {
+        /// <summary>The boosting iteration persisted with the cross-validation models.</summary>
         public int BestIteration { get; set; }
+        /// <summary>The number of fold model slots described by the metadata.</summary>
         public int NumFolds { get; set; }
     }
 }

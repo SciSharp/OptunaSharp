@@ -52,6 +52,8 @@ public static class Optuna
     ///     returned.
     /// </param>
     /// <param name="directions">A sequence of directions during multi-objective optimization.</param>
+    /// <returns>A study bound to the resolved storage, using the requested sampler and pruner.</returns>
+    /// <exception cref="NumSharp.ValueError">Both direction forms are supplied, the directions sequence is empty, or a direction is neither Minimize nor Maximize.</exception>
     public static Study CreateStudy(
         BaseStorage? storage = null,
         BaseSampler? sampler = null,
@@ -79,6 +81,8 @@ public static class Optuna
             directionList = directions!.ToList();
         }
 
+        // Direction count defines objective dimensionality throughout storage and sampling; reject
+        // an ambiguous or empty configuration before creating a persistent study record.
         if (directionList.Count < 1)
             throw new ValueError("The number of objectives must be greater than 0.");
         if (directionList.Any(d => d != StudyDirection.Minimize && d != StudyDirection.Maximize))
@@ -130,6 +134,9 @@ public static class Optuna
     /// <param name="storage">Storage object (or use the OptunaSharp.Storage.* packages for URLs).</param>
     /// <param name="sampler">Sampler, defaulting to <see cref="TPESampler" />.</param>
     /// <param name="pruner">Pruner, defaulting to <see cref="MedianPruner" />.</param>
+    /// <returns>The existing study with this invocation's sampler and pruner.</returns>
+    /// <exception cref="NumSharp.ValueError">The name is omitted and storage does not contain exactly one study.</exception>
+    /// <exception cref="NumSharp.KeyError">The named study does not exist.</exception>
     public static Study LoadStudy(
         string? studyName,
         BaseStorage storage,
@@ -155,6 +162,9 @@ public static class Optuna
     /// <summary>
     ///     Delete a <see cref="Study" /> object. Port of <c>optuna.delete_study</c>.
     /// </summary>
+    /// <param name="studyName">Name identifying the study in the selected storage.</param>
+    /// <param name="storage">Storage backend holding study and trial records.</param>
+    /// <exception cref="NumSharp.KeyError">The named study does not exist.</exception>
     public static void DeleteStudy(string studyName, BaseStorage storage)
     {
         var resolvedStorage = StorageFunctions.GetStorage(storage);
@@ -171,6 +181,13 @@ public static class Optuna
     /// <exception cref="DuplicatedStudyError">
     ///     If a study with a conflicting name already exists in the destination storage.
     /// </exception>
+    /// <param name="fromStudyName">Name of the existing source study.</param>
+    /// <param name="fromStorage">Storage from which metadata and trials are read.</param>
+    /// <param name="toStorage">Storage in which the new study is created.</param>
+    /// <param name="toStudyName">Destination name; null reuses the source name.</param>
+    /// <exception cref="NumSharp.KeyError">The source study is absent.</exception>
+    /// <exception cref="NumSharp.ValueError">A copied trial has an objective count incompatible with the study.</exception>
+    /// <remarks>The copy is incremental. A failure can leave the destination study with only part of its metadata or trials.</remarks>
     public static void CopyStudy(
         string fromStudyName,
         BaseStorage fromStorage,
@@ -178,6 +195,8 @@ public static class Optuna
         string? toStudyName = null)
     {
         var fromStudy = LoadStudy(studyName: fromStudyName, storage: fromStorage);
+        // Backends need not share a transaction. The new study remains visible if a later metadata
+        // or trial copy fails, matching the incremental copy contract.
         var toStudy = CreateStudy(
             studyName: toStudyName ?? fromStudyName,
             storage: toStorage,
@@ -211,6 +230,7 @@ public static class Optuna
     ///     Include the best trials if exist. It potentially increases the number of queries and
     ///     may take longer to fetch summaries depending on the storage.
     /// </param>
+    /// <returns>Summaries in storage order, including counts and optional single-objective best trials.</returns>
     public static List<StudySummary> GetAllStudySummaries(BaseStorage storage, bool includeBestTrial = true)
     {
         var resolvedStorage = StorageFunctions.GetStorage(storage);
@@ -273,6 +293,8 @@ public static class Optuna
     ///     Get all study names stored in a specified storage.
     ///     Port of <c>optuna.get_all_study_names</c>.
     /// </summary>
+    /// <param name="storage">Storage backend holding study and trial records.</param>
+    /// <returns>Names of all studies in the order returned by the storage backend.</returns>
     public static List<string> GetAllStudyNames(BaseStorage storage)
     {
         var resolvedStorage = StorageFunctions.GetStorage(storage);

@@ -9,7 +9,7 @@ namespace OptunaSharp.Distributions;
 /// <summary>
 ///     A distribution on floats. Port of <c>optuna/distributions.py: FloatDistribution</c>.
 ///
-///     This object is instantiated by <see cref="Trial.SuggestFloat(string, double, double)" />, and
+///     This object is instantiated by <see cref="Trial.SuggestFloat(string, double, double, double?, bool)" />, and
 ///     passed to samplers in general.
 /// </summary>
 /// <remarks>
@@ -31,6 +31,14 @@ public class FloatDistribution : BaseDistribution
     /// <summary>If <c>true</c>, this distribution is in log-scaled domain.</summary>
     public bool Log { get; }
 
+    /// <summary>Creates a numeric distribution and normalizes a stepped upper endpoint.</summary>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <param name="log">Whether to sample in the logarithmic domain, which requires a strictly positive lower endpoint.</param>
+    /// <param name="step">Positive float grid spacing, or null for a continuous range; logarithmic ranges require null.</param>
+    /// <exception cref="NumSharp.ValueError">The lower endpoint exceeds the upper endpoint, logarithmic bounds are nonpositive, or the step is invalid for the selected scale.</exception>
+    /// <exception cref="System.FormatException">A stepped bound or step is NaN or infinite and cannot be parsed as a decimal.</exception>
+    /// <exception cref="System.DivideByZeroException">A positive step rounds to zero in decimal arithmetic while aligning the upper endpoint.</exception>
     public FloatDistribution(double low, double high, bool log = false, double? step = null)
     {
         if (log && step is not null)
@@ -59,6 +67,9 @@ public class FloatDistribution : BaseDistribution
         Log = log;
     }
 
+    /// <summary>Tests whether this distribution admits only one candidate.</summary>
+    /// <returns>True when sampling can be replaced by the sole allowed value.</returns>
+    /// <exception cref="System.FormatException">A stepped bound or step is NaN or infinite and cannot be parsed as a decimal.</exception>
     public override bool Single()
     {
         if (Step is null)
@@ -81,6 +92,9 @@ public class FloatDistribution : BaseDistribution
         }
     }
 
+    /// <summary>Tests membership using the stored numeric representation.</summary>
+    /// <param name="paramValueInInternalRepr">Numeric internal representation: a numeric value or a zero-based categorical index.</param>
+    /// <returns>True when the value belongs to the range or categorical index domain.</returns>
     internal override bool Contains(double paramValueInInternalRepr)
     {
         double value = paramValueInInternalRepr;
@@ -92,6 +106,10 @@ public class FloatDistribution : BaseDistribution
         return Low <= value && value <= High && Math.Abs(k - Math.Round(k)) < 1.0e-8;
     }
 
+    /// <summary>Converts an external value into the numeric representation used by samplers.</summary>
+    /// <param name="paramValueInExternalRepr">External parameter value to convert to the distribution's numeric representation.</param>
+    /// <returns>The converted numeric value; range membership is checked separately by Contains.</returns>
+    /// <exception cref="NumSharp.ValueError">The value cannot be converted to a number, is NaN, or is nonpositive for a logarithmic distribution.</exception>
     public override double ToInternalRepr(object? paramValueInExternalRepr)
     {
         if (!PyFloat.TryConvert(paramValueInExternalRepr, out double internalRepr))
@@ -106,6 +124,8 @@ public class FloatDistribution : BaseDistribution
         return internalRepr;
     }
 
+    /// <summary>Builds the attribute payload used by Optuna JSON serialization.</summary>
+    /// <returns>A new ordered attribute dictionary; values preserve their distribution representation.</returns>
     internal override OrderedDict<string, object?> AsDict() => new()
     {
         // __init__ assignment order: step, low, high, log.
@@ -115,6 +135,9 @@ public class FloatDistribution : BaseDistribution
         ["log"] = Log,
     };
 
+    /// <summary>Compares distribution types and their defining attributes.</summary>
+    /// <param name="other">Value to compare with this instance; null compares unequal.</param>
+    /// <returns>True when the distributions have compatible types and equal attributes.</returns>
     public override bool Equals(BaseDistribution? other)
     {
         if (other is null || other.GetType() != GetType())
@@ -124,9 +147,17 @@ public class FloatDistribution : BaseDistribution
         return Nullable.Equals(Step, o.Step) && Low.Equals(o.Low) && High.Equals(o.High) && Log == o.Log;
     }
 
+    /// <summary>Computes a hash from the distribution type and defining attributes.</summary>
+    /// <returns>Hash code consistent with distribution equality.</returns>
     public override int GetHashCode() => HashCode.Combine(GetType(), Step, Low, High, Log);
 
     /// <summary>Python <c>_adjust_discrete_uniform_high</c> (exact Decimal arithmetic on the shortest reprs).</summary>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <param name="step">Positive grid spacing used to align the upper endpoint.</param>
+    /// <returns>The greatest reachable upper endpoint; the original endpoint is retained if decimal arithmetic overflows.</returns>
+    /// <exception cref="System.FormatException">A bound or step cannot be parsed as a finite decimal.</exception>
+    /// <exception cref="System.DivideByZeroException">The decimal representation of step is zero.</exception>
     internal static double AdjustDiscreteUniformHigh(double low, double high, double step)
     {
         try
@@ -166,9 +197,15 @@ public class UniformDistribution : FloatDistribution
 {
     // Optuna's @deprecated_class wraps __init__ to warn on construction; mirror that with a
     // runtime FutureWarning carrying the identical message (see DeprecationMessages).
+    /// <summary>Creates a numeric distribution and normalizes a stepped upper endpoint.</summary>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <exception cref="NumSharp.ValueError">The lower endpoint exceeds the upper endpoint, logarithmic bounds are nonpositive, or the step is invalid for the selected scale.</exception>
     public UniformDistribution(double low, double high) : base(low, high, log: false, step: null)
         => OptunaWarnings.Warn(DeprecationMessages.UniformDistribution, WarningCategory.FutureWarning);
 
+    /// <summary>Builds the attribute payload used by Optuna JSON serialization.</summary>
+    /// <returns>A new ordered attribute dictionary; values preserve their distribution representation.</returns>
     internal override OrderedDict<string, object?> AsDict() => new()
     {
         ["low"] = Low,
@@ -183,9 +220,15 @@ public class UniformDistribution : FloatDistribution
 [Obsolete(DeprecationMessages.LogUniformDistribution)]
 public class LogUniformDistribution : FloatDistribution
 {
+    /// <summary>Creates a numeric distribution and normalizes a stepped upper endpoint.</summary>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <exception cref="NumSharp.ValueError">The lower endpoint exceeds the upper endpoint, logarithmic bounds are nonpositive, or the step is invalid for the selected scale.</exception>
     public LogUniformDistribution(double low, double high) : base(low, high, log: true, step: null)
         => OptunaWarnings.Warn(DeprecationMessages.LogUniformDistribution, WarningCategory.FutureWarning);
 
+    /// <summary>Builds the attribute payload used by Optuna JSON serialization.</summary>
+    /// <returns>A new ordered attribute dictionary; values preserve their distribution representation.</returns>
     internal override OrderedDict<string, object?> AsDict() => new()
     {
         ["low"] = Low,
@@ -200,6 +243,11 @@ public class LogUniformDistribution : FloatDistribution
 [Obsolete(DeprecationMessages.DiscreteUniformDistribution)]
 public class DiscreteUniformDistribution : FloatDistribution
 {
+    /// <summary>Creates a numeric distribution and normalizes a stepped upper endpoint.</summary>
+    /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
+    /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
+    /// <param name="q">Positive spacing of the discrete float grid.</param>
+    /// <exception cref="NumSharp.ValueError">The lower endpoint exceeds the upper endpoint, logarithmic bounds are nonpositive, or the step is invalid for the selected scale.</exception>
     public DiscreteUniformDistribution(double low, double high, double q) : base(low, high, step: q)
         => OptunaWarnings.Warn(DeprecationMessages.DiscreteUniformDistribution, WarningCategory.FutureWarning);
 
@@ -212,6 +260,8 @@ public class DiscreteUniformDistribution : FloatDistribution
         set => Step = value;
     }
 
+    /// <summary>Builds the attribute payload used by Optuna JSON serialization.</summary>
+    /// <returns>A new ordered attribute dictionary; values preserve their distribution representation.</returns>
     internal override OrderedDict<string, object?> AsDict() => new()
     {
         ["low"] = Low,
@@ -226,6 +276,10 @@ public class DiscreteUniformDistribution : FloatDistribution
 /// </summary>
 internal static class PyFloat
 {
+    /// <summary>Attempts Python-compatible float conversion of supported scalar values.</summary>
+    /// <param name="value">Candidate scalar to convert using Python-compatible float rules.</param>
+    /// <param name="result">Converted scalar on success; otherwise the value produced by the failed conversion.</param>
+    /// <returns>True when conversion succeeds, including NaN and infinity.</returns>
     internal static bool TryConvert(object? value, out double result)
     {
         switch (value)
@@ -258,6 +312,10 @@ internal static class PyFloat
         }
     }
 
+    /// <summary>Parses invariant numeric text and Python spellings of infinity and NaN.</summary>
+    /// <param name="s">Numeric text; surrounding whitespace is ignored.</param>
+    /// <param name="result">Parsed value on success, or the parser's failure value.</param>
+    /// <returns>True if the text is accepted as a float.</returns>
     private static bool TryParse(string s, out double result)
     {
         s = s.Trim();

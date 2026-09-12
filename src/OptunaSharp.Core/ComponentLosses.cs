@@ -95,6 +95,9 @@ public static class ComponentLosses
     ///     non-finite entry (so a stored vector always reads back — a non-finite one never silently
     ///     becomes "absent"). Negative entries are accepted (read at their zero clamp downstream).
     /// </summary>
+    /// <param name="components">Nonempty finite residual vector to persist.</param>
+    /// <returns>A caller-owned copy of the validated component vector.</returns>
+    /// <exception cref="NumSharp.ValueError">The vector is empty or contains NaN or infinity.</exception>
     internal static double[] Validate(ReadOnlySpan<double> components)
     {
         if (components.Length == 0)
@@ -117,6 +120,8 @@ public static class ComponentLosses
     ///     Coerce a raw user-attr value to a validated component vector, or <c>null</c> when it is not a
     ///     usable residual vector (absent element, non-numeric, non-finite, or empty).
     /// </summary>
+    /// <param name="raw">Raw user-attribute value, possibly a numeric sequence.</param>
+    /// <returns>A fresh finite nonempty vector, or null for unsupported input.</returns>
     private static double[]? ToComponents(object? raw)
     {
         switch (raw)
@@ -153,6 +158,9 @@ public static class ComponentLosses
         }
     }
 
+    /// <summary>Checks whether every component is neither NaN nor infinity.</summary>
+    /// <param name="a">Array of component values to inspect.</param>
+    /// <returns>True when every entry is finite; true for an empty array.</returns>
     private static bool AllFinite(double[] a)
     {
         foreach (double v in a)

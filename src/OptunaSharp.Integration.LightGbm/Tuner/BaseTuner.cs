@@ -34,10 +34,14 @@ public abstract class BaseTuner
     /// <summary>The validation name(s), when explicitly supplied by the caller; else <c>null</c>.</summary>
     protected IReadOnlyList<string>? ValidNames;
 
+    /// <summary>Retains the shared LightGBM parameters used to resolve metrics and validation names.</summary>
+    /// <param name="lgbmParams">The mutable ordered LightGBM parameter dictionary, shared with the current tuning step.</param>
     protected BaseTuner(OrderedDict<string, object?> lgbmParams)
         => LgbmParams = lgbmParams;
 
     /// <summary>Port of <c>_get_metric_for_objective</c> — the one metric Optuna optimizes.</summary>
+    /// <returns>The final configured optimization metric, including a ranking cutoff where applicable.</returns>
+    /// <exception cref="System.NotImplementedException">The metric configuration is empty or has an unsupported type.</exception>
     protected string GetMetricForObjective()
     {
         object? metric = LgbmParams.GetValueOrDefault("metric", "binary_logloss");
@@ -61,6 +65,9 @@ public abstract class BaseTuner
     }
 
     /// <summary>Port of <c>_metric_with_eval_at</c> — append <c>@k</c> for the ranking metrics.</summary>
+    /// <param name="metric">The LightGBM metric name used for optimization or reporting.</param>
+    /// <returns>The ranking metric name with the resolved evaluation cutoff appended.</returns>
+    /// <exception cref="NumSharp.ValueError">The ranking cutoff is neither an integer nor an integer sequence.</exception>
     private string MetricWithEvalAt(string metric)
     {
         if (metric != "ndcg" && metric != "map")
@@ -87,6 +94,7 @@ public abstract class BaseTuner
     }
 
     /// <summary>Port of <c>higher_is_better</c> — is a larger metric value better?</summary>
+    /// <returns>Whether the selected metric should be maximized.</returns>
     public bool HigherIsBetter()
     {
         object? metric = LgbmParams.GetValueOrDefault("metric", "binary_logloss");
@@ -94,10 +102,16 @@ public abstract class BaseTuner
     }
 
     /// <summary>Port of <c>compare_validation_metrics</c>.</summary>
+    /// <param name="valScore">The newly observed validation score.</param>
+    /// <param name="bestScore">The current best score, or the validation-set metric mapping when constructing a Booster.</param>
+    /// <returns>Whether the new validation score improves on the incumbent in the metric's preferred direction.</returns>
     public bool CompareValidationMetrics(double valScore, double bestScore)
         => HigherIsBetter() ? valScore > bestScore : valScore < bestScore;
 
     /// <summary>Port of <c>_get_booster_best_score</c> — <c>booster.best_score[valid_name][metric]</c>.</summary>
+    /// <param name="booster">The trained booster or collection of fold models to inspect or persist.</param>
+    /// <returns>The selected validation-set metric from the booster.</returns>
+    /// <exception cref="System.NotImplementedException">No validation set or metric can be selected from the tuner configuration.</exception>
     protected double GetBoosterBestScore(Booster booster)
     {
         string metric = GetMetricForObjective();
@@ -116,6 +130,7 @@ public abstract class BaseTuner
     }
 
     /// <summary>The name of every validation set, aligned with <see cref="ValidSets" />.</summary>
+    /// <returns>Validation-set names in the same order as their datasets.</returns>
     protected IReadOnlyList<string> ResolveAllValidNames()
     {
         int n = ValidSets?.Count ?? 0;

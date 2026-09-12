@@ -24,26 +24,35 @@ namespace OptunaSharp;
 ///     study, please refer to <see cref="Optuna.CreateStudy" /> and <see cref="Optuna.LoadStudy" />
 ///     respectively.
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.study.Study.html">Official Optuna study contract.</seealso>
 public class Study
 {
+    /// <summary>Reserved system-attribute key holding objective display names.</summary>
     internal const string SystemAttrMetricNames = "study:metric_names";
 
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.study.study");
 
+    /// <summary>Per-thread optimization-loop state and cached trial history.</summary>
     internal sealed class ThreadLocalStudyAttribute
     {
+        /// <summary>Whether this thread is currently executing an objective or its callbacks.</summary>
         internal bool InOptimizeLoop;
+        /// <summary>Trial-history snapshot reused within one trial; cleared when the next trial is asked.</summary>
         internal List<FrozenTrial>? CachedAllTrials;
     }
 
     private readonly ThreadLocal<ThreadLocalStudyAttribute> _threadLocal =
         new(() => new ThreadLocalStudyAttribute());
 
+    /// <summary>Gets this thread's optimization state and trial cache.</summary>
     internal ThreadLocalStudyAttribute ThreadLocal => _threadLocal.Value!;
 
+    /// <summary>Shared request to stop scheduling trials after active trials finish.</summary>
     internal volatile bool StopFlag;
 
+    /// <summary>Storage identifier of the study.</summary>
     internal readonly int StudyId;
+    /// <summary>Backend containing this study's persistent or in-memory records.</summary>
     internal readonly BaseStorage Storage;
     private readonly List<StudyDirection> _directions;
 
@@ -56,6 +65,12 @@ public class Study
     /// <summary>The pruner in use.</summary>
     public BasePruner Pruner { get; set; }
 
+    /// <param name="studyName">Name identifying the study in the selected storage.</param>
+    /// <param name="storage">Storage backend holding study and trial records.</param>
+    /// <summary>Opens an existing named study using a shared storage backend.</summary>
+    /// <param name="sampler">Sampler for parameter suggestions; null selects TPE.</param>
+    /// <param name="pruner">Pruning strategy; null selects the median pruner.</param>
+    /// <exception cref="NumSharp.KeyError">The named study does not exist in storage.</exception>
     public Study(
         string studyName,
         BaseStorage storage,
@@ -78,12 +93,18 @@ public class Study
     ///     Return parameters of the best trial in the study.
     ///     This feature can only be used for single-objective optimization.
     /// </summary>
+    /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives.</exception>
+    /// <exception cref="NumSharp.ValueError">No completed trial, or no feasible completed trial, is available.</exception>
+    /// <exception cref="NumSharp.KeyError">The study has been removed from storage.</exception>
     public IReadOnlyDictionary<string, object?> BestParams => BestTrial.Params;
 
     /// <summary>
     ///     Return the best objective value in the study.
     ///     This feature can only be used for single-objective optimization.
     /// </summary>
+    /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives.</exception>
+    /// <exception cref="NumSharp.ValueError">No completed trial, or no feasible completed trial, is available.</exception>
+    /// <exception cref="NumSharp.KeyError">The study has been removed from storage.</exception>
     public double BestValue
     {
         get
@@ -104,6 +125,9 @@ public class Study
     ///     constraints. A trial is considered feasible when all of its constraint values are less
     ///     than or equal to 0.0.
     /// </summary>
+    /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives.</exception>
+    /// <exception cref="NumSharp.ValueError">No completed trial, or no feasible completed trial, is available.</exception>
+    /// <exception cref="NumSharp.KeyError">The study has been removed from storage.</exception>
     public FrozenTrial BestTrial => GetBestTrialInternal(deepcopy: true);
 
     /// <summary>
@@ -129,6 +153,7 @@ public class Study
     ///     Return the direction of the study. This feature can only be used for single-objective
     ///     optimization. If your study is multi-objective, use <see cref="Directions" /> instead.
     /// </summary>
+    /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives.</exception>
     public StudyDirection Direction
     {
         get
@@ -159,15 +184,24 @@ public class Study
     ///     flag to <c>false</c>, you shouldn't mutate any fields of the returned trials.
     /// </param>
     /// <param name="states">Trial states to filter on. If <c>null</c>, include all states.</param>
+    /// <returns>Trials in ascending trial-number order, optionally filtered and copied.</returns>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
     public virtual List<FrozenTrial> GetTrials(bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
         => GetTrialsInternal(deepcopy, states, useCache: false);
 
     /// <summary>Python <c>Study._get_trials</c>.</summary>
+    /// <param name="deepcopy">Whether to copy trial records; treat records returned with false as read-only.</param>
+    /// <param name="states">States to include; null includes every state.</param>
+    /// <param name="useCache">Whether to reuse the current thread's trial-history snapshot until the next Ask call.</param>
+    /// <returns>Trials in ascending trial-number order, optionally filtered and copied.</returns>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
     internal List<FrozenTrial> GetTrialsInternal(
         bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null, bool useCache = false)
     {
         if (useCache)
         {
+            // A sampler may request history repeatedly while suggesting one trial. Reuse a coherent
+            // per-thread snapshot until Ask invalidates it for the next trial.
             ThreadLocal.CachedAllTrials ??= Storage.GetAllTrials(StudyId, deepcopy: false);
             var trials = ThreadLocal.CachedAllTrials;
             var filteredTrials = states is not null
@@ -180,6 +214,11 @@ public class Study
     }
 
     /// <summary>Python <c>Study._get_best_trial(deepcopy)</c>.</summary>
+    /// <param name="deepcopy">Whether to copy trial records; treat records returned with false as read-only.</param>
+    /// <returns>The best feasible completed single-objective trial, copied when requested.</returns>
+    /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives.</exception>
+    /// <exception cref="NumSharp.ValueError">No completed trial, or no feasible completed trial, is available.</exception>
+    /// <exception cref="NumSharp.KeyError">The study has been removed from storage.</exception>
     internal FrozenTrial GetBestTrialInternal(bool deepcopy)
     {
         if (IsMultiObjective())
@@ -273,6 +312,9 @@ public class Study
     ///     Flag to determine whether to automatically run garbage collection after each trial.
     /// </param>
     /// <param name="showProgressBar">Flag to show progress bars or not.</param>
+    /// <exception cref="NumSharp.RuntimeError">Optimization is invoked recursively on the same thread.</exception>
+    /// <exception cref="System.Exception">An objective raises an exception outside catch, or a callback, sampler, pruner, or storage operation fails; the original failure propagates.</exception>
+    /// <remarks>Running objectives are allowed to finish when the count, timeout, or Stop request ends scheduling. Callback failures are not covered by the objective catch list.</remarks>
     public void Optimize(
         Func<Trial, double> func,
         int? nTrials = null,
@@ -297,6 +339,17 @@ public class Study
     ///     Optimize a multi-objective function. See
     ///     <see cref="Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool)" />.
     /// </summary>
+    /// <param name="nTrials">Maximum trials started by this invocation; null leaves the count unlimited.</param>
+    /// <param name="func">Objective delegate returning a scalar or values in study direction order.</param>
+    /// <param name="timeout">Maximum scheduling duration in seconds; null leaves elapsed time unlimited.</param>
+    /// <param name="nJobs">Concurrent trial workers; -1 uses the processor count.</param>
+    /// <param name="catch">Objective exception types to mark failed and continue; other objective exceptions stop optimization.</param>
+    /// <param name="callbacks">Callbacks invoked after a trial finishes, receiving the study and finished trial.</param>
+    /// <param name="gcAfterTrial">Whether to request full garbage collection after each trial.</param>
+    /// <param name="showProgressBar">Whether to show supported trial-count or timeout progress.</param>
+    /// <exception cref="NumSharp.RuntimeError">Optimization is invoked recursively on the same thread.</exception>
+    /// <exception cref="System.Exception">An objective raises an exception outside catch, or a callback, sampler, pruner, or storage operation fails; the original failure propagates.</exception>
+    /// <remarks>Running objectives are allowed to finish when the count, timeout, or Stop request ends scheduling. Callback failures are not covered by the objective catch list.</remarks>
     public void Optimize(
         Func<Trial, IReadOnlyList<double>> func,
         int? nTrials = null,
@@ -331,6 +384,10 @@ public class Study
     ///     parameter in this dictionary is automatically suggested for the returned trial, even
     ///     when the suggest method is not explicitly invoked by the user.
     /// </param>
+    /// <returns>An active trial claimed from the waiting queue or newly created; finish it with Tell.</returns>
+    /// <exception cref="NumSharp.ValueError">A supplied distribution or pre-suggested parameter is invalid.</exception>
+    /// <exception cref="System.Exception">Storage or a sampler hook fails while creating or initializing the trial.</exception>
+    /// <remarks>A failure while pre-suggesting fixed distributions can leave an already-created trial running. This manual interface does not start a heartbeat worker.</remarks>
     public Trial Ask(OrderedDict<string, BaseDistribution>? fixedDistributions = null)
     {
         if (!ThreadLocal.InOptimizeLoop && HeartbeatHelpers.IsHeartbeatEnabled(Storage))
@@ -360,6 +417,12 @@ public class Study
     ///     Finish a trial created with <see cref="Ask" /> reporting a single objective value.
     /// </summary>
     /// <returns>A <see cref="FrozenTrial" /> representing the resulting trial (deep-copied).</returns>
+    /// <param name="trial">Trial record or active trial on which the operation acts.</param>
+    /// <param name="value">Single objective value used to infer the completed state.</param>
+    /// <param name="skipIfFinished">Whether to return an already-finished record without changing its state or values.</param>
+    /// <exception cref="NumSharp.ValueError">The trial number is invalid, the trial is not running, its requested state and values disagree, or explicit completion has invalid objective values.</exception>
+    /// <exception cref="NumSharp.KeyError">The requested trial cannot be found.</exception>
+    /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
     public FrozenTrial Tell(Trial trial, double value, bool skipIfFinished = false)
         => TellInternal(trial, new[] { value }, null, skipIfFinished);
 
@@ -383,25 +446,61 @@ public class Study
     ///     already finished.
     /// </param>
     /// <returns>A <see cref="FrozenTrial" /> representing the resulting trial (deep-copied).</returns>
+    /// <exception cref="NumSharp.ValueError">The trial number is invalid, the trial is not running, its requested state and values disagree, or explicit completion has invalid objective values.</exception>
+    /// <exception cref="NumSharp.KeyError">The requested trial cannot be found.</exception>
+    /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
     public FrozenTrial Tell(
         Trial trial, IReadOnlyList<double>? values = null, TrialState? state = null, bool skipIfFinished = false)
         => TellInternal(trial, values, state, skipIfFinished);
 
     /// <summary>Finish a trial identified by its number, reporting a single objective value.</summary>
+    /// <param name="trialNumber">Zero-based trial number within the study, not a storage identifier.</param>
+    /// <param name="value">Single objective value used to infer the completed state.</param>
+    /// <param name="skipIfFinished">Whether to return an already-finished record without changing its state or values.</param>
+    /// <returns>A detached copy of the resulting stored trial.</returns>
+    /// <exception cref="NumSharp.ValueError">The trial number is invalid, the trial is not running, its requested state and values disagree, or explicit completion has invalid objective values.</exception>
+    /// <exception cref="NumSharp.KeyError">The requested trial cannot be found.</exception>
+    /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
     public FrozenTrial Tell(int trialNumber, double value, bool skipIfFinished = false)
         => TellInternal(trialNumber, new[] { value }, null, skipIfFinished);
 
     /// <summary>Finish a trial identified by its number.</summary>
+    /// <param name="trialNumber">Zero-based trial number within the study, not a storage identifier.</param>
+    /// <param name="values">Objective values in study direction order, or null when no objective values are recorded.</param>
+    /// <param name="state">Complete, Pruned, Fail, or null to infer Complete or Fail from objective-value validation.</param>
+    /// <param name="skipIfFinished">Whether to return an already-finished record without changing its state or values.</param>
+    /// <returns>A detached copy of the resulting stored trial.</returns>
+    /// <exception cref="NumSharp.ValueError">The trial number is invalid, the trial is not running, its requested state and values disagree, or explicit completion has invalid objective values.</exception>
+    /// <exception cref="NumSharp.KeyError">The requested trial cannot be found.</exception>
+    /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
     public FrozenTrial Tell(
         int trialNumber, IReadOnlyList<double>? values = null, TrialState? state = null, bool skipIfFinished = false)
         => TellInternal(trialNumber, values, state, skipIfFinished);
 
+    /// <param name="trial">Trial record or active trial on which the operation acts.</param>
+    /// <param name="values">Objective values in study direction order, or null when no objective values are recorded.</param>
+    /// <param name="state">Complete, Pruned, Fail, or null to infer Complete or Fail from objective-value validation.</param>
+    /// <summary>Finalizes a trial through validation, sampler postprocessing, and storage state updates.</summary>
+    /// <param name="skipIfFinished">Whether to return an already-finished record without changing its state or values.</param>
+    /// <returns>A detached copy of the resulting stored trial.</returns>
+    /// <exception cref="NumSharp.ValueError">The trial number is invalid, the trial is not running, its requested state and values disagree, or explicit completion has invalid objective values.</exception>
+    /// <exception cref="NumSharp.KeyError">The requested trial cannot be found.</exception>
+    /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
     private FrozenTrial TellInternal(Trial trial, IReadOnlyList<double>? values, TrialState? state, bool skipIfFinished)
     {
         TellHelpers.TellWithWarning(this, TellHelpers.GetFrozenTrial(this, trial), values, state, skipIfFinished);
         return TellHelpers.GetFrozenTrial(this, trial).DeepCopy();
     }
 
+    /// <param name="trialNumber">Zero-based trial number within the study, not a storage identifier.</param>
+    /// <param name="values">Objective values in study direction order, or null when no objective values are recorded.</param>
+    /// <param name="state">Complete, Pruned, Fail, or null to infer Complete or Fail from objective-value validation.</param>
+    /// <summary>Finalizes a trial through validation, sampler postprocessing, and storage state updates.</summary>
+    /// <param name="skipIfFinished">Whether to return an already-finished record without changing its state or values.</param>
+    /// <returns>A detached copy of the resulting stored trial.</returns>
+    /// <exception cref="NumSharp.ValueError">The trial number is invalid, the trial is not running, its requested state and values disagree, or explicit completion has invalid objective values.</exception>
+    /// <exception cref="NumSharp.KeyError">The requested trial cannot be found.</exception>
+    /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
     private FrozenTrial TellInternal(int trialNumber, IReadOnlyList<double>? values, TrialState? state, bool skipIfFinished)
     {
         TellHelpers.TellWithWarning(this, TellHelpers.GetFrozenTrial(this, trialNumber), values, state, skipIfFinished);
@@ -420,6 +519,7 @@ public class Study
     ///     Whether the returned table keeps two-level column labels; when <c>false</c>,
     ///     hierarchical columns such as <c>(params, x)</c> are flattened to <c>params_x</c>.
     /// </param>
+    /// <returns>An ordered TrialsTable of selected trial fields; this port does not require a pandas runtime.</returns>
     public TrialsTable TrialsDataframe(string[]? attrs = null, bool multiIndex = false)
         => OptunaSharp.TrialsDataframe.Build(this, attrs ?? OptunaSharp.TrialsDataframe.DefaultAttrs, multiIndex);
 
@@ -432,6 +532,8 @@ public class Study
     ///     Set a system attribute to the study. Note that Optuna internally uses this method to
     ///     save system messages.
     /// </summary>
+    /// <param name="key">Attribute or constraint name; setting an existing name replaces its value.</param>
+    /// <param name="value">Value to store or convert.</param>
     [Obsolete(DeprecationMessages.SetSystemAttr)]
     public void SetSystemAttr(string key, object? value)
     {
@@ -447,6 +549,7 @@ public class Study
     ///     method return immediately after all trials which the method spawned finishes. This
     ///     method only works when it is called inside an objective function or callback.
     /// </summary>
+    /// <exception cref="NumSharp.RuntimeError">The call is outside this thread's active optimization loop.</exception>
     public virtual void Stop()
     {
         if (!ThreadLocal.InOptimizeLoop)
@@ -463,6 +566,7 @@ public class Study
     /// <param name="params">Parameter values to pass your objective function.</param>
     /// <param name="userAttrs">A dictionary of user-specific attributes other than <c>params</c>.</param>
     /// <param name="skipIfExists">When <c>true</c>, prevents duplicate trials from being enqueued again.</param>
+    /// <remarks>Duplicate checking and insertion are separate storage operations; concurrent callers can enqueue the same parameters.</remarks>
     public void EnqueueTrial(
         OrderedDict<string, object?> @params,
         OrderedDict<string, object?>? userAttrs = null,
@@ -487,8 +591,14 @@ public class Study
     ///     (<c>trial.State.IsFinished() == true</c>). To queue trials for evaluation, please
     ///     refer to <see cref="EnqueueTrial" />.
     /// </summary>
+    /// <param name="trial">Trial record or active trial on which the operation acts.</param>
+    /// <exception cref="NumSharp.ValueError">A trial has invalid state, timestamps, values, parameters, or distributions, or the objective count differs from this study.</exception>
+    /// <exception cref="NumSharp.KeyError">The study has been removed from storage.</exception>
+    /// <remarks>Records are inserted one at a time; a later failure does not roll back records already added.</remarks>
     public void AddTrial(FrozenTrial trial)
     {
+        // Reject inconsistent state before any backend insertion so callers do not accumulate
+        // unusable records when importing completed trials.
         trial.Validate();
 
         if (trial.Values is not null && Directions.Count != trial.Values.Count)
@@ -501,6 +611,10 @@ public class Study
     }
 
     /// <summary>Add trials to study. The trials are validated before being added.</summary>
+    /// <param name="trials">Trial records to process in enumeration order.</param>
+    /// <exception cref="NumSharp.ValueError">A trial has invalid state, timestamps, values, parameters, or distributions, or the objective count differs from this study.</exception>
+    /// <exception cref="NumSharp.KeyError">The study has been removed from storage.</exception>
+    /// <remarks>Records are inserted one at a time; a later failure does not roll back records already added.</remarks>
     public void AddTrials(IEnumerable<FrozenTrial> trials)
     {
         foreach (var trial in trials)
@@ -512,6 +626,8 @@ public class Study
     ///     objective function. It is particularly useful in multi-objective optimization.
     ///     (Experimental since Optuna 3.2.0.)
     /// </summary>
+    /// <param name="metricNames">One display name per objective, in objective order.</param>
+    /// <exception cref="NumSharp.ValueError">The number of names differs from the number of objectives.</exception>
     public void SetMetricNames(IReadOnlyList<string> metricNames)
     {
         if (Directions.Count != metricNames.Count)
@@ -522,9 +638,11 @@ public class Study
     }
 
     /// <summary>Return <c>true</c> if the study has multiple objectives.</summary>
+    /// <returns>True when the study has more than one direction.</returns>
     internal bool IsMultiObjective() => Directions.Count > 1;
 
     /// <summary>Python <c>Study._pop_waiting_trial_id</c>.</summary>
+    /// <returns>Identifier of the first waiting trial successfully claimed, or null when none can be claimed.</returns>
     internal int? PopWaitingTrialId()
     {
         foreach (var trial in Storage.GetAllTrials(
@@ -553,6 +671,8 @@ public class Study
     }
 
     /// <summary>Python <c>Study._should_skip_enqueue</c>.</summary>
+    /// <param name="params">Parameter names mapped to their external values.</param>
+    /// <returns>True when queued or recorded parameters match under the enqueue comparison rules.</returns>
     internal bool ShouldSkipEnqueue(OrderedDict<string, object?> @params)
     {
         foreach (var trial in GetTrials(deepcopy: false))
@@ -606,6 +726,10 @@ public class Study
         return false;
     }
 
+    /// <summary>Checks Python-compatible scalar kind before comparing queued parameter values.</summary>
+    /// <param name="a">Previously queued or recorded scalar.</param>
+    /// <param name="b">Candidate scalar to enqueue.</param>
+    /// <returns>True when the values have the same supported scalar kind.</returns>
     private static bool AreSameParamKind(object a, object b)
     {
         // Python: isinstance(param_value, type(existing_param)) — bool/int/float/str kinds.
@@ -627,6 +751,9 @@ public class Study
     }
 
     /// <summary>Python <c>Study._log_completed_trial</c>.</summary>
+    /// <param name="values">Completed objective values in study direction order.</param>
+    /// <param name="params">Suggested parameter values included in the completion log.</param>
+    /// <param name="number">Per-study trial number used in logs or replay.</param>
     internal void LogCompletedTrial(List<double> values, int number, OrderedDict<string, object?> @params)
     {
         if (!_logger.IsEnabledFor(LogLevel.Info))

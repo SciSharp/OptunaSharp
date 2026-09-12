@@ -11,6 +11,11 @@ namespace OptunaSharp.Samplers.AgeMoea;
 /// </summary>
 internal sealed class FloatRandomSampling
 {
+    /// <summary>Draws independent uniform decision vectors inside the problem box.</summary>
+    /// <param name="problem">Decision bounds and objective/constraint evaluation surface.</param>
+    /// <param name="nSamples">Number of new decision vectors to draw.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <returns>Uniformly sampled vectors with one row per individual.</returns>
     public double[][] Do(AgeMoeaProblem problem, int nSamples, NumPyRandom rng)
     {
         double[][] x = NpRandom.Random(rng, nSamples, problem.NVar);

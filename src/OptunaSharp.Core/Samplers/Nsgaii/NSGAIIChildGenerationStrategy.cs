@@ -39,6 +39,15 @@ public class NSGAIIChildGenerationStrategy
     ///     OptunaSharp extension: activation rules for parameters that only exist under some values of
     ///     other parameters. <c>null</c> (default) keeps the Optuna-parity behavior.
     /// </param>
+    /// <summary>Configures the genetic operators, selection randomness, and conditional-parameter policy used for offspring.</summary>
+    /// <param name="mutation">Numerical mutation operator used when an offspring coordinate is selected for mutation.</param>
+    /// <param name="mutationProb">Per-parameter mutation probability; null selects the operator default.</param>
+    /// <param name="crossover">Operator combining the selected numerical parent vectors.</param>
+    /// <param name="crossoverProb">Probability of applying crossover to a mating.</param>
+    /// <param name="swappingProb">Probability of taking a coordinate from the alternate parent.</param>
+    /// <param name="constraintsFunc">Optional legacy callback returning constraint values; positive values violate a constraint.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <exception cref="NumSharp.ValueError">A mutation, crossover, or swapping probability is outside its supported interval.</exception>
     public NSGAIIChildGenerationStrategy(
         BaseMutation? mutation,
         double? mutationProb,
@@ -71,6 +80,10 @@ public class NSGAIIChildGenerationStrategy
     }
 
     /// <summary>Generate a child parameter dict from the given parent population (Python <c>__call__</c>).</summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="searchSpace">Ordered parameter distributions defining the coordinates used by this operation.</param>
+    /// <param name="parentPopulation">Eligible parent trials from the current generation.</param>
+    /// <returns>External offspring parameter values produced by the configured reproduction strategy.</returns>
     public OrderedDict<string, object?> Generate(
         Study study,
         OrderedDict<string, BaseDistribution> searchSpace,

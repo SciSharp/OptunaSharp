@@ -23,14 +23,18 @@ namespace OptunaSharp.Collections
     /// <summary>Prime-table + fast-mod helpers (verbatim from BCL System.Collections.HashHelpers).</summary>
     internal static class HashHelpers
     {
+        /// <summary>The collision-chain length that triggers the safer string-comparison hashing strategy.</summary>
         public const uint HashCollisionThreshold = 100;
 
         // This is the maximum prime smaller than Array.MaxLength.
+        /// <summary>The largest supported prime capacity for a managed hash table.</summary>
         public const int MaxPrimeArrayLength = 0x7FFFFFC3;
 
+        /// <summary>The secondary hash prime excluded when selecting unsuitable bucket capacities.</summary>
         public const int HashPrime = 101;
 
         // Table of prime numbers to use as hash table sizes.
+        /// <summary>The increasing prime capacities used to grow the ordered dictionary.</summary>
         internal static ReadOnlySpan<int> Primes =>
         [
             3, 7, 11, 17, 23, 29, 37, 47, 59, 71, 89, 107, 131, 163, 197, 239, 293, 353, 431, 521, 631, 761, 919,
@@ -40,6 +44,9 @@ namespace OptunaSharp.Collections
             1674319, 2009191, 2411033, 2893249, 3471899, 4166287, 4999559, 5999471, 7199369
         ];
 
+        /// <summary>Returns true when the integer is prime.</summary>
+        /// <param name="candidate">The positive odd candidate to test, or two; callers use this helper while searching capacities.</param>
+        /// <returns>True when the integer is prime.</returns>
         public static bool IsPrime(int candidate)
         {
             if ((candidate & 1) != 0)
@@ -55,6 +62,10 @@ namespace OptunaSharp.Collections
             return candidate == 2;
         }
 
+        /// <summary>Returns a prime capacity greater than or equal to the requested minimum.</summary>
+        /// <param name="min">The minimum acceptable prime capacity.</param>
+        /// <returns>A prime capacity greater than or equal to the requested minimum.</returns>
+        /// <exception cref="System.ArgumentException">The requested minimum capacity is negative.</exception>
         public static int GetPrime(int min)
         {
             if (min < 0)
@@ -76,6 +87,10 @@ namespace OptunaSharp.Collections
         }
 
         // Returns size of hashtable to grow to.
+        /// <summary>Returns the expanded prime capacity, limited by the maximum supported array length.</summary>
+        /// <param name="oldSize">The current hash-table capacity to expand.</param>
+        /// <returns>The expanded prime capacity, limited by the maximum supported array length.</returns>
+        /// <exception cref="System.ArgumentException">Capacity arithmetic produces an unsupported negative requested size.</exception>
         public static int ExpandPrime(int oldSize)
         {
             int newSize = 2 * oldSize;
@@ -92,11 +107,18 @@ namespace OptunaSharp.Collections
 
         /// <summary>Returns approximate reciprocal of the divisor: ceil(2**64 / divisor).</summary>
         /// <remarks>This should only be used on 64-bit.</remarks>
+        /// <param name="divisor">The positive bucket count used as the modulus.</param>
+        /// <returns>The reciprocal multiplier used to compute a remainder without division.</returns>
+        /// <exception cref="System.DivideByZeroException">The divisor is zero.</exception>
         public static ulong GetFastModMultiplier(uint divisor) =>
             ulong.MaxValue / divisor + 1;
 
         /// <summary>Performs a mod operation using the multiplier pre-computed with <see cref="GetFastModMultiplier"/>.</summary>
         /// <remarks>This should only be used on 64-bit.</remarks>
+        /// <param name="value">The unsigned hash value to reduce modulo the bucket count.</param>
+        /// <param name="divisor">The positive bucket count used as the modulus.</param>
+        /// <param name="multiplier">The precomputed reciprocal multiplier for the chosen divisor.</param>
+        /// <returns>The remainder of value divided by divisor.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static uint FastMod(uint value, uint divisor, ulong multiplier)
         {
@@ -110,22 +132,36 @@ namespace OptunaSharp.Collections
     /// <summary>The throw helpers OrderedDict relies on (from BCL System.Collections.ThrowHelper).</summary>
     internal static class ThrowHelper
     {
+        /// <summary>Throws the dictionary's missing-key exception with the requested key in its diagnostic.</summary>
+        /// <param name="key">The key whose associated entry is requested.</param>
+        /// <typeparam name="TKey">The non-null key type compared by the dictionary comparer.</typeparam>
+        /// <exception cref="System.Collections.Generic.KeyNotFoundException">Always thrown to report an absent key.</exception>
         [DoesNotReturn]
         internal static void ThrowKeyNotFound<TKey>(TKey key) =>
             throw new KeyNotFoundException(SR.Format(SR.Arg_KeyNotFoundWithKey, key));
 
+        /// <summary>Throws when insertion would create a second entry for an existing key.</summary>
+        /// <param name="key">The key whose associated entry is requested.</param>
+        /// <typeparam name="TKey">The non-null key type compared by the dictionary comparer.</typeparam>
+        /// <exception cref="System.ArgumentException">Always thrown to report a duplicate insertion key.</exception>
         [DoesNotReturn]
         internal static void ThrowDuplicateKey<TKey>(TKey key) =>
             throw new ArgumentException(SR.Format(SR.Argument_AddingDuplicate, key), nameof(key));
 
+        /// <summary>Throws when bucket traversal detects a cycle caused by unsupported concurrent mutation.</summary>
+        /// <exception cref="System.InvalidOperationException">Always thrown to report a concurrent mutation detected during bucket traversal.</exception>
         [DoesNotReturn]
         internal static void ThrowConcurrentOperation() =>
             throw new InvalidOperationException(SR.InvalidOperation_ConcurrentOperationsNotSupported);
 
+        /// <summary>Throws when an insertion-order position falls outside the valid range.</summary>
+        /// <exception cref="System.ArgumentOutOfRangeException">Always thrown to report an invalid insertion-order position.</exception>
         [DoesNotReturn]
         internal static void ThrowIndexArgumentOutOfRange() =>
             throw new ArgumentOutOfRangeException("index");
 
+        /// <summary>Throws when enumeration observes a structural change to the dictionary.</summary>
+        /// <exception cref="System.InvalidOperationException">Always thrown to report an enumerator/dictionary version mismatch.</exception>
         [DoesNotReturn]
         internal static void ThrowVersionCheckFailed() =>
             throw new InvalidOperationException(SR.InvalidOperation_EnumFailedVersion);
@@ -134,8 +170,14 @@ namespace OptunaSharp.Collections
     /// <summary>The two EnumerableHelpers members OrderedDict's enumerators use (from BCL Common).</summary>
     internal static class EnumerableHelpers
     {
+        /// <summary>Resets a value-type enumerator through a constrained interface call.</summary>
+        /// <param name="enumerator">The value-type enumerator reset through its IEnumerator implementation.</param>
+        /// <typeparam name="T">The type of element enumerated or copied.</typeparam>
         internal static void Reset<T>(ref T enumerator) where T : IEnumerator => enumerator.Reset();
 
+        /// <summary>Returns the shared empty generic enumerator.</summary>
+        /// <typeparam name="T">The type of element enumerated or copied.</typeparam>
+        /// <returns>The shared empty generic enumerator.</returns>
         internal static IEnumerator<T> GetEmptyEnumerator<T>() =>
             ((IEnumerable<T>)Array.Empty<T>()).GetEnumerator();
     }
@@ -143,20 +185,39 @@ namespace OptunaSharp.Collections
     /// <summary>The exact BCL resource strings referenced by the vendored code.</summary>
     internal static class SR
     {
+        /// <summary>The diagnostic format used when a requested key is absent.</summary>
         internal const string Arg_KeyNotFoundWithKey = "The given key '{0}' was not present in the dictionary.";
+        /// <summary>The diagnostic format used when a key is inserted twice.</summary>
         internal const string Argument_AddingDuplicate = "An item with the same key has already been added. Key: {0}";
+        /// <summary>The diagnostic format used when hash traversal detects unsupported concurrent mutation.</summary>
         internal const string InvalidOperation_ConcurrentOperationsNotSupported = "Operations that change non-concurrent collections must have exclusive access. A concurrent update was performed on this collection and corrupted its state. The collection's state is no longer correct.";
+        /// <summary>The diagnostic format used when the dictionary changes during enumeration.</summary>
         internal const string InvalidOperation_EnumFailedVersion = "Collection was modified; enumeration operation may not execute.";
+        /// <summary>The diagnostic format used when a nongeneric argument has an incompatible type.</summary>
         internal const string Arg_WrongType = "The value \"{0}\" is not of type \"{1}\" and cannot be used in this generic collection.";
+        /// <summary>The diagnostic format used when the destination array cannot hold the requested copy.</summary>
         internal const string Arg_ArrayPlusOffTooSmall = "Destination array is not long enough to copy all the items in the collection. Check array index and length.";
+        /// <summary>The diagnostic format used when the destination array has a nonzero lower bound.</summary>
         internal const string Arg_NonZeroLowerBound = "The lower bound of target array must be zero.";
+        /// <summary>The diagnostic format used when a multidimensional copy destination is supplied.</summary>
         internal const string Arg_RankMultiDimNotSupported = "Only single dimensional arrays are supported for the requested action.";
+        /// <summary>The diagnostic format used when the copy destination element type is incompatible.</summary>
         internal const string Argument_IncompatibleArrayType = "Target array type is not compatible with the type of items in the collection.";
+        /// <summary>The diagnostic format used when hash-table growth exceeds its supported capacity.</summary>
         internal const string Arg_HTCapacityOverflow = "Hashtable's capacity overflowed and went negative. Check load factor, capacity and the current size of the table.";
 
+        /// <summary>Returns the diagnostic text formatted using the current culture.</summary>
+        /// <param name="resourceFormat">The composite-format diagnostic string.</param>
+        /// <param name="p1">The first value substituted using the current culture's composite-format rules.</param>
+        /// <returns>The diagnostic text formatted using the current culture.</returns>
         internal static string Format(string resourceFormat, object? p1) =>
             string.Format(resourceFormat, p1);
 
+        /// <summary>Returns the diagnostic text formatted using the current culture.</summary>
+        /// <param name="resourceFormat">The composite-format diagnostic string.</param>
+        /// <param name="p1">The first value substituted using the current culture's composite-format rules.</param>
+        /// <param name="p2">The second value substituted using the current culture's composite-format rules.</param>
+        /// <returns>The diagnostic text formatted using the current culture.</returns>
         internal static string Format(string resourceFormat, object? p1, object? p2) =>
             string.Format(resourceFormat, p1, p2);
     }

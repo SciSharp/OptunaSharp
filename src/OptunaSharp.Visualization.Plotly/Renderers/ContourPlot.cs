@@ -19,14 +19,22 @@ internal static class ContourPlot
 {
     private static readonly Logger Logger = OptunaLogging.GetLogger("optuna.visualization._contour");
 
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(ContourInfo info)
     {
         int p = info.SortedParams.Count;
+        // A contour needs two independent axes; retain the titled empty figure when the extractor
+        // cannot supply a parameter pair instead of inventing a constant surface.
         if (p <= 1)
             return Fig.Figure(Array.Empty<Trace>(), Fig.Layout(("title", "Contour Plot")));
         return p == 2 ? RenderSingle(info) : RenderGrid(info);
     }
 
+    /// <summary>Builds a two-parameter contour with feasible and infeasible point overlays.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <returns>A chart with one contour panel.</returns>
     private static GenericChart RenderSingle(ContourInfo info)
     {
         var sub = info.SubPlotInfos[0][0];
@@ -44,6 +52,9 @@ internal static class ContourPlot
         return Fig.Figure(new[] { contour, feasible, infeasible }, layout);
     }
 
+    /// <summary>Builds the full parameter-pair contour grid with shared axes.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <returns>A chart containing the row-major contour grid.</returns>
     private static GenericChart RenderGrid(ContourInfo info)
     {
         int p = info.SortedParams.Count;
@@ -88,6 +99,9 @@ internal static class ContourPlot
         return Fig.Figure(traces, layout);
     }
 
+    /// <summary>Assigns a trace to the x and y axes of one subplot.</summary>
+    /// <param name="trace">Trace whose axis references are updated.</param>
+    /// <param name="n">One-based row-major subplot index.</param>
     private static void Anchor(Trace trace, int n)
     {
         trace.SetValue("xaxis", SubplotGrid.XAnchor(n));
@@ -95,6 +109,8 @@ internal static class ContourPlot
     }
 
     /// <summary>Python <c>update_*axes(range=…)</c> then category / log10 range + <c>type</c>.</summary>
+    /// <param name="axis">Mutable Plotly axis object receiving range and scale settings.</param>
+    /// <param name="ax">Extracted numeric or categorical axis metadata.</param>
     private static void SetRangeType(DObj axis, ContourAxisInfo ax)
     {
         axis.SetValue("range", new[] { ax.Range.Min, ax.Range.Max });
@@ -108,6 +124,10 @@ internal static class ContourPlot
     }
 
     /// <summary>Python <c>_get_contour_subplot</c> — (contour, feasible scatter, infeasible scatter).</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <param name="reverseScale">Whether to reverse the sequential color scale.</param>
+    /// <param name="targetName">Label used for the selected objective on axes, hover text, or the colorbar.</param>
+    /// <returns>Contour, feasible scatter, and infeasible scatter traces, empty when data cannot form a contour.</returns>
     private static (Trace Contour, Trace Feasible, Trace Infeasible) Subplot(
         SubContourInfo info, bool reverseScale, string targetName)
     {
@@ -163,6 +183,11 @@ internal static class ContourPlot
         return (contour, CreateScatter(fx, fy, true), CreateScatter(ix, iy, false));
     }
 
+    /// <summary>Builds a feasible or infeasible parameter-pair marker overlay.</summary>
+    /// <param name="x">Horizontal coordinates aligned element-for-element with y.</param>
+    /// <param name="y">Vertical coordinates aligned element-for-element with x.</param>
+    /// <param name="isFeasible">Whether to use the feasible-trial marker style.</param>
+    /// <returns>A scatter trace carrying the requested feasibility styling.</returns>
     private static Trace CreateScatter(List<object> x, List<object> y, bool isFeasible)
         => Fig.Trace("scatter",
             ("x", x.ToArray()),

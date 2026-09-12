@@ -12,6 +12,7 @@ namespace OptunaSharp.Pruners;
 ///     2. During the median calculation across completed trials, NaN values are ignored.
 ///        Only valid numeric values are considered.
 /// </summary>
+/// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.pruners.MedianPruner.html">Official Optuna MedianPruner reference.</seealso>
 public class MedianPruner : PercentilePruner
 {
     /// <param name="nStartupTrials">Pruning is disabled until the given number of trials finish in the same study.</param>
@@ -25,6 +26,8 @@ public class MedianPruner : PercentilePruner
     /// <param name="nMinTrials">
     ///     Minimum number of reported trial results at a step to judge whether to prune.
     /// </param>
+    /// <summary>Configures the percentile stopping rule with a fixed 50th-percentile cutoff.</summary>
+    /// <exception cref="NumSharp.ValueError">A startup/warmup count is negative, or an interval/minimum count is below one.</exception>
     public MedianPruner(
         int nStartupTrials = 5,
         int nWarmupSteps = 0,

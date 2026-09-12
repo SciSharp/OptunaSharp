@@ -39,6 +39,14 @@ internal static class FastForestBackend
     ///     Simple path — build the reproducible default options from <c>(n_trees, max_depth, seed)</c>,
     ///     then apply the optional <paramref name="configure" /> tweak (start-from-defaults) before fitting.
     /// </summary>
+    /// <param name="x">The float32 training matrix, with samples in rows and transformed features in columns.</param>
+    /// <param name="y">One target or class-label value per sample, in training-row order.</param>
+    /// <param name="nFeatures">The number of transformed feature columns in each training row.</param>
+    /// <param name="nTrees">The number of ensemble trees or boosting iterations requested.</param>
+    /// <param name="maxDepth">The maximum tree depth used to derive the bounded leaf count.</param>
+    /// <param name="seed">The training or fold-shuffling seed, as specified by the operation.</param>
+    /// <param name="configure">An optional callback customizing the derived trainer options before fitting.</param>
+    /// <returns>The fitted ensemble adapted to the shared importance-evaluation tree representation.</returns>
     internal static SklearnLikeTree[] Fit(
         float[,] x, double[] y, int nFeatures, int nTrees, int maxDepth, int? seed,
         Action<FastForestRegressionTrainer.Options>? configure = null)
@@ -50,11 +58,16 @@ internal static class FastForestBackend
 
     /// <summary>
     ///     Full-API path — fit with a caller-supplied <see cref="FastForestRegressionTrainer.Options" />.
-    ///     Only <see cref="TrainerInputBaseWithLabel.LabelColumnName" /> /
+    ///     Only <c>LabelColumnName</c> /
     ///     <c>FeatureColumnName</c> are overwritten (the fixed schema the transformed trials live in);
     ///     every other knob — <c>NumberOfTrees</c>, <c>NumberOfLeaves</c>, <c>FeatureFraction</c>,
     ///     bagging, <c>Seed</c>, <c>NumberOfThreads</c>, … — is the caller's.
     /// </summary>
+    /// <param name="x">The float32 training matrix, with samples in rows and transformed features in columns.</param>
+    /// <param name="y">One target or class-label value per sample, in training-row order.</param>
+    /// <param name="nFeatures">The number of transformed feature columns in each training row.</param>
+    /// <param name="options">The native trainer options; label and feature column names are managed by this adapter.</param>
+    /// <returns>The fitted ensemble adapted to the shared importance-evaluation tree representation.</returns>
     internal static SklearnLikeTree[] Fit(float[,] x, double[] y, int nFeatures, FastForestRegressionTrainer.Options options)
     {
         RequireImportanceSchema(options.ExampleWeightColumnName, options.RowGroupColumnName);
@@ -72,6 +85,11 @@ internal static class FastForestBackend
     }
 
     /// <summary>The reproducible defaults the <c>(n_trees, max_depth, seed)</c> overload fits with.</summary>
+    /// <param name="nTrees">The number of ensemble trees or boosting iterations requested.</param>
+    /// <param name="maxDepth">The maximum tree depth used to derive the bounded leaf count.</param>
+    /// <param name="seed">The training or fold-shuffling seed, as specified by the operation.</param>
+    /// <param name="n">The number of training rows used to bound leaves or construct folds.</param>
+    /// <returns>The configured native trainer options with deterministic single-thread settings.</returns>
     private static FastForestRegressionTrainer.Options DefaultOptions(int nTrees, int maxDepth, int? seed, int n)
     {
         var options = new FastForestRegressionTrainer.Options
@@ -95,6 +113,10 @@ internal static class FastForestBackend
     // The importance transform hands the trainer only a label + a feature vector — there is no
     // per-trial weight or group column — so these two of the trainer's four column-name options cannot
     // bind. Fail fast with a clear message instead of ML.NET's cryptic "column not found" at Fit time.
+    /// <summary>Rejects weight or group columns absent from the transformed-trial importance dataset.</summary>
+    /// <param name="exampleWeightColumnName">An optional requested weight column; importance training has no such column and requires null.</param>
+    /// <param name="rowGroupColumnName">An optional requested group column; importance training has no such column and requires null.</param>
+    /// <exception cref="System.ArgumentException">A weight or group column is configured, but the importance data contains only features and labels.</exception>
     private static void RequireImportanceSchema(string? exampleWeightColumnName, string? rowGroupColumnName)
     {
         if (exampleWeightColumnName is not null)
@@ -108,6 +130,10 @@ internal static class FastForestBackend
     }
 
     // A depth-d binary tree has at most 2^d leaves; a tree can never have more leaves than rows.
+    /// <summary>Bounds the binary-tree leaf count by both the requested depth and available sample count.</summary>
+    /// <param name="maxDepth">The maximum tree depth used to derive the bounded leaf count.</param>
+    /// <param name="n">The number of training rows used to bound leaves or construct folds.</param>
+    /// <returns>A leaf count of at least two, capped by available rows and the depth-derived limit.</returns>
     private static int LeavesFromDepth(int maxDepth, int n)
     {
         int leafCap = Math.Max(2, n);
@@ -115,6 +141,12 @@ internal static class FastForestBackend
         return Math.Max(2, Math.Min(fromDepth, leafCap));
     }
 
+    /// <summary>Materializes float32 feature vectors and labels in the fixed ML.NET importance-training schema.</summary>
+    /// <param name="mlContext">The ML.NET context used to split, train, or load the data.</param>
+    /// <param name="x">The float32 training matrix, with samples in rows and transformed features in columns.</param>
+    /// <param name="y">One target or class-label value per sample, in training-row order.</param>
+    /// <param name="nFeatures">The number of transformed feature columns in each training row.</param>
+    /// <returns>The typed feature/label data view used by the native trainer.</returns>
     private static IDataView LoadData(MLContext mlContext, float[,] x, double[] y, int nFeatures)
     {
         int n = y.Length;
@@ -134,7 +166,9 @@ internal static class FastForestBackend
 
     private sealed class InputRow
     {
+        /// <summary>The row's ordered float32 feature vector exposed to the ML.NET schema.</summary>
         public float[] Features { get; set; } = Array.Empty<float>();
+        /// <summary>The training label encoded in the trainer's required scalar type.</summary>
         public float Label { get; set; }
     }
 }

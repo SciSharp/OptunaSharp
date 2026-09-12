@@ -97,6 +97,29 @@ internal sealed class JanusOptimizer
 
     private List<FrozenTrial> _completedTrials;
 
+    /// <summary>Connects JANUS local-model fitting and candidate injection to an evolutionary population host.</summary>
+    /// <param name="trans">Search-space transform between external parameter values and the numerical box.</param>
+    /// <param name="host">Evolutionary optimizer whose proposals receive JANUS candidates.</param>
+    /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
+    /// <param name="direction">Whether objective values are minimized or maximized.</param>
+    /// <param name="cmixSeed">Seed for the separate curvature-exploration random stream.</param>
+    /// <param name="fuseEvery">Generation interval between Gauss-Newton injection attempts.</param>
+    /// <param name="fuseStart">First injection generation, or null to derive it from the fitting window.</param>
+    /// <param name="kappa">Host-scaled radial bound on the injected step.</param>
+    /// <param name="gnWindow">Number of recent observations used by the Jacobian model; null selects an automatic window.</param>
+    /// <param name="gnLambda">Regularization strength for the Gauss-Newton candidate solve.</param>
+    /// <param name="gnRidge">Ridge penalty used while fitting the local Jacobian.</param>
+    /// <param name="cmixW">Explicit host/curvature covariance mixture weight, or null for the adaptive policy.</param>
+    /// <param name="cmixLambda">Regularization strength for inversion of the curvature metric.</param>
+    /// <param name="cmixWBase">Base covariance mixture weight used by the automatic schedule.</param>
+    /// <param name="cmixWMax">Upper bound used by the automatic covariance-mixture schedule.</param>
+    /// <param name="gnPseudoMode">Scalar feature family used to estimate the Gauss-Newton residual metric.</param>
+    /// <param name="cmixPseudoMode">Scalar feature family used to estimate the exploration curvature metric.</param>
+    /// <param name="pseudoTarget">Policy converting scalar objectives into residual targets.</param>
+    /// <param name="pcaK">Policy selecting the retained principal-component dimension.</param>
+    /// <param name="cmixMode">Exploration policy: portfolio candidates or direct proposal-covariance reshaping.</param>
+    /// <param name="cmixCandidateFrac">Fraction of host population slots reserved for curvature exploration.</param>
+    /// <param name="cmixCandidateCenter">Whether exploration is centered on the host mean or archive points.</param>
     internal JanusOptimizer(
         SearchSpaceTransform trans, IPopulationHost host, List<FrozenTrial> completedTrials, StudyDirection direction,
         int cmixSeed,
@@ -146,13 +169,18 @@ internal sealed class JanusOptimizer
         _rng.seed((uint)(cmixSeed ^ 0x5A17));   // second MT19937 stream for CMIX noise (≠ the host stream)
     }
 
+    /// <summary>Number of evaluated individuals required for one generation.</summary>
     internal int PopulationSize => _popsize;
+    /// <summary>Number of numerical decision coordinates.</summary>
     internal int Dim => _d;
 
+    /// <summary>Replaces the history view used to harvest newly completed evaluations.</summary>
+    /// <param name="completed">Completed trial snapshots available for harvesting.</param>
     internal void SetCompletedTrials(List<FrozenTrial> completed) => _completedTrials = completed;
 
     // ---- window harvesting -----------------------------------------------------------------------
 
+    /// <summary>Adds newly completed evaluations to the local-model trace and pending host generation.</summary>
     private void Harvest()
     {
         foreach (var t in _completedTrials)
@@ -187,6 +215,8 @@ internal sealed class JanusOptimizer
         TrimWindow(window);
     }
 
+    /// <summary>Discards oldest trace observations beyond the requested fitting window.</summary>
+    /// <param name="window">Maximum number of recent observations retained for fitting.</param>
     private void TrimWindow(int window)
     {
         int extra = _winX.Count - window;
@@ -196,6 +226,8 @@ internal sealed class JanusOptimizer
         _winF.RemoveRange(0, extra);
     }
 
+    /// <summary>Finds the most recent available component-loss dimension.</summary>
+    /// <returns>The most recent component count, or null if no component trace exists.</returns>
     private int? LastComponentWidth()
     {
         for (int i = _winR.Count - 1; i >= 0; i--)
@@ -205,6 +237,9 @@ internal sealed class JanusOptimizer
 
     // ---- resolve auto hyperparameters ------------------------------------------------------------
 
+    /// <summary>Resolves the local-model history length from configured policy and feature dimension.</summary>
+    /// <param name="m">Number of objective or residual components.</param>
+    /// <returns>The resolved number of trace observations retained for fitting.</returns>
     private int ResolveGnWindow(int? m)
     {
         if (_gnWindow is int set) return Math.Max(_popsize, set);
@@ -213,12 +248,18 @@ internal sealed class JanusOptimizer
         return Math.Min(Math.Max(target, minWindow), 1200);
     }
 
+    /// <summary>Resolves how much history is required before the first Jacobian-informed injection.</summary>
+    /// <param name="window">Maximum number of recent observations retained for fitting.</param>
+    /// <returns>The first eligible injection generation.</returns>
     private int ResolveFuseStart(int window)
     {
         if (_fuseStart is int set) return Math.Max(_popsize, Math.Min(set, window));
         return Math.Max(2 * _popsize, Math.Min(200, Math.Max(_popsize, window / 2)));
     }
 
+    /// <summary>Resolves the covariance mixture weight using the configured policy and problem dimension.</summary>
+    /// <param name="m">Number of objective or residual components.</param>
+    /// <returns>The resolved covariance-mixture weight.</returns>
     private double ResolveCmixW(int m)
     {
         if (_cmixWEff is double eff) return eff;
@@ -249,6 +290,10 @@ internal sealed class JanusOptimizer
     ///     interop test (the live <c>_assemble_gn</c> is unreachable without torch). <c>A⁻¹Zᵀ·Sc</c> is
     ///     computed as <c>solve(A, Zᵀ·Sc)</c> (algebraically identical, fewer RHS columns).
     /// </summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <param name="rComponents">Component-loss observations aligned with the parameter trace.</param>
+    /// <param name="gnRidge">Ridge penalty used while fitting the local Jacobian.</param>
+    /// <returns>The fitted component Jacobian and optional Gauss-Newton Gram matrix, or null for an unusable fit.</returns>
     internal static (double[,] J, double[,] GnJtJ)? FitComponentJacobian(
         double[,] x, double[,] rComponents, double gnRidge)
     {
@@ -278,6 +323,8 @@ internal sealed class JanusOptimizer
         return (jac, gnJtJ);
     }
 
+    /// <summary>Fits the local Jacobian model and proposes a regularized Gauss-Newton candidate.</summary>
+    /// <returns>A proposed Gauss-Newton candidate, or null when fitting is not possible.</returns>
     private double[]? AssembleGn()
     {
         _lastJtJ = null;
@@ -410,6 +457,8 @@ internal sealed class JanusOptimizer
 
     // ---- CMIX candidate metric + samples ---------------------------------------------------------
 
+    /// <summary>Builds the eigensystem used to draw curvature-informed exploration candidates.</summary>
+    /// <returns>Metric eigenvectors and eigenvalues, or null when no usable fit exists.</returns>
     private (double[,] Eigvecs, double[] Eigvals)? CandidateMetric()
     {
         if (_lastJtJ is null) return null;
@@ -497,6 +546,9 @@ internal sealed class JanusOptimizer
         _host.TrySetProposalCovariance(sym);
     }
 
+    /// <summary>Inverts a square matrix, returning no result when the numerical solve is unusable.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The inverse matrix, or null if inversion fails.</returns>
     private static double[,]? InvertMatrix(double[,] a)
     {
         int n = a.GetLength(0);
@@ -507,6 +559,10 @@ internal sealed class JanusOptimizer
 
     // ---- CMIX candidate metric + samples ---------------------------------------------------------
 
+    /// <summary>Draws the requested exploration candidates from a regularized inverse-curvature proposal.</summary>
+    /// <param name="count">Number of candidate centers or samples requested.</param>
+    /// <param name="elite">Optional injected elite used as a candidate center.</param>
+    /// <returns>Candidate vectors, or null when the curvature proposal is unavailable.</returns>
     private double[][]? CmixCandidateSamples(int count, double[]? elite)
     {
         // A host without a proposal covariance offers no CMIX candidates (the paper's GN-only infill).
@@ -574,6 +630,8 @@ internal sealed class JanusOptimizer
     ///     to carry components (else an empty list). NOTE: as with <c>_nondominated_indices</c> in the MOO
     ///     file, the dominance filter keeps the DOMINATED points — ported verbatim.
     /// </summary>
+    /// <param name="count">Number of candidate centers or samples requested.</param>
+    /// <returns>Up to the requested number of archived proposal centers.</returns>
     private List<double[]> ArchiveCenters(int count)
     {
         var empty = new List<double[]>();
@@ -687,6 +745,9 @@ internal sealed class JanusOptimizer
 
     // ---- bounded injection (square-root-invariant Mahalanobis clip) ------------------------------
 
+    /// <summary>Clips an injected elite to the host step-length limit and numerical search-space box.</summary>
+    /// <param name="fused">Unbounded candidate assembled by the local model.</param>
+    /// <returns>The candidate restricted to the host-scaled radius and numerical box.</returns>
     private double[] BoundedElite(double[] fused)
     {
         double[] mean = _host.Mean;
@@ -713,6 +774,7 @@ internal sealed class JanusOptimizer
 
     // ---- generation + ask/tell -------------------------------------------------------------------
 
+    /// <summary>Prepares a coherent generation mixing native host draws with eligible JANUS candidates.</summary>
     private void Generate()
     {
         double[]? elite = null;
@@ -754,6 +816,9 @@ internal sealed class JanusOptimizer
         _pending = xs;
     }
 
+    /// <summary>Assigns the next prepared host or injected candidate to a trial number.</summary>
+    /// <param name="trialNumber">Public trial number assigned to the next requested candidate.</param>
+    /// <returns>The next external parameter values assigned to the trial.</returns>
     internal OrderedDict<string, object?> Ask(int trialNumber)
     {
         if (_pending is null) Generate();
@@ -774,6 +839,7 @@ internal sealed class JanusOptimizer
         return _trans.Untransform(np.array(safe));
     }
 
+    /// <summary>Passes a complete pending generation to the host and updates its proposal distribution.</summary>
     internal void UpdateEs()
     {
         if (_completedTrials.Count == 0) return;
@@ -815,6 +881,9 @@ internal sealed class JanusOptimizer
 
     // ---- small numpy-shaped helpers --------------------------------------------------------------
 
+    /// <summary>Centers and scales each observation column for numerically stable local regression.</summary>
+    /// <param name="x">Input numerical coordinates or observation rows.</param>
+    /// <returns>Standardized observations and the column standard deviations used to scale them.</returns>
     private static (double[,] Z, double[] Sd) Standardize(double[,] x)
     {
         int n = x.GetLength(0), d = x.GetLength(1);
@@ -833,6 +902,9 @@ internal sealed class JanusOptimizer
     }
 
     /// <summary>Solve <c>A X = B</c> for matrix RHS <c>B</c> (column by column).</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="b">Second numerical array operand.</param>
+    /// <returns>The solved coefficient matrix, or null when the numerical solve is unusable.</returns>
     private static double[,]? SolveMatrix(double[,] a, double[,] b)
     {
         int nrhs = b.GetLength(1), dim = a.GetLength(0);
@@ -854,6 +926,9 @@ internal sealed class JanusOptimizer
         return AllFinite(result) ? result : null;
     }
 
+    /// <summary>Allocates a matrix with its row and column axes exchanged.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>A newly allocated transposed matrix.</returns>
     private static double[,] Transpose(double[,] a)
     {
         int rows = a.GetLength(0), cols = a.GetLength(1);
@@ -862,6 +937,10 @@ internal sealed class JanusOptimizer
         return t;
     }
 
+    /// <summary>Multiplies a matrix by a vector.</summary>
+    /// <param name="m">Rectangular matrix operand.</param>
+    /// <param name="v">Vector operand aligned with the matrix coordinates.</param>
+    /// <returns>The product vector with one entry per matrix row.</returns>
     private static double[] MatVec(double[,] m, double[] v)
     {
         int rows = m.GetLength(0), cols = m.GetLength(1);
@@ -870,6 +949,10 @@ internal sealed class JanusOptimizer
         return r;
     }
 
+    /// <summary>Multiplies the transpose of a matrix by a vector.</summary>
+    /// <param name="m">Rectangular matrix operand.</param>
+    /// <param name="v">Vector operand aligned with the matrix coordinates.</param>
+    /// <returns>The product vector with one entry per matrix column.</returns>
     private static double[] MatTVec(double[,] m, double[] v)
     {
         int rows = m.GetLength(0), cols = m.GetLength(1);
@@ -878,6 +961,10 @@ internal sealed class JanusOptimizer
         return r;
     }
 
+    /// <summary>Computes a scalar dot product using the reference accumulation order.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <param name="b">Second numerical array operand.</param>
+    /// <returns>The scalar inner product.</returns>
     private static double Dot(double[] a, double[] b)
     {
         double s = 0;
@@ -885,6 +972,9 @@ internal sealed class JanusOptimizer
         return s;
     }
 
+    /// <summary>Allocates a vector with every sign reversed.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>A new vector containing the negation of each entry.</returns>
     private static double[] Negate(double[] a)
     {
         var r = new double[a.Length];
@@ -892,6 +982,9 @@ internal sealed class JanusOptimizer
         return r;
     }
 
+    /// <summary>Finds the first index attaining the smallest array value.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>The first minimum index.</returns>
     private static int ArgMin(double[] a)
     {
         int idx = 0;
@@ -900,10 +993,24 @@ internal sealed class JanusOptimizer
         return idx;
     }
 
+    /// <summary>Clamps a scalar to an inclusive interval.</summary>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <param name="lo">Inclusive lower clipping bound.</param>
+    /// <param name="hi">Inclusive upper clipping bound.</param>
+    /// <returns>The value restricted to the inclusive interval.</returns>
     private static double Clip(double v, double lo, double hi) => Math.Min(Math.Max(v, lo), hi);
+    /// <summary>Tests whether a scalar excludes NaN and both infinities.</summary>
+    /// <param name="v">Scalar operand used in the comparison or numerical transformation.</param>
+    /// <returns>True for a finite scalar, including zero.</returns>
     private static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
+    /// <summary>Tests whether all entries exclude NaN and both infinities.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>True when every entry is finite.</returns>
     private static bool AllFinite(double[] a) { foreach (double v in a) if (!IsFinite(v)) return false; return true; }
 
+    /// <summary>Tests whether all entries exclude NaN and both infinities.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>True when every entry is finite.</returns>
     private static bool AllFinite(double[,] a)
     {
         int rows = a.GetLength(0), cols = a.GetLength(1);

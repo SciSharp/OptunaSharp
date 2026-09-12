@@ -14,6 +14,10 @@ namespace OptunaSharp.Importance.Forests.Internal;
 ///     scikit-learn CART backend (Core) and the ML.NET FastForest backend (the
 ///     <c>OptunaSharp.Importance.Forests</c> satellite).
 /// </summary>
+/// <param name="x">Feature values with one sample per row and one feature per column.</param>
+/// <param name="y">Target values aligned with the feature rows.</param>
+/// <param name="nFeatures">The number of feature columns in the training matrix.</param>
+/// <returns>The fitted regression trees in ensemble order.</returns>
 internal delegate SklearnLikeTree[] ForestFit(float[,] x, double[] y, int nFeatures);
 
 /// <summary>
@@ -30,6 +34,12 @@ internal static class ForestImportance
         "`target=lambda t: t.values[0]` for the first objective value.";
 
     /// <summary>Port of <c>FanovaImportanceEvaluator.evaluate</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="params">Parameter names to include; null selects the parameters supported by this operation.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="fit">The forest-fitting callback used to train the importance estimator.</param>
+    /// <returns>Original-parameter importance values obtained by integrating the fitted forest.</returns>
+    /// <exception cref="NumSharp.ValueError">A multi-objective study has no scalar target selector, or the requested parameter set has no consistent completed-trial search space.</exception>
     internal static OrderedDict<string, double> EvaluateFanova(
         Study study, IReadOnlyList<string>? @params, Func<FrozenTrial, double>? target, ForestFit fit)
     {
@@ -90,6 +100,12 @@ internal static class ForestImportance
     }
 
     /// <summary>Port of <c>MeanDecreaseImpurityImportanceEvaluator.evaluate</c>.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="params">Parameter names to include; null selects the parameters supported by this operation.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="fit">The forest-fitting callback used to train the importance estimator.</param>
+    /// <returns>Original-parameter importance values obtained by aggregating split impurity decreases.</returns>
+    /// <exception cref="NumSharp.ValueError">A multi-objective study has no scalar target selector, or the requested parameter set has no consistent completed-trial search space.</exception>
     internal static OrderedDict<string, double> EvaluateMdi(
         Study study, IReadOnlyList<string>? @params, Func<FrozenTrial, double>? target, ForestFit fit)
     {
@@ -132,6 +148,10 @@ internal static class ForestImportance
     }
 
     /// <summary>scikit-learn casts X to float32 (DTYPE) before fitting the forest.</summary>
+    /// <param name="transParams">The encoded numerical parameter rows in transform order.</param>
+    /// <param name="nRows">The number of rows in the output feature matrix.</param>
+    /// <param name="nCols">The number of columns in the output feature matrix.</param>
+    /// <returns>The encoded feature matrix converted to scikit-learn's float32 input representation.</returns>
     private static float[,] BuildFloat32(double[][] transParams, int nRows, int nCols)
     {
         var x = new float[nRows, nCols];

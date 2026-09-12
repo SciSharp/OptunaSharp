@@ -25,6 +25,7 @@ namespace OptunaSharp.Samplers;
 /// </summary>
 public abstract class BaseSampler
 {
+    /// <summary>Message shared by samplers when a parameter falls back to independent sampling.</summary>
     internal const string IndependentSamplingWarningTemplate =
         "The parameter `{0}` in Trial#{1} is sampled independently " +
         "using `{2}` instead of `{3}`, potentially " +
@@ -33,6 +34,8 @@ public abstract class BaseSampler
         "`warn_independent_sampling` to `False` in the constructor of `{3}` if " +
         "this independent sampling is intended behavior.";
 
+    /// <summary>Returns the concrete sampler name for logs and diagnostics.</summary>
+    /// <returns>The runtime type name, without a namespace.</returns>
     public override string ToString() => GetType().Name;
 
     /// <summary>
@@ -42,15 +45,22 @@ public abstract class BaseSampler
     ///     returned by this method is passed to it. The parameters not contained in the search
     ///     space will be sampled by using <see cref="SampleIndependent" />.
     /// </summary>
+    /// <param name="study">Study supplying trial history, directions, and storage.</param>
+    /// <param name="trial">Current trial snapshot; copy it before modifying its contents.</param>
+    /// <returns>Parameter distributions eligible for joint sampling, in sampler-defined order.</returns>
     public abstract OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial);
 
     /// <summary>
     ///     Sample parameters in a given search space.
     ///
-    ///     This method is called once at the beginning of each trial, i.e., right before the
-    ///     evaluation of the objective function. This method is suitable for sampling algorithms
+    ///     The trial invokes this method lazily when it first needs relative parameters and caches
+    ///     the result for its remaining suggestions. This method is suitable for sampling algorithms
     ///     that use relationship between parameters such as Gaussian Process and CMA-ES.
     /// </summary>
+    /// <param name="study">Study supplying trial history, directions, and storage.</param>
+    /// <param name="trial">Current trial snapshot; copy it before modifying its contents.</param>
+    /// <param name="searchSpace">Distributions returned by <see cref="InferRelativeSearchSpace" />.</param>
+    /// <returns>Jointly sampled external parameter values; omitted parameters use independent sampling.</returns>
     public abstract OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace);
 
@@ -62,6 +72,11 @@ public abstract class BaseSampler
     ///     algorithms that do not use relationship between parameters such as random sampling
     ///     and TPE.
     /// </summary>
+    /// <param name="study">Study supplying trial history, directions, and storage.</param>
+    /// <param name="trial">Current trial snapshot; copy it before modifying its contents.</param>
+    /// <param name="paramName">Name of the parameter being suggested.</param>
+    /// <param name="paramDistribution">Distribution defining the parameter's domain and scale.</param>
+    /// <returns>A value in the distribution's external representation, including null categorical choices.</returns>
     public abstract object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution);
 
@@ -69,6 +84,8 @@ public abstract class BaseSampler
     ///     Trial pre-processing: called during trial initialization, just before the
     ///     <see cref="InferRelativeSearchSpace" /> call.
     /// </summary>
+    /// <param name="study">Study that owns the newly initialized trial.</param>
+    /// <param name="trial">New trial snapshot available before search-space inference.</param>
     public virtual void BeforeTrial(Study study, FrozenTrial trial)
     {
     }
@@ -77,7 +94,10 @@ public abstract class BaseSampler
     ///     Trial post-processing: called after the objective function returns and right before
     ///     the trial is finished and its state is stored.
     /// </summary>
-    /// <param name="values">Resulting trial values. Guaranteed to not be <c>null</c> if trial succeeded.</param>
+    /// <param name="study">Study that owns the trial being finished.</param>
+    /// <param name="trial">Trial snapshot before its terminal state is written to storage.</param>
+    /// <param name="state">Terminal state being recorded: complete, pruned, or failed.</param>
+    /// <param name="values">Resulting trial values in objective order; non-null for a successful trial.</param>
     public virtual void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
     }
@@ -85,17 +105,18 @@ public abstract class BaseSampler
     /// <summary>
     ///     Reseed sampler's random number generator.
     ///
-    ///     This method is called by the <see cref="Study" /> instance if trials are executed in
-    ///     parallel with the option <c>nJobs &gt; 1</c>. In that case, the sampler instance will
-    ///     be replicated including the state of the random number generator, and they may suggest
-    ///     the same values. To prevent this issue, this method assigns a different seed to each
-    ///     random number generator.
+    ///     Parallel optimization calls this hook before a worker's sequential trial loop. Concrete
+    ///     samplers refresh their random streams so workers do not deliberately reuse a seeded
+    ///     sequence. OptunaSharp workers share the study's sampler instance; this hook does not clone
+    ///     it or make concurrent sampling reproducible.
     /// </summary>
     public virtual void ReseedRng()
     {
     }
 
-    /// <summary>Python <c>_raise_error_if_multi_objective</c>.</summary>
+    /// <summary>Rejects a multi-objective study for samplers that require a scalar objective.</summary>
+    /// <param name="study">Study whose objective count is checked.</param>
+    /// <exception cref="ValueError">The study has more than one objective.</exception>
     internal void RaiseErrorIfMultiObjective(Study study)
     {
         if (study.IsMultiObjective())
@@ -108,7 +129,13 @@ public abstract class BaseSampler
 /// <summary>Module-level helpers of <c>optuna/samplers/_base.py</c>.</summary>
 internal static class SamplerHelpers
 {
-    /// <summary>Python <c>_process_constraints_after_trial</c>.</summary>
+    /// <summary>Evaluates and persists legacy constraints for completed or pruned trials.</summary>
+    /// <param name="constraintsFunc">Callback returning constraint values; positive values indicate violations.</param>
+    /// <param name="study">Study whose storage receives the constraint attribute.</param>
+    /// <param name="trial">Trial snapshot passed to the callback.</param>
+    /// <param name="state">Terminal trial state; failed trials are ignored.</param>
+    /// <exception cref="ValueError">The callback returns a NaN constraint.</exception>
+    /// <exception cref="Exception">The user callback or storage provider fails; its exception propagates.</exception>
     internal static void ProcessConstraintsAfterTrial(
         Func<FrozenTrial, IEnumerable<double>> constraintsFunc, Study study, FrozenTrial trial, TrialState state)
     {
@@ -125,6 +152,8 @@ internal static class SamplerHelpers
         }
         finally
         {
+            // Persist null even after callback failure so missing/invalid constraints cannot be
+            // mistaken for a feasible trial by a later constrained sampler.
             study.Storage.SetTrialSystemAttr(
                 trial.TrialId,
                 ConstrainedOptimization.ConstraintsKey,

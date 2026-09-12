@@ -30,6 +30,10 @@ internal static class GrpcProto
 
     // ---------------------------------------------------------------- enum mappers (servicer.py)
 
+    /// <param name="state">The trial lifecycle state to convert or persist.</param>
+    /// <returns>The corresponding protobuf trial-state value.</returns>
+    /// <summary>Maps the managed trial lifecycle state to the Optuna protobuf enum.</summary>
+    /// <exception cref="NumSharp.ValueError">The managed trial state is unknown.</exception>
     internal static ProtoApi.TrialState ToProtoTrialState(TrialState state) => state switch
     {
         TrialState.Running => ProtoApi.TrialState.Running,
@@ -40,6 +44,10 @@ internal static class GrpcProto
         _ => throw new ValueError($"Unknown TrialState: {state}"),
     };
 
+    /// <param name="state">The trial lifecycle state to convert or persist.</param>
+    /// <returns>The corresponding OptunaSharp trial-state value.</returns>
+    /// <summary>Maps an Optuna protobuf trial state to the managed lifecycle enum.</summary>
+    /// <exception cref="NumSharp.ValueError">The protobuf trial state is unknown.</exception>
     internal static TrialState FromProtoTrialState(ProtoApi.TrialState state) => state switch
     {
         ProtoApi.TrialState.Running => TrialState.Running,
@@ -52,17 +60,30 @@ internal static class GrpcProto
 
     // Optuna maps `StudyDirection.MINIMIZE if d == StudyDirection.MINIMIZE else api_pb2.MAXIMIZE` — a
     // binary choice, so NOT_SET (never persisted on a real study) folds to MAXIMIZE just as it does there.
+    /// <param name="direction">The objective direction used for ordering or representation conversion.</param>
+    /// <returns>The corresponding protobuf direction value.</returns>
+    /// <summary>Maps the managed optimization direction to the Optuna protobuf enum.</summary>
     internal static ProtoApi.StudyDirection ToProtoDirection(StudyDirection direction)
         => direction == StudyDirection.Minimize ? ProtoApi.StudyDirection.Minimize : ProtoApi.StudyDirection.Maximize;
 
+    /// <param name="direction">The objective direction used for ordering or representation conversion.</param>
+    /// <returns>The corresponding OptunaSharp direction value.</returns>
+    /// <summary>Maps an Optuna protobuf optimization direction to the managed enum.</summary>
     internal static StudyDirection FromProtoDirection(ProtoApi.StudyDirection direction)
         => direction == ProtoApi.StudyDirection.Minimize ? StudyDirection.Minimize : StudyDirection.Maximize;
 
     // ---------------------------------------------------------------- datetime (servicer.py)
 
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The timestamp serialized in Optuna's storage format.</returns>
+    /// <summary>Serializes an optional timestamp with the datetime convention used by Optuna's gRPC protocol.</summary>
     internal static string FormatDatetime(DateTime? value)
         => value is null ? "" : value.Value.ToString(DatetimeFormat, CultureInfo.InvariantCulture);
 
+    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
+    /// <returns>The local timestamp reconstructed from stored UTC text, or null for an absent timestamp.</returns>
+    /// <summary>Reconstructs an optional timestamp received through Optuna's gRPC protocol.</summary>
+    /// <exception cref="System.FormatException">The nonempty timestamp does not match the supported wire or database formats.</exception>
     internal static DateTime? ParseDatetime(string value)
         => string.IsNullOrEmpty(value)
             ? null
@@ -71,6 +92,8 @@ internal static class GrpcProto
     // ---------------------------------------------------------------- trial (servicer.py)
 
     /// <summary>Port of <c>servicer.py: _to_proto_trial</c>.</summary>
+    /// <param name="trial">The trial snapshot or database record being read or validated.</param>
+    /// <returns>A protobuf message preserving the trial fields required by Optuna's storage protocol.</returns>
     internal static ProtoApi.Trial ToProtoTrial(FrozenTrial trial)
     {
         var proto = new ProtoApi.Trial
@@ -100,6 +123,8 @@ internal static class GrpcProto
     }
 
     /// <summary>Port of <c>servicer.py: _from_proto_trial</c>.</summary>
+    /// <param name="trial">The trial snapshot or database record being read or validated.</param>
+    /// <returns>A managed trial snapshot reconstructed from the wire message.</returns>
     internal static FrozenTrial FromProtoTrial(ProtoApi.Trial trial)
     {
         var distributions = new OrderedDict<string, BaseDistribution>(trial.Distributions.Count);

@@ -12,6 +12,8 @@ namespace OptunaSharp.Visualization;
 ///     trial. Port of <c>_HypervolumeHistoryInfo</c> in
 ///     <c>optuna/visualization/_hypervolume_history.py</c>.
 /// </summary>
+/// <param name="TrialNumbers">The study-local trial numbers aligned with the value or estimate sequences.</param>
+/// <param name="Values">The per-trial values in the same order as the plot's trial sequence.</param>
 public sealed record HypervolumeHistoryInfo(
     IReadOnlyList<int> TrialNumbers,
     IReadOnlyList<double> Values);
@@ -32,6 +34,10 @@ public static class HypervolumeHistory
     ///     Python <c>_get_hypervolume_history_info(study, reference_point)</c>, guarded by the
     ///     validations from <c>plot_hypervolume_history</c>.
     /// </summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
+    /// <returns>The trial numbers and cumulative feasible hypervolume after each trial.</returns>
+    /// <exception cref="NumSharp.ValueError">The study is single-objective or the reference-point length differs from the number of objectives.</exception>
     public static HypervolumeHistoryInfo GetInfo(Study study, IReadOnlyList<double> referencePoint)
     {
         if (!study.IsMultiObjective())
@@ -138,6 +144,10 @@ public static class HypervolumeHistory
         return new HypervolumeHistoryInfo(trialNumbers, hypervolumeValues);
     }
 
+    /// <summary>Returns true when every coordinate of the first vector is no larger than the corresponding coordinate of the second.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <returns>True when every coordinate of the first vector is no larger than the corresponding coordinate of the second.</returns>
     private static bool AllLessOrEqual(double[] a, double[] b)
     {
         for (int j = 0; j < a.Length; j++)
@@ -146,6 +156,10 @@ public static class HypervolumeHistory
         return true;
     }
 
+    /// <summary>Returns true when at least one coordinate of the first vector is smaller than the corresponding coordinate of the second.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <returns>True when at least one coordinate of the first vector is smaller than the corresponding coordinate of the second.</returns>
     private static bool AnyLess(double[] a, double[] b)
     {
         for (int j = 0; j < a.Length; j++)
@@ -155,6 +169,9 @@ public static class HypervolumeHistory
     }
 
     /// <summary>NumPy <c>np.prod(ref - values)</c> — a sequential product (M ≤ 8, so no pairwise).</summary>
+    /// <param name="reference">The hypervolume reference vector in minimization coordinates.</param>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The product of distances between the objective vector and reference point.</returns>
     private static double Prod(double[] reference, double[] values)
     {
         double p = 1.0;  // 1.0 * x == x exactly, so this matches multiply.reduce starting from ref[0]-values[0].
@@ -163,6 +180,10 @@ public static class HypervolumeHistory
         return p;
     }
 
+    /// <summary>Returns a new vector containing the coordinatewise maximum of both inputs.</summary>
+    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
+    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
+    /// <returns>A new vector containing the coordinatewise maximum of both inputs.</returns>
     private static double[] Maximum(double[] a, double[] b)
     {
         var r = new double[a.Length];

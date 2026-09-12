@@ -12,15 +12,27 @@ namespace OptunaSharp.Importance.Forests.Internal.Cart;
 /// </summary>
 internal sealed class MseRegressionCriterion
 {
+    /// <summary>The training target indexed by original sample row.</summary>
     internal double[] Y = null!;                 // y[sample] (n_outputs == 1)
+    /// <summary>Bootstrap multiplicities or other observation weights; null gives unit weight.</summary>
     internal double[]? SampleWeight;             // bootstrap counts; null => all ones
+    /// <summary>The shared permutation identifying which original rows reach the current node.</summary>
     internal int[] SampleIndices = null!;        // the shared, in-place-permuted samples array
 
+    /// <summary>The node's sample-range bounds, child boundary, sample count, and missing-value count.</summary>
     internal int Start, End, Pos, NNodeSamples, NMissing;
+    /// <summary>The sample-weight totals for the whole dataset, current node, and its left/right children.</summary>
     internal double WeightedNSamples, WeightedNNodeSamples, WeightedNLeft, WeightedNRight;
+    /// <summary>The node's weighted squared-target sum and the weighted target sums for the node and its children.</summary>
     internal double SqSumTotal, SumTotal, SumLeft, SumRight;
 
     /// <summary>Initialize the criterion on <c>sample_indices[start:end]</c> (<c>init</c> + <c>reset</c>).</summary>
+    /// <param name="y">Target values aligned with the feature rows.</param>
+    /// <param name="sampleWeight">Weights indexed by original sample row; null gives every sample unit weight.</param>
+    /// <param name="weightedNSamples">The total sample weight over the whole training set.</param>
+    /// <param name="sampleIndices">The shared array of original row indices, permuted in place by tree partitioning.</param>
+    /// <param name="start">The inclusive start of the interval or slice.</param>
+    /// <param name="end">The exclusive endpoint of the sample-index slice.</param>
     internal void Init(double[] y, double[]? sampleWeight, double weightedNSamples, int[] sampleIndices, int start, int end)
     {
         Y = y;
@@ -72,6 +84,7 @@ internal sealed class MseRegressionCriterion
     }
 
     /// <summary><c>update(new_pos)</c> — move <c>sample_indices[pos:new_pos]</c> to the left child.</summary>
+    /// <param name="newPos">The new exclusive endpoint of the left child's sample-index range.</param>
     internal void Update(int newPos)
     {
         int pos = Pos;
@@ -109,6 +122,7 @@ internal sealed class MseRegressionCriterion
     }
 
     /// <summary><c>MSE.node_impurity</c>.</summary>
+    /// <returns>The weighted target variance at the current node.</returns>
     internal double NodeImpurity()
     {
         double impurity = SqSumTotal / WeightedNNodeSamples;
@@ -117,6 +131,7 @@ internal sealed class MseRegressionCriterion
     }
 
     /// <summary><c>MSE.proxy_impurity_improvement</c>.</summary>
+    /// <returns>The split proxy score used to compare candidates without recomputing parent constants.</returns>
     internal double ProxyImpurityImprovement()
     {
         double proxyLeft = SumLeft * SumLeft;
@@ -125,6 +140,8 @@ internal sealed class MseRegressionCriterion
     }
 
     /// <summary><c>MSE.children_impurity</c> (no missing).</summary>
+    /// <param name="impurityLeft">The target variance of the left child; assigned by the operation when passed by reference.</param>
+    /// <param name="impurityRight">The target variance of the right child; assigned by the operation when passed by reference.</param>
     internal void ChildrenImpurity(out double impurityLeft, out double impurityRight)
     {
         double sqSumLeft = 0.0;
@@ -146,6 +163,10 @@ internal sealed class MseRegressionCriterion
     }
 
     /// <summary><c>Criterion.impurity_improvement</c>.</summary>
+    /// <param name="impurityParent">The target variance of the unsplit parent node.</param>
+    /// <param name="impurityLeft">The target variance of the left child; assigned by the operation when passed by reference.</param>
+    /// <param name="impurityRight">The target variance of the right child; assigned by the operation when passed by reference.</param>
+    /// <returns>The sample-weight-scaled reduction in target variance produced by the split.</returns>
     internal double ImpurityImprovement(double impurityParent, double impurityLeft, double impurityRight)
         => (WeightedNNodeSamples / WeightedNSamples) *
            (impurityParent
@@ -153,5 +174,6 @@ internal sealed class MseRegressionCriterion
             - (WeightedNLeft / WeightedNNodeSamples * impurityLeft));
 
     /// <summary><c>RegressionCriterion.node_value</c> — the node's mean prediction.</summary>
+    /// <returns>The weighted mean target used as the current node's prediction.</returns>
     internal double NodeValue() => SumTotal / WeightedNNodeSamples;
 }

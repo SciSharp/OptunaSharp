@@ -19,9 +19,13 @@ namespace OptunaSharp.Integration.LightGbm;
 internal class OptunaObjective : BaseTuner
 {
     // Trial system-attr keys (Python `_ELAPSED_SECS_KEY` etc.).
+    /// <summary>The trial system-attribute key holding elapsed training time in seconds.</summary>
     internal const string ElapsedSecsKey = "lightgbm_tuner:elapsed_secs";
+    /// <summary>The trial system-attribute key holding seconds per boosting iteration.</summary>
     internal const string AverageIterationTimeKey = "lightgbm_tuner:average_iteration_time";
+    /// <summary>The trial system-attribute key identifying the stepwise tuning stage.</summary>
     internal const string StepNameKey = "lightgbm_tuner:step_name";
+    /// <summary>The trial system-attribute key holding the serialized LightGBM parameter snapshot.</summary>
     internal const string LgbmParamsKey = "lightgbm_tuner:lgbm_params";
 
     private const double Eps = 1e-12;                 // Python `_EPS`
@@ -31,14 +35,21 @@ internal class OptunaObjective : BaseTuner
     private protected static readonly Logger Log = OptunaLogging.GetLogger("optuna_integration.lightgbm");
 
     // The 7 tunable parameters (Python `_DEFAULT_LIGHTGBM_PARAMETERS` keys).
+    /// <summary>The seven LightGBM parameter names supported by the stepwise objective.</summary>
     internal static readonly string[] TunableParameters =
         { "lambda_l1", "lambda_l2", "num_leaves", "feature_fraction", "bagging_fraction", "bagging_freq", "min_child_samples" };
 
+    /// <summary>The subset of supported LightGBM parameters varied in this step.</summary>
     protected readonly List<string> TargetParamNames;
+    /// <summary>The training dataset used by every trial in this step.</summary>
     protected readonly Dataset TrainSet;
+    /// <summary>The requested boosting rounds per trial.</summary>
     protected readonly int NumBoostRound;
+    /// <summary>The component responsible for fitting models and evaluating validation metrics.</summary>
     protected readonly ILightGbmTrainer Trainer;
+    /// <summary>The stable step identifier recorded in trial metadata.</summary>
     protected readonly string StepName;
+    /// <summary>The optional directory used to persist each trial's model.</summary>
     protected readonly string? ModelDir;
 
     /// <summary>The best validation score this step has seen so far.</summary>
@@ -47,8 +58,20 @@ internal class OptunaObjective : BaseTuner
     /// <summary>The best booster (or CV booster) + the trial number that produced it, or <c>null</c>.</summary>
     internal (object Booster, int TrialNumber)? BestBoosterWithTrialNumber;
 
+    /// <summary>The number of trials whose postprocessing has completed in this objective instance.</summary>
     internal int TrialCount;
 
+    /// <summary>Creates the single-fit objective for one named tuning stage.</summary>
+    /// <param name="targetParamNames">The LightGBM parameters varied during this tuning step.</param>
+    /// <param name="lgbmParams">The mutable ordered LightGBM parameter dictionary, shared with the current tuning step.</param>
+    /// <param name="trainSet">The dataset used for training or cross-validation.</param>
+    /// <param name="validSets">The validation datasets whose metrics are recorded.</param>
+    /// <param name="validNames">Names aligned with the validation datasets; omitted names are resolved by the tuner.</param>
+    /// <param name="numBoostRound">The requested number of boosting rounds for each trial.</param>
+    /// <param name="trainer">The training implementation, or null to use the ML.NET LightGBM adapter.</param>
+    /// <param name="bestScore">The current best score, or the validation-set metric mapping when constructing a Booster.</param>
+    /// <param name="stepName">The stable tuning-step name recorded in trial system attributes.</param>
+    /// <param name="modelDir">An optional directory shared by workers for persisted trial boosters.</param>
     internal OptunaObjective(
         List<string> targetParamNames, OrderedDict<string, object?> lgbmParams, Dataset trainSet,
         IReadOnlyList<Dataset>? validSets, IReadOnlyList<string>? validNames, int numBoostRound,
@@ -67,6 +90,8 @@ internal class OptunaObjective : BaseTuner
         CheckTargetNamesSupported();
     }
 
+    /// <summary>Rejects a tuning stage containing a parameter outside the supported stepwise search.</summary>
+    /// <exception cref="System.NotImplementedException">A target parameter is outside the seven supported LightGBM tuning parameters.</exception>
     private void CheckTargetNamesSupported()
     {
         foreach (var name in TargetParamNames)
@@ -75,6 +100,7 @@ internal class OptunaObjective : BaseTuner
     }
 
     /// <summary>Port of <c>_preprocess</c> — suggest the step's target params into <c>lgbm_params</c>.</summary>
+    /// <param name="trial">The Optuna trial whose suggested parameters and training metadata are being updated.</param>
     protected void Preprocess(Trial trial)
     {
         if (Has("lambda_l1"))
@@ -104,6 +130,8 @@ internal class OptunaObjective : BaseTuner
     }
 
     /// <summary>Port of <c>__call__</c> — train, score, track best, and record system attrs.</summary>
+    /// <param name="trial">The Optuna trial whose suggested parameters and training metadata are being updated.</param>
+    /// <returns>The validation score optimized by the current study direction.</returns>
     internal virtual double Call(Trial trial)
     {
         Preprocess(trial);
@@ -136,10 +164,15 @@ internal class OptunaObjective : BaseTuner
     }
 
     /// <summary>The extensionless base path for a trial's persisted booster (<c>{model_dir}/{trial}</c>).</summary>
+    /// <param name="trialNumber">The zero-based study-local trial number used in the persisted booster path.</param>
+    /// <returns>The extensionless model-store path for this trial number.</returns>
     private protected string BoosterPath(int trialNumber)
         => Path.Combine(ModelDir!, trialNumber.ToString(CultureInfo.InvariantCulture));
 
     /// <summary>Port of <c>_postprocess</c> — record the elapsed / iteration-time / step / params attrs.</summary>
+    /// <param name="trial">The Optuna trial whose suggested parameters and training metadata are being updated.</param>
+    /// <param name="elapsedSecs">The measured wall-clock duration of this trial's training and scoring in seconds.</param>
+    /// <param name="averageIterationTime">The elapsed time divided by the number of completed boosting rounds.</param>
     protected void Postprocess(Trial trial, double elapsedSecs, double averageIterationTime)
     {
         trial.Storage.SetTrialSystemAttr(trial.TrialId, ElapsedSecsKey, elapsedSecs);
@@ -163,6 +196,20 @@ internal sealed class OptunaObjectiveCV : OptunaObjective
     private readonly int _seed;
     private readonly bool _returnCvBooster;
 
+    /// <summary>Creates the cross-validation objective for one named tuning stage.</summary>
+    /// <param name="targetParamNames">The LightGBM parameters varied during this tuning step.</param>
+    /// <param name="lgbmParams">The mutable ordered LightGBM parameter dictionary, shared with the current tuning step.</param>
+    /// <param name="trainSet">The dataset used for training or cross-validation.</param>
+    /// <param name="numBoostRound">The requested number of boosting rounds for each trial.</param>
+    /// <param name="trainer">The training implementation, or null to use the ML.NET LightGBM adapter.</param>
+    /// <param name="bestScore">The current best score, or the validation-set metric mapping when constructing a Booster.</param>
+    /// <param name="stepName">The stable tuning-step name recorded in trial system attributes.</param>
+    /// <param name="modelDir">An optional directory shared by workers for persisted trial boosters.</param>
+    /// <param name="nFold">The requested number of cross-validation folds.</param>
+    /// <param name="stratified">The requested stratification flag passed through the trainer request; the default adapter currently splits rows or query groups.</param>
+    /// <param name="shuffle">Whether to shuffle row or query-group order before assigning folds.</param>
+    /// <param name="seed">The training or fold-shuffling seed, as specified by the operation.</param>
+    /// <param name="returnCvBooster">Whether to retain each cross-validation fold's fitted model.</param>
     internal OptunaObjectiveCV(
         List<string> targetParamNames, OrderedDict<string, object?> lgbmParams, Dataset trainSet,
         int numBoostRound, ILightGbmTrainer trainer, double bestScore, string stepName, string? modelDir,
@@ -178,6 +225,8 @@ internal sealed class OptunaObjectiveCV : OptunaObjective
     }
 
     /// <summary>Port of <c>_get_cv_scores</c> — the per-iteration mean-metric list.</summary>
+    /// <param name="cvResults">The aggregated cross-validation metrics returned by the trainer.</param>
+    /// <returns>The per-iteration mean scores of the selected optimization metric.</returns>
     private IReadOnlyList<double> GetCvScores(CvResult cvResults)
     {
         string metric = GetMetricForObjective();
@@ -188,6 +237,7 @@ internal sealed class OptunaObjectiveCV : OptunaObjective
             : cvResults.Results["valid " + metricKey];
     }
 
+    /// <inheritdoc />
     internal override double Call(Trial trial)
     {
         Preprocess(trial);

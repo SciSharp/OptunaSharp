@@ -31,6 +31,7 @@ namespace OptunaSharp.Integration.LightGbm;
 public abstract class LightGbmBaseTuner : BaseTuner
 {
     /// <summary>Port of <c>_DEFAULT_LIGHTGBM_PARAMETERS</c> (LightGBM's documented defaults).</summary>
+    /// <returns>A fresh ordered mapping of the tunable LightGBM defaults.</returns>
     private static OrderedDict<string, object?> DefaultLightGbmParameters() => new()
     {
         ["lambda_l1"] = 0.0,
@@ -62,6 +63,22 @@ public abstract class LightGbmBaseTuner : BaseTuner
     /// <summary>The best booster seen this run + the trial number that produced it (in-memory).</summary>
     private protected (object Booster, int TrialNumber)? BestBoosterWithTrialNumber;
 
+    /// <summary>Initializes shared stepwise tuning configuration and verifies the study direction and model-store capability.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <param name="trainSet">The dataset used for training or cross-validation.</param>
+    /// <param name="numBoostRound">The requested number of boosting rounds for each trial.</param>
+    /// <param name="timeBudget">The total tuning budget in seconds, or null for no time limit.</param>
+    /// <param name="sampleSize">An optional maximum number of trailing training rows used for tuning.</param>
+    /// <param name="study">An existing study with a direction consistent with the selected metric, or null to create one.</param>
+    /// <param name="optunaCallbacks">Optional callbacks invoked by Study.Optimize after each trial.</param>
+    /// <param name="showProgressBar">Whether the caller requests progress output during tuning.</param>
+    /// <param name="modelDir">An optional directory shared by workers for persisted trial boosters.</param>
+    /// <param name="optunaSeed">The seed for OptunaSharp samplers used by the tuning steps.</param>
+    /// <param name="trainer">The training implementation, or null to use the ML.NET LightGBM adapter.</param>
+    /// <exception cref="NumSharp.ValueError">The existing study direction is inconsistent with the selected validation metric.</exception>
+    /// <exception cref="System.NotSupportedException">A model directory is requested but the custom trainer does not implement booster persistence.</exception>
+    /// <exception cref="System.IO.IOException">The requested model directory cannot be created.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Access to the requested model directory is denied.</exception>
     private protected LightGbmBaseTuner(
         IReadOnlyDictionary<string, object?> @params, Dataset trainSet, int numBoostRound,
         int? timeBudget, int? sampleSize, Study? study,
@@ -128,6 +145,8 @@ public abstract class LightGbmBaseTuner : BaseTuner
         }
     }
 
+    /// <summary>Reads the configured metric name or the tuner's binary-logloss fallback.</summary>
+    /// <returns>The configured metric text, or binary_logloss when it is absent.</returns>
     private string MetricName()
         => LgbmParams.GetValueOrDefault("metric", "binary_logloss")?.ToString() ?? "binary_logloss";
 
@@ -190,6 +209,7 @@ public abstract class LightGbmBaseTuner : BaseTuner
     }
 
     /// <summary>Port of <c>sample_train_set</c> — keep only the last <c>sample_size</c> rows for tuning.</summary>
+    /// <remarks>The current row-sampling path does not retain ranking query groups. Leave sampleSize unset for ranking datasets.</remarks>
     private void SampleTrainSet()
     {
         if (_sampleSize is null)
@@ -215,6 +235,7 @@ public abstract class LightGbmBaseTuner : BaseTuner
     // ---- The six tuning steps (Python `tune_*`). ----
 
     /// <summary>Port of <c>tune_feature_fraction</c> — GridSampler over <c>linspace(0.4, 1.0, n)</c>.</summary>
+    /// <param name="nTrials">The maximum trial count or grid-point count for this tuning step.</param>
     public void TuneFeatureFraction(int nTrials = 7)
     {
         const string paramName = "feature_fraction";
@@ -224,15 +245,18 @@ public abstract class LightGbmBaseTuner : BaseTuner
     }
 
     /// <summary>Port of <c>tune_num_leaves</c> — TPESampler, 20 trials.</summary>
+    /// <param name="nTrials">The maximum trial count or grid-point count for this tuning step.</param>
     public void TuneNumLeaves(int nTrials = 20)
         => TuneParams(new List<string> { "num_leaves" }, nTrials, new TPESampler(seed: OptunaSeed), "num_leaves");
 
     /// <summary>Port of <c>tune_bagging</c> — TPESampler over <c>bagging_fraction</c> + <c>bagging_freq</c>.</summary>
+    /// <param name="nTrials">The maximum trial count or grid-point count for this tuning step.</param>
     public void TuneBagging(int nTrials = 10)
         => TuneParams(new List<string> { "bagging_fraction", "bagging_freq" }, nTrials,
             new TPESampler(seed: OptunaSeed), "bagging");
 
     /// <summary>Port of <c>tune_feature_fraction_stage2</c> — a fine GridSampler around the best value.</summary>
+    /// <param name="nTrials">The maximum trial count or grid-point count for this tuning step.</param>
     public void TuneFeatureFractionStage2(int nTrials = 6)
     {
         const string paramName = "feature_fraction";
@@ -244,6 +268,7 @@ public abstract class LightGbmBaseTuner : BaseTuner
     }
 
     /// <summary>Port of <c>tune_regularization_factors</c> — TPESampler over <c>lambda_l1</c> + <c>lambda_l2</c>.</summary>
+    /// <param name="nTrials">The maximum trial count or grid-point count for this tuning step.</param>
     public void TuneRegularizationFactors(int nTrials = 20)
         => TuneParams(new List<string> { "lambda_l1", "lambda_l2" }, nTrials,
             new TPESampler(seed: OptunaSeed), "regularization_factors");
@@ -261,10 +286,19 @@ public abstract class LightGbmBaseTuner : BaseTuner
         TuneParams(new List<string> { paramName }, paramValues.Length, sampler, "min_child_samples");
     }
 
+    /// <summary>Wraps numerical grid coordinates as ordered categorical choices for one parameter.</summary>
+    /// <param name="name">The parameter name defining the one-dimensional grid.</param>
+    /// <param name="values">The numerical grid coordinates, converted to categorical choices in order.</param>
+    /// <returns>A one-parameter grid definition whose choice order matches the supplied coordinates.</returns>
     private static Dictionary<string, IReadOnlyList<CategoricalChoice>> GridSpace(string name, double[] values)
         => new() { [name] = values.Select(v => CategoricalChoice.From(v)).ToList() };
 
     /// <summary>Port of <c>_tune_params</c> — run one step's short study with the given sampler.</summary>
+    /// <param name="targetParamNames">The LightGBM parameters varied during this tuning step.</param>
+    /// <param name="nTrials">The maximum trial count or grid-point count for this tuning step.</param>
+    /// <param name="sampler">The sampler used for this step's trial suggestions.</param>
+    /// <param name="stepName">The stable tuning-step name recorded in trial system attributes.</param>
+    /// <returns>The objective retaining this step's trial count, score, and best booster.</returns>
     private OptunaObjective TuneParams(
         List<string> targetParamNames, int nTrials, BaseSampler sampler, string stepName)
     {
@@ -303,13 +337,22 @@ public abstract class LightGbmBaseTuner : BaseTuner
     }
 
     /// <summary>Create the step's objective (train vs CV) — Python's abstract <c>_create_objective</c>.</summary>
+    /// <param name="targetParamNames">The LightGBM parameters varied during this tuning step.</param>
+    /// <param name="trainSet">The dataset used for training or cross-validation.</param>
+    /// <param name="stepName">The stable tuning-step name recorded in trial system attributes.</param>
+    /// <returns>A trial objective configured for this tuner's validation strategy.</returns>
     private protected abstract OptunaObjective CreateObjective(
         List<string> targetParamNames, Dataset trainSet, string stepName);
 
     /// <summary>Port of <c>_get_custom_objective</c> — a non-string <c>objective</c> is a custom callable.</summary>
+    /// <param name="lgbmParams">The mutable ordered LightGBM parameter dictionary, shared with the current tuning step.</param>
+    /// <returns>The callable objective object, or null for an ordinary objective-name string.</returns>
     private static object? GetCustomObjective(OrderedDict<string, object?> lgbmParams)
         => lgbmParams.TryGetValue("objective", out var o) && o is not null and not string ? o : null;
 
+    /// <summary>Clones parameter values so tuning does not mutate the caller's parameter dictionary.</summary>
+    /// <param name="params">LightGBM parameter names and values, using native LightGBM spellings.</param>
+    /// <returns>An independent ordered parameter dictionary with cloned supported values.</returns>
     private static OrderedDict<string, object?> DeepCopyParams(IReadOnlyDictionary<string, object?> @params)
     {
         var copy = new OrderedDict<string, object?>();

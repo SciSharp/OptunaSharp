@@ -36,13 +36,23 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
     // BaseStorage is itself thread-safe (CachedStorage / RDBStorage hold their own locks), so no lock is
     // needed here either. Faithful to servicer.py, which relies on the backend's own thread-safety.
 
+    /// <summary>Binds gRPC request handlers to the supplied Optuna storage backend.</summary>
+    /// <param name="storage">The storage backend serving requests; its lifetime is controlled by its owner.</param>
     public OptunaStorageProxyService(BaseStorage storage) => _backend = storage;
 
     /// <summary>The <c>context.abort(code, details=str(e))</c> analog: an aborting gRPC fault.</summary>
+    /// <param name="code">The gRPC status used to represent the storage failure.</param>
+    /// <param name="e">The provider exception to classify or translate.</param>
+    /// <returns>A gRPC exception carrying the chosen status and original message.</returns>
     private static RpcException Fault(StatusCode code, Exception e) => new(new Status(code, e.Message));
 
     // ------------------------------------------------------------------ study manipulation
 
+    /// <summary>Creates a study through the backend and returns its storage identifier.</summary>
+    /// <param name="request">The study name and ordered objective directions.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The newly assigned study identifier.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study name already exists; the reply status is AlreadyExists.</exception>
     public override Task<ProtoApi.CreateNewStudyReply> CreateNewStudy(ProtoApi.CreateNewStudyRequest request, ServerCallContext context)
     {
         var directions = request.Directions.Select(GrpcProto.FromProtoDirection).ToList();
@@ -57,6 +67,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Deletes a study through the backend.</summary>
+    /// <param name="request">The identifier of the study to delete.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. An empty success reply.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.DeleteStudyReply> DeleteStudy(ProtoApi.DeleteStudyRequest request, ServerCallContext context)
     {
         try
@@ -70,6 +85,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Decodes and writes a study user attribute.</summary>
+    /// <param name="request">The study identifier, attribute name, and JSON value.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. An empty success reply.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.SetStudyUserAttributeReply> SetStudyUserAttribute(
         ProtoApi.SetStudyUserAttributeRequest request, ServerCallContext context)
     {
@@ -84,6 +104,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Decodes and writes a study system attribute.</summary>
+    /// <param name="request">The study identifier, attribute name, and JSON value.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. An empty success reply.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.SetStudySystemAttributeReply> SetStudySystemAttribute(
         ProtoApi.SetStudySystemAttributeRequest request, ServerCallContext context)
     {
@@ -100,6 +125,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
 
     // ------------------------------------------------------------------ study access
 
+    /// <summary>Resolves a study name through the backend.</summary>
+    /// <param name="request">The study name to resolve.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The matching storage-wide study identifier.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study name is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.GetStudyIdFromNameReply> GetStudyIdFromName(
         ProtoApi.GetStudyIdFromNameRequest request, ServerCallContext context)
     {
@@ -114,6 +144,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Reads the display name of a stored study.</summary>
+    /// <param name="request">The storage-wide study identifier.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The stored study name.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.GetStudyNameFromIdReply> GetStudyNameFromId(
         ProtoApi.GetStudyNameFromIdRequest request, ServerCallContext context)
     {
@@ -128,6 +163,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Reads the ordered objective directions of a study.</summary>
+    /// <param name="request">The storage-wide study identifier.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The directions encoded as protobuf enum values.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.GetStudyDirectionsReply> GetStudyDirections(
         ProtoApi.GetStudyDirectionsRequest request, ServerCallContext context)
     {
@@ -144,6 +184,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Reads and JSON-encodes a study's user attributes.</summary>
+    /// <param name="request">The storage-wide study identifier.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The JSON-valued user-attribute mapping.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.GetStudyUserAttributesReply> GetStudyUserAttributes(
         ProtoApi.GetStudyUserAttributesRequest request, ServerCallContext context)
     {
@@ -161,6 +206,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Reads and JSON-encodes a study's system attributes.</summary>
+    /// <param name="request">The storage-wide study identifier.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The JSON-valued system-attribute mapping.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.GetStudySystemAttributesReply> GetStudySystemAttributes(
         ProtoApi.GetStudySystemAttributesRequest request, ServerCallContext context)
     {
@@ -178,6 +228,10 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Reads study summaries and converts their metadata to the Optuna protobuf representation.</summary>
+    /// <param name="request">The empty request selecting all studies.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The collection of study summaries.</returns>
     public override Task<ProtoApi.GetAllStudiesReply> GetAllStudies(ProtoApi.GetAllStudiesRequest request, ServerCallContext context)
     {
         var studies = _backend.GetAllStudies();
@@ -201,6 +255,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
 
     // ------------------------------------------------------------------ trial manipulation
 
+    /// <summary>Creates a trial from the optional template carried by the request.</summary>
+    /// <param name="request">The owning study identifier and optional template trial.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The newly assigned storage-wide trial identifier.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.CreateNewTrialReply> CreateNewTrial(ProtoApi.CreateNewTrialRequest request, ServerCallContext context)
     {
         FrozenTrial? templateTrial = request.TemplateTrialIsNone ? null : GrpcProto.FromProtoTrial(request.TemplateTrial);
@@ -215,6 +274,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Decodes a distribution and stores a trial parameter in internal numeric form.</summary>
+    /// <param name="request">The trial identifier, parameter name, numeric value, and distribution JSON.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. An empty success reply.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The trial is missing, finished, or has an incompatible distribution; statuses are NotFound, FailedPrecondition, or InvalidArgument respectively.</exception>
     public override Task<ProtoApi.SetTrialParameterReply> SetTrialParameter(
         ProtoApi.SetTrialParameterRequest request, ServerCallContext context)
     {
@@ -238,6 +302,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Resolves a study-local trial number to a storage-wide identifier.</summary>
+    /// <param name="request">The study identifier and trial number within that study.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The matching storage-wide trial identifier.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The requested trial is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.GetTrialIdFromStudyIdTrialNumberReply> GetTrialIdFromStudyIdTrialNumber(
         ProtoApi.GetTrialIdFromStudyIdTrialNumberRequest request, ServerCallContext context)
     {
@@ -252,6 +321,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Applies a trial lifecycle transition and its optional objective values.</summary>
+    /// <param name="request">The trial identifier, requested lifecycle state, and objective values.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. Whether the backend accepted the requested transition.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The trial is missing or already finished; statuses are NotFound or FailedPrecondition respectively.</exception>
     public override Task<ProtoApi.SetTrialStateValuesReply> SetTrialStateValues(
         ProtoApi.SetTrialStateValuesRequest request, ServerCallContext context)
     {
@@ -273,6 +347,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Writes a trial's intermediate report at the requested step.</summary>
+    /// <param name="request">The trial identifier, report step, and intermediate value.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. An empty success reply.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The trial is missing or already finished; statuses are NotFound or FailedPrecondition respectively.</exception>
     public override Task<ProtoApi.SetTrialIntermediateValueReply> SetTrialIntermediateValue(
         ProtoApi.SetTrialIntermediateValueRequest request, ServerCallContext context)
     {
@@ -291,6 +370,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Decodes and writes a trial user attribute.</summary>
+    /// <param name="request">The trial identifier, attribute name, and JSON value.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. An empty success reply.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The trial is missing or already finished; statuses are NotFound or FailedPrecondition respectively.</exception>
     public override Task<ProtoApi.SetTrialUserAttributeReply> SetTrialUserAttribute(
         ProtoApi.SetTrialUserAttributeRequest request, ServerCallContext context)
     {
@@ -310,6 +394,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Decodes and writes a trial system attribute.</summary>
+    /// <param name="request">The trial identifier, attribute name, and JSON value.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. An empty success reply.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The trial is missing or already finished; statuses are NotFound or FailedPrecondition respectively.</exception>
     public override Task<ProtoApi.SetTrialSystemAttributeReply> SetTrialSystemAttribute(
         ProtoApi.SetTrialSystemAttributeRequest request, ServerCallContext context)
     {
@@ -331,6 +420,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
 
     // ------------------------------------------------------------------ trial access
 
+    /// <summary>Reads a frozen trial and converts it to its wire representation.</summary>
+    /// <param name="request">The storage-wide trial identifier.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The complete protobuf trial snapshot.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The trial is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.GetTrialReply> GetTrial(ProtoApi.GetTrialRequest request, ServerCallContext context)
     {
         try
@@ -344,6 +438,11 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
         }
     }
 
+    /// <summary>Reads trial snapshots newer than the cursor or explicitly requested for refresh.</summary>
+    /// <param name="request">The study identifier, exclusive trial-id cursor, and identifiers to refresh regardless of the cursor.</param>
+    /// <param name="context">The server call context supplied by ASP.NET Core; backend operations execute synchronously.</param>
+    /// <returns>A completed task containing the reply. The matching protobuf trial snapshots.</returns>
+    /// <exception cref="global::Grpc.Core.RpcException">The study is absent; the reply status is NotFound.</exception>
     public override Task<ProtoApi.GetTrialsReply> GetTrials(ProtoApi.GetTrialsRequest request, ServerCallContext context)
     {
         var includedTrialIds = new HashSet<long>(request.IncludedTrialIds);

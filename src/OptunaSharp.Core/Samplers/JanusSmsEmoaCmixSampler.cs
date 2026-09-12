@@ -44,6 +44,7 @@ public sealed class JanusSmsEmoaCmixSampler : SmsEmoaSampler
     /// <param name="crossoverProb">SMS-EMOA crossover probability (forwarded, default 0.9).</param>
     /// <param name="swappingProb">SMS-EMOA swapping probability (forwarded, default 0.5).</param>
     /// <param name="hvReferenceEps">Hypervolume reference-point epsilon (forwarded).</param>
+    /// <summary>Configures curvature-informed candidate injection into SMS-EMOA offspring.</summary>
     public JanusSmsEmoaCmixSampler(
         int populationSize = 50,
         int? seed = null,
@@ -71,6 +72,7 @@ public sealed class JanusSmsEmoaCmixSampler : SmsEmoaSampler
             cmixStartGeneration, cmixStartTrial, componentAttr, scalarFallback);
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {

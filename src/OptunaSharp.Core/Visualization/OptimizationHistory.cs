@@ -12,8 +12,11 @@ namespace OptunaSharp.Visualization;
 /// </summary>
 public enum ValueState
 {
+    /// <summary>The trial completed with every recorded constraint satisfied.</summary>
     Feasible = 0,
+    /// <summary>The trial completed with a positive constraint violation.</summary>
     Infeasible = 1,
+    /// <summary>The trial does not supply a completed objective value for the history curve.</summary>
     Incomplete = 2,
 }
 
@@ -21,6 +24,10 @@ public enum ValueState
 ///     One series of values (with optional error-bar standard deviations). Port of
 ///     <c>_ValuesInfo</c>.
 /// </summary>
+/// <param name="Values">The per-trial values in the same order as the plot's trial sequence.</param>
+/// <param name="Stds">The standard deviation at each plotted position, or null when error bars are absent.</param>
+/// <param name="LabelName">The legend label identifying this objective-value sequence.</param>
+/// <param name="States">The feasibility/completion classification aligned with the plotted values.</param>
 public sealed record ValuesInfo(
     IReadOnlyList<double> Values,
     IReadOnlyList<double>? Stds,
@@ -31,6 +38,9 @@ public sealed record ValuesInfo(
 ///     The data backing one study's optimization-history plot. Port of
 ///     <c>_OptimizationHistoryInfo</c>.
 /// </summary>
+/// <param name="TrialNumbers">The study-local trial numbers aligned with the value or estimate sequences.</param>
+/// <param name="ValuesInfo">The per-trial objective values, labels, and feasibility states.</param>
+/// <param name="BestValuesInfo">The running best-value curve, or null when that curve is not available.</param>
 public sealed record OptimizationHistoryInfo(
     IReadOnlyList<int> TrialNumbers,
     ValuesInfo ValuesInfo,
@@ -46,6 +56,12 @@ public static class OptimizationHistory
         OptunaLogging.GetLogger("optuna.visualization._optimization_history");
 
     /// <inheritdoc cref="GetInfoList(System.Collections.Generic.IReadOnlyList{Study}, System.Func{FrozenTrial, double}, string, bool)" />
+    /// <param name="study">The study whose trial values form the history.</param>
+    /// <param name="target">A scalar target selector; null uses the study's single objective.</param>
+    /// <param name="targetName">The label for the objective-value curve.</param>
+    /// <param name="errorBar">Whether to use the history aggregation path that also computes standard deviations.</param>
+    /// <returns>The history descriptors built for this study.</returns>
+    /// <exception cref="NumSharp.ValueError">A multi-objective study is supplied without a scalar target selector.</exception>
     public static List<OptimizationHistoryInfo> GetInfoList(
         Study study,
         Func<FrozenTrial, double>? target = null,
@@ -54,6 +70,12 @@ public static class OptimizationHistory
         => GetInfoList(new[] { study }, target, targetName, errorBar);
 
     /// <summary>Python <c>_get_optimization_history_info_list(study, target, target_name, error_bar)</c>.</summary>
+    /// <param name="studies">The studies to compare, in the order their data should appear.</param>
+    /// <param name="target">A selector for a scalar trial value; null uses the single objective value.</param>
+    /// <param name="targetName">The display label for the selected objective or custom target.</param>
+    /// <param name="errorBar">Whether histories are aggregated across studies with mean and standard-deviation error bars.</param>
+    /// <returns>The per-study objective histories and available running-best curves, optionally aggregated with error bars.</returns>
+    /// <exception cref="NumSharp.ValueError">A multi-objective study is supplied without a scalar target selector.</exception>
     public static List<OptimizationHistoryInfo> GetInfoList(
         IReadOnlyList<Study> studies,
         Func<FrozenTrial, double>? target = null,
@@ -204,6 +226,8 @@ public static class OptimizationHistory
     }
 
     /// <summary>NumPy <c>np.minimum.accumulate</c> — running minimum (no NaN in the inputs here).</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The running minimum of the input values.</returns>
     private static List<double> MinimumAccumulate(IEnumerable<double> values)
     {
         var result = new List<double>();
@@ -219,6 +243,8 @@ public static class OptimizationHistory
     }
 
     /// <summary>NumPy <c>np.maximum.accumulate</c> — running maximum (no NaN in the inputs here).</summary>
+    /// <param name="values">The ordered values to aggregate or format.</param>
+    /// <returns>The running maximum of the input values.</returns>
     private static List<double> MaximumAccumulate(IEnumerable<double> values)
     {
         var result = new List<double>();

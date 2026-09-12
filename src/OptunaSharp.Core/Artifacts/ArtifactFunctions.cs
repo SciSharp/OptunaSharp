@@ -31,7 +31,9 @@ public sealed record ArtifactMeta(string ArtifactId, string Filename, string Mim
 /// </summary>
 public static class ArtifactFunctions
 {
+    /// <summary>Reserved system-attribute prefix for serialized artifact metadata.</summary>
     internal const string ArtifactsAttrPrefix = "artifacts:";
+    /// <summary>Fallback MIME type used when no filename mapping or explicit type is available.</summary>
     internal const string DefaultMimeType = "application/octet-stream";
 
     /// <summary>
@@ -44,6 +46,13 @@ public static class ArtifactFunctions
     /// <param name="mimetype">A MIME type of the artifact; guessed from the file extension when omitted.</param>
     /// <param name="encoding">A Content-Encoding of the artifact; guessed from the file extension when omitted.</param>
     /// <returns>An artifact ID.</returns>
+    /// <exception cref="NumSharp.ValueError">No storage can be resolved for the supplied object.</exception>
+    /// <exception cref="NumSharp.TypeError">The object is neither Trial, FrozenTrial, nor Study.</exception>
+    /// <exception cref="OptunaSharp.UpdateFinishedTrialError">Metadata is written to a finished trial.</exception>
+    /// <exception cref="System.IO.IOException">The local input file cannot be read.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">Read access to the input file is denied.</exception>
+    /// <exception cref="System.Exception">The artifact or metadata backend fails.</exception>
+    /// <remarks>Metadata is stored before the content is uploaded. An upload failure can leave metadata pointing to absent or partial content; the operation is not transactional.</remarks>
     public static string UploadArtifact(
         IArtifactStore artifactStore,
         string filePath,
@@ -70,6 +79,8 @@ public static class ArtifactFunctions
             Mimetype: mimetype ?? guessMimetype ?? DefaultMimeType,
             Encoding: encoding ?? guessEncoding);
 
+        // Metadata and bytes live in separate stores. Publishing metadata first preserves Optuna's
+        // ordering, including its nontransactional failure case if the following upload fails.
         string attrKey = ArtifactsAttrPrefix + artifactId;
         string metaJson = PyJson.Dumps(new OrderedDict<string, object?>
         {
@@ -107,6 +118,10 @@ public static class ArtifactFunctions
     /// <param name="artifactStore">An artifact store.</param>
     /// <param name="filePath">A path to save the downloaded artifact.</param>
     /// <param name="artifactId">The identifier of the artifact to download.</param>
+    /// <exception cref="System.IO.IOException">The destination already exists or file copying fails.</exception>
+    /// <exception cref="OptunaSharp.Artifacts.ArtifactNotFound">The requested artifact does not exist.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">The destination cannot be written.</exception>
+    /// <remarks>Both streams are disposed on failure, but a partially written destination file is retained.</remarks>
     public static void DownloadArtifact(IArtifactStore artifactStore, string filePath, string artifactId)
     {
         if (File.Exists(filePath))
@@ -122,6 +137,13 @@ public static class ArtifactFunctions
     ///     (Python <c>get_all_artifact_meta</c>). If a <see cref="Study" /> is provided, the
     ///     artifacts uploaded to the study are returned, not those of all its trials.
     /// </summary>
+    /// <param name="storage">Storage backend holding study and trial records.</param>
+    /// <param name="studyOrTrial">Trial, FrozenTrial, or Study whose artifact metadata is requested.</param>
+    /// <returns>Metadata attached directly to the supplied study or trial.</returns>
+    /// <exception cref="NumSharp.ValueError">No storage can be resolved, or stored metadata is not valid JSON.</exception>
+    /// <exception cref="NumSharp.TypeError">The object is neither Trial, FrozenTrial, nor Study.</exception>
+    /// <exception cref="System.InvalidCastException">Stored artifact metadata has an incompatible shape.</exception>
+    /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required metadata field is missing.</exception>
     public static List<ArtifactMeta> GetAllArtifactMeta(object studyOrTrial, BaseStorage? storage = null)
     {
         if (studyOrTrial is Trial trialWithStorage && storage is null)
@@ -209,6 +231,9 @@ internal static class MimeTypes
         [".yml"] = "application/yaml",
     };
 
+    /// <summary>Infers MIME type and content encoding from supported filename suffixes.</summary>
+    /// <param name="filename">Filename whose extensions are inspected; no file is opened.</param>
+    /// <returns>Guessed MIME type and encoding, independently null when no mapping exists.</returns>
     internal static (string? Mimetype, string? Encoding) GuessType(string filename)
     {
         string? encoding = null;

@@ -106,6 +106,16 @@ internal sealed class LBfgsB
     private readonly int[] _isave = new int[44];
     private readonly double[] _dsave = new double[29];
 
+    /// <summary>Allocates the limited-memory workspaces and stores the coordinate-bound and convergence settings.</summary>
+    /// <param name="n">The number of optimized coordinates.</param>
+    /// <param name="m">The maximum number of stored limited-memory correction pairs.</param>
+    /// <param name="x">The current optimizer coordinates, updated in place where the parameter is mutable.</param>
+    /// <param name="l">The lower bound for each optimizer coordinate.</param>
+    /// <param name="u">The upper bound for each optimizer coordinate.</param>
+    /// <param name="nbd">Bound flags: 0 unbounded, 1 lower, 2 both, 3 upper.</param>
+    /// <param name="factr">The relative function-reduction stopping factor multiplied by machine epsilon.</param>
+    /// <param name="pgtol">The infinity-norm threshold for the projected gradient.</param>
+    /// <param name="maxls">The maximum number of line-search evaluations per iteration.</param>
     private LBfgsB(int n, int m, double[] x, double[] l, double[] u, int[] nbd,
         double factr, double pgtol, int maxls)
     {
@@ -139,6 +149,12 @@ internal sealed class LBfgsB
     }
 
     /// <summary>The result of a minimization: the optimum, its value, and run statistics.</summary>
+    /// <param name="X">The final optimized coordinate vector.</param>
+    /// <param name="F">The objective value at the final coordinate vector.</param>
+    /// <param name="G">The gradient at the final coordinate vector.</param>
+    /// <param name="NumIterations">The number of completed outer iterations.</param>
+    /// <param name="NumFuncEvals">The number of objective/gradient callback invocations.</param>
+    /// <param name="WarnFlag">The termination code: zero for convergence, one for a limit, and two for another warning or error.</param>
     internal readonly record struct Result(double[] X, double F, double[] G, int NumIterations, int NumFuncEvals, int WarnFlag);
 
     /// <summary>
@@ -148,6 +164,18 @@ internal sealed class LBfgsB
     ///     <see cref="double.PositiveInfinity" /> for one-sided or absent bounds; pass <c>null</c> for
     ///     a fully unconstrained problem (the GP fit's case).
     /// </summary>
+    /// <param name="funcAndGrad">The callback returning the objective and its gradient at the supplied coordinate vector.</param>
+    /// <param name="x0">The initial parameter vector; the driver copies it before optimization.</param>
+    /// <param name="bounds">The coordinate bounds used by this numerical operation.</param>
+    /// <param name="m">The maximum number of stored limited-memory correction pairs.</param>
+    /// <param name="factr">The relative function-reduction stopping factor multiplied by machine epsilon.</param>
+    /// <param name="pgtol">The infinity-norm threshold for the projected gradient.</param>
+    /// <param name="maxfun">The maximum number of objective/gradient evaluations.</param>
+    /// <param name="maxiter">The maximum number of optimizer iterations.</param>
+    /// <param name="maxls">The maximum number of line-search evaluations per iteration.</param>
+    /// <returns>The final point, objective, gradient, evaluation counts, and termination status.</returns>
+    /// <exception cref="System.ArgumentException">The line-search limit is not positive, or the bound count differs from the coordinate count.</exception>
+    /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
     internal static Result Minimize(
         Func<double[], (double, double[])> funcAndGrad,
         double[] x0,
@@ -230,6 +258,11 @@ internal sealed class LBfgsB
 
     // ==== BLAS (inc = 1, sequential — every L-BFGS-B call uses unit stride) ======================
 
+    /// <summary>Returns the inner product of the first n elements of the two vectors.</summary>
+    /// <param name="n">The number of leading vector elements to process.</param>
+    /// <param name="x">The first vector whose leading n elements enter the dot product.</param>
+    /// <param name="y">The second vector whose leading n elements enter the dot product.</param>
+    /// <returns>The inner product of the first n elements of the two vectors.</returns>
     private static double Ddot(int n, ReadOnlySpan<double> x, ReadOnlySpan<double> y)
     {
         double s = 0.0;
@@ -238,6 +271,10 @@ internal sealed class LBfgsB
         return s;
     }
 
+    /// <summary>Returns the Euclidean norm of the first n elements, using scaled accumulation to avoid overflow.</summary>
+    /// <param name="n">The number of leading vector elements to process.</param>
+    /// <param name="x">The vector whose leading n elements enter the Euclidean norm.</param>
+    /// <returns>The Euclidean norm of the first n elements, using scaled accumulation to avoid overflow.</returns>
     private static double Dnrm2(int n, ReadOnlySpan<double> x)
     {
         // Reference netlib dnrm2: scaled sum of squares to avoid overflow/underflow.
@@ -268,6 +305,11 @@ internal sealed class LBfgsB
         return scale * Math.Sqrt(ssq);
     }
 
+    /// <summary>Adds a scaled input vector to the destination vector using sequential BLAS-compatible arithmetic.</summary>
+    /// <param name="n">The number of leading vector elements to process.</param>
+    /// <param name="alpha">The scalar coefficient multiplying the input vector.</param>
+    /// <param name="x">The source vector whose leading n elements are scaled and added.</param>
+    /// <param name="y">The destination vector updated to y + alpha * x.</param>
     private static void Daxpy(int n, double alpha, ReadOnlySpan<double> x, Span<double> y)
     {
         if (alpha == 0.0)
@@ -276,12 +318,20 @@ internal sealed class LBfgsB
             y[i] += alpha * x[i];
     }
 
+    /// <summary>Scales the mutable vector in place using the scalar coefficient.</summary>
+    /// <param name="n">The number of leading vector elements to process.</param>
+    /// <param name="alpha">The scalar coefficient multiplying the input vector.</param>
+    /// <param name="x">The vector whose leading n elements are multiplied by alpha in place.</param>
     private static void Dscal(int n, double alpha, Span<double> x)
     {
         for (int i = 0; i < n; i++)
             x[i] *= alpha;
     }
 
+    /// <summary>Copies the requested leading vector elements without changing their order.</summary>
+    /// <param name="n">The number of leading vector elements to process.</param>
+    /// <param name="x">The source vector whose leading n elements are copied.</param>
+    /// <param name="y">The destination vector receiving the leading n source elements.</param>
     private static void Dcopy(int n, ReadOnlySpan<double> x, Span<double> y)
     {
         for (int i = 0; i < n; i++)
@@ -291,6 +341,10 @@ internal sealed class LBfgsB
     // ==== LAPACK: dpotrf (upper, column-major) + dtrtrs (upper, N/T, non-unit) ===================
 
     /// <summary>Port of <c>dpotrf(uplo='U')</c> via the unblocked <c>dpotf2</c> (n ≤ m is tiny).</summary>
+    /// <param name="a">The column-major matrix, overwritten when the routine computes its factorization.</param>
+    /// <param name="lda">The leading dimension of the column-major coefficient matrix.</param>
+    /// <param name="n">The number of optimized coordinates.</param>
+    /// <returns>Zero for a successful Cholesky factorization, or the one-based failing pivot index.</returns>
     private static int Dpotrf(Span<double> a, int lda, int n)
     {
         for (int j = 0; j < n; j++)
@@ -314,9 +368,22 @@ internal sealed class LBfgsB
     }
 
     // The top part of column c (rows 0..) of a column-major matrix with leading dimension lda.
+    /// <summary>Returns a view beginning at the selected column's first element in column-major storage.</summary>
+    /// <param name="a">The column-major matrix, overwritten when the routine computes its factorization.</param>
+    /// <param name="lda">The leading dimension of the column-major coefficient matrix.</param>
+    /// <param name="c">The zero-based column whose first element starts the returned span.</param>
+    /// <returns>A view beginning at the selected column's first element in column-major storage.</returns>
     private static ReadOnlySpan<double> Col(Span<double> a, int lda, int c) => a.Slice(lda * c);
 
     /// <summary>Port of <c>dtrtrs(uplo='U', diag='N')</c> for <c>trans ∈ {'N','T'}</c> — column-major dtrsm (side='L').</summary>
+    /// <param name="trans">Whether the triangular factor is transposed, using the BLAS character convention.</param>
+    /// <param name="a">The column-major matrix, overwritten when the routine computes its factorization.</param>
+    /// <param name="lda">The leading dimension of the column-major coefficient matrix.</param>
+    /// <param name="n">The number of optimized coordinates.</param>
+    /// <param name="b">The right-hand-side buffer overwritten with the triangular-system solution.</param>
+    /// <param name="ldb">The leading dimension of the column-major right-hand-side matrix.</param>
+    /// <param name="nrhs">The number of right-hand-side columns to solve.</param>
+    /// <returns>Zero when the triangular solve succeeds, or the one-based zero-diagonal index.</returns>
     private static int Dtrtrs(char trans, Span<double> a, int lda, int n, Span<double> b, int ldb, int nrhs)
     {
         // Singularity check (LAPACK dtrtrs).
@@ -357,6 +424,7 @@ internal sealed class LBfgsB
 
     // ==== the reverse-communication driver (mainlb) and its subroutines =========================
 
+    /// <summary>Advances the reverse-communication L-BFGS-B state machine through projection, subspace minimization, and line search.</summary>
     private void Mainlb()
     {
         Span<double> ws = _ws, wy = _wy, sy = _sy, ss = _ss, wt = _wt, wn = _wn;
@@ -541,6 +609,9 @@ internal sealed class LBfgsB
         _ = k;
     }
 
+    /// <summary>Validates dimensions, tolerances, and coordinate bounds and records the corresponding optimizer status.</summary>
+    /// <param name="info">The numerical status code, updated when a factorization, solve, or validation fails.</param>
+    /// <param name="k">The coordinate index associated with a bound-validation error.</param>
     private void Errclb(ref int info, out int k)
     {
         k = 0;
@@ -554,6 +625,10 @@ internal sealed class LBfgsB
         }
     }
 
+    /// <summary>Projects the initial point onto its bounds and classifies the initial active set.</summary>
+    /// <param name="prjctd">Receives whether the initial point was projected onto its bounds.</param>
+    /// <param name="cnstnd">Whether at least one coordinate has an active bound specification.</param>
+    /// <param name="boxed">Whether every coordinate has both a lower and an upper bound.</param>
     private void Active(out int prjctd, out int cnstnd, out int boxed)
     {
         prjctd = 0; cnstnd = 0; boxed = 1;
@@ -583,6 +658,8 @@ internal sealed class LBfgsB
         }
     }
 
+    /// <summary>Computes the infinity norm of the gradient after projection onto the feasible bound directions.</summary>
+    /// <param name="sbgnrm">The infinity norm of the projected gradient.</param>
     private void Projgr(out double sbgnrm)
     {
         sbgnrm = 0.0;
@@ -599,6 +676,13 @@ internal sealed class LBfgsB
         }
     }
 
+    /// <summary>Applies the middle matrix of the compact limited-memory Hessian representation.</summary>
+    /// <param name="sy">The compact S-transpose-Y matrix of stored correction-pair products.</param>
+    /// <param name="wt">The triangular factor used by the compact limited-memory Hessian representation.</param>
+    /// <param name="col">The number of currently stored correction pairs.</param>
+    /// <param name="v">The compact input or work vector used by the Hessian multiplication.</param>
+    /// <param name="p">The compact product vector, updated in place.</param>
+    /// <param name="info">The numerical status code, updated when a factorization, solve, or validation fails.</param>
     private void Bmv(Span<double> sy, Span<double> wt, int col, Span<double> v, Span<double> p, ref int info)
     {
         int m = _m;
@@ -629,6 +713,17 @@ internal sealed class LBfgsB
         }
     }
 
+    /// <summary>Updates the free-coordinate permutation and tracks coordinates entering or leaving the active set.</summary>
+    /// <param name="nfree">The number of coordinates currently free to move within their bounds.</param>
+    /// <param name="idx">The coordinate permutation grouping free and active variables.</param>
+    /// <param name="nenter">The number of coordinates newly entering the free set.</param>
+    /// <param name="ileave">The start of the coordinates leaving the free set in the transition-index workspace.</param>
+    /// <param name="idx2">The coordinate-index workspace recording entries to and exits from the free set.</param>
+    /// <param name="iwhere">The per-coordinate active-set status used by the generalized Cauchy search.</param>
+    /// <param name="wrk">Receives whether the compact subspace matrix needs rebuilding.</param>
+    /// <param name="updatd">Whether a new correction pair was accepted on the previous iteration.</param>
+    /// <param name="cnstnd">Whether at least one coordinate has an active bound specification.</param>
+    /// <param name="iter">The current outer iteration number.</param>
     private void Freev(ref int nfree, Span<int> idx, ref int nenter, ref int ileave, Span<int> idx2,
         Span<int> iwhere, ref int wrk, int updatd, int cnstnd, int iter)
     {
@@ -657,6 +752,11 @@ internal sealed class LBfgsB
         }
     }
 
+    /// <summary>Builds or advances the bound-breakpoint heap used by the generalized Cauchy search.</summary>
+    /// <param name="n">The number of optimized coordinates.</param>
+    /// <param name="t">The breakpoint or saved-coordinate workspace used by the current optimizer phase.</param>
+    /// <param name="iorder">The index permutation associated with the breakpoint heap.</param>
+    /// <param name="iheap">Whether the input breakpoints already satisfy the heap invariant.</param>
     private void Hpsolb(int n, Span<double> t, Span<int> iorder, int iheap)
     {
         int i, j;
@@ -707,6 +807,24 @@ internal sealed class LBfgsB
         }
     }
 
+    /// <summary>Finds the generalized Cauchy point along the piecewise projected steepest-descent path.</summary>
+    /// <param name="t">The breakpoint or saved-coordinate workspace used by the current optimizer phase.</param>
+    /// <param name="d">The search-direction vector, updated by the current optimizer phase.</param>
+    /// <param name="xcp">The generalized Cauchy point written by the projected search.</param>
+    /// <param name="wy">The circular matrix of stored gradient-difference vectors.</param>
+    /// <param name="ws">The circular matrix of stored step vectors.</param>
+    /// <param name="sy">The compact S-transpose-Y matrix of stored correction-pair products.</param>
+    /// <param name="wt">The triangular factor used by the compact limited-memory Hessian representation.</param>
+    /// <param name="theta">The scalar diagonal scale of the limited-memory Hessian approximation.</param>
+    /// <param name="col">The number of currently stored correction pairs.</param>
+    /// <param name="head">The first correction-pair column in circular-buffer order.</param>
+    /// <param name="p">The compact product vector, updated in place.</param>
+    /// <param name="c">The compact-model work vector; for column extraction, the zero-based requested column.</param>
+    /// <param name="wbp">Workspace for the compact Hessian contribution at the next bound breakpoint.</param>
+    /// <param name="v">The compact input or work vector used by the Hessian multiplication.</param>
+    /// <param name="nseg">Receives the number of piecewise-linear segments traversed by the Cauchy search.</param>
+    /// <param name="sbgnrm">The infinity norm of the projected gradient.</param>
+    /// <param name="info">The numerical status code, updated when a factorization, solve, or validation fails.</param>
     private void Cauchy(Span<double> t, Span<double> d, Span<double> xcp, Span<double> wy, Span<double> ws,
         Span<double> sy, Span<double> wt, double theta, int col, int head,
         Span<double> p, Span<double> c, Span<double> wbp, Span<double> v, out int nseg, double sbgnrm, ref int info)
@@ -846,6 +964,23 @@ internal sealed class LBfgsB
         if (col > 0) Daxpy(col2, dtm, p, c);
     }
 
+    /// <summary>Computes the reduced gradient at the Cauchy point using the compact Hessian correction.</summary>
+    /// <param name="x">The current optimizer coordinates, updated in place where the parameter is mutable.</param>
+    /// <param name="g">The current gradient vector, or directional derivative in the scalar line-search routine.</param>
+    /// <param name="ws">The circular matrix of stored step vectors.</param>
+    /// <param name="wy">The circular matrix of stored gradient-difference vectors.</param>
+    /// <param name="sy">The compact S-transpose-Y matrix of stored correction-pair products.</param>
+    /// <param name="wt">The triangular factor used by the compact limited-memory Hessian representation.</param>
+    /// <param name="z">The generalized Cauchy point or candidate subspace point.</param>
+    /// <param name="r">The residual or saved-gradient workspace used by the current optimizer phase.</param>
+    /// <param name="wa">The reusable compact-model workspace.</param>
+    /// <param name="index">The coordinate permutation selecting the free-variable subspace.</param>
+    /// <param name="theta">The scalar diagonal scale of the limited-memory Hessian approximation.</param>
+    /// <param name="col">The number of currently stored correction pairs.</param>
+    /// <param name="head">The first correction-pair column in circular-buffer order.</param>
+    /// <param name="nfree">The number of coordinates currently free to move within their bounds.</param>
+    /// <param name="cnstnd">Whether at least one coordinate has an active bound specification.</param>
+    /// <param name="info">The numerical status code, updated when a factorization, solve, or validation fails.</param>
     private void Cmprlb(Span<double> x, Span<double> g, Span<double> ws, Span<double> wy, Span<double> sy,
         Span<double> wt, Span<double> z, Span<double> r, Span<double> wa, Span<int> index,
         double theta, int col, int head, int nfree, int cnstnd, ref int info)
@@ -879,6 +1014,22 @@ internal sealed class LBfgsB
         }
     }
 
+    /// <summary>Inserts the latest step/gradient correction pair into the circular limited-memory history.</summary>
+    /// <param name="ws">The circular matrix of stored step vectors.</param>
+    /// <param name="wy">The circular matrix of stored gradient-difference vectors.</param>
+    /// <param name="sy">The compact S-transpose-Y matrix of stored correction-pair products.</param>
+    /// <param name="ss">The compact S-transpose-S matrix of stored step-vector products.</param>
+    /// <param name="d">The search-direction vector, updated by the current optimizer phase.</param>
+    /// <param name="r">The residual or saved-gradient workspace used by the current optimizer phase.</param>
+    /// <param name="itail">The last correction-pair column in the circular history buffer.</param>
+    /// <param name="iupdat">The number of accepted limited-memory correction updates.</param>
+    /// <param name="col">The number of currently stored correction pairs.</param>
+    /// <param name="head">The first correction-pair column in circular-buffer order.</param>
+    /// <param name="theta">The scalar diagonal scale of the limited-memory Hessian approximation.</param>
+    /// <param name="rr">The squared norm of the latest gradient-difference vector.</param>
+    /// <param name="dr">The inner product of the latest step and gradient-difference vectors.</param>
+    /// <param name="stp">The current line-search step length, updated to the next trial step.</param>
+    /// <param name="dtd">The squared norm of the search direction.</param>
     private void Matupd(Span<double> ws, Span<double> wy, Span<double> sy, Span<double> ss,
         Span<double> d, Span<double> r, ref int itail, int iupdat, ref int col, ref int head,
         ref double theta, double rr, double dr, double stp, double dtd)
@@ -908,6 +1059,13 @@ internal sealed class LBfgsB
         sy[(col - 1) + m * (col - 1)] = dr;
     }
 
+    /// <summary>Factors the positive-definite compact matrix needed to apply the Hessian representation.</summary>
+    /// <param name="wt">The triangular factor used by the compact limited-memory Hessian representation.</param>
+    /// <param name="sy">The compact S-transpose-Y matrix of stored correction-pair products.</param>
+    /// <param name="ss">The compact S-transpose-S matrix of stored step-vector products.</param>
+    /// <param name="col">The number of currently stored correction pairs.</param>
+    /// <param name="theta">The scalar diagonal scale of the limited-memory Hessian approximation.</param>
+    /// <param name="info">The numerical status code, updated when a factorization, solve, or validation fails.</param>
     private void Formt(Span<double> wt, Span<double> sy, Span<double> ss, int col, double theta, ref int info)
     {
         int m = _m;
@@ -928,6 +1086,23 @@ internal sealed class LBfgsB
         if (info != 0) info = -3;
     }
 
+    /// <summary>Updates and factors the compact matrix for the current free-variable subspace.</summary>
+    /// <param name="nsub">The number of free coordinates in the reduced subspace.</param>
+    /// <param name="ind">The original coordinate indices of the free subspace.</param>
+    /// <param name="nenter">The number of coordinates newly entering the free set.</param>
+    /// <param name="ileave">The start of the coordinates leaving the free set in the transition-index workspace.</param>
+    /// <param name="indx2">The workspace identifying coordinates entering or leaving the free set.</param>
+    /// <param name="iupdat">The number of accepted limited-memory correction updates.</param>
+    /// <param name="updatd">Whether a new correction pair was accepted on the previous iteration.</param>
+    /// <param name="wn">The factored compact matrix for the free-variable subspace solve.</param>
+    /// <param name="wn1">The cached unfactored compact products updated as the free set changes.</param>
+    /// <param name="ws">The circular matrix of stored step vectors.</param>
+    /// <param name="wy">The circular matrix of stored gradient-difference vectors.</param>
+    /// <param name="sy">The compact S-transpose-Y matrix of stored correction-pair products.</param>
+    /// <param name="theta">The scalar diagonal scale of the limited-memory Hessian approximation.</param>
+    /// <param name="col">The number of currently stored correction pairs.</param>
+    /// <param name="head">The first correction-pair column in circular-buffer order.</param>
+    /// <param name="info">The numerical status code, updated when a factorization, solve, or validation fails.</param>
     private void Formk(int nsub, Span<int> ind, int nenter, int ileave, Span<int> indx2, int iupdat,
         int updatd, Span<double> wn, Span<double> wn1, Span<double> ws, Span<double> wy, Span<double> sy,
         double theta, int col, int head, ref int info)
@@ -1076,6 +1251,23 @@ internal sealed class LBfgsB
         if (info != 0) info = -2;
     }
 
+    /// <summary>Solves the reduced-space Newton system and truncates the step when a coordinate reaches its bound.</summary>
+    /// <param name="nsub">The number of free coordinates in the reduced subspace.</param>
+    /// <param name="ind">The original coordinate indices of the free subspace.</param>
+    /// <param name="x">The current optimizer coordinates, updated in place where the parameter is mutable.</param>
+    /// <param name="d">The search-direction vector, updated by the current optimizer phase.</param>
+    /// <param name="xp">A saved feasible subspace point used when a Newton step reaches a bound.</param>
+    /// <param name="ws">The circular matrix of stored step vectors.</param>
+    /// <param name="wy">The circular matrix of stored gradient-difference vectors.</param>
+    /// <param name="theta">The scalar diagonal scale of the limited-memory Hessian approximation.</param>
+    /// <param name="xx">The full-space point from which the reduced step is formed.</param>
+    /// <param name="gg">The full-space gradient associated with the reference point.</param>
+    /// <param name="col">The number of currently stored correction pairs.</param>
+    /// <param name="head">The first correction-pair column in circular-buffer order.</param>
+    /// <param name="iword">Receives whether the reduced-space solution was truncated at a bound.</param>
+    /// <param name="wv">The compact vector workspace used during the reduced-space solve.</param>
+    /// <param name="wn">The factored compact matrix for the free-variable subspace solve.</param>
+    /// <param name="info">The numerical status code, updated when a factorization, solve, or validation fails.</param>
     private void Subsm(int nsub, Span<int> ind, Span<double> x, Span<double> d, Span<double> xp,
         Span<double> ws, Span<double> wy, double theta, Span<double> xx, Span<double> gg,
         int col, int head, ref int iword, Span<double> wv, Span<double> wn, ref int info)
@@ -1178,6 +1370,30 @@ internal sealed class LBfgsB
         }
     }
 
+    /// <summary>Runs the safeguarded line search while enforcing coordinate bounds and preserving reverse-communication state.</summary>
+    /// <param name="f">The objective value at the current line-search point.</param>
+    /// <param name="fold">The objective value saved at the beginning of the line search.</param>
+    /// <param name="gd">The directional derivative at the current line-search point.</param>
+    /// <param name="gdold">The directional derivative saved at the beginning of the line search.</param>
+    /// <param name="g">The current gradient vector, or directional derivative in the scalar line-search routine.</param>
+    /// <param name="d">The search-direction vector, updated by the current optimizer phase.</param>
+    /// <param name="r">The residual or saved-gradient workspace used by the current optimizer phase.</param>
+    /// <param name="t">The breakpoint or saved-coordinate workspace used by the current optimizer phase.</param>
+    /// <param name="z">The generalized Cauchy point or candidate subspace point.</param>
+    /// <param name="stp">The current line-search step length, updated to the next trial step.</param>
+    /// <param name="dnorm">The Euclidean norm of the search direction.</param>
+    /// <param name="dtd">The squared norm of the search direction.</param>
+    /// <param name="xstep">The actual coordinate-step norm corresponding to the current line-search step.</param>
+    /// <param name="stpmx">The largest feasible step permitted by the coordinate bounds.</param>
+    /// <param name="iter">The current outer iteration number.</param>
+    /// <param name="ifun">The number of function evaluations in the current line search.</param>
+    /// <param name="iback">The number of backtracking steps in the current line search.</param>
+    /// <param name="nfgv">The cumulative number of objective/gradient evaluations.</param>
+    /// <param name="info">The numerical status code, updated when a factorization, solve, or validation fails.</param>
+    /// <param name="boxed">Whether every coordinate has both a lower and an upper bound.</param>
+    /// <param name="cnstnd">Whether at least one coordinate has an active bound specification.</param>
+    /// <param name="dcsrchIsave">Integer state preserved between reverse-communication line-search calls.</param>
+    /// <param name="dcsrchDsave">Floating-point state preserved between reverse-communication line-search calls.</param>
     private void Lnsrlb(double f, ref double fold, ref double gd, ref double gdold,
         Span<double> g, Span<double> d, Span<double> r, Span<double> t, Span<double> z,
         ref double stp, ref double dnorm, ref double dtd, ref double xstep, ref double stpmx,
@@ -1253,6 +1469,19 @@ internal sealed class LBfgsB
         else { _task = NEW_X; _taskMsg = NO_MSG; }
     }
 
+    /// <summary>Advances the More-Thuente line search until sufficient decrease and curvature conditions are met or a limit is reached.</summary>
+    /// <param name="f">The objective value at the current line-search point.</param>
+    /// <param name="g">The current gradient vector, or directional derivative in the scalar line-search routine.</param>
+    /// <param name="stp">The current line-search step length, updated to the next trial step.</param>
+    /// <param name="ftol">The sufficient-decrease coefficient of the line-search acceptance test.</param>
+    /// <param name="gtol">The curvature coefficient of the line-search acceptance test.</param>
+    /// <param name="xtol">The relative width tolerance for the bracket of admissible line-search steps.</param>
+    /// <param name="stpmin">The minimum permitted trial step length.</param>
+    /// <param name="stpmax">The maximum permitted trial step length.</param>
+    /// <param name="task">The reverse-communication task code, updated to request evaluation or report completion.</param>
+    /// <param name="taskMsg">The detailed line-search diagnostic code associated with the task.</param>
+    /// <param name="isave">Integer line-search state carried between reverse-communication calls.</param>
+    /// <param name="dsave">Floating-point line-search state carried between reverse-communication calls.</param>
     private void Dcsrch(double f, double g, ref double stp, double ftol, double gtol, double xtol,
         double stpmin, double stpmax, ref int task, ref int taskMsg, Span<int> isave, Span<double> dsave)
     {
@@ -1337,6 +1566,19 @@ internal sealed class LBfgsB
         dsave[9] = stmin; dsave[10] = stmax; dsave[11] = width; dsave[12] = width1;
     }
 
+    /// <summary>Updates the safeguarded line-search bracket and interpolates its next admissible trial step.</summary>
+    /// <param name="stx">The best bracket endpoint, updated as trial points are evaluated.</param>
+    /// <param name="fx">The objective value at the best bracket endpoint.</param>
+    /// <param name="dx">The directional derivative at the best bracket endpoint.</param>
+    /// <param name="sty">The other endpoint of the current line-search bracket.</param>
+    /// <param name="fy">The objective value at the other bracket endpoint.</param>
+    /// <param name="dy">The directional derivative at the other bracket endpoint.</param>
+    /// <param name="stp">The current line-search step length, updated to the next trial step.</param>
+    /// <param name="fp">The objective value at the trial step.</param>
+    /// <param name="dp">The directional derivative at the trial step.</param>
+    /// <param name="brackt">Whether a minimizer is bracketed between the maintained endpoints.</param>
+    /// <param name="stpmin">The minimum permitted trial step length.</param>
+    /// <param name="stpmax">The maximum permitted trial step length.</param>
     private static void Dcstep(ref double stx, ref double fx, ref double dx, ref double sty,
         ref double fy, ref double dy, ref double stp, double fp, double dp, ref int brackt,
         double stpmin, double stpmax)

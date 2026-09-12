@@ -10,36 +10,52 @@ namespace OptunaSharp.Storages;
 /// </summary>
 public enum SqliteJournalMode
 {
+    /// <summary>Deletes the rollback journal after committing.</summary>
     Delete,
+    /// <summary>Truncates the rollback journal after committing.</summary>
     Truncate,
+    /// <summary>Invalidates the rollback-journal header while retaining its file.</summary>
     Persist,
+    /// <summary>Keeps the rollback journal in memory.</summary>
     Memory,
+    /// <summary>Uses a write-ahead log rather than a rollback journal.</summary>
     Wal,
+    /// <summary>Disables rollback-journal creation.</summary>
     Off,
 }
 
 /// <summary>Durability vs. speed trade-off (<c>PRAGMA synchronous</c>).</summary>
 public enum SqliteSynchronous
 {
+    /// <summary>Disables synchronization of database writes to durable storage.</summary>
     Off,
+    /// <summary>Uses SQLite's normal synchronization policy for the selected journal mode.</summary>
     Normal,
+    /// <summary>Requests full synchronization of critical database writes.</summary>
     Full,
+    /// <summary>Adds directory synchronization where supported by the journal mode.</summary>
     Extra,
 }
 
 /// <summary>Where temporary tables and indices are stored (<c>PRAGMA temp_store</c>).</summary>
 public enum SqliteTempStore
 {
+    /// <summary>Uses the SQLite build's default temporary-storage policy.</summary>
     Default,
+    /// <summary>Stores temporary tables and indexes in files.</summary>
     File,
+    /// <summary>Stores temporary tables and indexes in memory.</summary>
     Memory,
 }
 
 /// <summary>Auto-vacuum behavior (<c>PRAGMA auto_vacuum</c>). Only settable on a fresh database.</summary>
 public enum SqliteAutoVacuum
 {
+    /// <summary>Leaves free pages available for reuse until an explicit vacuum.</summary>
     None,
+    /// <summary>Reclaims free pages at each commit.</summary>
     Full,
+    /// <summary>Records reclaimable pages for explicit incremental-vacuum operations.</summary>
     Incremental,
 }
 

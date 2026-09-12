@@ -75,6 +75,9 @@ public static class PythonRuntime
     }
 
     /// <summary>Run an action under the GIL (initializing the engine first if needed).</summary>
+    /// <param name="body">The action to invoke while holding the GIL. Dispose temporary Python handles before it returns.</param>
+    /// <exception cref="PythonInteropException">The embedded interpreter cannot be initialized.</exception>
+    /// <exception cref="Exception">The supplied action throws; callback exceptions propagate unchanged.</exception>
     public static void Run(Action body)
     {
         Initialize();
@@ -83,6 +86,11 @@ public static class PythonRuntime
     }
 
     /// <summary>Run a function under the GIL (initializing the engine first if needed) and return its result.</summary>
+    /// <typeparam name="T">The managed result type, whose use must not require the GIL after this call.</typeparam>
+    /// <param name="body">The function to invoke while holding the GIL.</param>
+    /// <returns>The function's result. Internal bridge callers may transfer an owned Python handle only to code that preserves GIL discipline.</returns>
+    /// <exception cref="PythonInteropException">The embedded interpreter cannot be initialized.</exception>
+    /// <exception cref="Exception">The supplied function throws; callback exceptions propagate unchanged.</exception>
     public static T Run<T>(Func<T> body)
     {
         Initialize();
@@ -98,6 +106,9 @@ public static class PythonRuntime
     ///     <see cref="Run(Action)" /> body).
     /// </summary>
     /// <exception cref="PythonInteropException">The module could not be imported.</exception>
+    /// <param name="moduleName">The absolute Python import name.</param>
+    /// <returns>A borrowed, process-scoped module handle; do not dispose it.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="moduleName" /> is null.</exception>
     public static PyObject Import(string moduleName)
     {
         if (_importCache.TryGetValue(moduleName, out PyObject? cached))
@@ -201,6 +212,8 @@ public static class PythonRuntime
     ///     site-packages directories joined by the platform path separator. Best-effort — a failure
     ///     just moves on to the next candidate.
     /// </summary>
+    /// <param name="exe">The candidate interpreter executable or path.</param>
+    /// <returns>The discovered shared-library path and import directories, or null entries when probing fails.</returns>
     private static (string? Dll, string? SitePackages) ProbeEnvironment(string exe)
     {
         const string script =
@@ -255,6 +268,11 @@ public static class PythonRuntime
 /// <summary>Raised when the embedded CPython engine cannot be initialized or a Python call fails.</summary>
 public class PythonInteropException : Exception
 {
+    /// <summary>Creates an interop failure with a diagnostic message.</summary>
+    /// <param name="message">The explanation of the failure.</param>
     public PythonInteropException(string message) : base(message) { }
+    /// <summary>Creates an interop failure that preserves its underlying cause.</summary>
+    /// <param name="message">The explanation of the failure.</param>
+    /// <param name="inner">The exception raised by Python or interpreter initialization.</param>
     public PythonInteropException(string message, Exception inner) : base(message, inner) { }
 }

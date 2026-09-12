@@ -31,6 +31,9 @@ internal static class RdbUrl
     ///     Parse <paramref name="url" /> into its provider and a connection-string builder (an
     ///     <see cref="NpgsqlConnectionStringBuilder" /> or <see cref="MySqlConnectionStringBuilder" />).
     /// </summary>
+    /// <param name="url">The database connection URL to resolve.</param>
+    /// <returns>The selected relational provider and its native connection-string builder.</returns>
+    /// <exception cref="NumSharp.ValueError">The URL is malformed or selects an unsupported relational dialect.</exception>
     internal static (RdbProvider Provider, DbConnectionStringBuilder Builder) Parse(string url)
     {
         ArgumentNullException.ThrowIfNull(url);
@@ -111,6 +114,14 @@ internal static class RdbUrl
             : (provider, BuildMySql(host, port, user, password, database, query));
     }
 
+    /// <summary>Builds a PostgreSQL connection string from decoded URL components.</summary>
+    /// <param name="host">The server hostname or literal IP address.</param>
+    /// <param name="port">The server TCP port, or its provider default when nullable and omitted.</param>
+    /// <param name="user">The decoded username, or null when credentials are not supplied.</param>
+    /// <param name="password">The decoded password, or null when credentials are not supplied.</param>
+    /// <param name="database">The target database name.</param>
+    /// <param name="query">The URL query string whose decoded entries override connection options.</param>
+    /// <returns>The native PostgreSQL connection-string builder.</returns>
     private static DbConnectionStringBuilder BuildNpgsql(
         string host, int? port, string? user, string? password, string database, string query)
     {
@@ -127,6 +138,14 @@ internal static class RdbUrl
         return b;
     }
 
+    /// <summary>Builds a MySQL connection string from decoded URL components.</summary>
+    /// <param name="host">The server hostname or literal IP address.</param>
+    /// <param name="port">The server TCP port, or its provider default when nullable and omitted.</param>
+    /// <param name="user">The decoded username, or null when credentials are not supplied.</param>
+    /// <param name="password">The decoded password, or null when credentials are not supplied.</param>
+    /// <param name="database">The target database name.</param>
+    /// <param name="query">The URL query string whose decoded entries override connection options.</param>
+    /// <returns>The native MySQL connection-string builder.</returns>
     private static DbConnectionStringBuilder BuildMySql(
         string host, int? port, string? user, string? password, string database, string query)
     {
@@ -145,6 +164,9 @@ internal static class RdbUrl
 
     // Pass query-string pairs (e.g. ?SSL Mode=Require) straight through as connection-string keywords.
     // Both builders derive from DbConnectionStringBuilder and validate keywords per provider.
+    /// <summary>Applies decoded query-string settings to the native connection-string builder.</summary>
+    /// <param name="builder">The native connection-string builder receiving the parsed options.</param>
+    /// <param name="query">The URL query string whose decoded entries override connection options.</param>
     private static void ApplyQuery(DbConnectionStringBuilder builder, string query)
     {
         if (query.Length == 0)

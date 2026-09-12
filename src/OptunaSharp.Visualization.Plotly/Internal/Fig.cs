@@ -21,6 +21,9 @@ namespace OptunaSharp.Visualization.Plotly.Internal;
 internal static class Fig
 {
     /// <summary>A bare trace of the exact plotly type (<c>"scatter"</c>, <c>"contour"</c>, <c>"bar"</c>, <c>"scatter3d"</c>).</summary>
+    /// <param name="type">Plotly trace type, such as scatter, contour, or bar.</param>
+    /// <param name="entries">Plotly property names and values; null values are omitted and empty arrays are preserved.</param>
+    /// <returns>A bare trace with only the supplied non-null properties.</returns>
     public static Trace Trace(string type, params (string Key, object? Value)[] entries)
     {
         var t = new Trace(type);
@@ -29,6 +32,8 @@ internal static class Fig
     }
 
     /// <summary>A plotly layout (<c>go.Layout</c>) with the given keys.</summary>
+    /// <param name="entries">Plotly property names and values; null values are omitted and empty arrays are preserved.</param>
+    /// <returns>A new layout containing the supplied non-null properties.</returns>
     public static Layout Layout(params (string Key, object? Value)[] entries)
     {
         var l = new Layout();
@@ -37,6 +42,8 @@ internal static class Fig
     }
 
     /// <summary>A nested plotly object — a <c>marker</c>, <c>error_y</c>, <c>xaxis</c>, <c>colorbar</c>, an annotation, …</summary>
+    /// <param name="entries">Plotly property names and values; null values are omitted and empty arrays are preserved.</param>
+    /// <returns>A new mutable object for a nested Plotly property.</returns>
     public static DObj Obj(params (string Key, object? Value)[] entries)
     {
         var o = new DObj();
@@ -45,6 +52,9 @@ internal static class Fig
     }
 
     /// <summary>Assemble a figure from bare traces + a layout — <c>go.Figure(data=traces, layout=layout)</c>.</summary>
+    /// <param name="traces">Plotly trace objects in display order.</param>
+    /// <param name="layout">Plotly layout receiving the axes or attached to the returned chart.</param>
+    /// <returns>A chart assembled from the supplied trace objects and layout.</returns>
     public static GenericChart Figure(IEnumerable<Trace> traces, Layout layout)
     {
         var chart = GenericChart.ofTraceObjects(false, ListModule.OfSeq(traces));
@@ -52,6 +62,8 @@ internal static class Fig
     }
 
     /// <summary>Set only the non-null keys (see the null semantics in the type summary).</summary>
+    /// <param name="o">Mutable destination object to populate.</param>
+    /// <param name="entries">Plotly property names and values; null values are omitted and empty arrays are preserved.</param>
     private static void Fill(DObj o, (string Key, object? Value)[] entries)
     {
         foreach (var (key, value) in entries)

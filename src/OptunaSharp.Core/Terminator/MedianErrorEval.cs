@@ -41,6 +41,8 @@ public class MedianErrorEvaluator : BaseErrorEvaluator
     ///     <c>warmUpTrials</c>.
     /// </param>
     /// <param name="thresholdRatio">The ratio between the threshold and the initial median.</param>
+    /// <summary>Configures the initial improvement window and its median-based error threshold.</summary>
+    /// <exception cref="NumSharp.ValueError">The warm-up count is negative, the initial window is not positive, or the threshold ratio is nonpositive or nonfinite.</exception>
     public MedianErrorEvaluator(
         BaseImprovementEvaluator pairedImprovementEvaluator,
         int warmUpTrials = 10,
@@ -61,6 +63,10 @@ public class MedianErrorEvaluator : BaseErrorEvaluator
         _threshold = null;
     }
 
+    /// <summary>Returns the cached median-based threshold, or a small negative sentinel until the initial observation window is complete.</summary>
+    /// <param name="trials">Trial snapshots to inspect; their order is preserved unless the operation explicitly ranks them.</param>
+    /// <param name="studyDirection">Whether larger or smaller objective values are preferred.</param>
+    /// <returns>The cached median-based threshold, or a small negative sentinel until the initial observation window is complete.</returns>
     public override double Evaluate(IReadOnlyList<FrozenTrial> trials, StudyDirection studyDirection)
     {
         if (_threshold is not null)

@@ -16,9 +16,12 @@ public enum StudyDirection
     Maximize = 2,
 }
 
+/// <summary>Converts objective directions to the names used in Optuna messages.</summary>
 public static class StudyDirectionExtensions
 {
     /// <summary>Python <c>direction.name</c> (e.g. <c>"MINIMIZE"</c>).</summary>
+    /// <param name="direction">Objective direction to render with a Python enum name.</param>
+    /// <returns>MINIMIZE, MAXIMIZE, or NOT_SET for other enum values.</returns>
     internal static string PythonName(this StudyDirection direction) => direction switch
     {
         StudyDirection.Minimize => "MINIMIZE",

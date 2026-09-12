@@ -9,6 +9,9 @@ namespace OptunaSharp.Visualization;
 ///     <c>optuna/visualization/_terminator_improvement.py</c>. <see cref="Errors" /> is <c>null</c> when
 ///     errors were not requested.
 /// </summary>
+/// <param name="TrialNumbers">The study-local trial numbers aligned with the value or estimate sequences.</param>
+/// <param name="Improvements">The estimated remaining improvement aligned with the trial numbers.</param>
+/// <param name="Errors">The statistical error estimates aligned with trial numbers, or null when not requested.</param>
 public sealed record ImprovementInfo(
     IReadOnlyList<int> TrialNumbers,
     IReadOnlyList<double> Improvements,
@@ -41,6 +44,8 @@ public static class TerminatorImprovement
     ///     <see cref="StaticErrorEvaluator" /> with constant 0 when the improvement evaluator is a
     ///     <see cref="BestValueStagnationEvaluator" />).
     /// </param>
+    /// <returns>The improvement and optional error estimates computed along the study's completed-trial history.</returns>
+    /// <exception cref="NumSharp.ValueError">The study has multiple objectives.</exception>
     public static ImprovementInfo GetInfo(
         Study study,
         bool getError = false,

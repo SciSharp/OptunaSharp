@@ -15,6 +15,8 @@ public class PolynomialMutation : BaseMutation
     private readonly double _eta;
 
     /// <param name="eta">Distribution index. Larger values keep mutated values closer to the original.</param>
+    /// <summary>Configures the polynomial perturbation distribution applied to bounded coordinates.</summary>
+    /// <exception cref="NumSharp.ValueError">The polynomial distribution index is negative.</exception>
     public PolynomialMutation(double eta = 20.0)
     {
         if (eta < 0)
@@ -22,6 +24,7 @@ public class PolynomialMutation : BaseMutation
         _eta = eta;
     }
 
+    /// <inheritdoc />
     public override double Mutation(double param, NumPyRandom rng, Study study, double[] searchSpaceBounds)
     {
         double u = (double)rng.rand();

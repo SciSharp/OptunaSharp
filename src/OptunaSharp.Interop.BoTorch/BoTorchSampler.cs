@@ -30,15 +30,15 @@ namespace OptunaSharp.Interop.BoTorch;
 ///     <para><b>Scope:</b> the full <c>optuna_integration.BoTorchSampler</c> surface — single-objective
 ///     (LogEI / qEI / qLogEI / qNEI), multi-objective (qEHVI / EHVI / qNEHVI / qParEGO / qLogEI-ParEGO),
 ///     constrained optimization (via <c>Trial.SetConstraint</c> or the deprecated
-///     <paramref name="constraintsFunc" />), knowledge-gradient acquisitions (qKG / qHVKG), and a CPU/GPU
-///     <paramref name="device" /> — all selected through the <see cref="BoTorchCandidatesFunc" /> enum (see
+///     <c>constraintsFunc</c>), knowledge-gradient acquisitions (qKG / qHVKG), and a CPU/GPU
+///     <c>device</c> — all selected through the <see cref="BoTorchCandidatesFunc" /> enum (see
 ///     <see cref="BoTorchCandidates" />).</para>
 ///
 ///     <para><b>Reproducibility.</b> The first <see cref="_nStartupTrials" /> trials use an independent
 ///     <see cref="RandomSampler" /> (bit-exact with Optuna); from then on each acquisition optimization
-///     runs inside BoTorch's <c>manual_seed(seed)</c>, and the seed is advanced per trial exactly as
-///     Optuna does — so an OptunaSharp study reproduces <c>optuna_integration.BoTorchSampler</c>
-///     trial-for-trial on the same seed.</para>
+///     runs inside BoTorch's <c>manual_seed(seed)</c>, with the same per-trial seed progression as
+///     Optuna. Numerical agreement also depends on matching the Python, BoTorch, PyTorch, and device
+///     environment; a seed alone does not make different numerical runtimes interchangeable.</para>
 /// </summary>
 /// <example>
 ///     <code>
@@ -46,6 +46,7 @@ namespace OptunaSharp.Interop.BoTorch;
 ///     study.Optimize(t => Math.Pow(t.SuggestFloat("x", -10, 10) - 2, 2), nTrials: 30);
 ///     </code>
 /// </example>
+/// <seealso href="https://optuna-integration.readthedocs.io/en/stable/reference/generated/optuna_integration.BoTorchSampler.html">Official Optuna integration API contract.</seealso>
 public sealed class BoTorchSampler : BaseSampler
 {
     private readonly bool _considerRunningTrials;
@@ -95,6 +96,8 @@ public sealed class BoTorchSampler : BaseSampler
     ///     against Python holds only for an identical device + torch build; the CPU path is the zero-copy
     ///     parity path.
     /// </param>
+    /// <summary>Creates a sampler that fits and optimizes real BoTorch acquisitions through embedded CPython.</summary>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.PythonInteropException">CPython or the required Python package cannot be initialized or imported.</exception>
     public BoTorchSampler(
         BoTorchCandidatesFunc candidatesFunc = BoTorchCandidatesFunc.Auto,
         Func<FrozenTrial, IEnumerable<double>>? constraintsFunc = null,
@@ -128,6 +131,7 @@ public sealed class BoTorchSampler : BaseSampler
     }
 
     /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">The stateful BoTorch sampler is reused with a different study.</exception>
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         if (_studyId is null)
@@ -149,6 +153,7 @@ public sealed class BoTorchSampler : BaseSampler
     }
 
     /// <inheritdoc />
+    /// <exception cref="NumSharp.RuntimeError">A completed trial's constraint names differ from the first completed trial's constraint names.</exception>
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -297,6 +302,11 @@ public sealed class BoTorchSampler : BaseSampler
     ///     Validate the candidates tensor (botorch.py's shape checks + <c>squeeze(0)</c>) and cross it to a
     ///     1-D NumSharp <see cref="NDArray" /> through NumSharp's zero-copy interop. Under the GIL.
     /// </summary>
+    /// <param name="candidates">The borrowed result expected to be a torch tensor containing exactly one candidate.</param>
+    /// <param name="nBounds">The number of transformed parameter coordinates required by the search-space bounds.</param>
+    /// <returns>An independent one-dimensional array containing the candidate's transformed coordinates.</returns>
+    /// <exception cref="NumSharp.TypeError">The acquisition result is not a torch.Tensor.</exception>
+    /// <exception cref="NumSharp.ValueError">The tensor rank, batch size, or coordinate count does not describe one candidate with the expected bounds.</exception>
     private static NDArray ExtractCandidate(PyObject candidates, int nBounds)
     {
         if (!candidates.HasAttr("dim"))
@@ -371,6 +381,8 @@ public sealed class BoTorchSampler : BaseSampler
 
     /// <summary>Format a key set as Python's <c>list</c> repr (<c>['0', '1']</c>) for the verbatim
     /// constraint-mismatch <see cref="RuntimeError" /> message.</summary>
+    /// <param name="keys">The ordered constraint names included in the diagnostic.</param>
+    /// <returns>The bracketed, quoted list of constraint names.</returns>
     private static string PyListRepr(IEnumerable<string> keys)
         => "[" + string.Join(", ", keys.Select(k => "'" + k + "'")) + "]";
 }

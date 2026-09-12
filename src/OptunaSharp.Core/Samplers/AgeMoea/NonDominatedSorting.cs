@@ -20,6 +20,10 @@ internal static class NonDominatedSorting
     ///     Sort <paramref name="f" /> into Pareto fronts (lists of row indices, best front first),
     ///     stopping once <paramref name="nStopIfRanked" /> individuals have been ranked.
     /// </summary>
+    /// <param name="f">Objective vectors in minimization orientation.</param>
+    /// <param name="cv">Constraint-violation values or callback supplying them in individual order.</param>
+    /// <param name="nStopIfRanked">Stop constructing fronts after at least this many individuals have been ranked.</param>
+    /// <returns>Nondominated fronts as lists of original population indices.</returns>
     public static List<List<int>> Do(double[][] f, double[]? cv = null, int nStopIfRanked = int.MaxValue)
     {
         int n = f.Length;

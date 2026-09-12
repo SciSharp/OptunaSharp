@@ -23,6 +23,10 @@ internal static class TerminatorImprovementPlot
     private static readonly Logger Logger =
         OptunaLogging.GetLogger("optuna.visualization._terminator_improvement");
 
+    /// <summary>Converts extracted visualization data into the corresponding Plotly figure.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <param name="minNTrials">Initial trial-count region drawn with reduced opacity and excluded from the later improvement maximum.</param>
+    /// <returns>A chart containing the plot's traces, axes, and labels.</returns>
     public static GenericChart Render(ImprovementInfo info, int minNTrials)
     {
         var yaxis = Fig.Obj(("title", "Terminator Improvement"));
@@ -62,6 +66,12 @@ internal static class TerminatorImprovementPlot
         return Fig.Figure(traces, layout);
     }
 
+    /// <summary>Builds one opacity segment of the improvement curve.</summary>
+    /// <param name="x">Trial numbers for this segment.</param>
+    /// <param name="y">Improvement estimates aligned with the trial numbers.</param>
+    /// <param name="opacity">Opacity of the improvement trace between zero and one.</param>
+    /// <param name="showlegend">Whether this trace contributes a visible legend entry.</param>
+    /// <returns>Blue markers-and-lines trace.</returns>
     private static Trace ImprovementScatter(int[] x, double[] y, double opacity, bool showlegend)
     {
         string blue = $"rgba(99, 110, 250, {PythonRepr.FloatRepr(opacity)})";
@@ -76,6 +86,10 @@ internal static class TerminatorImprovementPlot
             ("legendgroup", "improvement"));
     }
 
+    /// <summary>Builds the error curve or preserves an empty trace when errors were not requested.</summary>
+    /// <param name="trialNumbers">Trial numbers aligned with the error estimates.</param>
+    /// <param name="errors">Error estimates aligned with trial numbers, or null when errors were not computed.</param>
+    /// <returns>Red markers-and-lines trace, or a bare scatter trace.</returns>
     private static Trace ErrorScatter(IReadOnlyList<int> trialNumbers, IReadOnlyList<double>? errors)
     {
         if (errors is null)
@@ -90,6 +104,11 @@ internal static class TerminatorImprovementPlot
             ("line", Fig.Obj(("color", "rgb(239, 85, 59)"))));
     }
 
+    /// <summary>Computes a padded vertical range over improvement and optional error estimates.</summary>
+    /// <param name="info">Validated plot data produced by the corresponding Core visualization extractor.</param>
+    /// <param name="minNTrials">Initial trial-count region drawn with reduced opacity and excluded from the later improvement maximum.</param>
+    /// <returns>Lower and upper axis limits.</returns>
+    /// <exception cref="System.InvalidOperationException">A required estimate sequence is empty.</exception>
     private static (double Low, double High) YRange(ImprovementInfo info, int minNTrials)
     {
         double minValue = info.Improvements.Min();

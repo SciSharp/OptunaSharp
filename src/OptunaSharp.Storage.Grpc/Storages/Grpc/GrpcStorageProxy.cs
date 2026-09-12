@@ -67,6 +67,7 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
     /// <param name="port">The port of the gRPC server.</param>
     /// <param name="configureChannel">Invoked on the insecure-h2c <see cref="GrpcChannelOptions" /> just
     ///   before the channel is created; mutate it in place.</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="configureChannel" /> is null.</exception>
     public GrpcStorageProxy(string host, int port, Action<GrpcChannelOptions> configureChannel)
         : this(CreateInsecureChannel($"http://{host}:{port}",
                 configureChannel ?? throw new ArgumentNullException(nameof(configureChannel))),
@@ -82,6 +83,7 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
     /// </summary>
     /// <param name="address">The server address, e.g. <c>https://host:443</c> or <c>http://host:13000</c>.</param>
     /// <param name="channelOptions">The channel options; passed straight to <see cref="GrpcChannel.ForAddress(string, GrpcChannelOptions)" />.</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="address" /> or <paramref name="channelOptions" /> is null.</exception>
     public GrpcStorageProxy(string address, GrpcChannelOptions channelOptions)
         : this(GrpcChannel.ForAddress(
                 address ?? throw new ArgumentNullException(nameof(address)),
@@ -96,12 +98,15 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
     ///     <b>You own the channel's lifetime</b> — the proxy never disposes a channel it did not create.
     /// </summary>
     /// <param name="channel">A configured <see cref="GrpcChannel" />.</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="channel" /> is null.</exception>
     public GrpcStorageProxy(GrpcChannel channel)
         : this(channel ?? throw new ArgumentNullException(nameof(channel)), ownsChannel: false)
     {
     }
 
     /// <summary>Shared core: every public constructor funnels here.</summary>
+    /// <param name="channel">The gRPC channel used for remote storage calls.</param>
+    /// <param name="ownsChannel">Whether disposing this proxy should also dispose the channel.</param>
     private GrpcStorageProxy(GrpcChannel channel, bool ownsChannel)
     {
         // Optuna decorates GrpcStorageProxy with @experimental_class("4.2.0"), which raises an
@@ -117,6 +122,9 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
     ///     Optuna's <c>create_insecure_channel</c>: an HTTP/2 cleartext (h2c) channel with unlimited
     ///     receive. <paramref name="configure" />, when non-null, tweaks the derived options first.
     /// </summary>
+    /// <param name="address">The HTTP or HTTPS address of the gRPC server.</param>
+    /// <param name="configure">The callback that customizes native connection options before opening the connection.</param>
+    /// <returns>A channel that the proxy will own and dispose.</returns>
     private static GrpcChannel CreateInsecureChannel(string address, Action<GrpcChannelOptions>? configure)
     {
         var options = new GrpcChannelOptions
@@ -148,16 +156,21 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
     }
 
     /// <summary>Close the gRPC channel (Optuna's <c>close</c>) — unless it was injected, in which case the caller owns it.</summary>
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public void Close()
     {
         if (_ownsChannel)
             _channel.Dispose();
     }
 
+    /// <summary>Releases resources owned by this storage instance; caller-owned connections or channels remain the caller's responsibility.</summary>
     public void Dispose() => Close();
 
     // ------------------------------------------------------------------ study manipulation
 
+    /// <inheritdoc />
+    /// <exception cref="DuplicatedStudyError">Another study already uses the requested name.</exception>
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override int CreateNewStudy(IReadOnlyList<StudyDirection> directions, string? studyName = null)
     {
         studyName ??= DefaultStudyNamePrefix + Guid.NewGuid();
@@ -173,6 +186,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override void DeleteStudy(int studyId)
     {
         try
@@ -186,6 +201,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         _cache.DeleteStudyCache(studyId);
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override void SetStudyUserAttr(int studyId, string key, object? value)
     {
         var request = new ProtoApi.SetStudyUserAttributeRequest { StudyId = studyId, Key = key, Value = PyJson.Dumps(value) };
@@ -199,6 +216,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override void SetStudySystemAttr(int studyId, string key, object? value)
     {
         var request = new ProtoApi.SetStudySystemAttributeRequest { StudyId = studyId, Key = key, Value = PyJson.Dumps(value) };
@@ -214,6 +233,9 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
 
     // ------------------------------------------------------------------ study access
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">No study has the requested name.</exception>
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override int GetStudyIdFromName(string studyName)
     {
         try
@@ -226,6 +248,9 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">The study identifier does not exist.</exception>
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override string GetStudyNameFromId(int studyId)
     {
         try
@@ -238,6 +263,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override List<StudyDirection> GetStudyDirections(int studyId)
     {
         try
@@ -251,6 +278,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override OrderedDict<string, object?> GetStudyUserAttrs(int studyId)
     {
         try
@@ -267,6 +296,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override OrderedDict<string, object?> GetStudySystemAttrs(int studyId)
     {
         try
@@ -283,6 +314,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override List<FrozenStudy> GetAllStudies()
     {
         var response = _stub.GetAllStudies(new ProtoApi.GetAllStudiesRequest());
@@ -308,6 +341,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
 
     // ------------------------------------------------------------------ trial manipulation
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override int CreateNewTrial(int studyId, FrozenTrial? templateTrial = null)
     {
         var request = templateTrial is null
@@ -328,6 +363,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override void SetTrialParam(int trialId, string paramName, double paramValueInternal, BaseDistribution distribution)
     {
         var request = new ProtoApi.SetTrialParameterRequest
@@ -353,6 +390,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override bool SetTrialStateValues(int trialId, TrialState state, IReadOnlyList<double>? values = null)
     {
         var request = new ProtoApi.SetTrialStateValuesRequest
@@ -376,6 +415,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
     {
         var request = new ProtoApi.SetTrialIntermediateValueRequest
@@ -398,6 +439,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override void SetTrialUserAttr(int trialId, string key, object? value)
     {
         var request = new ProtoApi.SetTrialUserAttributeRequest { TrialId = trialId, Key = key, Value = PyJson.Dumps(value) };
@@ -415,6 +458,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override void SetTrialSystemAttr(int trialId, string key, object? value)
     {
         var request = new ProtoApi.SetTrialSystemAttributeRequest { TrialId = trialId, Key = key, Value = PyJson.Dumps(value) };
@@ -432,6 +477,9 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.KeyError">The requested trial number does not exist in the study.</exception>
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override int GetTrialIdFromStudyIdTrialNumber(int studyId, int trialNumber)
     {
         var request = new ProtoApi.GetTrialIdFromStudyIdTrialNumberRequest { StudyId = studyId, TrialNumber = trialNumber };
@@ -447,6 +495,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
 
     // ------------------------------------------------------------------ trial access
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override FrozenTrial GetTrial(int trialId)
     {
         try
@@ -460,6 +510,8 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
     public override List<FrozenTrial> GetAllTrials(
         int studyId, bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null)
     {
@@ -480,14 +532,22 @@ internal sealed class GrpcClientCache
     private readonly ProtoApi.StorageService.StorageServiceClient _grpcClient;
     private readonly object _lock = new();
 
+    /// <summary>Creates an incremental trial cache bound to the generated storage client.</summary>
+    /// <param name="grpcClient">The generated gRPC client used to fetch trial-cache updates.</param>
     internal GrpcClientCache(ProtoApi.StorageService.StorageServiceClient grpcClient) => _grpcClient = grpcClient;
 
+    /// <summary>Drops locally cached trial state for a deleted study.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
     internal void DeleteStudyCache(int studyId)
     {
         lock (_lock)
             _studies.Remove(studyId);
     }
 
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="states">The allowed trial states, or null to include every state.</param>
+    /// <returns>Cached trial snapshots filtered by the requested states after refreshing remote updates.</returns>
+    /// <summary>Refreshes the remote trial cache and returns snapshots matching the requested states.</summary>
     internal List<FrozenTrial> GetAllTrials(int studyId, IReadOnlyCollection<TrialState>? states)
     {
         lock (_lock)
@@ -501,6 +561,8 @@ internal sealed class GrpcClientCache
         }
     }
 
+    /// <summary>Fetches new and unfinished trials and merges them into the study cache.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
     private void ReadTrialsFromRemoteStorage(int studyId)
     {
         if (!_studies.ContainsKey(studyId))
@@ -531,6 +593,9 @@ internal sealed class GrpcClientCache
             AddTrialToCache(studyId, GrpcProto.FromProtoTrial(trialProto));
     }
 
+    /// <summary>Updates a trial snapshot and the finished/unfinished incremental-cache cursors.</summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="trial">The trial snapshot or database record being read or validated.</param>
     private void AddTrialToCache(int studyId, FrozenTrial trial)
     {
         var study = _studies[studyId];
@@ -550,7 +615,10 @@ internal sealed class GrpcClientCache
 /// <summary>Per-study cache entry (Optuna's <c>GrpcClientCacheEntry</c>). Trials are keyed by number.</summary>
 internal sealed class GrpcClientCacheEntry
 {
+    /// <summary>Cached trial snapshots keyed by storage-wide trial identifier.</summary>
     internal Dictionary<int, FrozenTrial> Trials { get; } = new();
+    /// <summary>Identifiers that must be fetched again because their trial state can still change.</summary>
     internal HashSet<int> UnfinishedTrialIds { get; } = new();
+    /// <summary>The greatest finished trial identifier already seen by the incremental cache.</summary>
     internal int LastFinishedTrialId { get; set; } = -1;
 }

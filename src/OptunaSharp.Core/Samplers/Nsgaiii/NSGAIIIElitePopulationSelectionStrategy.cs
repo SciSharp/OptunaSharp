@@ -41,6 +41,13 @@ public class NSGAIIIElitePopulationSelectionStrategy
     private readonly int _dividingParameter;
     private readonly LazyRandomState _rng;
 
+    /// <summary>Configures nondomination ranking and reference-point niching to a fixed population size.</summary>
+    /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
+    /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
+    /// <param name="constraintsFunc">Optional legacy callback returning constraint values; positive values violate a constraint.</param>
+    /// <param name="referencePoints">Reference vectors, one row per point and one column per objective.</param>
+    /// <param name="dividingParameter">Number of simplex divisions used to generate reference points.</param>
+    /// <exception cref="NumSharp.ValueError">Population size is below two.</exception>
     public NSGAIIIElitePopulationSelectionStrategy(
         int populationSize,
         LazyRandomState rng,
@@ -62,6 +69,10 @@ public class NSGAIIIElitePopulationSelectionStrategy
     ///     Select the elite population from the given trials by the NSGA-III algorithm (Python
     ///     <c>__call__</c>).
     /// </summary>
+    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <returns>The individuals retained by the configured survival rule, in selection order.</returns>
+    /// <exception cref="NumSharp.ValueError">The reference-point dimension does not match the study objective count.</exception>
     public List<FrozenTrial> Select(Study study, List<FrozenTrial> population)
     {
         bool isConstrained = ConstrainedOptimization.IsConstrainedOptimization(population);
@@ -112,6 +123,9 @@ public class NSGAIIIElitePopulationSelectionStrategy
     ///     Python <c>_generate_default_reference_point</c>: the reference points `uniformly` spread on
     ///     a hyperplane, one per <c>combinations_with_replacement(range(n_objectives), div)</c>.
     /// </summary>
+    /// <param name="nObjectives">Number of objective coordinates.</param>
+    /// <param name="dividingParameter">Number of simplex divisions used to generate reference points.</param>
+    /// <returns>Simplex reference points with one row per point and one column per objective.</returns>
     internal static double[,] GenerateDefaultReferencePoint(int nObjectives, int dividingParameter = 3)
     {
         var indices = CombinationsWithReplacement(nObjectives, dividingParameter);
@@ -128,6 +142,9 @@ public class NSGAIIIElitePopulationSelectionStrategy
     ///     <c>itertools.combinations_with_replacement(range(n), r)</c> in lexicographic order — the
     ///     same order numpy sees, so the reference-point rows line up byte-for-byte.
     /// </summary>
+    /// <param name="n">Number of distinct zero-based index values available.</param>
+    /// <param name="r">Number of entries in each combination.</param>
+    /// <returns>Nondecreasing index combinations of the requested length.</returns>
     private static List<int[]> CombinationsWithReplacement(int n, int r)
     {
         var result = new List<int[]>();
@@ -151,6 +168,8 @@ public class NSGAIIIElitePopulationSelectionStrategy
     }
 
     /// <summary>Python <c>_filter_inf</c>: clip +-inf to a margin beyond the finite range per axis.</summary>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <returns>A finite objective matrix using the reference replacement for infinite entries.</returns>
     private static double[,] FilterInf(IReadOnlyList<FrozenTrial> population)
     {
         int p = population.Count;
@@ -194,6 +213,8 @@ public class NSGAIIIElitePopulationSelectionStrategy
     }
 
     /// <summary>Python <c>_normalize_objective_values</c>. Mutates and returns <paramref name="a" />.</summary>
+    /// <param name="a">First numerical array operand.</param>
+    /// <returns>Objective rows translated by the ideal point and scaled by intercepts.</returns>
     private static double[,] NormalizeObjectiveValues(double[,] a)
     {
         int p = a.GetLength(0);
@@ -277,6 +298,9 @@ public class NSGAIIIElitePopulationSelectionStrategy
     ///     Python <c>_associate_individuals_with_reference_points</c>: the closest reference point to
     ///     each individual and that Euclidean (perpendicular) distance.
     /// </summary>
+    /// <param name="objectiveMatrix">Objective vectors with one individual per row.</param>
+    /// <param name="referencePoints">Reference vectors, one row per point and one column per objective.</param>
+    /// <returns>Nearest reference-point indices and perpendicular distances for each individual.</returns>
     private static (int[] Closest, double[] Distance) AssociateIndividualsWithReferencePoints(
         double[,] objectiveMatrix, double[,] referencePoints)
     {
@@ -329,6 +353,13 @@ public class NSGAIIIElitePopulationSelectionStrategy
     ///     Python <c>_preserve_niche_individuals</c>: draw survivors from the borderline front so the
     ///     reference points stay as evenly (sparsely) populated as possible.
     /// </summary>
+    /// <param name="targetPopulationSize">Number of individuals to retain after selection.</param>
+    /// <param name="elitePopulationNum">Number of individuals already retained from better fronts.</param>
+    /// <param name="population">Individuals available for survival or reproduction.</param>
+    /// <param name="closestReferencePoints">Nearest reference-point index per individual.</param>
+    /// <param name="distanceReferencePoints">Perpendicular distance to the nearest reference point per individual.</param>
+    /// <returns>Individuals chosen from the split front to fill underrepresented reference niches.</returns>
+    /// <exception cref="NumSharp.ValueError">The candidate population contains fewer individuals than the target population size.</exception>
     private List<FrozenTrial> PreserveNicheIndividuals(
         int targetPopulationSize,
         int elitePopulationNum,
@@ -416,6 +447,10 @@ public class NSGAIIIElitePopulationSelectionStrategy
     }
 
     /// <summary>Python <c>defaultdict(list)</c> access: auto-create the bucket for a missing key.</summary>
+    /// <param name="dict">Dictionary mapping niche identifiers to mutable element lists.</param>
+    /// <param name="key">Niche identifier whose element list is requested.</param>
+    /// <typeparam name="T">Element type stored in the niche bucket or shuffled list.</typeparam>
+    /// <returns>The existing list for the key, or a newly inserted empty list.</returns>
     private static List<T> GetBucket<T>(Dictionary<int, List<T>> dict, int key)
     {
         if (!dict.TryGetValue(key, out var list))
@@ -430,6 +465,8 @@ public class NSGAIIIElitePopulationSelectionStrategy
     ///     <c>rng.shuffle(list)</c> in place — reproduces numpy's Python-list Fisher-Yates by shuffling
     ///     an index permutation with the same MT19937 j-sequence (bit-exact, verified) and gathering.
     /// </summary>
+    /// <param name="list">Elements reordered in place.</param>
+    /// <typeparam name="T">Element type stored in the niche bucket or shuffled list.</typeparam>
     private void ShuffleInPlace<T>(List<T> list)
     {
         int n = list.Count;

@@ -34,6 +34,9 @@ internal static class QuasiMonteCarlo
     ///     numbers — scipy's <c>_sv</c> after <c>_initialize_v</c>. Returned as a copy so the scrambled
     ///     engine (<see cref="ScrambledSobol" />) can apply the LMS in place without touching the cache.
     /// </summary>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <returns>The direction-number vector for each requested Sobol dimension.</returns>
+    /// <exception cref="NumSharp.ValueError">The dimension is outside the supported direction-number table.</exception>
     internal static uint[][] SobolSv(int dim)
     {
         if (dim < 1 || dim > SobolDirectionNumbers.MaxDim)
@@ -53,6 +56,10 @@ internal static class QuasiMonteCarlo
     // ===========================================================================================
 
     /// <summary>The Sobol' point at sequence index <paramref name="n" /> (index 0 is the origin).</summary>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <param name="n">The zero-based Sobol sequence index, smaller than 2 raised to SobolBits; zero selects the origin.</param>
+    /// <returns>The requested Sobol point, with one coordinate per dimension.</returns>
+    /// <exception cref="NumSharp.ValueError">The dimension is outside the supported table or the point index exceeds the fixed-bit sequence capacity.</exception>
     internal static double[] SobolPoint(int dim, ulong n)
     {
         if (dim < 1 || dim > SobolDirectionNumbers.MaxDim)
@@ -85,6 +92,7 @@ internal static class QuasiMonteCarlo
     ///     polynomials + initial m-values. Computed once for all <see cref="SobolDirectionNumbers.MaxDim" />
     ///     dimensions (row d depends only on dimension d).
     /// </summary>
+    /// <returns>The cached Sobol direction-number table.</returns>
     private static uint[][] DirectionNumbers()
     {
         if (_sv is not null)
@@ -135,6 +143,10 @@ internal static class QuasiMonteCarlo
     // ===========================================================================================
 
     /// <summary>The Halton point at sequence index <paramref name="n" /> (index 0 is the origin).</summary>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <param name="n">The zero-based Halton sequence index; zero selects the origin.</param>
+    /// <returns>The requested Halton point, with one radical-inverse coordinate per dimension.</returns>
+    /// <exception cref="NumSharp.ValueError">The dimension is outside the supported prime-base table.</exception>
     internal static double[] HaltonPoint(int dim, ulong n)
     {
         if (dim < 1 || dim > SobolDirectionNumbers.MaxDim)
@@ -165,6 +177,9 @@ internal static class QuasiMonteCarlo
     ///     shared prime table behind the unscrambled <see cref="HaltonPoint" /> and the scrambled
     ///     <see cref="ScrambledHalton" /> (the analogue of <see cref="SobolSv" /> for the Halton engine).
     /// </summary>
+    /// <param name="dim">The number of coordinates in each point.</param>
+    /// <returns>The first requested prime bases used by the Halton dimensions.</returns>
+    /// <exception cref="NumSharp.ValueError">The requested dimension is outside the supported prime-base table.</exception>
     internal static int[] HaltonPrimes(int dim)
     {
         if (dim < 1 || dim > SobolDirectionNumbers.MaxDim)
@@ -173,6 +188,7 @@ internal static class QuasiMonteCarlo
     }
 
     /// <summary>The first <see cref="SobolDirectionNumbers.MaxDim" /> primes (Halton bases 2, 3, 5, …).</summary>
+    /// <returns>The cached sequence of prime bases.</returns>
     private static int[] Primes()
     {
         if (_primes is not null)
@@ -199,5 +215,8 @@ internal static class QuasiMonteCarlo
         return _primes;
     }
 
+    /// <summary>Returns the number of bits needed to represent the nonnegative integer.</summary>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <returns>The number of bits needed to represent the nonnegative integer.</returns>
     private static int BitLength(int value) => value == 0 ? 0 : BitOperations.Log2((uint)value) + 1;
 }

@@ -96,6 +96,7 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// <param name="endpoint">A ServiceStack.Redis endpoint.</param>
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="endpoint" /> is null.</exception>
     public ServiceStackJournalRedisBackend(SsRedisEndpoint endpoint, bool useCluster = false, string prefix = "")
         : this(PoolFor(endpoint ?? throw new ArgumentNullException(nameof(endpoint))), "", useCluster, prefix)
     {
@@ -112,12 +113,17 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     ///   <c>PooledRedisClientManager</c>, <c>BasicRedisClientManager</c>).</param>
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="manager" /> is null.</exception>
     public ServiceStackJournalRedisBackend(IRedisClientsManager manager, bool useCluster = false, string prefix = "")
         : this(manager ?? throw new ArgumentNullException(nameof(manager)), "", useCluster, prefix)
     {
     }
 
-    /// <summary>Shared core: every public constructor funnels here (so all raise the experimental warning).</summary>
+    /// <summary>Binds the shared Redis connection, key namespace, and append strategy for all constructor paths.</summary>
+    /// <param name="manager">The Redis connection manager retained for journal operations.</param>
+    /// <param name="url">The database connection URL to resolve.</param>
+    /// <param name="useCluster">Whether to use separate counter and log writes for a Redis cluster rather than the standalone Lua script.</param>
+    /// <param name="prefix">The journal key namespace, shared by its counter, log records, and snapshot.</param>
     private ServiceStackJournalRedisBackend(IRedisClientsManager manager, string url, bool useCluster, string prefix)
     {
         // Optuna decorates JournalRedisBackend with @experimental_class("3.1.0"), which raises an
@@ -129,6 +135,8 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
         _prefix = prefix;
     }
 
+    /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">A nonfinal journal record contains malformed JSON.</exception>
     public override IEnumerable<OrderedDict<string, object?>> ReadLogs(int logNumberFrom)
     {
         string? maxStr = GetValue(RedisJournalProtocol.LogNumberKey(_prefix));
@@ -138,6 +146,8 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
 
         for (long logNumber = logNumberFrom; logNumber <= maxLogNumber; logNumber++)
         {
+            // Cluster append reserves a sequence number before writing its record. A visible counter
+            // can therefore lead the record; wait for that writer so replay never skips an operation.
             double sleepSecs = 0.1;
             string? log;
             while (true)
@@ -157,6 +167,8 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
             }
             catch (ValueError)
             {
+                // Only the final record may still be incomplete; corruption earlier in the journal
+                // cannot be deferred without changing the replayed sequence of storage operations.
                 if (logNumber != maxLogNumber)
                     throw;
                 decoded = false;
@@ -168,6 +180,7 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
         }
     }
 
+    /// <inheritdoc />
     public override void AppendLogs(IReadOnlyList<OrderedDict<string, object?>> logs)
     {
         using IRedisClient client = _manager.GetClient();
@@ -192,12 +205,16 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
         }
     }
 
+    /// <summary>Replaces the Redis journal snapshot with the supplied opaque serialized bytes.</summary>
+    /// <param name="snapshot">The serialized journal-state snapshot to store as opaque bytes.</param>
     public void SaveSnapshot(byte[] snapshot)
     {
         using IRedisClient client = _manager.GetClient();
         ((IRedisNativeClient)client).Set(RedisJournalProtocol.SnapshotKey(_prefix), snapshot);
     }
 
+    /// <summary>Reads the latest Redis journal snapshot, if one has been saved.</summary>
+    /// <returns>The saved snapshot bytes, or null when the snapshot key is absent.</returns>
     public byte[]? LoadSnapshot()
     {
         using IRedisClient client = _manager.GetClient();
@@ -206,6 +223,9 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
         return ((IRedisNativeClient)client).Get(RedisJournalProtocol.SnapshotKey(_prefix));
     }
 
+    /// <summary>Reads the string value of a Redis key through a borrowed pooled connection.</summary>
+    /// <param name="key">The attribute name or exact storage key to access.</param>
+    /// <returns>The Redis value, or null when the key is absent.</returns>
     private string? GetValue(string key)
     {
         using IRedisClient client = _manager.GetClient();
@@ -213,6 +233,8 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     }
 
     /// <summary>Builds a pooled ServiceStack client manager from the neutral <see cref="RedisEndpoint" />.</summary>
+    /// <param name="ep">The client-neutral, parsed Redis endpoint.</param>
+    /// <returns>A ServiceStack client pool configured for the parsed endpoint.</returns>
     internal static IRedisClientsManager CreateManager(RedisEndpoint ep)
         => PoolFor(ToServiceStackEndpoint(ep));
 
@@ -220,6 +242,10 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     ///     Maps the neutral endpoint onto ServiceStack.Redis' own, applies the caller's native
     ///     <paramref name="configure" /> tweak, then builds the pool.
     /// </summary>
+    /// <param name="ep">The client-neutral, parsed Redis endpoint.</param>
+    /// <param name="configure">The callback that customizes native connection options before opening the connection.</param>
+    /// <returns>A ServiceStack client pool configured for the parsed endpoint.</returns>
+    /// <exception cref="System.ArgumentNullException"><paramref name="configure" /> is null.</exception>
     internal static IRedisClientsManager CreateManager(RedisEndpoint ep, Action<SsRedisEndpoint> configure)
     {
         if (configure is null)
@@ -230,6 +256,9 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     }
 
     /// <summary>Maps the neutral <see cref="RedisEndpoint" /> onto ServiceStack.Redis' own endpoint type.</summary>
+    /// <param name="ep">The client-neutral, parsed Redis endpoint.</param>
+    /// <returns>The ServiceStack endpoint matching the parsed TCP/TLS connection settings.</returns>
+    /// <exception cref="NumSharp.ValueError">The URL selects a Unix-domain socket, which this backend does not support.</exception>
     private static SsRedisEndpoint ToServiceStackEndpoint(RedisEndpoint ep)
     {
         if (ep.UnixSocketPath is not null)
@@ -252,6 +281,8 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     ///     <c>Username</c>); timeouts/retry are taken from the process-wide <c>RedisConfig</c> defaults, not
     ///     the per-endpoint value (a ServiceStack pooled-manager behavior). See the type-level remarks.
     /// </summary>
+    /// <param name="sep">The configured ServiceStack Redis endpoint.</param>
+    /// <returns>The newly created ServiceStack client pool.</returns>
     private static IRedisClientsManager PoolFor(SsRedisEndpoint sep)
         => new RedisManagerPool(sep.ToString());
 }

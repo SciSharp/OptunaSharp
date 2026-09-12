@@ -20,9 +20,16 @@ internal sealed class SubplotGrid
     private readonly DObj[] _xaxes;   // indexed by N (1-based); [0] unused
     private readonly DObj[] _yaxes;
 
+    /// <summary>Gets the number of subplot rows.</summary>
     public int Rows { get; }
+    /// <summary>Gets the number of subplot columns.</summary>
     public int Cols { get; }
 
+    /// <summary>Stores axis objects indexed by one-based subplot number.</summary>
+    /// <param name="rows">Positive number of subplot rows.</param>
+    /// <param name="cols">Positive number of subplot columns.</param>
+    /// <param name="xaxes">X-axis objects with element zero unused.</param>
+    /// <param name="yaxes">Y-axis objects with element zero unused.</param>
     private SubplotGrid(int rows, int cols, DObj[] xaxes, DObj[] yaxes)
     {
         Rows = rows;
@@ -32,16 +39,38 @@ internal sealed class SubplotGrid
     }
 
     /// <summary>Cell index N (1-based, row-major) for 1-based (<paramref name="row" />, <paramref name="col" />).</summary>
+    /// <param name="row">One-based subplot row.</param>
+    /// <param name="col">One-based subplot column.</param>
+    /// <returns>One-based row-major cell index; this arithmetic helper does not validate bounds.</returns>
     public int Cell(int row, int col) => (row - 1) * Cols + col;
 
+    /// <summary>Formats the trace-axis reference for a subplot.</summary>
+    /// <param name="n">One-based row-major subplot index.</param>
+    /// <returns>x or y for the first axis; otherwise the axis prefix followed by its index.</returns>
     public static string XAnchor(int n) => n == 1 ? "x" : $"x{n}";
+    /// <summary>Formats the trace-axis reference for a subplot.</summary>
+    /// <param name="n">One-based row-major subplot index.</param>
+    /// <returns>x or y for the first axis; otherwise the axis prefix followed by its index.</returns>
     public static string YAnchor(int n) => n == 1 ? "y" : $"y{n}";
 
+    /// <summary>Gets the mutable axis object for a subplot.</summary>
+    /// <param name="n">One-based row-major subplot index.</param>
+    /// <returns>The stored axis object, shared with the chart layout.</returns>
+    /// <exception cref="System.IndexOutOfRangeException">The index lies outside the allocated axis array.</exception>
     public DObj XAxis(int n) => _xaxes[n];
+    /// <summary>Gets the mutable axis object for a subplot.</summary>
+    /// <param name="n">One-based row-major subplot index.</param>
+    /// <returns>The stored axis object, shared with the chart layout.</returns>
+    /// <exception cref="System.IndexOutOfRangeException">The index lies outside the allocated axis array.</exception>
     public DObj YAxis(int n) => _yaxes[n];
 
     /// <param name="hSpacing">Horizontal spacing (default plotly <c>0.2/cols</c>; rank passes <c>0.08/cols</c>).</param>
     /// <param name="vSpacing">Vertical spacing (default plotly <c>0.3/rows</c>; rank passes <c>0.08/rows</c>).</param>
+    /// <summary>Adds a uniform subplot grid with shared axes to the supplied layout.</summary>
+    /// <param name="layout">Plotly layout receiving the axes or attached to the returned chart.</param>
+    /// <param name="rows">Positive number of subplot rows.</param>
+    /// <param name="cols">Positive number of subplot columns.</param>
+    /// <returns>A grid providing the inserted axis objects and their trace references.</returns>
     public static SubplotGrid Init(Layout layout, int rows, int cols, double? hSpacing = null, double? vSpacing = null)
     {
         double hSpace = hSpacing ?? 0.2 / cols;
@@ -49,6 +78,13 @@ internal sealed class SubplotGrid
         return InitCore(layout, rows, cols, hSpace, vSpace);
     }
 
+    /// <summary>Adds a uniform subplot grid with shared axes to the supplied layout.</summary>
+    /// <param name="layout">Plotly layout receiving the axes or attached to the returned chart.</param>
+    /// <param name="rows">Positive number of subplot rows.</param>
+    /// <param name="cols">Positive number of subplot columns.</param>
+    /// <param name="hSpacing">Horizontal gap in normalized paper coordinates.</param>
+    /// <param name="vSpacing">Vertical gap in normalized paper coordinates.</param>
+    /// <returns>A grid providing the inserted axis objects and their trace references.</returns>
     private static SubplotGrid InitCore(Layout layout, int rows, int cols, double hSpacing, double vSpacing)
     {
         double colW = (1.0 - hSpacing * (cols - 1)) / cols;

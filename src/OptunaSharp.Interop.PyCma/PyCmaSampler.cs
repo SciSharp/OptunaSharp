@@ -53,6 +53,7 @@ namespace OptunaSharp.Interop.PyCma;
 ///     }, nTrials: 50);
 ///     </code>
 /// </example>
+/// <seealso href="https://optuna-integration.readthedocs.io/en/stable/reference/generated/optuna_integration.PyCmaSampler.html">Official Optuna integration API contract.</seealso>
 public sealed class PyCmaSampler : BaseSampler
 {
     private const double Eps = 1e-10;   // cma.py's _EPS
@@ -96,6 +97,8 @@ public sealed class PyCmaSampler : BaseSampler
     ///     with the same <paramref name="seed" />).
     /// </param>
     /// <param name="warnIndependentSampling">Emit a warning when a parameter is sampled independently.</param>
+    /// <summary>Creates the pycma-backed sampler and verifies that its Python dependency can be imported.</summary>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.PythonInteropException">CPython or the required Python package cannot be initialized or imported.</exception>
     public PyCmaSampler(
         IReadOnlyDictionary<string, object?>? x0 = null,
         double? sigma0 = null,
@@ -129,6 +132,7 @@ public sealed class PyCmaSampler : BaseSampler
         _warnIndependentSampling = warnIndependentSampling;
     }
 
+    /// <inheritdoc />
     public override void ReseedRng()
     {
         // Python: self._cma_opts["seed"] = random.randint(1, 2**32); self._independent_sampler.reseed_rng()
@@ -136,6 +140,7 @@ public sealed class PyCmaSampler : BaseSampler
         _independentSampler.ReseedRng();
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
         var searchSpace = new OrderedDict<string, BaseDistribution>();
@@ -151,6 +156,7 @@ public sealed class PyCmaSampler : BaseSampler
         return searchSpace;
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {
@@ -192,6 +198,9 @@ public sealed class PyCmaSampler : BaseSampler
     }
 
     /// <summary>cma.py's <c>_initialize_x0</c> — the default initial mean (external representation).</summary>
+    /// <param name="searchSpace">The ordered distributions defining the relative parameter coordinates.</param>
+    /// <returns>The initial parameter dictionary in search-space order.</returns>
+    /// <exception cref="System.NotImplementedException">The search space contains an unsupported distribution type.</exception>
     private static IReadOnlyDictionary<string, object?> InitializeX0(OrderedDict<string, BaseDistribution> searchSpace)
     {
         var x0 = new Dictionary<string, object?>();
@@ -220,6 +229,10 @@ public sealed class PyCmaSampler : BaseSampler
     }
 
     /// <summary>cma.py's <c>_initialize_sigma0</c> — the default step size (min range / 6).</summary>
+    /// <param name="searchSpace">The ordered distributions defining the relative parameter coordinates.</param>
+    /// <returns>The narrowest transformed range divided by six; the sampling caller applies a numerical floor before constructing pycma.</returns>
+    /// <exception cref="System.NotImplementedException">The search space contains an unsupported distribution type.</exception>
+    /// <exception cref="System.InvalidOperationException">The search space is empty, so no minimum range exists.</exception>
     private static double InitializeSigma0(OrderedDict<string, BaseDistribution> searchSpace)
     {
         var sigma0s = new List<double>();
@@ -243,6 +256,7 @@ public sealed class PyCmaSampler : BaseSampler
         return sigma0s.Min();
     }
 
+    /// <inheritdoc />
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
@@ -260,6 +274,8 @@ public sealed class PyCmaSampler : BaseSampler
     }
 
     /// <summary>cma.py's <c>_log_independent_sampling</c> (verbatim message).</summary>
+    /// <param name="trial">The trial being mirrored, sampled, or checked for optimizer compatibility.</param>
+    /// <param name="paramName">The case-sensitive name of the parameter sampled independently.</param>
     private void LogIndependentSampling(FrozenTrial trial, string paramName)
     {
         Logger.Warning(
@@ -272,9 +288,11 @@ public sealed class PyCmaSampler : BaseSampler
             "if this independent sampling is intended behavior.");
     }
 
+    /// <inheritdoc />
     public override void BeforeTrial(Study study, FrozenTrial trial)
         => _independentSampler.BeforeTrial(study, trial);
 
+    /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
         => _independentSampler.AfterTrial(study, trial, state, values);
 
@@ -293,6 +311,14 @@ public sealed class PyCmaSampler : BaseSampler
         private readonly PyObject _es;
         private readonly long _popsize;
 
+        /// <summary>Creates the Python optimizer and the fixed coordinate mapping used to replay study history.</summary>
+        /// <param name="searchSpace">The ordered distributions defining the relative parameter coordinates.</param>
+        /// <param name="x0">The initial parameter values or Python initial coordinate vector for CMA-ES.</param>
+        /// <param name="sigma0">The initial CMA-ES standard deviation in its transformed coordinates.</param>
+        /// <param name="cmaStds">Optional per-parameter multipliers of the initial standard deviation.</param>
+        /// <param name="cmaOpts">Additional pycma constructor options; bridge-managed bounds, seed, and standard deviations take precedence.</param>
+        /// <param name="seed">The random seed; where nullable, null leaves seed selection to the documented runtime default.</param>
+        /// <exception cref="System.NotImplementedException">The CMA-ES search space contains an unsupported distribution type.</exception>
         internal Optimizer(
             OrderedDict<string, BaseDistribution> searchSpace,
             IReadOnlyDictionary<string, object?> x0,
@@ -386,6 +412,9 @@ public sealed class PyCmaSampler : BaseSampler
         ///     pycma. Returns the number of the last trial told (or -1 if none). The <c>ask()</c> before
         ///     each <c>tell()</c> is required by pycma's state machine.
         /// </summary>
+        /// <param name="trials">The available study trial snapshots in study order.</param>
+        /// <param name="direction">The study's objective direction, used to orient fitness for the optimizer.</param>
+        /// <returns>The study-local number of the last trial consumed by a completed generation, or the prior cursor when no generation is ready.</returns>
         internal int Tell(IReadOnlyList<FrozenTrial> trials, StudyDirection direction)
         {
             List<FrozenTrial> completeTrials = CollectTargetTrials(trials, lastTold: -1, targetStates: CompleteOnly);
@@ -422,6 +451,9 @@ public sealed class PyCmaSampler : BaseSampler
         ///     compatible trials after the last told one; under parallel execution it can exceed the
         ///     population, so extra <c>ask()</c>s are burned (matching pycma's behaviour).
         /// </summary>
+        /// <param name="trials">The available study trial snapshots in study order.</param>
+        /// <param name="lastToldTrialNumber">The last study-local trial number already consumed by the optimizer.</param>
+        /// <returns>One suggested configuration mapped back into the original Optuna parameter distributions.</returns>
         internal OrderedDict<string, object?> Ask(IReadOnlyList<FrozenTrial> trials, int lastToldTrialNumber)
         {
             int individualIndex = CollectTargetTrials(trials, lastToldTrialNumber, targetStates: null).Count;
@@ -449,6 +481,8 @@ public sealed class PyCmaSampler : BaseSampler
         ///     the intersection search space guarantees compatibility; the check matters for distributed
         ///     runs where an incompatible trial may complete concurrently.
         /// </summary>
+        /// <param name="trial">The trial being mirrored, sampled, or checked for optimizer compatibility.</param>
+        /// <returns>Whether every required parameter exists with a compatible distribution.</returns>
         private bool IsCompatible(FrozenTrial trial)
         {
             foreach (var (name, distribution) in _searchSpace)
@@ -464,6 +498,10 @@ public sealed class PyCmaSampler : BaseSampler
         }
 
         /// <summary>cma.py's <c>_collect_target_trials</c>.</summary>
+        /// <param name="trials">The available study trial snapshots in study order.</param>
+        /// <param name="lastTold">The last study-local trial number already consumed by the optimizer.</param>
+        /// <param name="targetStates">The lifecycle states eligible for replay, or null for all states.</param>
+        /// <returns>The compatible trial snapshots eligible for replay after the cursor.</returns>
         private List<FrozenTrial> CollectTargetTrials(
             IReadOnlyList<FrozenTrial> trials, int lastTold, TrialState[]? targetStates)
         {
@@ -482,6 +520,9 @@ public sealed class PyCmaSampler : BaseSampler
         }
 
         /// <summary>cma.py's <c>_to_cma_params</c> — external parameter value → cma-space coordinate.</summary>
+        /// <param name="dist">The distribution defining value conversion or the borrowed Python distribution object.</param>
+        /// <param name="value">The parameter value or borrowed Python scalar to convert.</param>
+        /// <returns>The continuous coordinate used by pycma.</returns>
         private static double ToCmaParams(BaseDistribution dist, object? value)
         {
             switch (dist)
@@ -500,6 +541,9 @@ public sealed class PyCmaSampler : BaseSampler
         }
 
         /// <summary>cma.py's <c>_to_optuna_params</c> — cma-space coordinate → external parameter value.</summary>
+        /// <param name="dist">The distribution defining value conversion or the borrowed Python distribution object.</param>
+        /// <param name="cmaParamValue">The continuous coordinate emitted by pycma.</param>
+        /// <returns>The external parameter value after inverse transformation, rounding, and bounds handling.</returns>
         private static object? ToOptunaParams(BaseDistribution dist, double cmaParamValue)
         {
             switch (dist)
@@ -535,8 +579,11 @@ public sealed class PyCmaSampler : BaseSampler
         }
 
         /// <summary><c>numpy.round</c> — round half to even (banker's rounding), matching numpy's <c>rint</c>.</summary>
+        /// <param name="x">The continuous coordinate to round using NumPy-compatible ties-to-even behavior.</param>
+        /// <returns>The nearest integral double, with halfway values rounded to the even integer.</returns>
         private static double NpRound(double x) => Math.Round(x, MidpointRounding.ToEven);
 
+        /// <summary>Releases owned Python references while holding the GIL.</summary>
         public void Dispose() => _es.Dispose();
     }
 }

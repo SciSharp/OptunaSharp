@@ -44,6 +44,7 @@ public sealed class JanusAgeMoea2CmixSampler : AgeMoea2Sampler
     /// <param name="crossoverProb">AGE-MOEA-2 crossover probability (forwarded, default 0.9).</param>
     /// <param name="swappingProb">AGE-MOEA-2 swapping probability (forwarded, default 0.5).</param>
     /// <param name="conditionalParams">AGE-MOEA-2 conditional-parameter activation rules (forwarded).</param>
+    /// <summary>Configures curvature-informed candidate injection into an AGE-MOEA-2 population.</summary>
     public JanusAgeMoea2CmixSampler(
         int populationSize = 50,
         int? seed = null,
@@ -71,6 +72,7 @@ public sealed class JanusAgeMoea2CmixSampler : AgeMoea2Sampler
             cmixStartGeneration, cmixStartTrial, componentAttr, scalarFallback);
     }
 
+    /// <inheritdoc />
     public override OrderedDict<string, object?> SampleRelative(
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
     {

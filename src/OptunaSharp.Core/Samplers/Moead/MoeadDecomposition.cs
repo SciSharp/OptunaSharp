@@ -29,7 +29,7 @@ public enum MoeadScalarization
 }
 
 /// <summary>
-///     Evaluates a MOEA/D scalarizing function. Every objective vector <paramref name="f" /> and weight
+///     Evaluates a MOEA/D scalarizing function. Every objective vector <c>f</c> and weight
 ///     vector are expressed in the <b>minimization</b> convention (lower is better on every objective),
 ///     with <c>z*</c> the running ideal point; a smaller returned value is a better subproblem fitness.
 /// </summary>
@@ -41,6 +41,12 @@ internal static class MoeadDecomposition
     /// <summary>The scalarized fitness of objective vector <paramref name="f" /> for the subproblem with
     ///     weight vector <paramref name="weight" /> and ideal point <paramref name="ideal" /> (all length m,
     ///     minimization convention).</summary>
+    /// <param name="scalarization">Scalar decomposition function used to compare candidates for a subproblem.</param>
+    /// <param name="f">Objective vectors in minimization orientation.</param>
+    /// <param name="weight">Subproblem weights aligned with objective order.</param>
+    /// <param name="ideal">Ideal objective vector used as the normalization origin.</param>
+    /// <returns>The decomposition-specific scalar loss for the weight vector.</returns>
+    /// <exception cref="System.ArgumentOutOfRangeException">The scalarization enum value is unsupported.</exception>
     internal static double Scalarize(
         MoeadScalarization scalarization, double[] f, double[] weight, double[] ideal)
     {

@@ -53,6 +53,15 @@ internal sealed class SklearnLikeTree
     /// <summary><c>Tree.node_count</c>.</summary>
     internal int NodeCount => Feature.Length;
 
+    /// <summary>Captures a fitted regression tree in flat arrays matching scikit-learn's node representation.</summary>
+    /// <param name="nFeatures">The number of feature columns in the training matrix.</param>
+    /// <param name="feature">The zero-based feature column whose splits or importance are requested.</param>
+    /// <param name="childrenLeft">The left-child index of each node; leaf nodes carry the leaf sentinel.</param>
+    /// <param name="childrenRight">The right-child index of each node; leaf nodes carry the leaf sentinel.</param>
+    /// <param name="threshold">The incumbent objective value that a candidate must improve upon, in the model's maximization convention.</param>
+    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <param name="impurity">The weighted target variance at the parent node.</param>
+    /// <param name="weightedNNodeSamples">The total sample weight reaching this node.</param>
     internal SklearnLikeTree(
         int nFeatures, int[] feature, int[] childrenLeft, int[] childrenRight, double[] threshold, double[] value,
         double[]? impurity = null, double[]? weightedNNodeSamples = null)

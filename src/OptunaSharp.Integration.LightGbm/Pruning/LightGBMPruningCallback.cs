@@ -38,6 +38,7 @@ public readonly record struct LightGbmEvaluationResult(
 ///     <see cref="OptunaSharp.Integration.PruningCallback" />.
 ///     </para>
 /// </summary>
+/// <seealso href="https://optuna-integration.readthedocs.io/en/stable/reference/generated/optuna_integration.LightGBMPruningCallback.html">Official metric-reporting and pruning contract.</seealso>
 public class LightGBMPruningCallback
 {
     private readonly Trial _trial;
@@ -53,13 +54,15 @@ public class LightGBMPruningCallback
     /// </param>
     /// <param name="validName">
     ///     The name of the target validation. If omitted, <c>valid_0</c> is used which is the default name
-    ///     of the first validation. Ignored when <paramref name="isCv" /> is passed to <see cref="Call" />.
+    ///     of the first validation. Ignored when <c>isCv = true</c> is passed to <see cref="Call" />.
     /// </param>
     /// <param name="reportInterval">
     ///     Check whether the trial should report intermediate values for pruning every n-th boosting
     ///     iteration. By default <c>reportInterval=1</c> and reporting is performed after every iteration.
     ///     Note that the pruning itself is performed according to the interval definition of the pruner.
     /// </param>
+    /// <summary>Creates a callback that reports the selected validation metric and asks Optuna whether to prune.</summary>
+    /// <exception cref="System.ArgumentNullException"><paramref name="trial" /> or <paramref name="metric" /> or <paramref name="validName" /> is null.</exception>
     public LightGBMPruningCallback(
         Trial trial, string metric, string validName = "valid_0", int reportInterval = 1)
     {
@@ -71,6 +74,10 @@ public class LightGBMPruningCallback
 
     // Port of `_find_evaluation_result`: the first entry whose valid-name matches and whose metric matches
     // either the bare name or the LightGBM v4.0.0+ "valid "-prefixed name.
+    /// <summary>Finds the requested validation-set and metric entry, including cross-validation naming rules.</summary>
+    /// <param name="targetValidName">The validation-set name whose metric result is required.</param>
+    /// <param name="evaluationResultList">The per-validation-set metric results supplied by the training callback.</param>
+    /// <returns>The matching metric result, or null when it is absent.</returns>
     private LightGbmEvaluationResult? FindEvaluationResult(
         string targetValidName, IReadOnlyList<LightGbmEvaluationResult> evaluationResultList)
     {
@@ -97,7 +104,7 @@ public class LightGBMPruningCallback
     /// <param name="isCv">
     ///     <c>true</c> when this callback is driving a cross-validation run, in which case the target
     ///     validation name is <c>valid</c> (as LightGBM's <c>cv</c> reports) rather than
-    ///     <paramref name="validName" />.
+    ///     the validation name supplied to the constructor.
     /// </param>
     /// <exception cref="NumSharp.ValueError">
     ///     Thrown when the target validation name + metric is not present in
@@ -105,6 +112,7 @@ public class LightGBMPruningCallback
     ///     study's direction (verbatim Optuna messages).
     /// </exception>
     /// <exception cref="TrialPruned">Thrown when the pruner decides the trial should be pruned.</exception>
+    /// <exception cref="System.DivideByZeroException">The callback was constructed with a report interval of zero.</exception>
     public void Call(
         int iteration, IReadOnlyList<LightGbmEvaluationResult> evaluationResultList, bool isCv = false)
     {
@@ -146,6 +154,9 @@ public class LightGBMPruningCallback
             throw new TrialPruned($"Trial was pruned at iteration {iteration}.");
     }
 
+    /// <summary>Formats evaluation results into a Python-style diagnostic list.</summary>
+    /// <param name="list">The callback metric results formatted into the diagnostic.</param>
+    /// <returns>The formatted list of validation metric records.</returns>
     private static string FormatEvaluationResultList(IReadOnlyList<LightGbmEvaluationResult> list)
     {
         var parts = new List<string>(list.Count);

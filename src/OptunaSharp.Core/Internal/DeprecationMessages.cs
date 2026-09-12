@@ -31,33 +31,43 @@ internal static class DeprecationMessages
         "See https://github.com/optuna/optuna/releases/tag/v3.1.0.";
 
     // Distributions (deprecated_class, v3.0.0 -> v6.0.0).
+    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>UniformDistribution</c>.</summary>
     internal const string UniformDistribution =
         "UniformDistribution" + DeprecatedV30V60 + " Use :class:`~optuna.distributions.FloatDistribution` instead.";
 
+    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>LogUniformDistribution</c>.</summary>
     internal const string LogUniformDistribution =
         "LogUniformDistribution" + DeprecatedV30V60 + " Use :class:`~optuna.distributions.FloatDistribution` instead.";
 
+    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>DiscreteUniformDistribution</c>.</summary>
     internal const string DiscreteUniformDistribution =
         "DiscreteUniformDistribution" + DeprecatedV30V60 + " Use :class:`~optuna.distributions.FloatDistribution` instead.";
 
+    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>IntUniformDistribution</c>.</summary>
     internal const string IntUniformDistribution =
         "IntUniformDistribution" + DeprecatedV30V60 + " Use :class:`~optuna.distributions.IntDistribution` instead.";
 
+    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>IntLogUniformDistribution</c>.</summary>
     internal const string IntLogUniformDistribution =
         "IntLogUniformDistribution" + DeprecatedV30V60 + " Use :class:`~optuna.distributions.IntDistribution` instead.";
 
     // Trial suggest_* aliases (deprecated_func, v3.0.0 -> v6.0.0).
+    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>SuggestUniform</c>.</summary>
     internal const string SuggestUniform =
         "suggest_uniform" + DeprecatedV30V60 + " Use suggest_float instead.";
 
+    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>SuggestLogUniform</c>.</summary>
     internal const string SuggestLogUniform =
         "suggest_loguniform" + DeprecatedV30V60 + " Use suggest_float(..., log=True) instead.";
 
+    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>SuggestDiscreteUniform</c>.</summary>
     internal const string SuggestDiscreteUniform =
         "suggest_discrete_uniform" + DeprecatedV30V60 + " Use suggest_float(..., step=...) instead.";
 
     // system-attrs members (deprecated_func, v3.1.0 -> v5.0.0, no extra text).
+    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>SetSystemAttr</c>.</summary>
     internal const string SetSystemAttr = "set_system_attr" + DeprecatedV31V50;
 
+    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>SystemAttrs</c>.</summary>
     internal const string SystemAttrs = "system_attrs" + DeprecatedV31V50;
 }
