@@ -73,8 +73,12 @@ public class FixedTrial : BaseTrial
 
     public override void SetUserAttr(string key, object? value) => _userAttrs[key] = value;
 
-    [Obsolete("Deprecated in v3.1.0. This feature will be removed in v5.0.0.")]
-    public override void SetSystemAttr(string key, object? value) => _systemAttrs[key] = value;
+    [Obsolete(DeprecationMessages.SetSystemAttr)]
+    public override void SetSystemAttr(string key, object? value)
+    {
+        OptunaWarnings.Warn(DeprecationMessages.SetSystemAttr, WarningCategory.FutureWarning);
+        _systemAttrs[key] = value;
+    }
 
     private object? Suggest(string name, BaseDistribution distribution)
     {

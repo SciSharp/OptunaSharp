@@ -12,7 +12,7 @@ namespace OptunaSharp;
 ///
 ///     See also <see cref="Optuna.GetAllStudySummaries" />.
 /// </summary>
-public class StudySummary
+public class StudySummary : IEquatable<StudySummary>, IComparable<StudySummary>
 {
     private readonly List<StudyDirection> _directions;
     internal int StudyId;
@@ -72,4 +72,52 @@ public class StudySummary
 
     /// <summary>A sequence of <see cref="StudyDirection" /> objects.</summary>
     public IReadOnlyList<StudyDirection> Directions => _directions;
+
+    // ------------------------------------------------------------------ equality / ordering
+
+    /// <summary>
+    ///     Python <c>__eq__</c>: value equality over every field (Optuna compares
+    ///     <c>other.__dict__ == self.__dict__</c>) — study name, directions, best trial, user
+    ///     attributes, trial count, start datetime and study id.
+    /// </summary>
+    public bool Equals(StudySummary? other)
+    {
+        if (other is null)
+            return false;
+        if (ReferenceEquals(this, other))
+            return true;
+        return StudyName == other.StudyName
+            && _directions.SequenceEqual(other._directions)
+            && (BestTrial is null ? other.BestTrial is null : BestTrial.Equals(other.BestTrial))
+            && Internal.PyJson.ValueEquals(UserAttrs, other.UserAttrs)
+            && NTrials == other.NTrials
+            && Nullable.Equals(DatetimeStart, other.DatetimeStart)
+            && StudyId == other.StudyId;
+    }
+
+    public override bool Equals(object? obj) => obj is StudySummary other && Equals(other);
+
+    /// <summary>
+    ///     A hash consistent with <see cref="Equals(StudySummary)" />. Optuna's <c>StudySummary</c>
+    ///     is actually unhashable (it defines <c>__eq__</c> without <c>__hash__</c>), but — as with
+    ///     the <see cref="FrozenTrial" /> port — we expose a usable hash rather than replicate that.
+    /// </summary>
+    public override int GetHashCode() => HashCode.Combine(StudyId, StudyName, NTrials);
+
+    /// <summary>Python <c>__lt__</c> / <c>__le__</c>: <see cref="StudySummary" /> is ordered by study id.</summary>
+    public int CompareTo(StudySummary? other) => other is null ? 1 : StudyId.CompareTo(other.StudyId);
+
+    public static bool operator ==(StudySummary? left, StudySummary? right)
+        => left is null ? right is null : left.Equals(right);
+
+    public static bool operator !=(StudySummary? left, StudySummary? right) => !(left == right);
+
+    // Ordering mirrors Python's __lt__/__le__ (by study id); >/>= are the reflected forms.
+    public static bool operator <(StudySummary left, StudySummary right) => left.StudyId < right.StudyId;
+
+    public static bool operator >(StudySummary left, StudySummary right) => left.StudyId > right.StudyId;
+
+    public static bool operator <=(StudySummary left, StudySummary right) => left.StudyId <= right.StudyId;
+
+    public static bool operator >=(StudySummary left, StudySummary right) => left.StudyId >= right.StudyId;
 }

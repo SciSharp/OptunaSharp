@@ -125,10 +125,13 @@ public class IntDistribution : BaseDistribution
 ///     A uniform distribution on integers.
 ///     Deprecated since Optuna 3.0.0: use <see cref="IntDistribution" /> instead.
 /// </summary>
-[Obsolete("Deprecated in v3.0.0. This feature will be removed in v6.0.0. Use IntDistribution instead.")]
+[Obsolete(DeprecationMessages.IntUniformDistribution)]
 public class IntUniformDistribution : IntDistribution
 {
-    public IntUniformDistribution(long low, long high, long step = 1) : base(low, high, log: false, step: step) { }
+    // Optuna's @deprecated_class wraps __init__ to warn on construction; mirror that with a
+    // runtime FutureWarning carrying the identical message (see DeprecationMessages).
+    public IntUniformDistribution(long low, long high, long step = 1) : base(low, high, log: false, step: step)
+        => OptunaWarnings.Warn(DeprecationMessages.IntUniformDistribution, WarningCategory.FutureWarning);
 
     internal override OrderedDict<string, object?> AsDict() => new()
     {
@@ -142,10 +145,11 @@ public class IntUniformDistribution : IntDistribution
 ///     A uniform distribution on integers in the log domain.
 ///     Deprecated since Optuna 3.0.0: use <see cref="IntDistribution" /> instead.
 /// </summary>
-[Obsolete("Deprecated in v3.0.0. This feature will be removed in v6.0.0. Use IntDistribution instead.")]
+[Obsolete(DeprecationMessages.IntLogUniformDistribution)]
 public class IntLogUniformDistribution : IntDistribution
 {
-    public IntLogUniformDistribution(long low, long high, long step = 1) : base(low, high, log: true, step: step) { }
+    public IntLogUniformDistribution(long low, long high, long step = 1) : base(low, high, log: true, step: step)
+        => OptunaWarnings.Warn(DeprecationMessages.IntLogUniformDistribution, WarningCategory.FutureWarning);
 
     internal override OrderedDict<string, object?> AsDict() => new()
     {

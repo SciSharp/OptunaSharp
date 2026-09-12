@@ -196,9 +196,10 @@ public class Trial : BaseTrial
     ///     save system messages such as failure reason of trials. Please use
     ///     <see cref="SetUserAttr" /> to set users' attributes.
     /// </summary>
-    [Obsolete("Deprecated in v3.1.0. This feature will be removed in v5.0.0.")]
+    [Obsolete(DeprecationMessages.SetSystemAttr)]
     public override void SetSystemAttr(string key, object? value)
     {
+        OptunaWarnings.Warn(DeprecationMessages.SetSystemAttr, WarningCategory.FutureWarning);
         Storage.SetTrialSystemAttr(TrialId, key, value);
         _cachedFrozenTrial.SystemAttrsDict[key] = value;
     }
@@ -330,8 +331,19 @@ public class Trial : BaseTrial
         => _cachedFrozenTrial.DeepCopy().UserAttrsDict;
 
     /// <summary>Return system attributes.</summary>
+    // Optuna deprecates `Trial.system_attrs` specifically (FrozenTrial / FixedTrial keep theirs), so
+    // this override is obsolete over a non-obsolete base member on purpose — hence the CS0809 mute.
+#pragma warning disable CS0809
+    [Obsolete(DeprecationMessages.SystemAttrs)]
     public override IReadOnlyDictionary<string, object?> SystemAttrs
-        => new OrderedDict<string, object?>(Storage.GetTrialSystemAttrs(TrialId));
+    {
+        get
+        {
+            OptunaWarnings.Warn(DeprecationMessages.SystemAttrs, WarningCategory.FutureWarning);
+            return new OrderedDict<string, object?>(Storage.GetTrialSystemAttrs(TrialId));
+        }
+    }
+#pragma warning restore CS0809
 
     /// <summary>Return start datetime.</summary>
     public override DateTime? DatetimeStart => _cachedFrozenTrial.DatetimeStart;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp;
 
@@ -15,17 +16,29 @@ public abstract class BaseTrial
 {
     public abstract double SuggestFloat(string name, double low, double high, double? step = null, bool log = false);
 
-    [Obsolete("Deprecated in v3.0.0. This feature will be removed in v6.0.0. Use SuggestFloat instead.")]
+    // Optuna's @deprecated_func warns (FutureWarning) before delegating to suggest_float; mirror
+    // that here with the identical message (see DeprecationMessages). These are `virtual` with a
+    // default body, so the runtime warning covers Trial / FrozenTrial / FixedTrial alike.
+    [Obsolete(DeprecationMessages.SuggestUniform)]
     public virtual double SuggestUniform(string name, double low, double high)
-        => SuggestFloat(name, low, high);
+    {
+        OptunaWarnings.Warn(DeprecationMessages.SuggestUniform, WarningCategory.FutureWarning);
+        return SuggestFloat(name, low, high);
+    }
 
-    [Obsolete("Deprecated in v3.0.0. This feature will be removed in v6.0.0. Use SuggestFloat(..., log: true) instead.")]
+    [Obsolete(DeprecationMessages.SuggestLogUniform)]
     public virtual double SuggestLogUniform(string name, double low, double high)
-        => SuggestFloat(name, low, high, log: true);
+    {
+        OptunaWarnings.Warn(DeprecationMessages.SuggestLogUniform, WarningCategory.FutureWarning);
+        return SuggestFloat(name, low, high, log: true);
+    }
 
-    [Obsolete("Deprecated in v3.0.0. This feature will be removed in v6.0.0. Use SuggestFloat(..., step: ...) instead.")]
+    [Obsolete(DeprecationMessages.SuggestDiscreteUniform)]
     public virtual double SuggestDiscreteUniform(string name, double low, double high, double q)
-        => SuggestFloat(name, low, high, step: q);
+    {
+        OptunaWarnings.Warn(DeprecationMessages.SuggestDiscreteUniform, WarningCategory.FutureWarning);
+        return SuggestFloat(name, low, high, step: q);
+    }
 
     public abstract long SuggestInt(string name, long low, long high, long step = 1, bool log = false);
 
@@ -69,7 +82,9 @@ public abstract class BaseTrial
     public void SetComponentLosses(ReadOnlySpan<double> components)
         => SetUserAttr(ComponentLosses.Key, ComponentLosses.Validate(components));
 
-    [Obsolete("Deprecated in v3.1.0. This feature will be removed in v5.0.0.")]
+    // Abstract, so the runtime FutureWarning lives in each concrete override (Trial / FrozenTrial /
+    // FixedTrial), each of which Optuna decorates with @deprecated_func individually.
+    [Obsolete(DeprecationMessages.SetSystemAttr)]
     public abstract void SetSystemAttr(string key, object? value);
 
     public abstract IReadOnlyDictionary<string, object?> Params { get; }

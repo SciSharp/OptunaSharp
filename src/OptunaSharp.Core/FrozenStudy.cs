@@ -11,7 +11,7 @@ namespace OptunaSharp;
 ///
 ///     This class is private in Optuna and not referenced by Optuna users.
 /// </summary>
-public class FrozenStudy
+public class FrozenStudy : IEquatable<FrozenStudy>, IComparable<FrozenStudy>
 {
     private readonly List<StudyDirection> _directions;
     internal int StudyId;
@@ -74,4 +74,49 @@ public class FrozenStudy
             SystemAttrs.Select(kv => new KeyValuePair<string, object?>(kv.Key, Internal.PyJson.DeepCopy(kv.Value)))),
         studyId: StudyId,
         directions: _directions.ToList());
+
+    // ------------------------------------------------------------------ equality / ordering
+
+    /// <summary>
+    ///     Python <c>__eq__</c>: value equality over every field (<c>other.__dict__ == self.__dict__</c>)
+    ///     — study name, directions, user attributes, system attributes and study id.
+    /// </summary>
+    public bool Equals(FrozenStudy? other)
+    {
+        if (other is null)
+            return false;
+        if (ReferenceEquals(this, other))
+            return true;
+        return StudyName == other.StudyName
+            && _directions.SequenceEqual(other._directions)
+            && Internal.PyJson.ValueEquals(UserAttrs, other.UserAttrs)
+            && Internal.PyJson.ValueEquals(SystemAttrs, other.SystemAttrs)
+            && StudyId == other.StudyId;
+    }
+
+    public override bool Equals(object? obj) => obj is FrozenStudy other && Equals(other);
+
+    /// <summary>
+    ///     A hash consistent with <see cref="Equals(FrozenStudy)" />. Optuna's <c>FrozenStudy</c> is
+    ///     unhashable (<c>__eq__</c> without <c>__hash__</c>); as elsewhere in the port we expose a
+    ///     usable hash instead.
+    /// </summary>
+    public override int GetHashCode() => HashCode.Combine(StudyId, StudyName);
+
+    /// <summary>Python <c>__lt__</c> / <c>__le__</c>: <see cref="FrozenStudy" /> is ordered by study id.</summary>
+    public int CompareTo(FrozenStudy? other) => other is null ? 1 : StudyId.CompareTo(other.StudyId);
+
+    public static bool operator ==(FrozenStudy? left, FrozenStudy? right)
+        => left is null ? right is null : left.Equals(right);
+
+    public static bool operator !=(FrozenStudy? left, FrozenStudy? right) => !(left == right);
+
+    // Ordering mirrors Python's __lt__/__le__ (by study id); >/>= are the reflected forms.
+    public static bool operator <(FrozenStudy left, FrozenStudy right) => left.StudyId < right.StudyId;
+
+    public static bool operator >(FrozenStudy left, FrozenStudy right) => left.StudyId > right.StudyId;
+
+    public static bool operator <=(FrozenStudy left, FrozenStudy right) => left.StudyId <= right.StudyId;
+
+    public static bool operator >=(FrozenStudy left, FrozenStudy right) => left.StudyId >= right.StudyId;
 }

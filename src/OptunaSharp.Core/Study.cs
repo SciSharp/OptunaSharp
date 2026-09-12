@@ -219,11 +219,12 @@ public class Study
     }
 
     /// <summary>Return system attributes of the study.</summary>
-    [Obsolete("Deprecated in v3.1.0. This feature will be removed in v5.0.0.")]
+    [Obsolete(DeprecationMessages.SystemAttrs)]
     public OrderedDict<string, object?> SystemAttrs
     {
         get
         {
+            OptunaWarnings.Warn(DeprecationMessages.SystemAttrs, WarningCategory.FutureWarning);
             var attrs = Storage.GetStudySystemAttrs(StudyId);
             var copy = new OrderedDict<string, object?>(attrs.Count);
             foreach (var (key, value) in attrs)
@@ -431,8 +432,12 @@ public class Study
     ///     Set a system attribute to the study. Note that Optuna internally uses this method to
     ///     save system messages.
     /// </summary>
-    [Obsolete("Deprecated in v3.1.0. This feature will be removed in v5.0.0.")]
-    public void SetSystemAttr(string key, object? value) => Storage.SetStudySystemAttr(StudyId, key, value);
+    [Obsolete(DeprecationMessages.SetSystemAttr)]
+    public void SetSystemAttr(string key, object? value)
+    {
+        OptunaWarnings.Warn(DeprecationMessages.SetSystemAttr, WarningCategory.FutureWarning);
+        Storage.SetStudySystemAttr(StudyId, key, value);
+    }
 
     /// <summary>
     ///     Exit from the current optimization loop after the running trials finish.
@@ -581,9 +586,11 @@ public class Study
                     && paramValue is not string && paramValue is not null)
                 {
                     PyFloat.TryConvert(existingParam, out double existingNumeric);
-                    // np.isclose(..., atol=0.0, equal_nan=True).
+                    // np.isclose(a, b, atol=0.0, equal_nan=True): |a - b| <= atol + rtol*|b|.
+                    // rtol is NOT passed, so it takes np.isclose's DEFAULT of 1e-5 (NOT 1e-8 — that
+                    // is _truncnorm's explicit rtol; this call uses the numpy default).
                     isRepeated = double.IsNaN(newNumeric) && double.IsNaN(existingNumeric)
-                        || Math.Abs(newNumeric - existingNumeric) <= 1e-08 * Math.Abs(existingNumeric);
+                        || Math.Abs(newNumeric - existingNumeric) <= 1e-05 * Math.Abs(existingNumeric);
                 }
                 else
                 {

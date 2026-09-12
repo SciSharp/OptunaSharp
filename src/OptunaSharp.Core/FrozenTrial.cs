@@ -125,8 +125,12 @@ public class FrozenTrial : BaseTrial
     public bool TryGetComponentLosses(out double[] components)
         => ComponentLosses.TryRead(UserAttrs, out components);
 
-    [Obsolete("Deprecated in v3.1.0. This feature will be removed in v5.0.0.")]
-    public override void SetSystemAttr(string key, object? value) => SystemAttrsDict[key] = value;
+    [Obsolete(DeprecationMessages.SetSystemAttr)]
+    public override void SetSystemAttr(string key, object? value)
+    {
+        OptunaWarnings.Warn(DeprecationMessages.SetSystemAttr, WarningCategory.FutureWarning);
+        SystemAttrsDict[key] = value;
+    }
 
     // ------------------------------------------------------------------ validation
 

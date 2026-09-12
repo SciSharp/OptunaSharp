@@ -320,6 +320,23 @@ public class StudyTests
     }
 
     [TestMethod]
+    public void EnqueueTrial_SkipIfExists_UsesNpIscloseDefaultRtol()
+    {
+        // Optuna's _should_skip_enqueue calls np.isclose(a, b, atol=0.0, equal_nan=True), which
+        // takes np.isclose's DEFAULT rtol=1e-5 (|a-b| <= 1e-5*|b|). Regression pin: the port once
+        // hardcoded 1e-8 (the _truncnorm rtol), so a duplicate within (1e-8, 1e-5]*|b| was wrongly
+        // enqueued. 5.0 vs 5.00004 differ by 4e-5 <= 5e-5 -> duplicate (skipped); 5.0 vs 5.0001
+        // differ by 1e-4 > 5e-5 -> not a duplicate (enqueued).
+        var study = NewStudy();
+        study.EnqueueTrial(new OrderedDict<string, object?> { ["x"] = 5.0 });
+        study.EnqueueTrial(new OrderedDict<string, object?> { ["x"] = 5.00004 }, skipIfExists: true);
+        study.GetTrials(deepcopy: false).Should().HaveCount(1, "5.00004 is within rtol=1e-5 of 5.0");
+
+        study.EnqueueTrial(new OrderedDict<string, object?> { ["x"] = 5.0001 }, skipIfExists: true);
+        study.GetTrials(deepcopy: false).Should().HaveCount(2, "5.0001 is outside rtol=1e-5 of 5.0");
+    }
+
+    [TestMethod]
     public void AddTrial_Validates_Objective_Count_And_State()
     {
         var study = NewStudy();
