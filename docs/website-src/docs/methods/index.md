@@ -154,7 +154,8 @@ native deep-dives:
   BoTorch (Balandat et al., NeurIPS 2020).
 - **PyCma** — `PyCmaSampler` (`OptunaSharp.Interop.PyCma`): CMA-ES via Hansen's `cma` package.
 - **Pymoo** — `PymooSampler` (`OptunaSharp.Interop.Pymoo`): drives 11 pymoo multi-objective
-  algorithms (NSGA-II/III, R-NSGA-II/III, U-NSGA-III, AGE-MOEA/2, RVEA, SMS-EMOA, SPEA2, C-TAEA).
+  algorithms (NSGA-II/III, R-NSGA-II/III, U-NSGA-III, AGE-MOEA/2, RVEA, SMS-EMOA, SPEA2, C-TAEA). See
+  the [pymoo Integration guide](../pymoo.md).
 - **OptunaHub** — `OptunaHubSampler` / `OptunaHubPruner` (`OptunaSharp.Interop.pythonnet`): wraps any
   of the ~85 samplers and the pruners on [hub.optuna.org](https://hub.optuna.org/).
 - **Forest-backend importances** — ML.NET FastForest/FastTree and LightGBM variants of fANOVA / MDI

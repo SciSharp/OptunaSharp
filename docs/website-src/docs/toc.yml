@@ -20,6 +20,8 @@
       href: pruners.md
     - name: Multi-objective Optimization
       href: multi-objective.md
+    - name: pymoo Integration
+      href: pymoo.md
     - name: Storage
       href: storage.md
     - name: Artifacts
