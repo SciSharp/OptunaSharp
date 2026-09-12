@@ -20,8 +20,6 @@
       href: pruners.md
     - name: Multi-objective Optimization
       href: multi-objective.md
-    - name: pymoo Integration
-      href: pymoo.md
     - name: Storage
       href: storage.md
     - name: Artifacts
@@ -34,19 +32,129 @@
       href: visualization.md
     - name: Logging
       href: logging.md
-    - name: Command-Line Interface
-      href: cli.md
+- name: Integrations
+  href: ../integrations/index.md
 - name: Methods
   items:
     - name: Overview
       href: methods/index.md
-    - name: AGE-MOEA-2 (2022)
-      href: methods/age-moea-2.md
-    - name: AGE-MOEA (2019)
-      href: methods/age-moea.md
-    - name: NSGA-II (2002)
-      href: methods/nsga-ii.md
-    - name: NSGA-III (2014)
-      href: methods/nsga-iii.md
-    - name: SMS-EMOA (2007)
-      href: methods/sms-emoa.md
+    - name: Samplers
+      items:
+        - name: JANUS (2026)
+          href: methods/janus.md
+        - name: JANUS-DE (2026)
+          href: methods/janus-de.md
+        - name: JANUS-MOO-CMIX (2026)
+          href: methods/janus-moo-cmix.md
+        - name: JANUS-SMS-EMOA-CMIX (2026)
+          href: methods/janus-sms-emoa-cmix.md
+        - name: JANUS-AGE-MOEA-2-CMIX (2026)
+          href: methods/janus-age-moea-2-cmix.md
+        - name: AGE-MOEA-2 (2022)
+          href: methods/age-moea-2.md
+        - name: AGE-MOEA (2019)
+          href: methods/age-moea.md
+        - name: NSGA-III (2014)
+          href: methods/nsga-iii.md
+        - name: SMS-EMOA (2007)
+          href: methods/sms-emoa.md
+        - name: NSGA-II (2002)
+          href: methods/nsga-ii.md
+        - name: RVEA (2016)
+          href: methods/rvea.md
+        - name: MOEA/D (2007)
+          href: methods/moea-d.md
+        - name: VkD-CMA (2016)
+          href: methods/vkd-cma.md
+        - name: LM-CMA (2015)
+          href: methods/lm-cma.md
+        - name: CMA-ES (2001)
+          href: methods/cma-es.md
+        - name: Differential Evolution (1997)
+          href: methods/differential-evolution.md
+        - name: Particle Swarm Optimization (1995)
+          href: methods/pso.md
+        - name: GP-BO (2012)
+          href: methods/gp.md
+        - name: TPE (2011)
+          href: methods/tpe.md
+        - name: Random Search (2012)
+          href: methods/random.md
+        - name: QMC (1967)
+          href: methods/qmc.md
+        - name: Grid Search
+          href: methods/grid.md
+        - name: Brute-Force Search
+          href: methods/brute-force.md
+        - name: Partial-Fixed
+          href: methods/partial-fixed.md
+    - name: Pruners
+      items:
+        - name: Successive Halving / ASHA (2020)
+          href: methods/successive-halving.md
+        - name: Hyperband (2017)
+          href: methods/hyperband.md
+        - name: Median (2017)
+          href: methods/median.md
+        - name: Wilcoxon (1945)
+          href: methods/wilcoxon.md
+        - name: Percentile
+          href: methods/percentile.md
+        - name: Threshold
+          href: methods/threshold.md
+        - name: Patient
+          href: methods/patient.md
+        - name: Nop
+          href: methods/nop.md
+    - name: Importance Evaluators
+      items:
+        - name: PED-ANOVA (2023)
+          href: methods/ped-anova.md
+        - name: SHAP (2017)
+          href: methods/shap.md
+        - name: fANOVA (2014)
+          href: methods/fanova.md
+        - name: Mean Decrease Impurity (2001)
+          href: methods/mdi.md
+    - name: Terminators
+      items:
+        - name: EMMR (2023)
+          href: methods/emmr.md
+        - name: Median Error (2023)
+          href: methods/median-error.md
+        - name: Regret-Bound (2022)
+          href: methods/regret-bound.md
+        - name: Best-Value Stagnation
+          href: methods/best-value-stagnation.md
+        - name: Cross-Validation Error
+          href: methods/cross-validation-error.md
+        - name: Static Error
+          href: methods/static-error.md
+    - name: Operators
+      items:
+        - name: vSBX (2002)
+          href: methods/vsbx.md
+        - name: SBX (1995)
+          href: methods/sbx.md
+        - name: SPX (2001)
+          href: methods/spx.md
+        - name: UNDX (1999)
+          href: methods/undx.md
+        - name: BLX-alpha (1993)
+          href: methods/blx-alpha.md
+        - name: Uniform Crossover (1989)
+          href: methods/uniform-crossover.md
+        - name: Polynomial Mutation (1996)
+          href: methods/polynomial-mutation.md
+    - name: Kernels
+      items:
+        - name: GP Acquisition Functions (2023)
+          href: methods/gp-acquisitions.md
+        - name: Hypervolume WFG (2012)
+          href: methods/hypervolume.md
+        - name: CMA Optimizers (2016)
+          href: methods/cma-optimizers.md
+        - name: Reference Directions (1998)
+          href: methods/reference-directions.md
+        - name: QMC Sequences (1967)
+          href: methods/qmc-sequences.md
