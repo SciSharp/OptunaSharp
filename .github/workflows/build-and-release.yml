@@ -29,7 +29,6 @@ jobs:
   # Emitted as job outputs the `test` / `interop-test` matrices consume:
   #   oses        JSON array of runner OSes
   #   tfms_space  space-separated TFM list, for the `for TFM in ...` test loop
-  #   tfms_semi   ;-separated TFM list, for the `-p:TargetFrameworks=...` build override
   #
   # Policy (why each tier):
   #   * v* tag / manual dispatch -> all 3 OSes + both TFMs. Release confidence and the only place the
@@ -48,7 +47,6 @@ jobs:
     outputs:
       oses: ${{ steps.scope.outputs.oses }}
       tfms_space: ${{ steps.scope.outputs.tfms_space }}
-      tfms_semi: ${{ steps.scope.outputs.tfms_semi }}
     steps:
       - id: scope
         shell: bash
@@ -56,15 +54,12 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             echo 'oses=["ubuntu-latest","windows-latest","macos-latest"]' >> "$GITHUB_OUTPUT"
             echo 'tfms_space=net8.0 net10.0'                             >> "$GITHUB_OUTPUT"
-            echo 'tfms_semi=net8.0;net10.0'                              >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             echo 'oses=["ubuntu-latest","windows-latest"]'              >> "$GITHUB_OUTPUT"
             echo 'tfms_space=net8.0 net10.0'                             >> "$GITHUB_OUTPUT"
-            echo 'tfms_semi=net8.0;net10.0'                              >> "$GITHUB_OUTPUT"
           else
             echo 'oses=["ubuntu-latest","windows-latest"]'              >> "$GITHUB_OUTPUT"
             echo 'tfms_space=net10.0'                                    >> "$GITHUB_OUTPUT"
-            echo 'tfms_semi=net10.0'                                     >> "$GITHUB_OUTPUT"
           fi
           echo "Resolved CI scope:"; cat "$GITHUB_OUTPUT"
 
@@ -103,14 +98,12 @@ jobs:
           10.0.x
         dotnet-quality: 'preview'
 
-    # Build only the TFM(s) this trigger will test (PRs build net10.0 only). The multi-target
-    # <TargetFrameworks> is overridden per run so a PR does not compile the net8.0 leg it will not run.
+    # Build the project as declared (both TFMs). The Test step then runs only the TFM(s) this trigger
+    # selected (net10.0 on PRs, both on push/tag). A per-run TargetFrameworks override was tried, but a
+    # multi-value global property breaks the SDK's multi-targeting dispatch (NETSDK1046), so we build both
+    # and simply skip the extra TFM at test time — the wasted PR build is small next to the macOS/cache wins.
     - name: Build
-      shell: bash
-      run: |
-        dotnet build test/OptunaSharp.Tests/OptunaSharp.Tests.csproj --configuration Release \
-          -p:TargetFrameworks="${{ needs.setup.outputs.tfms_semi }}" \
-          -p:NoWarn=${{ env.DOTNET_NOWARN }}
+      run: dotnet build test/OptunaSharp.Tests/OptunaSharp.Tests.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
 
     # Filtering:
     #   - OpenBugs / HighMemory: excluded (known-failing / resource-heavy)
@@ -324,13 +317,10 @@ jobs:
         echo "PYTHONNET_PYDLL=$PYDLL" >> "$GITHUB_ENV"
         echo "PYTHONNET_PYDLL resolved to: $PYDLL"
 
-    # Build only the TFM(s) this trigger will test (PRs build net10.0 only), same rationale as `test`.
+    # Build the project as declared (both TFMs); the Test step runs only the selected TFM(s). See the
+    # note on the `test` job's Build step for why TargetFrameworks is not overridden per run.
     - name: Build
-      shell: bash
-      run: |
-        dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj --configuration Release \
-          -p:TargetFrameworks="${{ needs.setup.outputs.tfms_semi }}" \
-          -p:NoWarn=${{ env.DOTNET_NOWARN }}
+      run: dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
 
     - name: Test
       timeout-minutes: 20
