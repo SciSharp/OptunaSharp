@@ -15,16 +15,16 @@ namespace (journal backends in **`OptunaSharp.Storages.Journal`**).
 |---------|-----------|-------------|----------------|---------|
 | `InMemoryStorage` | No (process lifetime) | Single process | — | Core |
 | `JournalStorage` + `JournalFileBackend` | Yes (a file) | Multi-process, multi-host (shared file) | **Yes** — Python Optuna reads/writes the same journal | Core |
-| `JournalStorage` + `JournalRedisBackend` | Yes (Redis) | Distributed workers | Yes (shared Redis keys) | `OptunaSharp.Storage.Redis` |
+| `JournalStorage` + a Redis client backend | Yes (Redis) | Distributed workers | Shared journal logs; runtime-specific snapshots | [Choose a Redis adapter](../integrations/storage/redis/index.md) |
 | `RDBStorage` (SQLite) | Yes (a `.db` file) | Multi-process (one host) | **Yes** — Python Optuna opens the same SQLite file | `OptunaSharp.Storage.Sqlite` |
+| `OptunaSharp.Storages.EFCore.RDBStorage` | Yes (PostgreSQL / MySQL) | See the [trial-creation concurrency limit](../integrations/storage/ef-core.md#concurrency-heartbeats-and-schema-lifecycle) | Optuna-compatible head schema | `OptunaSharp.Storage.EFCore` |
 | `GrpcStorageProxy` + `GrpcProxyServer` | Via the fronted backend | Distributed workers (over the network) | **Yes** — interoperates with Python's gRPC proxy | `OptunaSharp.Storage.Grpc` |
 | `CachedStorage` | Wraps another | Read-through cache over a backend | Inherited | Core |
 
-> The SQLite `RDBStorage` (`OptunaSharp.Storage.Sqlite`) and the gRPC storage proxy
-> (`OptunaSharp.Storage.Grpc`) ship as satellite packages today; EF Core providers for PostgreSQL/MySQL
-> (Phase 4.2) remain on the roadmap. Construct the RDB and gRPC storages directly (shown below) —
-> `StorageFunctions.GetStorage` resolves storages from a *value*, not from a `sqlite:///`/`postgresql://`
-> URL string.
+The [Storage integrations](../integrations/storage/index.md) section documents SQLite, the
+implemented EF Core PostgreSQL/MySQL backend, all three Redis client adapters, and gRPC. Construct
+these backends directly: Core's `StorageFunctions.GetStorage` accepts a storage instance but does
+not resolve an RDB URL merely because its satellite package is installed.
 
 ## In-memory (the default)
 
@@ -72,9 +72,9 @@ Run this twice, or from several processes at once, and the trials accumulate in 
 
 Concurrent writers coordinate through a lock file. Two implementations are provided, matching Optuna:
 
-- `JournalFileSymlinkLock` — portable, uses an atomic symlink (the default on systems without
-  reliable `O_EXCL` open semantics).
-- `JournalFileOpenLock` — uses exclusive file creation; preferred on POSIX file systems.
+- `JournalFileSymlinkLock` — the default; uses a symlink and may require extra privileges on Windows.
+- `JournalFileOpenLock` — uses exclusive file creation; useful on Windows when symlink privileges
+  are unavailable, provided the filesystem supports the required exclusive-create semantics.
 
 ```csharp
 var backend = new JournalFileBackend("study.log", new JournalFileOpenLock("study.log"));
@@ -85,22 +85,23 @@ crashed process is reclaimed.
 
 ## Redis journal storage (distributed)
 
-For distributed workers sharing state through Redis, install the **`OptunaSharp.Storage.Redis`**
-satellite package and use `JournalRedisBackend` (namespace `OptunaSharp.Storages.Journal`). It carries
-the same journal semantics as the file backend, so no extra study code changes.
+For distributed workers sharing state through Redis, install a concrete client adapter such as
+**`OptunaSharp.Storage.StackExchange.Redis`**. `OptunaSharp.Storage.Redis` is the shared protocol
+package, not a directly constructible URL client. See the [Redis integrations](../integrations/storage/redis/index.md)
+for StackExchange.Redis, NRedisStack, and ServiceStack.Redis configuration and client lifetimes.
 
 ```csharp
 using OptunaSharp;
 using OptunaSharp.Storages.Journal;
 
-var storage = new JournalStorage(new JournalRedisBackend("redis://localhost:6379/0"));
+var storage = new JournalStorage(new StackExchangeJournalRedisBackend("redis://localhost:6379/0"));
 var study = Optuna.CreateStudy(storage: storage, studyName: "dist", loadIfExists: true);
 ```
 
-`JournalRedisBackend(string url, bool useCluster = false, string prefix = "")` accepts `redis://`,
-`rediss://` (TLS), and `unix://` URLs. Set `useCluster: true` for a Redis Cluster; use `prefix` to
-namespace multiple studies in one Redis instance. The keys and JSON payloads are shared with Python
-Optuna's Redis journal backend.
+The adapters support `redis://` and `rediss://` (TLS); Unix-socket support and cluster configuration
+depend on the client. A `prefix` isolates a journal namespace that may contain several studies.
+Journal logs can be shared with Python Optuna; snapshots use different serialization formats.
+The [Redis guide](../integrations/storage/redis/index.md) explains those boundaries.
 
 ## SQLite RDB storage (a persistent database file)
 
@@ -126,7 +127,7 @@ storage over the network. A lightweight **client** forwards every storage operat
 fronts a real backend (typically the SQLite `RDBStorage`). Install **`OptunaSharp.Storage.Grpc`**; the
 client is `GrpcStorageProxy` and the server is `GrpcProxyServer`, both in `OptunaSharp.Storages.Grpc`. It
 is a faithful port of `optuna.storages.GrpcStorageProxy` / `run_grpc_proxy_server`, experimental since
-Optuna v4.2.0. This is a summary — see the dedicated [gRPC Storage Proxy](../grpc/index.md) section for
+Optuna v4.2.0. This is a summary — see the dedicated [gRPC Storage Proxy](../integrations/storage/grpc/index.md) section for
 the full client and server reference.
 
 ### The server
@@ -249,9 +250,9 @@ int? original = RetryHeartbeatStaleTrialCallback.RetriedTrialNumber(trial);
 ```csharp
 using OptunaSharp.Storages;
 
-BaseStorage s1 = StorageFunctions.GetStorage(null);            // -> new InMemoryStorage()
+BaseStorage s1 = StorageFunctions.GetStorage((BaseStorage?)null); // -> new InMemoryStorage()
 BaseStorage s2 = StorageFunctions.GetStorage(existingStorage); // returned as-is
-// RDB URLs (sqlite:///..., postgresql://...) throw NotSupported until Phase 4.1;
+// RDB URL strings throw NotSupportedException; construct the satellite backend explicitly.
 // redis:// URLs throw ValueError (construct JournalRedisBackend explicitly instead).
 ```
 
@@ -270,7 +271,7 @@ names default to the `no-name-` prefix (`BaseStorage.DefaultStudyNamePrefix`), m
 |-----------------|-------------|
 | `optuna.storages.InMemoryStorage()` | `new InMemoryStorage()` |
 | `JournalStorage(JournalFileBackend("study.log"))` | `new JournalStorage(new JournalFileBackend("study.log"))` |
-| `JournalStorage(JournalRedisBackend("redis://…"))` | `new JournalStorage(new JournalRedisBackend("redis://…"))` |
+| `JournalStorage(JournalRedisBackend("redis://…"))` | `new JournalStorage(new StackExchangeJournalRedisBackend("redis://…"))` |
 | `optuna.storages.RDBStorage("sqlite:///optuna.db")` | `new RDBStorage("sqlite:///optuna.db")` |
 | `optuna.storages.GrpcStorageProxy(host=…, port=…)` | `new GrpcStorageProxy(host: …, port: …)` |
 | `optuna.storages.run_grpc_proxy_server(storage, …)` | `GrpcProxyServer.RunGrpcProxyServer(storage, …)` |

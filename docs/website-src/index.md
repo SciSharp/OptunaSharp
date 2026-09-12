@@ -2,7 +2,7 @@
   <section class="ns-home-intro">
     <p class="ns-home-kicker">Hyperparameter optimization for .NET</p>
     <div class="ns-home-title-row">
-      <img class="ns-home-logo" src="images/optunasharp-logo.png" alt="" height="64">
+      <img class="ns-home-logo" src="images/optunasharp-logo.png" alt="" width="70" height="48" style="max-width: 70px; max-height: 48px; object-fit: contain;">
       <h1>OptunaSharp</h1>
     </div>
     <p class="ns-home-lede">
@@ -13,16 +13,17 @@
     </p>
     <div class="ns-home-actions" aria-label="Primary documentation links">
       <a class="ns-home-button ns-home-button-primary" href="docs/intro.md">Introduction</a>
-      <a class="ns-home-button" href="docs/getting-started.md"><span class="ns-home-button-label">Getting<br>Started</span></a>
-      <a class="ns-home-button" href="docs/roadmap.md"><span class="ns-home-button-label">Porting<br>Roadmap</span></a>
+      <a class="ns-home-button" href="docs/getting-started.md">Getting started</a>
+      <a class="ns-home-button" href="integrations/index.md">Integrations</a>
+      <a class="ns-home-button" href="docs/roadmap.md">Porting roadmap</a>
       <a class="ns-home-button" href="api/index.md">API reference</a>
     </div>
   </section>
 
   <section class="ns-home-code" aria-label="Status">
     <div class="ns-home-code-head">
-      <h2>Status: scaffolding</h2>
-      <p>The build/test/package/CI stack is in place. No Optuna algorithms are ported yet.</p>
+      <h2>Status: core surface ported</h2>
+      <p>The core algorithm surface is in place — samplers, pruners, storages, importance, and visualization — with more landing module-by-module.</p>
     </div>
     <div class="ns-code-grid">
       <pre><code class="lang-bash">dotnet add package OptunaSharp</code></pre>
@@ -55,7 +56,7 @@ study.optimize(objective, n_trials=100)</code></pre>
       <a class="ns-doc-card" href="docs/roadmap.md">
         <span>Plan</span>
         <strong>Porting roadmap</strong>
-        <p>The Optuna modules to port and the "Optuna is the source of truth" methodology.</p>
+        <p>Where each Optuna module stands, and the "Optuna is the source of truth" methodology.</p>
       </a>
       <a class="ns-doc-card" href="api/index.md">
         <span>Reference</span>
@@ -66,6 +67,7 @@ study.optimize(objective, n_trials=100)</code></pre>
   </section>
 
   <section class="ns-home-links" aria-label="Community links">
+    <a href="integrations/index.md">Explore all integrations</a>
     <a href="https://github.com/SciSharp/OptunaSharp">GitHub Repository</a>
     <a href="https://www.nuget.org/packages/OptunaSharp">NuGet Package</a>
     <a href="https://github.com/SciSharp/NumSharp">NumSharp</a>

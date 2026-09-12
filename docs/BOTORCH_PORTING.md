@@ -8,8 +8,11 @@
 > `optuna_integration.botorch.*` twin; the only non-parity spot is *constrained qKG*, which raises the
 > **identical** botorch `RuntimeError` on both sides (a real botorch limitation, faithfully reproduced).
 > Gated by `BoTorchApiParityTests` (31, function-level byte-exact) + `BoTorchSamplerParityTests` (15,
-> end-to-end replay incl. the CUDA device smoke test), both `net8.0` + `net10.0`. The custom-callable
-> `candidates_func` (§7) remains deliberately deferred (enum-only surface).
+> end-to-end replay incl. the CUDA device smoke test) + `BoTorchIntegrationParityTests` (5, the
+> higher-level end-to-end paths: running-trial `X_pending` parallel optimization for qEI & qEHVI, the
+> deprecated `constraintsFunc` path, and a mixed int+float multi-objective space — all bit-exact), all on
+> `net8.0` + `net10.0`. The custom-callable `candidates_func` (§7) remains deliberately deferred (enum-only
+> surface).
 
 Governs completing **`OptunaSharp.Interop.BoTorch`** to full parity with
 `optuna_integration.BoTorchSampler`. This is the detailed sub-plan for **PORTING_PLAN.md §6.5**.
@@ -247,8 +250,10 @@ Recommend (a) now; revisit (b) if a user asks. Not on the critical path.
   are float64 and ride the existing pinned zero-copy `ToTensor` / `ToNDArray`.
 - **Enum is the surface.** Every new acquisition is a `BoTorchCandidatesFunc` member; the public API
   stays `PyObject`-free.
-- **`ExtractCandidate` is unchanged** — the shape validation (`t.dim()/t.size()/t.squeeze()`) +
-  `ToNDArray` result crossing already handles any acquisition's output.
+- **`ExtractCandidate` is unchanged** — the shape validation (`Python.torch.Tensor.dim_t(t)` /
+  `.size_t(t, dim)` / `.squeeze(t, dim)`) + `ToNDArray` result crossing already handles any acquisition's
+  output. Those tensor members live in the pythonic tree (`Python.torch.Tensor` in `Pythonic.cs`), exposed
+  as a **nested class** (not extension members), mirroring Python's own `torch.Tensor.size(t, -1)`.
 
 ## 9. Definition of Done (per phase)
 

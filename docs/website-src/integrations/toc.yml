@@ -1,0 +1,68 @@
+- name: Integrations
+  href: index.md
+- name: Model training
+  href: training/index.md
+  items:
+    - name: Native scikit-learn-style search
+      href: training/scikit-learn.md
+    - name: ML.NET
+      href: training/ml-net.md
+    - name: LightGBM
+      href: training/lightgbm.md
+    - name: Training-loop pruning
+      href: training/pruning.md
+- name: Storage
+  href: storage/index.md
+  items:
+    - name: SQLite
+      href: storage/sqlite.md
+    - name: EF Core (PostgreSQL / MySQL)
+      href: storage/ef-core.md
+    - name: Redis
+      href: storage/redis/index.md
+      items:
+        - name: StackExchange.Redis
+          href: storage/redis/stackexchange-redis.md
+        - name: NRedisStack
+          href: storage/redis/nredisstack.md
+        - name: ServiceStack.Redis
+          href: storage/redis/servicestack-redis.md
+    - name: gRPC
+      href: storage/grpc/index.md
+      items:
+        - name: Client
+          href: storage/grpc/client.md
+        - name: Server
+          href: storage/grpc/server.md
+        - name: Cross-language use
+          href: storage/grpc/cross-language.md
+- name: Python bridges
+  href: python/index.md
+  items:
+    - name: Python.NET runtime
+      href: python/pythonnet.md
+    - name: OptunaHub
+      href: python/optunahub.md
+    - name: BoTorch
+      href: python/botorch.md
+    - name: PyCma
+      href: python/pycma.md
+    - name: pymoo
+      href: python/pymoo.md
+- name: Cloud artifacts
+  href: artifacts/index.md
+  items:
+    - name: Amazon S3
+      href: artifacts/s3.md
+    - name: Google Cloud Storage
+      href: artifacts/gcs.md
+    - name: Azure Blob Storage
+      href: artifacts/azure-blob.md
+    - name: Cloudflare R2
+      href: artifacts/r2.md
+- name: Visualization
+  items:
+    - name: Plotly.NET
+      href: visualization/plotly.md
+- name: Command-line tool
+  href: cli.md

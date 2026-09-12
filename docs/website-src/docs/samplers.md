@@ -246,6 +246,10 @@ All are marked in the source and pinned by tests.
 
 ## See also
 
+[Python sampler integrations](../integrations/python/index.md):
+[BoTorch](../integrations/python/botorch.md), [PyCma](../integrations/python/pycma.md),
+[pymoo](../integrations/python/pymoo.md), and [OptunaHub](../integrations/python/optunahub.md).
+
 [Study and Trials](study-and-trials.md) · [Distributions](distributions.md) ·
 [Search Spaces](search-spaces.md) · [Pruners](pruners.md) ·
 [Multi-objective Optimization](multi-objective.md) · the [API reference](../api/index.md).

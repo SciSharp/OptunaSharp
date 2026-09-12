@@ -2,13 +2,14 @@
 
 OptunaSharp ports Optuna's visualization suite as a **data layer**: each plot is a builder that
 computes the exact numbers Optuna would hand to Plotly — axes, series, colors, hover text — returned as
-a strongly-typed *info record*. You render those records with any charting library, or feed them to a
-future rendering package. This split keeps Core free of a plotting dependency while still guaranteeing
+a strongly-typed *info record*. You can render with the implemented
+[Plotly.NET integration](../integrations/visualization/plotly.md), or consume these records in your
+own charting library. This split keeps Core free of a plotting dependency while still guaranteeing
 the figures are computed identically to Optuna. Everything lives in **`OptunaSharp.Visualization`**.
 
-> **Data layer, not renderer.** These builders return info records (the `_get_*_info` analog), not
-> images. A Plotly-backed rendering package that turns the records into figures is planned for a later
-> phase; today you consume the records directly.
+The builders below return info records (the `_get_*_info` analog). Install
+`OptunaSharp.Visualization.Plotly` for ready-made interactive figures; its
+[integration guide](../integrations/visualization/plotly.md) covers chart methods and HTML output.
 
 ## Using a builder
 
@@ -63,7 +64,7 @@ library, or to export as CSV/JSON.
 | `optuna.visualization._optimization_history._get_optimization_history_info_list(study)` | `OptimizationHistory.GetInfoList(study)` |
 | `_get_pareto_front_info(study)` | `ParetoFront.GetInfo(study)` |
 | `_get_hypervolume_history_info(study, ref_point)` | `HypervolumeHistory.GetInfo(study, referencePoint)` |
-| `plot_optimization_history(study)` (rendering) | *(rendering package — roadmap)* |
+| `plot_optimization_history(study)` (rendering) | `PlotlyVisualization.PlotOptimizationHistory(study)` in the Plotly satellite |
 
 The info builders are **bit-exact** against live Optuna wherever the path avoids the error function
 (and within the documented erf tolerance where it doesn't).

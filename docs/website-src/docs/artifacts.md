@@ -71,6 +71,11 @@ foreach (ArtifactMeta meta in ArtifactFunctions.GetAllArtifactMeta(study.BestTri
 
 ## Cloud backends (satellite packages)
 
+The [Cloud artifacts integration guide](../integrations/artifacts/index.md) covers upload/download
+semantics, retries, client ownership, and the complete setup for each provider:
+[S3](../integrations/artifacts/s3.md), [GCS](../integrations/artifacts/gcs.md),
+[Azure Blob](../integrations/artifacts/azure-blob.md), and [R2](../integrations/artifacts/r2.md).
+
 Cloud stores live in separate NuGet packages so the Core library stays free of cloud SDK
 dependencies — install only the one you use. All of them place their type in the same
 `OptunaSharp.Artifacts` namespace, so usage is uniform.

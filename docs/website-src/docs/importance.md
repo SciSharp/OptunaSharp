@@ -160,5 +160,9 @@ the intended, stable output.
 
 ## See also
 
+[ML.NET importance backends](../integrations/training/ml-net.md#parameter-importance-backends) ·
+[LightGBM importance backends](../integrations/training/lightgbm.md#experimental-importance-evaluators) —
+alternative trainer-backed evaluators with different numeric behavior from Core's canonical forest.
+
 [Study and Trials](study-and-trials.md) · [Visualization](visualization.md) — plot importances ·
 the [API reference](../api/index.md).

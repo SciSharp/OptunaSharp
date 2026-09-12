@@ -4,12 +4,13 @@
 hyperparameter optimization framework. It aims for **1-to-1 behavioral parity with Optuna 5.x** and
 is built on top of [NumSharp](https://github.com/SciSharp/NumSharp) for numerical work.
 
-> **Status: scaffolding.** The repository currently contains the build/test/package/CI stack only.
-> No Optuna algorithms are ported yet. This site and its API reference grow as the port lands.
+> **Status: core surface ported.** The core algorithm surface is in place — studies, trials,
+> distributions, samplers, pruners, storages, importance, terminator, and visualization — with more
+> landing module-by-module. See the [Porting Roadmap](roadmap.md) for where each module stands.
 
 ## The study / trial model
 
-Optuna's two core concepts, which OptunaSharp will mirror:
+Optuna's two core concepts, which OptunaSharp mirrors:
 
 - **Study** — an optimization session over an objective function, with a direction
   (`minimize`/`maximize`), a sampler, a pruner, and a storage.
@@ -42,5 +43,9 @@ print(study.best_params)   # -> {'x': ~2.0}
 Optuna is the **source of truth**. OptunaSharp is checked against the real library through the
 `OptunaSharp.Tests.Interop` project, which runs **live Optuna in-process via pythonnet** and asserts
 that OptunaSharp produces matching results — the same approach NumSharp uses against live NumPy.
+
+Connect your trainer, storage, Python optimizer, cloud artifacts, or charts through the
+[Integrations catalog](../integrations/index.md). It covers every optional package and the
+training integrations built into Core.
 
 Continue to [Getting Started](getting-started.md) or the [Porting Roadmap](roadmap.md).

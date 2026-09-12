@@ -1,0 +1,1215 @@
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<title>VolleyEval Profile Matrix</title>
+<style>
+  :root{
+    /* committed dark "observatory console" — every color painted explicitly */
+    --ground:#0a0e13; --ground-2:#0c1219; --stage:#070a0e;
+    --panel:#10161d; --panel-2:#0d131a; --raise:#141c25;
+    --line:#1e2a35; --line-2:#283846;
+    --ink:#e7eef4; --ink-2:#9fb2c0; --ink-3:#647889;
+    --accent:#e8a53a; --accent-2:#f4c169; --accent-dim:#7c6127;
+    --danger:#e5545b; --danger-dim:#5a2b30;
+    --inert:#5b6b78;
+    --good:#57b98a;
+    --shadow:0 1px 0 rgba(255,255,255,.02), 0 10px 30px -18px rgba(0,0,0,.7);
+    --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --disp:"Archivo","IBM Plex Sans",system-ui,sans-serif;
+    --maxw:1180px;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:15px; line-height:1.6;
+    letter-spacing:.005em;
+    background-image:
+      radial-gradient(1200px 600px at 78% -8%, rgba(232,165,58,.06), transparent 60%),
+      radial-gradient(900px 500px at 6% 4%, rgba(80,120,190,.07), transparent 55%);
+    background-attachment:fixed;
+  }
+  .page{max-width:var(--maxw); margin:0 auto; padding:0 22px 72px}
+  a{color:var(--accent-2); text-decoration:none}
+  a:hover{text-decoration:underline; text-underline-offset:2px}
+  ::selection{background:rgba(232,165,58,.28); color:#fff}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:2px}
+
+  .eyebrow{
+    font-family:var(--mono); font-size:11.5px; letter-spacing:.22em;
+    text-transform:uppercase; color:var(--accent); font-weight:500;
+  }
+  .mono{font-family:var(--mono)}
+  .num{font-variant-numeric:tabular-nums}
+  .muted{color:var(--ink-3)}
+  h1,h2,h3{font-family:var(--disp); font-weight:800; line-height:1.05; text-wrap:balance; margin:0}
+  h2{font-size:clamp(22px,3vw,30px); letter-spacing:-.015em}
+  h3{font-size:17px; font-weight:700; letter-spacing:-.01em}
+  p{margin:0}
+
+  /* ---------- masthead ---------- */
+  .masthead{padding:40px 0 22px; border-bottom:1px solid var(--line)}
+  .brandline{display:flex; align-items:baseline; gap:14px; flex-wrap:wrap}
+  .brandline h1{font-size:clamp(40px,7.4vw,78px); letter-spacing:-.03em; font-weight:800}
+  .brandline .sub{font-family:var(--mono); color:var(--ink-2); font-size:13px; letter-spacing:.02em}
+  .serve{color:var(--accent)}
+  .thesis{margin-top:16px; max-width:64ch; color:var(--ink-2); font-size:16.5px}
+  .thesis b{color:var(--ink); font-weight:600}
+  .meta-strip{
+    margin-top:22px; display:flex; flex-wrap:wrap; gap:0;
+    border:1px solid var(--line); border-radius:4px; overflow:hidden; background:var(--panel-2);
+  }
+  .meta-strip .m{
+    padding:9px 14px; border-right:1px solid var(--line);
+    font-family:var(--mono); font-size:11.5px; color:var(--ink-2);
+    display:flex; gap:8px; align-items:baseline;
+  }
+  .meta-strip .m:last-child{border-right:0}
+  .meta-strip .m .k{color:var(--ink-3); text-transform:uppercase; letter-spacing:.14em; font-size:10px}
+  .meta-strip .m .v{color:var(--ink)}
+  .meta-strip .m .v.warn{color:var(--accent)}
+
+  /* ---------- provenance banner ---------- */
+  .banner{
+    margin:20px 0 8px; display:flex; gap:16px; align-items:flex-start;
+    padding:14px 18px; background:linear-gradient(90deg, rgba(232,165,58,.10), rgba(232,165,58,.02));
+    border:1px solid var(--accent-dim); border-left:3px solid var(--accent); border-radius:4px;
+  }
+  .banner .dot{margin-top:3px; flex:0 0 auto}
+  .banner p{font-size:13.5px; color:var(--ink-2); max-width:92ch}
+  .banner b{color:var(--ink)}
+  .prov{display:inline-flex; align-items:center; gap:5px; font-family:var(--mono); font-size:12px; white-space:nowrap}
+  .prov.meas{color:var(--accent-2)} .prov.hyp{color:var(--ink-2)}
+
+  /* ---------- stage ---------- */
+  .stage-section{margin-top:26px}
+  .stage-head{display:flex; justify-content:space-between; align-items:flex-end; gap:16px; flex-wrap:wrap; margin-bottom:14px}
+  .stage-head .lead{max-width:60ch}
+  .stage-grid{display:grid; grid-template-columns:1fr 344px; gap:16px; align-items:stretch}
+  .stage-main{min-width:0; display:flex; flex-direction:column; gap:12px}
+  #host{
+    position:relative; width:100%; height:clamp(400px,64vh,640px);
+    background:radial-gradient(120% 120% at 50% 6%, #0b1017, var(--stage) 72%);
+    border:1px solid var(--line-2); border-radius:6px; overflow:hidden;
+    box-shadow:var(--shadow), inset 0 0 0 1px rgba(255,255,255,.015);
+    cursor:grab; touch-action:none;
+  }
+  #host.grabbing{cursor:grabbing}
+  #cv{display:block; width:100%; height:100%}
+  .axis-key{
+    position:absolute; left:12px; bottom:10px; font-family:var(--mono); font-size:11px;
+    color:var(--ink-3); letter-spacing:.03em; pointer-events:none;
+    background:rgba(7,10,14,.55); padding:3px 8px; border-radius:3px; border:1px solid var(--line)
+  }
+  #tip{
+    position:absolute; z-index:6; pointer-events:none; min-width:150px; max-width:230px;
+    background:rgba(9,13,18,.94); border:1px solid var(--line-2); border-radius:5px;
+    padding:9px 11px; box-shadow:0 12px 30px -12px rgba(0,0,0,.8); backdrop-filter:blur(3px);
+    transform:translate(-50%,calc(-100% - 14px));
+  }
+  #tip .t-top{display:flex; justify-content:space-between; gap:10px; align-items:baseline}
+  #tip .t-cont{font-family:var(--disp); font-weight:700; font-size:14px; color:var(--ink)}
+  #tip .t-sc{font-family:var(--mono); font-size:15px; font-weight:500}
+  #tip .t-chal{font-family:var(--mono); font-size:11px; color:var(--ink-2); margin-top:2px}
+  #tip .t-badge{margin-top:7px}
+  #nowebgl{position:absolute; inset:0; display:grid; place-items:center; text-align:center; padding:30px; color:var(--ink-2)}
+
+  /* controls */
+  .controls{display:flex; flex-wrap:wrap; gap:10px 14px; align-items:center;
+    padding:11px 13px; background:var(--panel-2); border:1px solid var(--line); border-radius:5px}
+  .ctl-label{font-family:var(--mono); font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-3)}
+  .seg{display:inline-flex; border:1px solid var(--line-2); border-radius:5px; overflow:hidden; background:var(--ground-2)}
+  .seg button{
+    font-family:var(--mono); font-size:12px; color:var(--ink-2); background:transparent;
+    border:0; padding:6px 12px; cursor:pointer; letter-spacing:.02em}
+  .seg button+button{border-left:1px solid var(--line-2)}
+  .seg button[aria-pressed="true"]{background:rgba(232,165,58,.16); color:var(--accent-2)}
+  .tgl{display:inline-flex; align-items:center; gap:8px; font-family:var(--mono); font-size:12px; color:var(--ink-2); cursor:pointer; user-select:none}
+  .tgl input{position:absolute; opacity:0; width:0; height:0}
+  .tgl .sw{width:34px; height:19px; border-radius:11px; background:var(--ground-2); border:1px solid var(--line-2); position:relative; transition:background .16s}
+  .tgl .sw::after{content:""; position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:var(--ink-3); transition:transform .16s, background .16s}
+  .tgl input:checked+.sw{background:rgba(232,165,58,.22); border-color:var(--accent-dim)}
+  .tgl input:checked+.sw::after{transform:translateX(15px); background:var(--accent)}
+  .btn{font-family:var(--mono); font-size:12px; color:var(--ink); background:var(--ground-2);
+    border:1px solid var(--line-2); border-radius:5px; padding:6px 10px; cursor:pointer}
+  .btn:hover{border-color:var(--accent-dim); color:var(--accent-2)}
+  .spacer{flex:1 1 auto}
+
+  /* right rail */
+  .rail{display:flex; flex-direction:column; gap:16px; min-width:0}
+  .readout{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:16px; box-shadow:var(--shadow)}
+  .readout .ro-eyebrow{font-family:var(--mono); font-size:10.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-3)}
+  .readout .ro-cont{font-family:var(--disp); font-weight:800; font-size:24px; letter-spacing:-.01em; margin-top:6px}
+  .readout .ro-fam{font-family:var(--mono); font-size:12px; color:var(--accent); margin-top:1px}
+  .readout .ro-blurb{color:var(--ink-2); font-size:13.5px; margin-top:10px}
+  .ro-sc{display:flex; align-items:baseline; gap:10px; margin:14px 0 4px}
+  .ro-sc .big{font-family:var(--disp); font-weight:800; font-size:40px; line-height:1; font-variant-numeric:tabular-nums}
+  .ro-sc .of{font-family:var(--mono); font-size:11px; color:var(--ink-3); letter-spacing:.04em}
+  .ro-grid{display:grid; grid-template-columns:auto 1fr; gap:6px 12px; margin-top:12px; font-size:12.5px}
+  .ro-grid dt{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); align-self:center}
+  .ro-grid dd{margin:0; color:var(--ink)}
+  .ro-note{margin-top:13px; padding-top:12px; border-top:1px solid var(--line); color:var(--ink-2); font-size:13px}
+  .ro-champ{margin-top:10px; display:none; align-items:center; gap:7px; font-family:var(--mono); font-size:12px; color:var(--accent-2)}
+  .ro-hint{color:var(--ink-3); font-size:13px; margin-top:10px}
+
+  .badge{display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11px;
+    padding:2px 8px; border-radius:20px; border:1px solid var(--line-2); letter-spacing:.02em}
+  .badge b{font-weight:500}
+  .badge.ok{color:var(--ink-2)}
+  .badge.inert{color:var(--inert); border-color:#33404a}
+  .badge.dnf{color:var(--danger); border-color:var(--danger-dim); background:rgba(229,84,91,.08)}
+  .badge.meas{color:var(--accent-2); border-color:var(--accent-dim); background:rgba(232,165,58,.08)}
+  .badge.hyp{color:var(--ink-3)}
+  .dot{width:9px; height:9px; border-radius:2px; display:inline-block}
+
+  /* legend */
+  .legend{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:15px 16px}
+  .legend h3{font-size:12px; font-family:var(--mono); font-weight:500; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3)}
+  .ramp{height:12px; border-radius:3px; margin:12px 0 6px;
+    background:linear-gradient(90deg,#440154,#472c7a,#3b528b,#2c728e,#21918c,#28ae80,#5ec962,#addc30,#fde725)}
+  .ramp-ax{display:flex; justify-content:space-between; font-family:var(--mono); font-size:10.5px; color:var(--ink-3)}
+  .legend .rows{margin-top:14px; display:flex; flex-direction:column; gap:9px}
+  .legend .row{display:flex; align-items:center; gap:10px; font-size:12.5px; color:var(--ink-2)}
+  .legend .row .mk{width:16px; height:16px; border-radius:3px; flex:0 0 auto; display:grid; place-items:center}
+  .swatch-inert{background:#3b4750; border:1px solid var(--inert)}
+  .swatch-dnf{border:1.5px solid var(--danger); border-radius:2px; background:rgba(229,84,91,.10)}
+  .ring{width:15px; height:15px; border-radius:50%; border:2px solid var(--accent); box-sizing:border-box}
+  .hollow{width:14px;height:14px;border-radius:50%;border:1.5px dashed var(--ink-3)}
+
+  /* ---------- doc panels ---------- */
+  .doc{margin-top:56px}
+  .sec-head{margin-bottom:20px}
+  .sec-head .eyebrow{display:block; margin-bottom:9px}
+  .sec-head p{color:var(--ink-2); max-width:74ch; margin-top:9px}
+  .rule{height:1px; background:var(--line); margin:52px 0}
+
+  .pipe{display:grid; grid-template-columns:repeat(4,1fr); gap:14px}
+  .step{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:16px; position:relative}
+  .step .n{font-family:var(--mono); font-size:13px; color:var(--accent); font-weight:500}
+  .step h3{margin:8px 0 7px}
+  .step p{color:var(--ink-2); font-size:13px}
+  .step .arw{position:absolute; right:-11px; top:50%; transform:translateY(-50%); color:var(--line-2); z-index:2; font-size:16px}
+  .step:last-child .arw{display:none}
+
+  .twocol{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:20px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:18px}
+  .card h3{margin-bottom:4px}
+  .card h3 .tag{font-family:var(--mono); font-weight:400; font-size:11px; color:var(--accent); letter-spacing:.06em; margin-left:8px}
+  .card p{color:var(--ink-2); font-size:13.5px; margin-top:8px}
+  .card ul{margin:10px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px}
+  .card li{font-size:13px; color:var(--ink-2); padding-left:16px; position:relative}
+  .card li::before{content:""; position:absolute; left:0; top:8px; width:6px; height:6px; border-radius:1px; background:var(--accent-dim)}
+  .card li b{color:var(--ink); font-weight:600}
+
+  .tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:6px; margin-top:6px}
+  table{border-collapse:collapse; width:100%; min-width:640px; font-size:13px}
+  thead th{
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--ink-3); text-align:left; padding:11px 14px; background:var(--panel-2);
+    border-bottom:1px solid var(--line-2); position:sticky; top:0; white-space:nowrap}
+  tbody td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; color:var(--ink-2)}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover td{background:rgba(255,255,255,.015)}
+  td.axis{font-family:var(--mono); color:var(--ink); font-size:12px; white-space:nowrap}
+  td.win b{color:var(--ink); font-weight:600}
+  td strong.hi{color:var(--accent-2); font-weight:600}
+  .kbd{font-family:var(--mono); font-size:11px; color:var(--ink); background:var(--ground-2); border:1px solid var(--line-2); border-radius:3px; padding:1px 6px}
+
+  .rec{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px}
+  .rec .r{display:flex; align-items:center; gap:14px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:13px 15px}
+  .rec .r .cond{flex:1; color:var(--ink-2); font-size:13.5px}
+  .rec .r .cond b{color:var(--ink)}
+  .rec .r .arw{color:var(--line-2); font-family:var(--mono)}
+  .rec .r .champ{font-family:var(--mono); font-size:12.5px; color:var(--accent-2); white-space:nowrap; text-align:right}
+  .rec .r .champ small{display:block; color:var(--ink-3); font-size:10.5px; letter-spacing:.04em}
+
+  /* scorecard — the per-model roll-up */
+  .scorecard td{font-variant-numeric:tabular-nums}
+  .sc-rank{font-family:var(--mono); color:var(--ink-3); width:1%}
+  .sc-model{display:flex; flex-direction:column; gap:1px}
+  .sc-model b{color:var(--ink); font-weight:700; font-family:var(--disp); font-size:14.5px}
+  .sc-model span{font-family:var(--mono); font-size:10.5px; color:var(--ink-3); letter-spacing:.02em}
+  .sc-mean{display:flex; align-items:center; gap:11px; min-width:160px}
+  .sc-track{flex:1; height:8px; background:var(--ground-2); border:1px solid var(--line); border-radius:5px; overflow:hidden}
+  .sc-fill{height:100%; border-radius:5px 0 0 5px}
+  .sc-mean b{font-family:var(--mono); font-weight:500; color:var(--ink); width:32px; text-align:right}
+  .win-chips{display:flex; align-items:center; gap:6px; flex-wrap:wrap}
+  .win-n{font-family:var(--disp); font-weight:800; font-size:16px; color:var(--accent-2)}
+  .win-n.zero{color:var(--ink-3); font-weight:500; font-family:var(--mono); font-size:14px}
+  .win-tag{font-family:var(--mono); font-size:10px; color:var(--ink-2); border:1px solid var(--line-2); border-radius:3px; padding:1px 5px}
+  .sc-peak{font-family:var(--mono); font-weight:500}
+  .sc-cov{font-family:var(--mono); font-size:12.5px; color:var(--ink)}
+  .sc-cov.part{color:var(--accent)}
+  .sc-cov small{color:var(--ink-3); font-size:10.5px}
+  .sc-notes{display:flex; flex-direction:column; gap:12px; margin-top:16px}
+  .sc-callout{background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:5px; padding:14px 16px}
+  .sc-callout .eyebrow{display:block; margin-bottom:6px}
+  .sc-callout p{color:var(--ink-2); font-size:14px; max-width:90ch}
+  .sc-callout b{color:var(--ink); font-weight:600}
+  .sc-fine{font-size:11.5px; color:var(--ink-3); line-height:1.5; max-width:96ch}
+  .sc-fine em{color:var(--ink-2); font-style:normal}
+  .scorecard tbody tr:hover td{background:rgba(232,165,58,.045)}
+
+  /* challenge catalog — the columns as first-class objects */
+  .chal-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px}
+  .chal-card{background:var(--panel); border:1px solid var(--line); border-radius:6px; overflow:hidden; display:flex; flex-direction:column}
+  .chal-card:hover{border-color:var(--line-2)}
+  .chal-thumb{position:relative; height:128px; background:var(--stage); border-bottom:1px solid var(--line-2)}
+  .chal-cv{display:block; width:100%; height:128px}
+  .chal-thumb .cid{position:absolute; top:8px; left:9px; font-family:var(--mono); font-weight:500; font-size:12px; color:var(--accent-2); background:rgba(7,10,14,.72); border:1px solid var(--line-2); border-radius:3px; padding:1px 7px; letter-spacing:.05em}
+  .chal-thumb .cprov{position:absolute; top:8px; right:9px; font-family:var(--mono); font-size:10.5px; padding:1px 7px; border-radius:3px; background:rgba(7,10,14,.72)}
+  .chal-thumb .cprov.a{color:var(--accent-2); border:1px solid var(--accent-dim)}
+  .chal-thumb .cprov.h{color:var(--ink-3); border:1px solid var(--line-2)}
+  .chal-body{padding:13px 14px 15px; display:flex; flex-direction:column; gap:9px}
+  .chal-name{font-family:var(--disp); font-weight:700; font-size:16px; color:var(--ink); letter-spacing:-.01em}
+  .chal-def{font-size:11.5px; color:var(--ink-2); background:var(--ground-2); border:1px solid var(--line); border-radius:4px; padding:5px 9px; overflow-x:auto; white-space:nowrap}
+  .chal-axis{font-family:var(--mono); font-size:10.5px; letter-spacing:.11em; text-transform:uppercase; color:var(--accent)}
+  .chal-meta{display:grid; grid-template-columns:auto 1fr; gap:3px 12px; margin:0}
+  .chal-meta dt{font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); align-self:center}
+  .chal-meta dd{margin:0; color:var(--ink); font-size:11.5px; font-variant-numeric:tabular-nums}
+  .chal-champ{margin-top:2px; padding-top:9px; border-top:1px solid var(--line); font-family:var(--mono); font-size:12px; color:var(--ink-2)}
+  .chal-champ b{color:var(--accent-2); font-weight:500}
+
+  footer{margin-top:60px; padding-top:22px; border-top:1px solid var(--line); color:var(--ink-3); font-size:12.5px; font-family:var(--mono)}
+  footer .frow{display:flex; gap:8px 22px; flex-wrap:wrap; align-items:baseline}
+  footer b{color:var(--ink-2); font-weight:500}
+
+  @media (max-width:940px){
+    .stage-grid{grid-template-columns:1fr}
+    .pipe{grid-template-columns:1fr 1fr}
+    .step .arw{display:none}
+    .twocol,.rec{grid-template-columns:1fr}
+  }
+  @media (max-width:560px){
+    .page{padding:0 14px 56px}
+    .pipe{grid-template-columns:1fr}
+    .meta-strip .m{border-right:0; border-bottom:1px solid var(--line); width:100%}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <span class="eyebrow">OptunaSharp · Benchmark · VolleyEval</span>
+    <div class="brandline" style="margin-top:12px">
+      <h1>Volley<span class="serve">Eval</span></h1>
+      <span class="sub">a sampler × challenge profile matrix</span>
+    </div>
+    <p class="thesis">There is no single best sampler — only a best sampler <b>per regime</b>.
+      VolleyEval fires a <b>volley</b> of optimization challenges at every contender, auto-tunes each one
+      against each challenge, and records where it wins, where it abstains, and where it cannot compete —
+      accumulating, over time, a strength/weakness map no single leaderboard can tell.</p>
+    <div class="meta-strip" role="group" aria-label="run parameters">
+      <div class="m"><span class="k">status</span><span class="v warn">DESIGN</span></div>
+      <div class="m"><span class="k">contenders</span><span class="v num">12</span></div>
+      <div class="m"><span class="k">challenges</span><span class="v num">B1–B12</span></div>
+      <div class="m"><span class="k">metric</span><span class="v">best-at-budget · trials-to-threshold</span></div>
+      <div class="m"><span class="k">score</span><span class="v mono">(best − random)/(opt − random)</span></div>
+      <div class="m"><span class="k">seeds</span><span class="v">median + IQR</span></div>
+    </div>
+  </header>
+
+  <div class="banner">
+    <span class="dot" style="width:10px;height:10px;border-radius:50%;background:var(--accent)"></span>
+    <p><b>This is a design-stage visualization, not a completed run.</b> Cells drawn with a solid ring
+      <span class="prov meas">● anchored</span> are grounded in <b>measured</b> evidence from the 2026-09-10
+      sampler investigation (see the Evidence table below). Cells drawn hollow
+      <span class="prov hyp">○ hypothesis</span> are the design's <b>falsifiable</b> intended-champion predictions —
+      what the first volley run will confirm or overturn. Toggle <b>Dim hypotheses</b> to see exactly how much
+      is measured today.</p>
+  </div>
+
+  <!-- =================== STAGE =================== -->
+  <section class="stage-section" aria-label="profile matrix">
+    <div class="stage-head">
+      <div class="lead">
+        <span class="eyebrow">The primary artifact</span>
+        <h2 style="margin-top:8px">Profile matrix</h2>
+        <p class="muted" style="font-size:14px;margin-top:6px">
+          Contenders × challenges × normalized score. Height is how close to optimal a tuned sampler gets;
+          color repeats it on a viridis ramp. The field is not flat — <b style="color:var(--ink-2)">the winner changes column to column</b>.</p>
+      </div>
+    </div>
+
+    <div class="stage-grid">
+      <div class="stage-main">
+        <div id="host">
+          <canvas id="cv"></canvas>
+          <div class="axis-key">X · challenges B1–B12 &nbsp;•&nbsp; Z · contenders &nbsp;•&nbsp; height · normalized score</div>
+          <div id="tip" hidden></div>
+          <div id="nowebgl" hidden>
+            <div>
+              <p class="mono" style="color:var(--accent)">WebGL unavailable</p>
+              <p style="margin-top:8px">The 3-D matrix needs WebGL. The methodology, evidence, and recommender below are fully readable without it.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="controls">
+          <span class="ctl-label">Color</span>
+          <div class="seg" id="colormode" role="group" aria-label="color mode">
+            <button data-mode="score" aria-pressed="true">Score</button>
+            <button data-mode="rank" aria-pressed="false">Rank / column</button>
+          </div>
+          <label class="tgl"><input type="checkbox" id="tg-dim"><span class="sw"></span>Dim hypotheses</label>
+          <label class="tgl"><input type="checkbox" id="tg-spin"><span class="sw"></span>Auto-orbit</label>
+          <span class="spacer"></span>
+          <button class="btn" id="bt-zin" title="zoom in">＋</button>
+          <button class="btn" id="bt-zout" title="zoom out">－</button>
+          <button class="btn" id="bt-reset">Reset view</button>
+        </div>
+      </div>
+
+      <aside class="rail">
+        <div class="readout" id="readout" aria-live="polite">
+          <span class="ro-eyebrow">Selected cell</span>
+          <div class="ro-cont" id="ro-cont">Hover the field</div>
+          <div class="ro-fam" id="ro-fam">— read a contender against a challenge —</div>
+          <p class="ro-hint" id="ro-hint">Drag to orbit · scroll to zoom · hover a bar for a reading · click to pin it here. Each bar answers: how good does this <em>sampler</em> get on this <em>challenge</em>, after its knobs are tuned for it?</p>
+          <div id="ro-body" hidden>
+            <div class="ro-sc"><span class="big num" id="ro-score">0.00</span><span class="of">normalized · 0 = random, 1 = optimal</span></div>
+            <dl class="ro-grid">
+              <dt>Challenge</dt><dd id="ro-chal"></dd>
+              <dt>Axis</dt><dd id="ro-axis"></dd>
+              <dt>Space</dt><dd id="ro-space" class="mono" style="font-size:12px"></dd>
+              <dt>Budget</dt><dd id="ro-budget" class="mono"></dd>
+              <dt>Result</dt><dd id="ro-status"></dd>
+            </dl>
+            <div class="ro-champ" id="ro-champ">◆ Hypothesized champion for this challenge</div>
+            <p class="ro-note" id="ro-note"></p>
+          </div>
+        </div>
+
+        <div class="legend">
+          <h3>Reading the marks</h3>
+          <div class="ramp" aria-hidden="true"></div>
+          <div class="ramp-ax"><span>0.0 · random</span><span>0.5</span><span>1.0 · optimal</span></div>
+          <div class="rows">
+            <div class="row"><span class="mk"><span class="ring"></span></span><b style="color:var(--ink)">Anchored</b>&nbsp;— grounded in measured evidence</div>
+            <div class="row"><span class="mk"><span class="hollow"></span></span><b style="color:var(--ink)">Hypothesis</b>&nbsp;— design's falsifiable prediction</div>
+            <div class="row"><span class="mk swatch-inert"></span><b style="color:var(--ink)">Inert</b>&nbsp;— ≡ random; sampler abstains on this type</div>
+            <div class="row"><span class="mk swatch-dnf"></span><b style="color:var(--ink)">DNF</b>&nbsp;— infeasible in a sane budget</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- =================== DOC =================== -->
+  <div class="doc">
+
+    <section aria-label="unit of success per model">
+      <div class="sec-head">
+        <span class="eyebrow">The unit per model</span>
+        <h2>Each model rolls up to a figure of merit — a small tuple, not one number</h2>
+        <p>The atomic measurable unit is the <b style="color:var(--ink)">normalized score per (model × challenge)</b> —
+          a real number in [0,1] with a fixed zero (random) and one (optimal). Roll a model's row up and you get its
+          per-model figures of merit: <b style="color:var(--ink)">mean</b> (robustness), <b style="color:var(--ink)">regimes won</b>
+          (a rank-tournament — how often it is best), <b style="color:var(--ink)">peak</b> (does it own any regime at all),
+          and <b style="color:var(--ink)">coverage</b> (did it even compete, or DNF / abstain). Each also exists
+          <b style="color:var(--ink)">per-wall-clock</b>. VolleyEval reports the tuple and refuses to collapse it to one
+          headline scalar — that scalar would hide the regime inversion the whole suite exists to show.</p>
+      </div>
+      <div class="tbl-wrap">
+        <table class="scorecard">
+          <thead><tr>
+            <th>#</th><th>Model</th><th>Mean score</th><th>Regimes won</th><th>Peak</th><th>Coverage</th>
+          </tr></thead>
+          <tbody id="sc-body"></tbody>
+        </table>
+      </div>
+      <div class="sc-notes">
+        <div class="sc-callout">
+          <span class="eyebrow">Read it</span>
+          <p id="sc-insight">Highest average and highest ceiling are different models — which is why the unit of success is the profile row, not a point.</p>
+        </div>
+        <p class="sc-fine mono">○ <em>projected standings</em> — rolled up live from the matrix above, whose cells are mostly falsifiable hypotheses; only the ● anchored cells (B5 categorical + the high-D continuous anchors) are measured. The <em>method</em> of the roll-up is real and fixed; the numbers move once the volley runs. Mean treats DNF as 0 and inert as ≈0; "regimes won" counts column-best cells; coverage excludes DNF and abstentions.</p>
+      </div>
+    </section>
+
+    <div class="rule"></div>
+
+    <section aria-label="challenge catalog">
+      <div class="sec-head">
+        <span class="eyebrow">The volley</span>
+        <h2>Twelve challenges — what each column actually probes</h2>
+        <p>The samplers are only half the matrix. Each column is a <b style="color:var(--ink)">challenge</b>:
+          a define-by-run objective with a known (or best-seen) <b style="color:var(--ink)">optimum</b>, a
+          <b style="color:var(--ink)">random baseline</b> that fixes the zero of the score band, a trial
+          <b style="color:var(--ink)">budget</b>, and a falsifiable <b style="color:var(--ink)">champion hypothesis</b>.
+          They are picked to span difficulty space (the axes table below), so every sampler's strength
+          <em>and</em> weakness is exposed by some column. Each thumbnail is the actual landscape;
+          <span class="prov meas">● anchored</span> marks challenges with measured cells,
+          <span class="prov hyp">○ hypothesis</span> the rest.</p>
+      </div>
+      <div class="chal-grid" id="challenge-cards"></div>
+    </section>
+
+    <div class="rule"></div>
+
+    <section aria-label="how a ranking is earned">
+      <div class="sec-head">
+        <span class="eyebrow">How a ranking is earned</span>
+        <h2>Every cell is a tuned, validated, seed-averaged run</h2>
+        <p>A round is not one training run — it is a <b style="color:var(--ink)">nested study</b>. Each challenge gets to
+          hyperoptimize the sampler it faces, so a contender is judged at <em>its own best</em>, never a stale default.
+          The outer study is itself an OptunaSharp study whose objective runs an OptunaSharp study — "optimize the optimizer," realized inside the library.</p>
+      </div>
+      <div class="pipe">
+        <div class="step"><div class="n">01</div><h3>Outer study tunes</h3><p>TPE searches the contender's declared knob space — NSGA's <span class="mono">population_size, crossover_prob…</span>; TPE's <span class="mono">n_startup, multivariate, group</span>; CMA's <span class="mono">sigma0, popsize, restart</span>.</p><span class="arw">→</span></div>
+        <div class="step"><div class="n">02</div><h3>Inner runs the challenge</h3><p>For each knob set, the sampler drives the challenge to its trial budget on the search seeds and returns the aggregated best-at-budget.</p><span class="arw">→</span></div>
+        <div class="step"><div class="n">03</div><h3>Held-out validation</h3><p>The outer winner is re-run on <b>unseen seeds</b>. Mandatory: a single-seed best of 13140 validated to 12617 — the gap is exactly the seed-overfit this step guards.</p><span class="arw">→</span></div>
+        <div class="step"><div class="n">04</div><h3>Recipe filed</h3><p>The validated hyperparameters are written to the recipe library, keyed by <span class="mono">(contender, challenge, budget)</span> — a reusable answer, not just a score.</p></div>
+      </div>
+
+      <div class="twocol">
+        <div class="card">
+          <h3>Two metrics, never one <span class="tag">quality</span></h3>
+          <p>A single number hides the trade a researcher actually makes.</p>
+          <ul>
+            <li><b>Best-at-budget</b> — final objective after the fixed trial budget. "How good does it get?"</li>
+            <li><b>Trials-to-threshold</b> — trials to first reach 50 / 90 / 99% of the optimum-above-random band. "How fast does it get there?"</li>
+            <li>Both reported as a <b>seed distribution</b> — median + IQR — never a bare mean; the 2026-09-10 runs showed a 12277–13140 spread on one config.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Two leaderboards, never one <span class="tag">fairness</span></h3>
+          <p>Per-trial cost spanned <strong class="hi">20–800×</strong> in a single session — a cost-blind board is useless in practice.</p>
+          <ul>
+            <li><b>Per-trial-budget</b> — pure sample efficiency; every contender gets N trials.</li>
+            <li><b>Per-wall-clock</b> — practical efficiency; every contender gets T seconds. TPE spent 537 s where QMC spent 24 s for the same 500 trials.</li>
+            <li><b>DNF and inert are results.</b> BoTorch's 830 s / 11 trials is <span class="mono" style="color:var(--danger)">DNF(infeasible)</span>; native CMA on categoricals is <span class="mono" style="color:var(--inert)">≡random(inert)</span>. Both are signal, not a gap.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <div class="rule"></div>
+
+    <section aria-label="difficulty axes">
+      <div class="sec-head">
+        <span class="eyebrow">Why these challenges</span>
+        <h2>The catalog must span difficulty space</h2>
+        <p>Samplers diverge along measurable axes. The challenge set is chosen so that every contender's strength
+          <em>and</em> weakness is exposed by some challenge. A challenge no contender struggles with is worthless and is rejected.</p>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Axis</th><th>Span</th><th>Rewards →</th><th>Punishes ✕</th></tr></thead>
+          <tbody>
+            <tr><td class="axis">parameter type</td><td>float · int · categorical · bool · mixed</td><td>continuous → CMA family; categorical → NSGA / QMC</td><td>categorical starves native CMA / LM-CMA → they abstain to random</td></tr>
+            <tr><td class="axis">dimensionality</td><td>2 · 10 · 50 · 128 · 512+</td><td>low → GP / TPE; high → LM-CMA / Sep-CMA</td><td>high-D breaks full CMA (O(n²)) and GP (one-hot blow-up)</td></tr>
+            <tr><td class="axis">structure</td><td>flat · conditional/tree · building-block</td><td>conditional → TPE <span class="mono">group=true</span>; building-block → GA</td><td>flat model assumptions on a tree space</td></tr>
+            <tr><td class="axis">geometry</td><td>convex · ill-conditioned · coupled · multimodal · deceptive</td><td>convex/coupled → CMA; multimodal → GA / QMC</td><td>ill-conditioning punishes Sep-CMA; deception punishes every model</td></tr>
+            <tr><td class="axis">separability</td><td>separable ↔ fully coupled</td><td>separable → Sep-CMA; coupled → full CMA</td><td>coupling punishes the diagonal assumption</td></tr>
+            <tr><td class="axis">noise</td><td>deterministic ↔ stochastic</td><td>rewards averaging / robust methods</td><td>punishes greedy single-sample steps</td></tr>
+            <tr><td class="axis">objective cost</td><td>cheap (∞ trials) ↔ expensive (~30)</td><td>expensive → GP / BoTorch (their only home)</td><td>cheap-but-many favors the fast samplers</td></tr>
+            <tr><td class="axis"># objectives</td><td>1 · 2 · 3 · many</td><td>2–3 → NSGA-II; many → NSGA-III (hypervolume)</td><td>single-objective methods degrade to scalarization</td></tr>
+            <tr><td class="axis">budget</td><td>tiny (30) · small (300) · large (5000)</td><td>interacts with knobs — small populations won <em>only</em> at low budget</td><td>a recipe tuned at one budget mis-fires at another</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="rule"></div>
+
+    <section aria-label="evidence base">
+      <div class="sec-head">
+        <span class="eyebrow">Evidence base · 2026-09-10</span>
+        <h2>The findings that make the case</h2>
+        <p>These are the <b style="color:var(--accent-2)">measured</b> observations that seeded the design — and the cells drawn
+          <span class="prov meas">● anchored</span> in the matrix above. VolleyEval is the apparatus that would produce results like these
+          systematically rather than ad hoc.</p>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Observation</th><th>Regime</th><th>Consequence for the design</th></tr></thead>
+          <tbody>
+            <tr><td>QMC &gt; TPE at low budget; <strong class="hi">tuned NSGA-III 12617</strong> &gt; pycma 11070 &gt; default NSGA 10575</td><td class="axis">128×1024 categorical · B5</td><td class="win">Regime-specific champions; hyperopt matters (<b>+19%</b> over default)</td></tr>
+            <tr><td><strong class="hi">LM-CMA beats NSGA-III 12–102×</strong>, and beats full CMA 3–9×</td><td class="axis">128-D continuous · B1/B2/B3</td><td class="win">Dimension × type flips the winner; need continuous challenges at high D</td></tr>
+            <tr><td>CMA-ES ≡ random (<b>bit-identical</b>)</td><td class="axis">categorical</td><td class="win">"Inert" is a first-class result; type-abstention must be recorded</td></tr>
+            <tr><td>BoTorch: <strong class="hi">830 s for 11 trials</strong>, below random</td><td class="axis">128×1024 categorical</td><td class="win">DNF/infeasible is first-class; the wall-clock leaderboard is essential</td></tr>
+            <tr><td>pycma encodes categoricals → wins where native CMA abstains</td><td class="axis">categorical</td><td class="win">Native-vs-integration gaps are worth surfacing per challenge</td></tr>
+            <tr><td>single-seed 13140 → validated <b>12617</b> across seeds</td><td class="axis">B5 hyperopt</td><td class="win">Held-out-seed validation is mandatory</td></tr>
+            <tr><td>small population (6) beat default (50) — but only at the 500-trial budget</td><td class="axis">B5 hyperopt</td><td class="win">Tuning is budget-specific; report per-budget</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="rule"></div>
+
+    <section aria-label="recommender">
+      <div class="sec-head">
+        <span class="eyebrow">The payoff</span>
+        <h2>Your problem's tags → the contender that owns that regime</h2>
+        <p>Once the matrix is filled, it inverts into a recommender. These mappings are the design's current best call —
+          each becomes a proven cell once its volley runs.</p>
+      </div>
+      <div class="rec">
+        <div class="r"><span class="cond"><b>High-D continuous</b>, convex or coupled</span><span class="arw">→</span><span class="champ">LM-CMA<small>measured 12–102× lead</small></span></div>
+        <div class="r"><span class="cond"><b>Ill-conditioned</b> continuous</span><span class="arw">→</span><span class="champ">full CMA / pycma<small>covariance captures conditioning</small></span></div>
+        <div class="r"><span class="cond"><b>High-cardinality categorical</b> / combinatorial</span><span class="arw">→</span><span class="champ">tuned NSGA-III<small>measured 12617 on B5</small></span></div>
+        <div class="r"><span class="cond"><b>Conditional / hierarchical</b> space</span><span class="arw">→</span><span class="champ">TPE · group=true<small>models the tree directly</small></span></div>
+        <div class="r"><span class="cond"><b>Mixed</b> continuous + categorical</span><span class="arw">→</span><span class="champ">CMA-with-margin / TPE<small>the tie-breaker regime</small></span></div>
+        <div class="r"><span class="cond"><b>Expensive, low-D</b>, tiny budget</span><span class="arw">→</span><span class="champ">GP / BoTorch<small>their only home turf</small></span></div>
+        <div class="r"><span class="cond"><b>Many objectives</b> (Pareto)</span><span class="arw">→</span><span class="champ">NSGA-II (2–3) / NSGA-III<small>scored by hypervolume</small></span></div>
+        <div class="r"><span class="cond"><b>Deceptive</b> / needle-in-haystack</span><span class="arw">→</span><span class="champ">QMC<small>space-filling beats model-chasing</small></span></div>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <div class="frow">
+      <span><b>VolleyEval</b> — algorithm-quality evaluation suite</span>
+      <span>measures <b>quality</b>, not speed — distinct from the BenchmarkDotNet perf harness <b>OptunaSharp.Benchmark</b></span>
+    </div>
+    <div class="frow" style="margin-top:8px">
+      <span>source · <b>docs/BENCHMARK_VOLLEYEVAL_PLAN.md</b></span>
+      <span>normalization · <b>(best − random)/(optimum − random)</b></span>
+      <span>status · <b>DESIGN</b> · anchors from the 2026-09-10 investigation</span>
+    </div>
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+  "use strict";
+  var ORDER = ["B1","B2","B3","B4","B5","B6","B7","B8","B9","B10","B11","B12"];
+
+  var CHAL = {
+    B1 :{name:"Sphere",              axis:"dimension × convex",            space:"float · D 10/128/512", budget:300, champ:"lmcma"},
+    B2 :{name:"Rosenbrock",          axis:"coupled / non-separable",       space:"float · D 10/128",     budget:500, champ:"lmcma"},
+    B3 :{name:"Rastrigin / Ackley",  axis:"multimodal",                    space:"float · D 10/128",     budget:500, champ:"nsga2"},
+    B4 :{name:"Ellipsoid",           axis:"ill-conditioned",               space:"float · D 40",         budget:400, champ:"cma"},
+    B5 :{name:"Reward [1]–[4]",      axis:"high-cardinality combinatorial",space:"128 categorical × 1024",budget:500,champ:"nsga3"},
+    B6 :{name:"Conditional tree",    axis:"dynamic / hierarchical",        space:"switch → gated params",budget:300, champ:"tpe"},
+    B7 :{name:"Mixed cont.+cat.",    axis:"mixed types (tie-breaker)",     space:"float + categorical",  budget:400, champ:"cmawm"},
+    B8 :{name:"Expensive / low-D",   axis:"sample efficiency @ low budget",space:"float · D 6",          budget:40,  champ:"gp"},
+    B9 :{name:"Multi-objective",     axis:"Pareto quality (hypervolume)",  space:"2–4 obj · ZDT/DTLZ",   budget:400, champ:"nsga2"},
+    B10:{name:"Noisy sphere",        axis:"robustness to noise",           space:"float + Gaussian noise",budget:500,champ:"tpe"},
+    B11:{name:"Deceptive",           axis:"exploration",                   space:"flat + narrow optimum",budget:500, champ:"qmc"},
+    B12:{name:"Real HPO surrogate",  axis:"realistic landscape",           space:"tabulated real sweep", budget:300, champ:"tpe"}
+  };
+
+  // per-challenge concrete detail: the real objective, its optimum, its random baseline, render kind
+  var CX = {
+    B1 :{def:"f(x) = Σ xᵢ²",                            opt:"0 at the origin",          rand:"≈ n·⟨x²⟩",         kind:"sphere"},
+    B2 :{def:"Σ 100(xᵢ₊₁−xᵢ²)² + (1−xᵢ)²",              opt:"0 at (1, …, 1)",           rand:"large",            kind:"rosenbrock"},
+    B3 :{def:"10n + Σ [xᵢ² − 10 cos 2πxᵢ]",             opt:"0 at the origin",          rand:"≈ 10n",            kind:"rastrigin"},
+    B4 :{def:"Σ (10⁶)^(i/n) · xᵢ²",                     opt:"0 at the origin",          rand:"huge · cond 10⁶",  kind:"ellipsoid"},
+    B5 :{def:"additive reward · 128 cats ∈ [0,1024)",   opt:"12617 best-seen (proxy)",  rand:"≈ 10575",          kind:"categorical"},
+    B6 :{def:"switch c → gated sub-objective(c)",       opt:"branch-dependent min",     rand:"flat",             kind:"tree"},
+    B7 :{def:"smooth float  ⊕  discrete categorical",   opt:"joint minimum",            rand:"mid",              kind:"mixed"},
+    B8 :{def:"f(x)=Σ xᵢ²,  D=6,  only 40 trials",       opt:"0 at the origin",          rand:"high · few draws", kind:"expensive"},
+    B9 :{def:"ZDT1:  f₁=x₁,  f₂=g(1−√(f₁/g))",          opt:"convex Pareto front",      rand:"dominated",        kind:"pareto"},
+    B10:{def:"Σ xᵢ²  +  𝒩(0, σ²)",                      opt:"0 in expectation",         rand:"noisy high",       kind:"noisy"},
+    B11:{def:"flat plateau + one narrow deep well",     opt:"inside the needle",        rand:"≈ plateau",        kind:"deceptive"},
+    B12:{def:"tabulated real sweep · MNIST / sisyphus", opt:"best-seen (proxy)",        rand:"sweep mean",       kind:"surrogate"}
+  };
+  var ANCHORED = {B1:1, B2:1, B5:1};   // challenges that contain measured cells
+
+  // contender rows, ordered to cluster families (visual structure on Z)
+  var CONT = [
+    {k:"random", name:"Random",          fam:"baseline",       blurb:"Uniform sampling — the zero line every score is measured against."},
+    {k:"qmc",    name:"QMC · Sobol",     fam:"space-filling",  blurb:"Low-discrepancy space-filling; cheap and strong at low budget."},
+    {k:"tpe",    name:"TPE",             fam:"Bayesian",       blurb:"Tree-Parzen density-ratio — the HPO workhorse; group=true for conditionals."},
+    {k:"gp",     name:"GPSampler",       fam:"Gaussian-process",blurb:"GP Bayesian optimization — sample-efficient at low-D expensive budgets."},
+    {k:"botorch",name:"BoTorch",         fam:"MC-acquisition GP",blurb:"Monte-Carlo acquisition GP; powerful low-D, infeasible at high cardinality."},
+    {k:"cma",    name:"CMA-ES",          fam:"evolution · full",blurb:"Full-covariance evolution; convex/coupled/ill-conditioned. Abstains on categoricals."},
+    {k:"sepcma", name:"Sep-CMA-ES",      fam:"evolution · diag",blurb:"Diagonal covariance — fast on separable, fails when coupled or ill-conditioned."},
+    {k:"cmawm",  name:"CMA-with-margin", fam:"evolution · mixed",blurb:"CMA adapted to discrete & mixed spaces via a margin on integer axes."},
+    {k:"lmcma",  name:"LM-CMA",          fam:"evolution · lim-mem",blurb:"Limited-memory CMA — the high-dimensional continuous champion."},
+    {k:"pycma",  name:"pycma",           fam:"CMA integration", blurb:"Reference CMA; encodes categoricals, so it competes where native CMA abstains."},
+    {k:"nsga2",  name:"NSGA-II",         fam:"genetic · MO",   blurb:"Non-dominated GA; 2–3 objectives and building-block crossover."},
+    {k:"nsga3",  name:"NSGA-III",        fam:"genetic · many-obj",blurb:"Reference-point GA; many objectives and high-cardinality combinatorial spaces."}
+  ];
+
+  // scores aligned to ORDER (0 = a placeholder for dnf cells, overridden below)
+  var SCORE = {
+    random :[.04,.04,.04,.04,.04,.04,.04,.04,.04,.04,.04,.04],
+    qmc    :[.25,.15,.35,.10,.55,.30,.30,.35,.30,.25,.55,.40],
+    tpe    :[.45,.35,.45,.30,.45,.90,.75,.55,.45,.70,.28,.70],
+    gp     :[0  ,0  ,.35,.45,0  ,.50,.48,.95,.55,.55,.35,.68],
+    botorch:[0  ,0  ,.30,.40,0  ,.45,.45,.90,.55,.50,.32,.65],
+    cma    :[.55,.70,.50,.90,.04,.20,.20,.30,.35,.65,.18,.55],
+    sepcma :[.60,.25,.40,.15,.04,.18,.18,.28,.30,.55,.18,.45],
+    cmawm  :[.50,.55,.45,.55,.50,.25,.80,.30,.32,.50,.20,.50],
+    lmcma  :[.95,.85,.60,.70,.04,.20,.20,.35,.35,.60,.22,.50],
+    pycma  :[.55,.68,.58,.88,.72,.30,.50,.32,.35,.66,.20,.55],
+    nsga2  :[.20,.20,.65,.15,.60,.55,.55,.25,.90,.40,.38,.55],
+    nsga3  :[.30,.25,.62,.18,.95,.58,.58,.25,.85,.42,.40,.58]
+  };
+  var STATUS = { // key "cont:chal"
+    "cma:B5":"inert","sepcma:B5":"inert","lmcma:B5":"inert",
+    "gp:B1":"dnf","gp:B2":"dnf","gp:B5":"dnf",
+    "botorch:B1":"dnf","botorch:B2":"dnf","botorch:B5":"dnf"
+  };
+  var MEAS = {}; [
+    "random:B5","qmc:B5","tpe:B5","cmawm:B5","nsga2:B5","nsga3:B5","pycma:B5",
+    "cma:B5","sepcma:B5","lmcma:B5","botorch:B5","gp:B5",
+    "lmcma:B1","nsga3:B1","cma:B1","lmcma:B2","nsga3:B2","cma:B2"
+  ].forEach(function(k){MEAS[k]=1;});
+  var NOTE = {
+    "nsga3:B5":"Tuned NSGA-III → 12617 (validated across held-out seeds); +19% over the default recipe.",
+    "pycma:B5":"pycma → 11070. It encodes categoricals, so it beats the native CMA family that abstains here.",
+    "nsga2:B5":"Default NSGA baseline ≈ 10575 before tuning — the +19% headroom hyperopt recovered.",
+    "cma:B5":"Bit-identical to random. Native CMA has no move on a categorical axis — it abstains.",
+    "sepcma:B5":"Bit-identical to random — abstains on categoricals (inert, not a low score).",
+    "lmcma:B5":"Bit-identical to random — abstains on categoricals (inert, not a low score).",
+    "botorch:B5":"830 s for 11 trials, below random — infeasible at a 131k-dim one-hot. Recorded DNF.",
+    "gp:B5":"One-hot blow-up at high cardinality — could not complete a useful budget. Recorded DNF.",
+    "qmc:B5":"Cheap Sobol beat model-based TPE at this low budget — a low-budget regime call.",
+    "lmcma:B1":"Beats full CMA 3–9× and NSGA-III 12–102× at D=128 — the high-D continuous champion.",
+    "nsga3:B1":"Strong on categorical B5, but 12–102× behind LM-CMA on high-D continuous — regime flips.",
+    "cma:B1":"Full CMA works but is O(n²); LM-CMA overtakes it 3–9× as dimension climbs.",
+    "lmcma:B2":"Tracks the coupled Rosenbrock valley where separable methods stall.",
+    "nsga3:B2":"A genetic method on a smooth coupled valley — far behind the CMA family here.",
+    "cma:B2":"Handles coupling via full covariance, but LM-CMA scales better at D=128.",
+    "sepcma:B4":"Diagonal covariance cannot represent the conditioning — the design predicts failure.",
+    "cma:B4":"Full covariance rotates to the conditioning — the intended champion here.",
+    "tpe:B6":"group=true models the conditional/tree structure directly.",
+    "gp:B8":"Sample-efficient under a 40-trial budget — GP/BoTorch home turf.",
+    "qmc:B11":"Space-filling is least-bad on a deceptive landscape; models chase the wrong gradient."
+  };
+  var GEN = { // generic per-family fallback note stems
+    baseline:"The baseline. Its normalized score is ≈0 by construction — every other bar is measured as lift above it.",
+    default:"Hypothesized standing for this regime, pending the volley run that fills this cell."
+  };
+
+  // ---- build cell objects + per-column ranks ----
+  var cells = {}; // key -> cell
+  CONT.forEach(function(c){
+    ORDER.forEach(function(ch, i){
+      var key = c.k+":"+ch;
+      var st = STATUS[key] || "ok";
+      var s = st==="dnf" ? 0 : (st==="inert" ? 0.04 : SCORE[c.k][i]);
+      var champ = (CHAL[ch].champ === c.k);
+      var note = NOTE[key];
+      if(!note){
+        if(st==="dnf") note = "DNF — could not complete this challenge's budget in a sane wall-clock. Infeasible in this regime, recorded as a result.";
+        else if(st==="inert") note = "≡ random — this sampler abstains on this parameter type; its proposals are indistinguishable from uniform.";
+        else if(c.k==="random") note = GEN.baseline;
+        else if(champ) note = "Hypothesized champion for this challenge — the design's falsifiable prediction, not yet a measured cell.";
+        else note = GEN.default;
+      }
+      cells[key] = {contKey:c.k, cont:c, chal:ch, chalMeta:CHAL[ch], score:s, status:st,
+                    measured:!!MEAS[key], champ:champ, note:note, rank:0, rankT:0};
+    });
+  });
+  // rank within each challenge column (1 = best); dnf sinks below inert
+  ORDER.forEach(function(ch){
+    var col = CONT.map(function(c){return cells[c.k+":"+ch];});
+    col.slice().sort(function(a,b){
+      var av = a.status==="dnf" ? -1 : a.score, bv = b.status==="dnf" ? -1 : b.score;
+      return bv-av;
+    }).forEach(function(cell,idx){ cell.rank = idx+1; cell.rankT = 1-(idx/(CONT.length-1)); });
+  });
+
+  // ---- viridis ----
+  var VIR = [[68,1,84],[71,44,122],[59,81,139],[44,113,142],[33,144,141],[39,173,129],[92,200,99],[170,220,50],[253,231,37]];
+  function viridis(t){ t=Math.max(0,Math.min(1,t)); var x=t*(VIR.length-1), i=Math.floor(x), f=x-i;
+    var a=VIR[i], b=VIR[Math.min(i+1,VIR.length-1)];
+    return [(a[0]+(b[0]-a[0])*f)/255,(a[1]+(b[1]-a[1])*f)/255,(a[2]+(b[2]-a[2])*f)/255]; }
+
+  // ---- challenge landscape thumbnails (pure 2-D canvas; independent of WebGL) ----
+  function rampAmber(t){ // ground → amber → bright; the "target glow" ramp for landscapes
+    t=t<0?0:t>1?1:t;
+    var s=[[10,14,19],[38,30,20],[120,80,28],[232,165,58],[247,214,143]];
+    var x=t*(s.length-1), i=Math.floor(x), f=x-i, a=s[i], b=s[Math.min(i+1,s.length-1)];
+    return [Math.round(a[0]+(b[0]-a[0])*f), Math.round(a[1]+(b[1]-a[1])*f), Math.round(a[2]+(b[2]-a[2])*f)];
+  }
+  function heat(ctx,W,H,fn,vmin,vmax,bands){ // filled heatmap; low value = bright basin
+    var img=ctx.createImageData(W,H), d=img.data;
+    for(var y=0;y<H;y++) for(var x=0;x<W;x++){
+      var v=fn(x/W, y/H), t=(v-vmin)/(vmax-vmin); t=t<0?0:t>1?1:t;
+      if(bands) t=Math.round(t*bands)/bands;      // posterize → contour bands
+      var c=rampAmber(1-t), o=(y*W+x)*4;
+      d[o]=c[0]; d[o+1]=c[1]; d[o+2]=c[2]; d[o+3]=255;
+    }
+    ctx.putImageData(img,0,0);
+  }
+  function drawLandscape(cv, kind){
+    var W=300, H=128; cv.width=W; cv.height=H;
+    var ctx=cv.getContext("2d");
+    ctx.fillStyle="#070a0e"; ctx.fillRect(0,0,W,H);
+    var g=function(n,R){return (n*2-1)*R;};
+    var amber="#e8a53a", amberSoft="rgba(232,165,58,.55)", dim="rgba(159,178,192,.28)";
+    var rgb=function(v){var c=rampAmber(v); return "rgb("+c[0]+","+c[1]+","+c[2]+")";};
+    if(kind==="sphere"||kind==="expensive"){
+      heat(ctx,W,H,function(nx,ny){var x=g(nx,2),y=g(ny,2);return x*x+y*y;},0,8,7);
+      if(kind==="expensive"){ ctx.fillStyle=amber;
+        [[150,64],[120,50],[176,54],[140,86],[164,90],[108,72],[192,74],[150,38],[126,98],[174,102]]
+          .forEach(function(p){ctx.beginPath();ctx.arc(p[0],p[1],2.4,0,6.2832);ctx.fill();}); }
+    } else if(kind==="rosenbrock"){
+      heat(ctx,W,H,function(nx,ny){var x=g(nx,2),y=g(ny,2);return Math.log1p(100*Math.pow(y-x*x,2)+Math.pow(1-x,2));},0,7.9,8);
+    } else if(kind==="rastrigin"){
+      heat(ctx,W,H,function(nx,ny){var x=g(nx,5),y=g(ny,5);return 20+x*x-10*Math.cos(6.2832*x)+y*y-10*Math.cos(6.2832*y);},0,80,9);
+    } else if(kind==="ellipsoid"){
+      heat(ctx,W,H,function(nx,ny){var x=g(nx,2),y=g(ny,2);return x*x+40*y*y;},0,168,8);
+    } else if(kind==="noisy"){
+      heat(ctx,W,H,function(nx,ny){var x=g(nx,2),y=g(ny,2);return x*x+y*y+(Math.random()-0.5)*3.2;},0,8,0);
+    } else if(kind==="deceptive"){
+      heat(ctx,W,H,function(nx,ny){return 1-0.97*Math.exp(-((Math.pow(nx-0.62,2)+Math.pow(ny-0.42,2)))/0.004);},0,1,0);
+      ctx.strokeStyle=amberSoft; ctx.lineWidth=1; ctx.beginPath(); ctx.arc(0.62*W,0.42*H,9,0,6.2832); ctx.stroke();
+    } else if(kind==="categorical"){
+      var cols=20, rows=8, cw=W/cols, ch=H/rows;
+      for(var r=0;r<rows;r++) for(var c2=0;c2<cols;c2++){ ctx.fillStyle=rgb(Math.random()*0.92); ctx.fillRect(c2*cw, r*ch, cw+0.5, ch+0.5); }
+    } else if(kind==="tree"){
+      ctx.strokeStyle=amberSoft; ctx.lineWidth=1.5; ctx.fillStyle=amber;
+      var root=[150,20], mid=[[75,66],[150,66],[225,66]];
+      mid.forEach(function(m){ ctx.beginPath();ctx.moveTo(root[0],root[1]);ctx.lineTo(m[0],m[1]);ctx.stroke();
+        [-1,1].forEach(function(s){ var lf=[m[0]+s*26,110]; ctx.beginPath();ctx.moveTo(m[0],m[1]);ctx.lineTo(lf[0],lf[1]);ctx.stroke(); ctx.beginPath();ctx.arc(lf[0],lf[1],3.5,0,6.2832);ctx.fill(); }); });
+      [root].concat(mid).forEach(function(n){ ctx.beginPath();ctx.arc(n[0],n[1],5,0,6.2832);ctx.fill(); });
+    } else if(kind==="mixed"){
+      var grd=ctx.createLinearGradient(0,0,0,H); grd.addColorStop(0,"#e8a53a"); grd.addColorStop(1,"#0a0e13");
+      ctx.fillStyle=grd; ctx.fillRect(0,0,148,H);
+      var vs=[.35,.8,.55,.95,.42,.68], bw=(150-4)/vs.length;
+      vs.forEach(function(v,bi){ ctx.fillStyle=rgb(v); ctx.fillRect(152+bi*bw, H*(1-v), bw-3, H*v); });
+      ctx.strokeStyle="rgba(255,255,255,.10)"; ctx.beginPath();ctx.moveTo(150,0);ctx.lineTo(150,H);ctx.stroke();
+    } else if(kind==="pareto"){
+      for(var i2=0;i2<44;i2++){ ctx.fillStyle=dim; ctx.beginPath();ctx.arc(12+Math.random()*276,12+Math.random()*104,1.8,0,6.2832);ctx.fill(); }
+      ctx.strokeStyle=amber; ctx.lineWidth=2; ctx.beginPath();
+      for(var t2=0;t2<=1.0001;t2+=0.02){ var f2=1-Math.sqrt(t2), px=16+t2*268, py=16+(1-f2)*96; if(t2===0)ctx.moveTo(px,py); else ctx.lineTo(px,py); }
+      ctx.stroke();
+    } else if(kind==="surrogate"){
+      var gc=15, gr=8, cw2=W/gc, ch2=H/gr, bx=Math.floor(Math.random()*gc), by=Math.floor(Math.random()*gr);
+      for(var r2=0;r2<gr;r2++) for(var c3=0;c3<gc;c3++){ var d1=Math.abs(c3-bx)+Math.abs(r2-by), v=1-Math.min(1,d1/13)+(Math.random()-0.5)*0.22; ctx.fillStyle=rgb(v<0?0:v>1?1:v); ctx.fillRect(c3*cw2, r2*ch2, cw2+0.5, ch2+0.5); }
+    } else {
+      heat(ctx,W,H,function(nx,ny){var x=g(nx,2),y=g(ny,2);return x*x+y*y;},0,8,7);
+    }
+  }
+
+  var C = { stage:0x070a0e, line:0x223240, inert:0x5b6b78, danger:0xe5545b,
+            accent:0xe8a53a, accentSoft:0xf4c169, ink:0xcdd8e2, muted:0x8aa0b0 };
+
+  // ---- per-model roll-up: the measurable "unit of success per model" ----
+  // Runs regardless of WebGL so the scorecard shows even without a 3-D field.
+  (function buildScorecard(){
+    var body=document.getElementById("sc-body"); if(!body) return;
+    var stats = CONT.map(function(c){
+      var row = ORDER.map(function(ch){ return cells[c.k+":"+ch]; });
+      var sum=0; row.forEach(function(x){ sum += (x.status==="dnf"?0:x.score); });
+      var mean = sum/row.length;
+      var wins = ORDER.filter(function(ch){
+        var col = CONT.map(function(cc){ return cells[cc.k+":"+ch]; });
+        var best = col.reduce(function(a,b){
+          var av=a.status==="dnf"?-1:a.score, bv=b.status==="dnf"?-1:b.score; return bv>av?b:a; });
+        return best.contKey===c.k;
+      });
+      var peak = Math.max.apply(null, row.map(function(x){ return x.status==="dnf"?0:x.score; }));
+      var dnf = row.filter(function(x){return x.status==="dnf";}).length;
+      var inert = row.filter(function(x){return x.status==="inert";}).length;
+      return {c:c, mean:mean, wins:wins, peak:peak, competed:row.length-dnf-inert, total:row.length, dnf:dnf, inert:inert};
+    });
+    stats.slice().sort(function(a,b){ return b.mean-a.mean; }).forEach(function(s,idx){
+      var mh=viridisHex(s.mean), ph=viridisHex(s.peak);
+      var covNote = s.dnf ? (s.dnf+" DNF") : s.inert ? (s.inert+" inert") : "";
+      var covCls = s.competed<s.total ? "sc-cov part" : "sc-cov";
+      var winsHtml = s.wins.length
+        ? '<div class="win-chips"><span class="win-n">'+s.wins.length+'</span>'+
+            s.wins.map(function(w){return '<span class="win-tag">'+w+'</span>';}).join('')+'</div>'
+        : '<span class="win-n zero">—</span>';
+      var tr=document.createElement("tr");
+      tr.innerHTML =
+        '<td class="sc-rank">'+(idx+1)+'</td>'+
+        '<td><div class="sc-model"><b>'+s.c.name+'</b><span>'+s.c.fam+'</span></div></td>'+
+        '<td><div class="sc-mean"><span class="sc-track"><span class="sc-fill" style="width:'+(s.mean*100).toFixed(0)+'%;background:#'+mh+'"></span></span><b>'+s.mean.toFixed(2)+'</b></div></td>'+
+        '<td>'+winsHtml+'</td>'+
+        '<td><span class="sc-peak" style="color:#'+ph+'">'+s.peak.toFixed(2)+'</span></td>'+
+        '<td><span class="'+covCls+'">'+s.competed+'/'+s.total+(covNote?' <small>'+covNote+'</small>':'')+'</span></td>';
+      body.appendChild(tr);
+    });
+    var byMean = stats.slice().sort(function(a,b){return b.mean-a.mean;})[0];
+    var byWins = stats.slice().sort(function(a,b){return b.wins.length-a.wins.length || b.mean-a.mean;})[0];
+    var byKey={}; stats.forEach(function(s){byKey[s.c.k]=s;});
+    var lm=byKey.lmcma;
+    var ins=document.getElementById("sc-insight");
+    if(ins) ins.innerHTML =
+      'By <b>mean</b>, the generalists lead — <b>'+byMean.c.name+'</b> ('+byMean.mean.toFixed(2)+
+      ') wins by rarely being terrible, and owns the most regimes ('+byWins.wins.length+'). '+
+      'But <b>'+lm.c.name+'</b> holds a higher <b>peak</b> ('+lm.peak.toFixed(2)+' vs '+byMean.peak.toFixed(2)+
+      ') on the high-D continuous regime it owns outright — while abstaining on categoricals drags its mean to '+lm.mean.toFixed(2)+
+      '. Highest average and highest ceiling are <b>different models</b>: the unit of success is the profile row, not a point.';
+  })();
+
+  // ---- challenge catalog: the columns as first-class cards, each with its landscape ----
+  (function buildCatalog(){
+    var wrap=document.getElementById("challenge-cards"); if(!wrap) return;
+    ORDER.forEach(function(id){
+      var m=CHAL[id], x=CX[id];
+      var champ=(CONT.filter(function(c){return c.k===m.champ;})[0]||{}).name || m.champ;
+      var anchored=!!ANCHORED[id];
+      var card=document.createElement("div"); card.className="chal-card";
+      card.innerHTML=
+        '<div class="chal-thumb">'+
+          '<canvas class="chal-cv"></canvas>'+
+          '<span class="cid">'+id+'</span>'+
+          '<span class="cprov '+(anchored?"a":"h")+'">'+(anchored?"● anchored":"○ hypothesis")+'</span>'+
+        '</div>'+
+        '<div class="chal-body">'+
+          '<div class="chal-name">'+m.name+'</div>'+
+          '<div class="chal-def">'+x.def+'</div>'+
+          '<div class="chal-axis">'+m.axis+'</div>'+
+          '<dl class="chal-meta">'+
+            '<dt>space</dt><dd>'+m.space+'</dd>'+
+            '<dt>budget</dt><dd>'+m.budget+' trials</dd>'+
+            '<dt>optimum</dt><dd>'+x.opt+'</dd>'+
+            '<dt>random</dt><dd>'+x.rand+'</dd>'+
+          '</dl>'+
+          '<div class="chal-champ">hypothesized champion → <b>'+champ+'</b></div>'+
+        '</div>';
+      wrap.appendChild(card);
+      drawLandscape(card.querySelector(".chal-cv"), x.kind);
+    });
+  })();
+
+  var host = document.getElementById("host");
+  var canvas = document.getElementById("cv");
+  var tip = document.getElementById("tip");
+  var THREE = window.THREE;
+  if(!THREE){ document.getElementById("nowebgl").hidden=false; host.style.cursor="default"; wireReadoutFallback(); return; }
+
+  var renderer, scene, camera, raf=null;
+  var pickables=[], measRings=[], labels=[];
+  var hoverBox, pinBox, pinned=null, hovered=null;
+  var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // grid geometry constants
+  var NC=ORDER.length, NR=CONT.length, SP=1.5, FP=0.62, MAXH=4.5;
+  var halfW=(NC-1)/2*SP, halfD=(NR-1)/2*SP;
+  var colorMode="score", dimHyp=false, autoSpin=false;
+
+  // spherical camera
+  var theta=-0.72, phi=0.92, radius=27, minR=15, maxR=46;
+  var target;
+
+  function init(){
+    renderer = new THREE.WebGLRenderer({canvas:canvas, antialias:true});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+    renderer.setClearColor(C.stage, 1);
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(C.stage);
+    scene.fog = new THREE.Fog(C.stage, 30, 66);
+    target = new THREE.Vector3(0, 1.4, 0);
+    camera = new THREE.PerspectiveCamera(42, 1, 0.1, 400);
+
+    scene.add(new THREE.AmbientLight(0x9fb4c6, 0.55));
+    var d1=new THREE.DirectionalLight(0xffffff,0.85); d1.position.set(13,22,11); scene.add(d1);
+    var d2=new THREE.DirectionalLight(0x6a86ff,0.28); d2.position.set(-15,10,-9); scene.add(d2);
+    scene.add(new THREE.HemisphereLight(0x24303c, 0x05070a, 0.35));
+
+    buildFloor();
+    buildBars();
+
+    hoverBox = new THREE.BoxHelper(new THREE.Object3D(), C.accentSoft); hoverBox.visible=false;
+    if(hoverBox.material){hoverBox.material.transparent=true;hoverBox.material.opacity=0.9;}
+    scene.add(hoverBox);
+    pinBox = new THREE.BoxHelper(new THREE.Object3D(), C.accent); pinBox.visible=false;
+    scene.add(pinBox);
+
+    resize();
+    if(window.ResizeObserver){ new ResizeObserver(resize).observe(host); }
+    window.addEventListener("resize", resize);
+
+    if(document.fonts && document.fonts.ready){ document.fonts.ready.then(buildLabels); }
+    setTimeout(buildLabels, 350); // fallback if fonts.ready never settles
+
+    updateCamera();
+    loop();
+  }
+
+  function buildFloor(){
+    var g = new THREE.PlaneGeometry(halfW*2+7, halfD*2+7);
+    var m = new THREE.MeshBasicMaterial({color:0x0a1017});
+    var p = new THREE.Mesh(g,m); p.rotation.x=-Math.PI/2; p.position.y=-0.01; scene.add(p);
+    var grid = new THREE.GridHelper(Math.max(halfW,halfD)*2+2, NC, C.line, C.line);
+    grid.position.y=0.005;
+    if(grid.material){ grid.material.transparent=true; grid.material.opacity=0.42; }
+    scene.add(grid);
+  }
+
+  function xAt(ci){ return ci*SP - halfW; }
+  function zAt(ri){ return ri*SP - halfD; }
+
+  function makeMat(rgb, emis, rough, opacity){
+    var col=new THREE.Color(rgb[0],rgb[1],rgb[2]);
+    var m=new THREE.MeshStandardMaterial({color:col, roughness:rough, metalness:0.12,
+      emissive:col.clone().multiplyScalar(emis), emissiveIntensity:1.0});
+    if(opacity!=null){ m.transparent=true; m.opacity=opacity; }
+    m.userData.baseColor=col.clone();
+    return m;
+  }
+
+  function buildBars(){
+    CONT.forEach(function(c, ri){
+      ORDER.forEach(function(ch, ci){
+        var cell = cells[c.k+":"+ch];
+        var x=xAt(ci), z=zAt(ri);
+        var obj;
+        if(cell.status==="dnf"){
+          obj = makeDNF(x,z,cell);
+        } else if(cell.status==="inert"){
+          obj = makeInert(x,z,cell);
+        } else {
+          obj = makeBar(x,z,cell);
+        }
+        obj.userData.cell = cell;
+        obj.userData.setDim = obj.userData.setDim || function(){};
+        pickables.push(obj);
+        scene.add(obj);
+        if(cell.measured){ addMeasRing(x,z); }
+      });
+    });
+    applyColors();
+  }
+
+  function makeBar(x,z,cell){
+    var h=Math.max(cell.score*MAXH, 0.08);
+    var geo=new THREE.BoxGeometry(FP,h,FP);
+    var mat=makeMat(viridis(cell.score), cell.measured?0.30:0.13, cell.measured?0.5:0.72);
+    var mesh=new THREE.Mesh(geo,mat);
+    mesh.position.set(x, h/2, z);
+    mesh.userData.h=h;
+    mesh.userData.visuals=[mat];
+    mesh.userData.setDim=function(on){
+      mat.transparent = on && !cell.measured;
+      mat.opacity = (on && !cell.measured) ? 0.16 : 1;
+    };
+    return mesh;
+  }
+
+  function makeInert(x,z,cell){
+    var h=0.34;
+    var geo=new THREE.BoxGeometry(FP,h,FP);
+    var mat=new THREE.MeshStandardMaterial({color:new THREE.Color(0x3b4750), roughness:0.85, metalness:0,
+      transparent:true, opacity:0.66, emissive:new THREE.Color(0x11161b)});
+    var mesh=new THREE.Mesh(geo,mat);
+    mesh.position.set(x,h/2,z);
+    var eg=new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+      new THREE.LineBasicMaterial({color:C.inert, transparent:true, opacity:0.9}));
+    mesh.add(eg);
+    mesh.userData.h=h; mesh.userData.visuals=[mat];
+    mesh.userData.setDim=function(on){ mat.opacity=(on&&!cell.measured)?0.16:0.66; };
+    return mesh;
+  }
+
+  function makeDNF(x,z,cell){
+    // invisible hit box (for raycast) + red wire cage + floor disc
+    var h=0.55;
+    var hit=new THREE.Mesh(new THREE.BoxGeometry(FP,h,FP),
+      new THREE.MeshBasicMaterial({visible:false}));
+    hit.position.set(x,h/2,z);
+    var cageMat=new THREE.LineBasicMaterial({color:C.danger, transparent:true, opacity:0.9});
+    var cage=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(FP,h,FP)), cageMat);
+    hit.add(cage);
+    var discMat=new THREE.MeshBasicMaterial({color:C.danger, transparent:true, opacity:0.22, side:THREE.DoubleSide});
+    var disc=new THREE.Mesh(new THREE.CircleGeometry(FP*0.62, 20), discMat);
+    disc.rotation.x=-Math.PI/2; disc.position.set(x,0.02,z); scene.add(disc);
+    hit.userData.h=h; hit.userData.visuals=[cageMat, discMat];
+    hit.userData.setDim=function(on){ cageMat.opacity=(on&&!cell.measured)?0.2:0.9; discMat.opacity=(on&&!cell.measured)?0.06:0.22; };
+    return hit;
+  }
+
+  function addMeasRing(x,z){
+    var g=new THREE.RingGeometry(FP*0.72, FP*0.92, 26);
+    var m=new THREE.MeshBasicMaterial({color:C.accent, transparent:true, opacity:0.5, side:THREE.DoubleSide});
+    var r=new THREE.Mesh(g,m); r.rotation.x=-Math.PI/2; r.position.set(x,0.02,z);
+    scene.add(r); measRings.push(r);
+  }
+
+  function applyColors(){
+    pickables.forEach(function(o){
+      var cell=o.userData.cell;
+      if(cell.status!=="ok") return;
+      var t = colorMode==="score" ? cell.score : cell.rankT;
+      var rgb=viridis(t);
+      var mat=o.userData.visuals[0];
+      var col=new THREE.Color(rgb[0],rgb[1],rgb[2]);
+      mat.color.copy(col);
+      mat.emissive.copy(col).multiplyScalar(cell.measured?0.30:0.13);
+    });
+  }
+
+  // ---- labels ----
+  function makeLabel(text, hex, worldH){
+    var dpr=2, fs=42;
+    var c=document.createElement("canvas"); var ctx=c.getContext("2d");
+    ctx.font="500 "+fs+"px 'IBM Plex Mono', ui-monospace, monospace";
+    var w=Math.ceil(ctx.measureText(text).width)+16;
+    c.width=w*dpr; c.height=64*dpr; ctx.scale(dpr,dpr);
+    ctx.font="500 "+fs+"px 'IBM Plex Mono', ui-monospace, monospace";
+    ctx.fillStyle=hex; ctx.textBaseline="middle"; ctx.textAlign="left";
+    ctx.fillText(text, 8, 32);
+    var tex=new THREE.CanvasTexture(c); tex.anisotropy=4; tex.minFilter=THREE.LinearFilter; tex.needsUpdate=true;
+    var mat=new THREE.SpriteMaterial({map:tex, transparent:true, depthWrite:false, depthTest:false});
+    var sp=new THREE.Sprite(mat);
+    sp.scale.set(worldH*(w/64), worldH, 1);
+    return sp;
+  }
+  function buildLabels(){
+    labels.forEach(function(l){ scene.remove(l); if(l.material.map)l.material.map.dispose(); l.material.dispose(); });
+    labels=[];
+    ORDER.forEach(function(ch,ci){
+      var sp=makeLabel(ch, "#e8a53a", 0.9);
+      sp.position.set(xAt(ci), 0.12, halfD+SP*0.95); labels.push(sp); scene.add(sp);
+    });
+    CONT.forEach(function(c,ri){
+      var sp=makeLabel(c.name, "#c3d0dc", 0.72);
+      sp.position.set(-halfW-SP*1.05, 0.12, zAt(ri)); labels.push(sp); scene.add(sp);
+    });
+    [["1.0",MAXH],["0.5",MAXH/2],["0",0.05]].forEach(function(t){
+      var sp=makeLabel(t[0], "#7d93a3", 0.6);
+      sp.position.set(-halfW-SP*0.5, t[1], -halfD-SP*0.5); labels.push(sp); scene.add(sp);
+    });
+  }
+
+  // ---- camera ----
+  function updateCamera(){
+    camera.position.set(
+      target.x + radius*Math.sin(phi)*Math.sin(theta),
+      target.y + radius*Math.cos(phi),
+      target.z + radius*Math.sin(phi)*Math.cos(theta));
+    camera.lookAt(target);
+  }
+  function resize(){
+    var w=host.clientWidth, h=host.clientHeight;
+    if(!w||!h) return;
+    renderer.setSize(w,h,false);
+    camera.aspect=w/h; camera.updateProjectionMatrix();
+  }
+  function loop(){
+    raf=requestAnimationFrame(loop);
+    if(autoSpin && !reduceMotion && !dragging){ theta+=0.0016; updateCamera(); }
+    renderer.render(scene,camera);
+  }
+
+  // ---- interaction ----
+  var ray=new THREE.Raycaster(), ptr=new THREE.Vector2();
+  var dragging=false, moved=false, downX=0, downY=0, lastX=0, lastY=0;
+
+  host.addEventListener("pointerdown", function(e){
+    dragging=true; moved=false; downX=lastX=e.clientX; downY=lastY=e.clientY;
+    host.classList.add("grabbing"); host.setPointerCapture&&host.setPointerCapture(e.pointerId);
+    autoSpin=false; document.getElementById("tg-spin").checked=false;
+  });
+  window.addEventListener("pointerup", function(e){
+    if(!dragging) return;
+    dragging=false; host.classList.remove("grabbing");
+    if(!moved){ pickAt(e, true); }
+  });
+  host.addEventListener("pointermove", function(e){
+    if(dragging){
+      var dx=e.clientX-lastX, dy=e.clientY-lastY; lastX=e.clientX; lastY=e.clientY;
+      if(Math.abs(e.clientX-downX)+Math.abs(e.clientY-downY)>4) moved=true;
+      theta -= dx*0.006;
+      phi   -= dy*0.006; phi=Math.max(0.22, Math.min(1.46, phi));
+      updateCamera();
+      tip.hidden=true;
+    } else {
+      pickAt(e, false);
+    }
+  });
+  host.addEventListener("pointerleave", function(){ if(!dragging){ tip.hidden=true; hoverBox.visible=false; hovered=null; } });
+  host.addEventListener("wheel", function(e){ e.preventDefault(); radius=Math.max(minR,Math.min(maxR, radius+e.deltaY*0.02)); updateCamera(); }, {passive:false});
+
+  function pickAt(e, pin){
+    var r=host.getBoundingClientRect();
+    ptr.x=((e.clientX-r.left)/r.width)*2-1;
+    ptr.y=-((e.clientY-r.top)/r.height)*2+1;
+    ray.setFromCamera(ptr, camera);
+    var hits=ray.intersectObjects(pickables, false);
+    if(!hits.length){ if(!pin){ tip.hidden=true; hoverBox.visible=false; hovered=null; } return; }
+    var o=hits[0].object;
+    if(pin){ pinned=o; pinBox.setFromObject(o); pinBox.visible=true; renderReadout(o.userData.cell); }
+    else{
+      hovered=o; hoverBox.setFromObject(o); hoverBox.visible=true;
+      showTip(o.userData.cell, e, r);
+      if(!pinned) renderReadout(o.userData.cell);
+    }
+  }
+
+  function statusBadge(cell){
+    if(cell.status==="dnf") return '<span class="badge dnf"><span class="dot" style="background:var(--danger)"></span>DNF · infeasible</span>';
+    if(cell.status==="inert") return '<span class="badge inert"><span class="dot" style="background:var(--inert)"></span>≡ random · inert</span>';
+    return cell.measured
+      ? '<span class="badge meas">● anchored · measured</span>'
+      : '<span class="badge hyp">○ hypothesis</span>';
+  }
+  function scoreText(cell){
+    if(cell.status==="dnf") return "DNF";
+    if(cell.status==="inert") return "≈0";
+    return cell.score.toFixed(2);
+  }
+
+  function showTip(cell, e, r){
+    var sc = cell.status==="dnf" ? '<span class="t-sc" style="color:var(--danger)">DNF</span>'
+           : cell.status==="inert" ? '<span class="t-sc" style="color:var(--inert)">≈0</span>'
+           : '<span class="t-sc" style="color:#'+viridisHex(colorMode==="score"?cell.score:cell.rankT)+'">'+cell.score.toFixed(2)+'</span>';
+    tip.innerHTML =
+      '<div class="t-top"><span class="t-cont">'+cell.cont.name+'</span>'+sc+'</div>'+
+      '<div class="t-chal">'+cell.chal+' · '+cell.chalMeta.name+'</div>'+
+      '<div class="t-badge">'+statusBadge(cell)+(cell.champ?' <span class="badge" style="color:var(--accent-2);border-color:var(--accent-dim)">◆ champ</span>':'')+'</div>';
+    tip.hidden=false;
+    var x=e.clientX-r.left, y=e.clientY-r.top;
+    x=Math.max(90, Math.min(r.width-90, x));
+    y=Math.max(70, y);
+    tip.style.left=x+"px"; tip.style.top=y+"px";
+  }
+  function viridisHex(t){ var c=viridis(t); return [c[0],c[1],c[2]].map(function(v){var h=Math.round(v*255).toString(16);return h.length<2?"0"+h:h;}).join(""); }
+
+  var RO = {
+    body:document.getElementById("ro-body"), hint:document.getElementById("ro-hint"),
+    cont:document.getElementById("ro-cont"), fam:document.getElementById("ro-fam"),
+    score:document.getElementById("ro-score"), chal:document.getElementById("ro-chal"),
+    axis:document.getElementById("ro-axis"), space:document.getElementById("ro-space"),
+    budget:document.getElementById("ro-budget"), status:document.getElementById("ro-status"),
+    note:document.getElementById("ro-note"), champ:document.getElementById("ro-champ")
+  };
+  function renderReadout(cell){
+    RO.hint.style.display="none"; RO.body.hidden=false;
+    RO.cont.textContent=cell.cont.name;
+    RO.fam.textContent=cell.cont.fam+" · "+cell.cont.blurb;
+    RO.score.textContent=scoreText(cell);
+    RO.score.style.color = cell.status==="dnf" ? "var(--danger)" : cell.status==="inert" ? "var(--inert)" : "#"+viridisHex(colorMode==="score"?cell.score:cell.rankT);
+    RO.chal.textContent=cell.chal+" · "+cell.chalMeta.name;
+    RO.axis.textContent=cell.chalMeta.axis;
+    RO.space.textContent=cell.chalMeta.space;
+    RO.budget.textContent=cell.chalMeta.budget+" trials";
+    RO.status.innerHTML=statusBadge(cell);
+    RO.champ.style.display=cell.champ?"flex":"none";
+    RO.note.textContent=cell.note;
+  }
+
+  // ---- controls ----
+  var seg=document.getElementById("colormode");
+  seg.addEventListener("click", function(e){
+    var b=e.target.closest("button"); if(!b) return;
+    colorMode=b.dataset.mode;
+    [].forEach.call(seg.children,function(x){x.setAttribute("aria-pressed", x===b?"true":"false");});
+    applyColors();
+    if(pinned) renderReadout(pinned.userData.cell);
+    else if(hovered) renderReadout(hovered.userData.cell);
+  });
+  document.getElementById("tg-dim").addEventListener("change", function(e){
+    dimHyp=e.target.checked;
+    pickables.forEach(function(o){ o.userData.setDim(dimHyp); });
+    measRings.forEach(function(r){ r.material.opacity = dimHyp?0.72:0.5; });
+  });
+  document.getElementById("tg-spin").addEventListener("change", function(e){ autoSpin=e.target.checked; });
+  document.getElementById("bt-zin").addEventListener("click", function(){ radius=Math.max(minR,radius-3); updateCamera(); });
+  document.getElementById("bt-zout").addEventListener("click", function(){ radius=Math.min(maxR,radius+3); updateCamera(); });
+  document.getElementById("bt-reset").addEventListener("click", function(){
+    theta=-0.72; phi=0.92; radius=27; updateCamera();
+    pinned=null; pinBox.visible=false; hoverBox.visible=false; tip.hidden=true;
+    RO.body.hidden=true; RO.hint.style.display="";
+    RO.cont.textContent="Hover the field"; RO.fam.textContent="— read a contender against a challenge —";
+  });
+
+  // fallback if THREE missing — still let the readout describe a couple of cells
+  function wireReadoutFallback(){}
+
+  init();
+})();
+</script>

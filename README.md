@@ -31,22 +31,32 @@
 
 ---
 
-## ⚠️ Status: scaffolding
+## Status
 
-This repository currently contains **only the project stack** — solution, projects, strong-naming,
-tests, pythonnet interop harness, packaging, and CI/CD — modeled on the
-[NumSharp](https://github.com/SciSharp/NumSharp) stack. **No Optuna algorithms are ported yet.**
-The scaffolding exists so the port can grow incrementally against a green build/test/package/release
-pipeline from day one.
+OptunaSharp has ported the **core algorithm surface** of Optuna 5.x and much of its ecosystem. The
+build/test/package/release pipeline has been green since day one, and the port grows against it
+module-by-module — [`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md) is the governing roadmap.
 
-What already works:
+In place today:
 
-- `dotnet build` / `dotnet test` / `dotnet pack` across **net8.0** and **net10.0**.
-- A published-shaped, strong-named, **empty** `OptunaSharp` NuGet package.
-- A unit-test project with smoke tests (assembly identity + the NumSharp dependency resolving).
-- A pythonnet interop project that runs **real Optuna** in-process and self-skips without Python.
-- GitHub Actions: cross-OS build/test, a strong-naming gate, a live-Optuna interop job, and a
-  tag-driven NuGet release pipeline.
+- **Core (pure-managed)** — Study / Trial / FrozenTrial (`suggest_*`, `optimize`, multi-objective
+  directions), float/int/categorical distributions, search-space inference, in-memory + journal
+  storage, exceptions and logging.
+- **Samplers** — Random, Grid, TPE, CMA-ES, GP, QMC, BruteForce, PartialFixed, NSGA-II, NSGA-III
+  (plus beyond-Optuna extensions: AGE-MOEA-2, SMS-EMOA, LM-CMA, JANUS).
+- **Pruners** — Median, Percentile, SuccessiveHalving, Hyperband, Threshold, Patient, Wilcoxon, Nop.
+- **Importance** — fANOVA, MeanDecreaseImpurity, PED-ANOVA, SHAP (pure-managed, byte-exact) — plus a
+  scikit-learn-style `OptunaSearchCV`.
+- **Terminator** and the **visualization** data layer (all 12 `plot_*`).
+- **Satellite packages** (foreign-runtime, opt-in like `NumSharp.Interop.OpenBLAS`): SQLite / EF Core
+  / gRPC / Redis storage, cloud artifact stores (S3 / GCS / Azure Blob / R2), Plotly visualization,
+  LightGBM / ML.NET integration, an `optunasharp` CLI tool, and pythonnet interop bridges (OptunaHub,
+  BoTorch, PyCma).
+
+Reproducibility under a fixed seed is **bit-identical to Python** wherever the path is deterministic,
+enforced by a live-Optuna parity harness (pythonnet) that asks real Optuna to compute answers
+in-process and asserts OptunaSharp matches. The whole pipeline runs on **net8.0** and **net10.0**
+across Windows / Linux / macOS, behind a strong-naming gate and a tag-driven NuGet release.
 
 ## Install
 
@@ -82,7 +92,8 @@ The C# surface will mirror this define-by-run shape as the port lands.
 ```
 OptunaSharp/
 ├── src/
-│   └── OptunaSharp.Core/            # the OptunaSharp package (empty scaffolding; refs NumSharp)
+│   ├── OptunaSharp.Core/            # the OptunaSharp package — the pure-managed library (refs NumSharp)
+│   └── OptunaSharp.*/               # optional satellite packages (Storage.*, Visualization.Plotly, Integration.*, Interop.*, Artifacts.*, Cli)
 ├── test/
 │   ├── OptunaSharp.Tests/           # unit tests (MSTest v3 + AwesomeAssertions)
 │   ├── OptunaSharp.Tests.Interop/   # live-Optuna parity harness (pythonnet)
@@ -137,7 +148,7 @@ dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj -c Release \
 # Live-Optuna interop (needs a discoverable Python with `pip install optuna`)
 dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj -c Release
 
-# Pack the (empty) OptunaSharp package
+# Pack the OptunaSharp package
 dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj -c Release -o packages
 ```
 
@@ -145,23 +156,25 @@ Test categories (`OpenBugs`, `Misaligned`, `RequiresPython`, `HighMemory`, `Wind
 attributes in `test/OptunaSharp.Tests/TestCategory.cs`, so CI filter strings stay stable as the
 suite grows.
 
-## Roadmap — Optuna modules to port
+## Roadmap — Optuna modules
 
-Tracking Optuna's own module layout. Nothing below is implemented yet; this is the porting map.
+Tracking Optuna's own module layout. The core surface is in place;
+[`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md) is the authoritative, phase-by-phase roadmap.
 
 | Optuna module | Role | OptunaSharp status |
 |---------------|------|--------------------|
-| `distributions` | Search-space distributions (float/int/categorical) | not started |
-| `trial` | Trial + FrozenTrial, `suggest_*` | not started |
-| `study` | Study, `optimize`, directions, storage glue | not started |
-| `samplers` | TPE, random, grid, CMA-ES, GP, … | not started |
-| `pruners` | Median, Hyperband, successive halving, … | not started |
-| `storages` | In-memory + RDB/journal persistence | not started |
-| `search_space` | Search-space inference | not started |
-| `importance` | Hyperparameter importance | not started |
-| `terminator` | Automated termination | not started |
-| `visualization` | Optimization-history plots | not started |
-| `exceptions` / `logging` | Framework exceptions + logging | not started |
+| `distributions` | Search-space distributions (float/int/categorical) | ✅ ported |
+| `trial` | Trial + FrozenTrial, `suggest_*` | ✅ ported |
+| `study` | Study, `optimize`, directions, storage glue | ✅ ported |
+| `samplers` | Random, Grid, TPE, CMA-ES, GP, QMC, BruteForce, NSGA-II/III, … | ✅ ported |
+| `pruners` | Median, Hyperband, successive halving, … | ✅ ported |
+| `storages` | In-memory + journal (Core); RDB (SQLite/EF Core), gRPC, Redis (satellites) | ✅ ported |
+| `search_space` | Search-space inference | ✅ ported |
+| `importance` | Hyperparameter importance (fANOVA, MDI, PED-ANOVA, SHAP) | ✅ ported |
+| `terminator` | Automated termination | ✅ ported |
+| `visualization` | Optimization-history plots (data layer + Plotly) | ✅ ported |
+| `exceptions` / `logging` | Framework exceptions + logging | ✅ ported |
+| `integration` / `artifacts` | LightGBM/ML.NET/sklearn; S3/GCS/Azure/R2 artifacts; OptunaHub/BoTorch/PyCma bridges | ✅ ported |
 
 ## Scripting with `dotnet run` (.NET 10 file-based apps)
 
