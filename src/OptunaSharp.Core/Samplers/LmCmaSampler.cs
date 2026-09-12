@@ -1,0 +1,345 @@
+// Sampler for LM-CMA — Limited-Memory Covariance Matrix Adaptation Evolution Strategy.
+//
+// Reference paper:
+//   Ilya Loshchilov. "LM-CMA: an Alternative to L-BFGS for Large Scale Black-box Optimization."
+//   Evolutionary Computation (MIT Press). arXiv:1511.00221 (2015).  https://arxiv.org/abs/1511.00221
+//
+// This sampler drives the paper-identical `LmCma` optimizer (see LmCma.cs) through the Optuna
+// study protocol. The two protocol-forced concessions to the paper (box-clamping and non-mirrored
+// per-trial driving) are documented on the type <summary> below.
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using NumSharp;
+using OptunaSharp.Collections;
+using OptunaSharp.Distributions;
+using OptunaSharp.Internal;
+using OptunaSharp.Logging;
+using OptunaSharp.Samplers.CmaEs;
+using OptunaSharp.SearchSpace;
+
+namespace OptunaSharp.Samplers;
+
+/// <summary>
+///     A sampler driving the paper-identical <see cref="LmCma" /> optimizer — Limited-Memory CMA-ES
+///     (Ilya Loshchilov, <i>"LM-CMA: an Alternative to L-BFGS for Large Scale Black-box Optimization"</i>,
+///     Evolutionary Computation 2015; arXiv:1511.00221). LM-CMA stores only <c>m ≪ n</c> direction vectors
+///     and reconstructs the Cholesky factor on the fly (<c>O(mn)</c> memory and per-sample time, no
+///     eigendecomposition), which targets very high-dimensional search spaces where full <see cref="Cma" />'s
+///     <c>O(n²)</c> covariance is impractical. On low-dimensional / ill-conditioned problems it converges
+///     more slowly than full CMA-ES — that is the documented large-scale trade-off, not a defect.
+///
+///     <para><b>Distinct from <see cref="CmaEsSampler" />.</b> This is a separate, standalone sampler, not a
+///     flag on <see cref="CmaEsSampler" />: LM-CMA shares none of that sampler's <c>with_margin</c> /
+///     <c>use_separable_cma</c> / warm-start / restart machinery, and reusing it would force-fit features the
+///     paper does not define. LM-CMA is <b>not</b> part of the Optuna ecosystem (no <c>cmaes</c> class, no
+///     Optuna sampler, no OptunaHub package), so — unlike the other CMA variants — this is a native
+///     paper-faithful implementation validated by convergence, with no upstream to bit-match.</para>
+///
+///     <para><b>Two paper concessions the per-trial protocol forces (both documented on the optimizer):</b>
+///     (1) LM-CMA (the paper) is <b>unconstrained</b>; Optuna needs in-box params, so the sampler <b>clamps</b>
+///     each asked candidate to the transformed bounds and the next <c>tell</c> re-derives x from the stored
+///     (clamped) params — the optimizer learns from the actually-evaluated points. (2) Optuna asks one
+///     candidate per trial from freshly-restored state, which cannot carry the intra-generation mirror
+///     pairing (Alg. 7 l.9–10), so the sampler drives the <b>non-mirrored</b> generation via
+///     <see cref="LmCma.AskCandidate" />, passing the true generation position so SelectSubset's <c>k==1</c>
+///     boost still fires once per generation.</para>
+///
+///     <para>Categorical parameters and single-value distributions are handled by the independent sampler,
+///     as in <see cref="CmaEsSampler" />. The optimizer needs <c>n &gt; 1</c>; a single-dimensional relative
+///     space falls back to independent sampling.</para>
+/// </summary>
+/// <example>
+///     <code>
+///     var study = Optuna.CreateStudy(sampler: new LmCmaSampler(seed: 42));
+///     study.Optimize(t =>
+///     {
+///         double s = 0;
+///         for (int i = 0; i &lt; 20; i++) { double x = t.SuggestFloat($"x{i}", -5, 5); s += x * x; }
+///         return s;
+///     }, nTrials: 200);
+///     </code>
+/// </example>
+public sealed class LmCmaSampler : BaseSampler
+{
+    // system_attrs values must stay under 2046 characters on RDBStorage (same limit as CmaEsSampler).
+    private const int SystemAttrMaxLength = 2045;
+    private const double Eps = 1e-10;
+
+    private static readonly Logger Logger = OptunaLogging.GetLogger("optuna.samplers.lm_cmaes");
+
+    private readonly BaseSampler _independentSampler;
+    private readonly int _nStartupTrials;
+    private bool _warnIndependentSampling;
+    private readonly LazyRandomState _cmaRng;
+    private readonly IntersectionSearchSpace _searchSpace;
+    private readonly bool _considerPrunedTrials;
+    private readonly int? _popsize;
+    private readonly int? _nVectors;
+
+    /// <param name="nStartupTrials">Independent sampling is used until this many trials finish.</param>
+    /// <param name="independentSampler">Sampler for parameters outside the relative search space (default <see cref="RandomSampler" />).</param>
+    /// <param name="warnIndependentSampling">Emit a warning when a parameter is sampled independently.</param>
+    /// <param name="seed">Random seed for LM-CMA.</param>
+    /// <param name="considerPrunedTrials">If <c>true</c>, PRUNED trials are considered for sampling (experimental).</param>
+    /// <param name="popsize">Population size λ (default <c>4 + ⌊3 ln n⌋</c>, the paper's value).</param>
+    /// <param name="nVectors">Number of stored direction vectors m (default <c>4 + ⌊3 ln n⌋</c>; the paper notes ≈√n can do better when memory allows).</param>
+    public LmCmaSampler(
+        int nStartupTrials = 1,
+        BaseSampler? independentSampler = null,
+        bool warnIndependentSampling = true,
+        int? seed = null,
+        bool considerPrunedTrials = false,
+        int? popsize = null,
+        int? nVectors = null)
+    {
+        _independentSampler = independentSampler ?? new RandomSampler(seed);
+        _nStartupTrials = nStartupTrials;
+        _warnIndependentSampling = warnIndependentSampling;
+        _cmaRng = new LazyRandomState(seed);
+        _searchSpace = new IntersectionSearchSpace();
+        _considerPrunedTrials = considerPrunedTrials;
+        _popsize = popsize;
+        _nVectors = nVectors;
+    }
+
+    public override void ReseedRng()
+    {
+        // _cmaRng needs no reseed here: relative sampling reseeds per trial (see SampleRelative).
+        _independentSampler.ReseedRng();
+    }
+
+    public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
+    {
+        var searchSpace = new OrderedDict<string, BaseDistribution>();
+        foreach (var (name, distribution) in _searchSpace.Calculate(study))
+        {
+            // A single-valued distribution is sampled inside Trial; a categorical one is unsupported.
+            if (distribution.Single()) continue;
+            if (distribution is not FloatDistribution && distribution is not IntDistribution) continue;
+            searchSpace[name] = distribution;
+        }
+        return searchSpace;
+    }
+
+    public override OrderedDict<string, object?> SampleRelative(
+        Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
+    {
+        RaiseErrorIfMultiObjective(study);
+
+        if (searchSpace.Count == 0)
+            return new OrderedDict<string, object?>();
+
+        var completedTrials = GetTrials(study);
+        if (completedTrials.Count < _nStartupTrials)
+            return new OrderedDict<string, object?>();
+
+        var trans = new SearchSpaceTransform(searchSpace, transformStep: true, transform01: true);
+
+        // Transformed box bounds — the optimizer works in this space; we clamp to it (LM-CMA is unconstrained).
+        double[] boundsFlat = trans.Bounds.ToArray<double>();
+        int nDim = boundsFlat.Length / 2;
+        var lower = new double[nDim];
+        var upper = new double[nDim];
+        for (int i = 0; i < nDim; i++) { lower[i] = boundsFlat[i * 2]; upper[i] = boundsFlat[i * 2 + 1]; }
+
+        // LM-CMA requires n > 1 (a rank-one direction store is meaningless in 1-D) → independent sampling.
+        if (nDim < 2)
+        {
+            if (_warnIndependentSampling)
+            {
+                Logger.Warning(
+                    "`LmCmaSampler` requires a search space of dimension > 1. " +
+                    $"`{_independentSampler.GetType().Name}` is used instead.");
+                _warnIndependentSampling = false;
+            }
+            return new OrderedDict<string, object?>();
+        }
+
+        var optimizer = RestoreOptimizer(completedTrials) ?? InitOptimizer(lower, upper);
+
+        if (optimizer.Dim != nDim)
+        {
+            if (_warnIndependentSampling)
+            {
+                Logger.Warning(
+                    "`LmCmaSampler` does not support dynamic search space. " +
+                    $"`{_independentSampler.GetType().Name}` is used instead of `LmCmaSampler`.");
+                _warnIndependentSampling = false;
+            }
+            return new OrderedDict<string, object?>();
+        }
+
+        var solutionTrials = GetSolutionTrials(completedTrials, optimizer.Generation);
+
+        if (solutionTrials.Count >= optimizer.PopulationSize)
+        {
+            var solutions = new List<(double[] X, double Value)>();
+            foreach (var t in solutionTrials.Take(optimizer.PopulationSize))
+            {
+                // Re-derive x in optimizer space from the stored (clamped) params, so the optimizer learns
+                // from the actually-evaluated points. Flip sign for maximization.
+                double[] x = trans.Transform(t.ParamsDict).ToArray<double>();
+                double y = study.Direction == StudyDirection.Minimize ? t.Value!.Value : -t.Value!.Value;
+                solutions.Add((x, y));
+            }
+
+            optimizer.Tell(solutions);
+
+            string optimizerStr = SerializeOptimizer(optimizer);
+            foreach (var (key, value) in SplitOptimizerStr(optimizerStr))
+                study.Storage.SetTrialSystemAttr(trial.TrialId, key, value);
+        }
+
+        // Each trial reseeds so its single ask is reproducible and differs from its siblings' asks.
+        int seed = (int)_cmaRng.Rng.randint(1, 65536) + trial.Number;
+        optimizer.ReseedRng(seed);
+
+        // Non-mirrored generation: k is this candidate's 1-based position within the current generation.
+        int k = solutionTrials.Count + 1;
+        double[] cmaParams = optimizer.AskCandidate(k);
+        for (int i = 0; i < nDim; i++)
+            cmaParams[i] = Math.Min(Math.Max(cmaParams[i], lower[i]), upper[i]);   // clamp to the box
+
+        study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyGeneration, optimizer.Generation);
+
+        return trans.Untransform(np.array(cmaParams));
+    }
+
+    private const string AttrPrefix = "lmcma:";
+    private static string AttrKeyGeneration => AttrPrefix + "generation";
+    private static string AttrKeyOptimizer => AttrPrefix + "optimizer";
+
+    private static string ConcatOptimizerAttrs(IReadOnlyDictionary<string, string> optimizerAttrs)
+        => string.Concat(Enumerable.Range(0, optimizerAttrs.Count)
+            .Select(i => optimizerAttrs[$"{AttrKeyOptimizer}:{i}"]));
+
+    private static Dictionary<string, string> SplitOptimizerStr(string optimizerStr)
+    {
+        int optimizerLen = optimizerStr.Length;
+        var attrs = new Dictionary<string, string>();
+        int chunks = (int)Math.Ceiling(optimizerLen / (double)SystemAttrMaxLength);
+        for (int i = 0; i < chunks; i++)
+        {
+            int start = i * SystemAttrMaxLength;
+            int end = Math.Min((i + 1) * SystemAttrMaxLength, optimizerLen);
+            attrs[$"{AttrKeyOptimizer}:{i}"] = optimizerStr[start..end];
+        }
+        return attrs;
+    }
+
+    private static string SerializeOptimizer(LmCma optimizer)
+        => "lmcma\n" + JsonSerializer.Serialize(optimizer.ToState());
+
+    private static LmCma DeserializeOptimizer(string optimizerStr)
+    {
+        int nl = optimizerStr.IndexOf('\n');
+        string tag = optimizerStr[..nl];
+        string json = optimizerStr[(nl + 1)..];
+        if (tag != "lmcma")
+            throw new NotSupportedException($"Unknown optimizer state tag '{tag}'.");
+        return LmCma.FromState(JsonSerializer.Deserialize<LmCmaState>(json)!);
+    }
+
+    private static LmCma? RestoreOptimizer(List<FrozenTrial> completedTrials)
+    {
+        for (int idx = completedTrials.Count - 1; idx >= 0; idx--)
+        {
+            var trial = completedTrials[idx];
+            var optimizerAttrs = trial.SystemAttrs
+                .Where(kv => kv.Key.StartsWith(AttrKeyOptimizer, StringComparison.Ordinal))
+                .ToDictionary(kv => kv.Key, kv => (string)kv.Value!);
+            if (optimizerAttrs.Count == 0) continue;
+            return DeserializeOptimizer(ConcatOptimizerAttrs(optimizerAttrs));
+        }
+        return null;
+    }
+
+    private LmCma InitOptimizer(double[] lower, double[] upper)
+    {
+        int nDim = lower.Length;
+        var mean = new double[nDim];
+        for (int i = 0; i < nDim; i++) mean[i] = lower[i] + (upper[i] - lower[i]) / 2;   // box midpoint
+
+        double sigma0 = double.PositiveInfinity;                                          // min((hi-lo)/6)
+        for (int i = 0; i < nDim; i++) sigma0 = Math.Min(sigma0, (upper[i] - lower[i]) / 6);
+        sigma0 = Math.Max(sigma0, Eps);
+
+        int seed = (int)_cmaRng.Rng.randint(1, 2147483646);
+        return new LmCma(mean, sigma0, seed: seed, populationSize: _popsize, nVectors: _nVectors);
+    }
+
+    public override object? SampleIndependent(
+        Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
+    {
+        RaiseErrorIfMultiObjective(study);
+
+        if (_warnIndependentSampling)
+        {
+            var completeTrials = GetTrials(study);
+            if (completeTrials.Count >= _nStartupTrials)
+                LogIndependentSampling(trial, paramName);
+        }
+
+        return _independentSampler.SampleIndependent(study, trial, paramName, paramDistribution);
+    }
+
+    private void LogIndependentSampling(FrozenTrial trial, string paramName)
+    {
+        Logger.Warning(string.Format(
+            IndependentSamplingWarningTemplate,
+            paramName,
+            trial.Number,
+            _independentSampler.GetType().Name,
+            GetType().Name,
+            "dynamic search space and `CategoricalDistribution` are not supported by `LmCmaSampler`"));
+    }
+
+    private List<FrozenTrial> GetTrials(Study study)
+    {
+        var completeTrials = new List<FrozenTrial>();
+        foreach (var t in study.GetTrialsInternal(deepcopy: false, states: null, useCache: true))
+        {
+            if (t.State == TrialState.Complete)
+            {
+                completeTrials.Add(t);
+            }
+            else if (t.State == TrialState.Pruned
+                     && t.IntermediateValues.Count > 0
+                     && _considerPrunedTrials)
+            {
+                int maxStep = t.IntermediateValues.Keys.Max();
+                double value = t.IntermediateValues[maxStep];
+                var copied = t.DeepCopy();
+                copied.Value = value;
+                completeTrials.Add(copied);
+            }
+        }
+        return completeTrials;
+    }
+
+    private static List<FrozenTrial> GetSolutionTrials(List<FrozenTrial> trials, int generation)
+    {
+        var result = new List<FrozenTrial>();
+        foreach (var t in trials)
+        {
+            long g = t.SystemAttrs.TryGetValue(AttrKeyGeneration, out var v) ? Convert.ToInt64(v) : -1;
+            if (generation == g) result.Add(t);
+        }
+        return result;
+    }
+
+    public override void BeforeTrial(Study study, FrozenTrial trial)
+        => _independentSampler.BeforeTrial(study, trial);
+
+    public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
+    {
+        if (trial.Constraints != null)
+            OptunaWarnings.Warn(
+                "Constraints have been set, but LmCmaSampler will not use them for optimization.",
+                WarningCategory.UserWarning);
+        _independentSampler.AfterTrial(study, trial, state, values);
+    }
+}
