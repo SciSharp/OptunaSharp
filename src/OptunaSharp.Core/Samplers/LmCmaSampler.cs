@@ -377,7 +377,9 @@ public sealed class LmCmaSampler : BaseSampler
     /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
-        if (trial.Constraints != null)
+        // Python `if trial.constraints:` — FrozenTrial.Constraints is never null (an empty dict when
+        // unset), so warn only when at least one constraint was actually set on the trial.
+        if (trial.Constraints.Count > 0)
             OptunaWarnings.Warn(
                 "Constraints have been set, but LmCmaSampler will not use them for optimization.",
                 WarningCategory.UserWarning);
