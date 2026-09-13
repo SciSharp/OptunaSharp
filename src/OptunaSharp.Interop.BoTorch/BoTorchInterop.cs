@@ -35,7 +35,14 @@ internal static class BoTorchInterop
     /// <param name="data">The managed float64 vector or row-major matrix passed across the Python boundary.</param>
     /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
     /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
-    internal static PyObject ToTensor(double[,] data) => np.array(data, copy: false).ToTorch();
+    internal static PyObject ToTensor(double[,] data)
+    {
+        // The tensor is a VIEW over the pinned matrix; NumSharp roots the buffer (and the
+        // GCHandle pin) for the tensor's lifetime via weakref.finalize, so disposing this
+        // NDArray now is safe — the pin outlives it and releases with the last torch view.
+        using NDArray nd = np.array(data, copy: false);
+        return nd.ToTorch();
+    }
 
     /// <summary>
     ///     A C# <c>(rows, cols)</c> matrix → a float64 <c>torch.Tensor</c> placed on <paramref name="device" />
@@ -51,7 +58,11 @@ internal static class BoTorchInterop
     /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
     internal static PyObject ToTensor(double[,] data, string? device)
     {
-        PyObject tensor = np.array(data, copy: false).ToTorch();
+        // Same zero-copy view as the CPU overload; the NDArray is disposed once the tensor
+        // exists (its buffer is rooted for the tensor's life — see the (double[,]) overload).
+        PyObject tensor;
+        using (NDArray nd = np.array(data, copy: false))
+            tensor = nd.ToTorch();
         if (string.IsNullOrEmpty(device) || device == "cpu")
             return tensor;
         using (tensor)
@@ -64,7 +75,13 @@ internal static class BoTorchInterop
     /// <param name="data">The managed float64 vector or row-major matrix passed across the Python boundary.</param>
     /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
     /// <exception cref="global::Python.Runtime.PythonException">The Python tensor, array, model-fitting, or acquisition operation fails; the original Python diagnostic is preserved.</exception>
-    internal static PyObject ToTensor(double[] data) => np.array(data, copy: false).ToTorch();
+    internal static PyObject ToTensor(double[] data)
+    {
+        // Pinned-and-viewed like the matrix overload; dispose the NDArray once the tensor
+        // exists (the buffer stays rooted for the tensor's life via weakref.finalize).
+        using NDArray nd = np.array(data, copy: false);
+        return nd.ToTorch();
+    }
 
     /// <summary>
     ///     A <c>torch.Tensor</c> → an independent NumSharp <see cref="NDArray" /> via NumSharp's torch

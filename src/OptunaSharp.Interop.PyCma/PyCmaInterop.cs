@@ -35,7 +35,11 @@ internal static class PyCmaInterop
     /// <exception cref="global::Python.Runtime.PythonException">NumPy array conversion or its tolist call fails.</exception>
     internal static PyObject ToPyList(double[] data)
     {
-        using PyObject numpy = np.array(data, copy: false).ToNumpy();
+        // View the vector zero-copy, cross to numpy, then tolist() copies into an independent
+        // Python list — so the NDArray and the numpy view are both transient. Dispose them
+        // (reverse order: numpy view first, then the NDArray/pin); the list is already built.
+        using NDArray nd = np.array(data, copy: false);
+        using PyObject numpy = nd.ToNumpy();
         return numpy.InvokeMethod("tolist");
     }
 
@@ -46,7 +50,10 @@ internal static class PyCmaInterop
     /// <exception cref="global::Python.Runtime.PythonException">NumPy array conversion or its tolist call fails.</exception>
     internal static PyObject ToPyList(double[,] data)
     {
-        using PyObject numpy = np.array(data, copy: false).ToNumpy();
+        // As the vector overload: view zero-copy, cross to numpy, tolist() copies out, then
+        // dispose the numpy view and the NDArray/pin (the list no longer references them).
+        using NDArray nd = np.array(data, copy: false);
+        using PyObject numpy = nd.ToNumpy();
         return numpy.InvokeMethod("tolist");
     }
 
