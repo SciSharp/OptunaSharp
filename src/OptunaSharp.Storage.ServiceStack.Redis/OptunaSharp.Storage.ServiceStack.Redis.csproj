@@ -28,6 +28,12 @@
     <PackageReference Include="ServiceStack.Redis" Version="10.1.4" />
   </ItemGroup>
 
+  <!-- Optional Microsoft.Extensions.DependencyInjection wire-up (OptunaSharp.Storages.Journal.Extensions).
+       Pure-managed abstractions; version single-sourced in ../../Directory.Build.props. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsDIVersion)" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\OptunaSharp.Storage.Redis\OptunaSharp.Storage.Redis.csproj" />
     <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />

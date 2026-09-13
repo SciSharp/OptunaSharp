@@ -32,6 +32,13 @@
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
   </ItemGroup>
 
+  <!-- Optional Microsoft.Extensions.DependencyInjection wire-up (OptunaSharp.Storages.EFCore.Extensions).
+       EF Core 9 already pulls DI abstractions transitively (9.0.x); the direct 10.0.x roll-forward
+       keeps the solution consistent. Version single-sourced in ../../Directory.Build.props. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsDIVersion)" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
   </ItemGroup>

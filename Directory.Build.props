@@ -80,4 +80,27 @@
     <NumSharpVersion Condition="'$(NumSharpVersion)' == ''">0.70.0</NumSharpVersion>
   </PropertyGroup>
 
+  <!-- ====================================================================================
+       Microsoft.Extensions.DependencyInjection.Abstractions version — single-sourced for the
+       optional `*.Extensions` DI wire-up shipped by Core and the satellite packages
+       (AddOptunaStudyFactory / AddSqliteStorage / AddS3ArtifactStore / AddBoTorchSampler / …).
+
+       WHY 10.0.x AND NOT AN 8.0.x FLOOR. We add this as a DIRECT reference to packages that also
+       pull it transitively at a HIGHER version — e.g. Azure.Storage.Blobs 12.29.2 -> Azure.Core
+       1.55.0 -> Hosting.Abstractions 10.0.3 -> DI.Abstractions (>= 10.0.3), and StackExchange.Redis
+       3.1.31 -> Logging.Abstractions 10.0.5 -> DI.Abstractions (>= 10.0.5). A direct reference BELOW a
+       transitive requirement is a package DOWNGRADE (NU1605, and this repo builds warnings-as-errors),
+       so the pinned version must be at least the highest transitive requirement across the whole
+       solution. We therefore pin the LATEST 10.0.x patch, which is above every 10.0.x a transitive
+       dependency here asks for; it has net8.0 + netstandard2.0 assets so it still loads on both our
+       TFMs, and a direct 10.0.x is a roll-FORWARD (never a downgrade) over the lower DI-abstractions
+       versions EF Core 9 / ML.NET 4 pull, so the whole solution restores cleanly. It is a pure-managed
+       BCL-adjacent package (no foreign runtime), so referencing it from Core does not break Core's
+       "no foreign runtime" rule. Bump this one value to raise the version everywhere. (The gRPC storage
+       package does NOT use this: it gets DI from the ASP.NET Core shared framework — see its own csproj.)
+       ==================================================================================== -->
+  <PropertyGroup>
+    <MicrosoftExtensionsDIVersion Condition="'$(MicrosoftExtensionsDIVersion)' == ''">10.0.12</MicrosoftExtensionsDIVersion>
+  </PropertyGroup>
+
 </Project>

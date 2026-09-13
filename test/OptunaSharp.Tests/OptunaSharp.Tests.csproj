@@ -15,6 +15,10 @@
     <!-- MSTest v3 metapackage: framework + adapter + source-generated discovery. -->
     <PackageReference Include="MSTest" Version="3.8.3" />
     <PackageReference Include="AwesomeAssertions" Version="9.3.0" />
+    <!-- The DI CONTAINER implementation (ServiceCollection + BuildServiceProvider), needed to exercise
+         the OptunaSharp.Extensions / *.Extensions DI wire-up end-to-end. Core ships only the
+         abstractions; this brings the concrete container. Version single-sourced in Directory.Build.props. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(MicrosoftExtensionsDIVersion)" />
   </ItemGroup>
 
   <ItemGroup>

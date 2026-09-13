@@ -59,4 +59,11 @@
     <ProjectReference Include="..\OptunaSharp.Core\OptunaSharp.Core.csproj" />
   </ItemGroup>
 
+  <!-- Optional Microsoft.Extensions.DependencyInjection wire-up (OptunaSharp.Interop.PythonNet.Extensions).
+       Declared directly (the extension uses IServiceCollection) though Core also flows it transitively;
+       pure-managed abstractions, version single-sourced in ../../Directory.Build.props. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsDIVersion)" />
+  </ItemGroup>
+
 </Project>

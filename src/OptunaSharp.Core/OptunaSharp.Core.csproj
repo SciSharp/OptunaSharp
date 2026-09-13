@@ -57,4 +57,18 @@
     <PackageReference Include="NumSharp.Interop.OpenBLAS" Version="$(NumSharpVersion)" />
   </ItemGroup>
 
+  <!-- ================================================================================
+       Microsoft.Extensions.DependencyInjection.Abstractions — the ONLY dependency of the
+       optional DI wire-up in the OptunaSharp.Extensions namespace (AddOptunaSampler /
+       AddOptunaPruner / AddOptunaStorage / AddOptunaStudyFactory). It is pure managed and
+       BCL-adjacent (NOT a foreign runtime — the rule that pushes ML.NET / TorchSharp / Redis /
+       SQLite into satellite packages does not trigger here), so Core keeps its "no foreign
+       runtime" guarantee. Version single-sourced as $(MicrosoftExtensionsDIVersion) in
+       ../../Directory.Build.props. A consumer that never touches the DI extensions still
+       resolves it (it is a hard package dependency), but pays no runtime cost for it.
+       ================================================================================ -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsDIVersion)" />
+  </ItemGroup>
+
 </Project>

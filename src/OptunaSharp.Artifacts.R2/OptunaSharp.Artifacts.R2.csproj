@@ -35,4 +35,10 @@
     <PackageReference Include="AWSSDK.S3" Version="4.0.102.4" />
   </ItemGroup>
 
+  <!-- Optional Microsoft.Extensions.DependencyInjection wire-up (OptunaSharp.Artifacts.Extensions).
+       Pure-managed abstractions; version single-sourced in ../../Directory.Build.props. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsDIVersion)" />
+  </ItemGroup>
+
 </Project>
