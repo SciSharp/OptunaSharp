@@ -37,13 +37,19 @@ the SciSharp strong-name key.
 ## Run it
 
 ```bash
-# Local (needs: dotnet, python with `pip install optuna xgboost lightgbm scikit-learn`)
-cp <path>/OptunaSharp.<ver>.nupkg feed/
+# Local — the build AUTO-PACKS src/OptunaSharp.Core into feed/ on first build / whenever Core changes
+# (the _PackCoreIntoLocalFeed MSBuild target in the .csproj, hooked BeforeTargets=Restore), so no manual
+# `cp` of a .nupkg is needed. PackageSmokeTests then needs nothing else — no python, no oracle:
+dotnet test -c Release -f net10.0 --filter "TestCategory!=RequiresOracle"
+
+# To ALSO run the real-package parity tests, generate the oracle first
+# (needs python: pip install optuna xgboost lightgbm scikit-learn):
 export PACKAGE_PARITY_ORACLE_DIR="$PWD/oracle" PACKAGE_PARITY_REQUIRE=1
 python gen_oracle.py
-dotnet test -c Release -f net10.0 -p:OptunaSharpPackageVersion=<ver>
+dotnet test -c Release -f net10.0
 
-# Fully isolated (Docker Compose) — mirrors CI
+# Fully isolated (Docker Compose) — mirrors CI (here the feed is pre-dropped, not auto-packed: the
+# container has no src/ tree, so the auto-pack target self-disables and CI's packaged artifact is used)
 OPTUNASHARP_VERSION=<ver> docker compose up --build --abort-on-container-exit --exit-code-from package-parity
 docker compose down -v
 ```
