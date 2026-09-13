@@ -34,8 +34,9 @@ services:
       OPTUNASHARP_VERSION: ${OPTUNASHARP_VERSION:-0.1.0}
       PACKAGE_PARITY_ORACLE_DIR: /work/oracle
       PACKAGE_PARITY_REQUIRE: "1"
-      # Reach the composed Redis by service name (the packaged JournalRedis parity uses this once the
-      # satellite is fed + the OpenBLAS blocker is resolved — see README).
+      # Reach the composed Redis by service name. PackagedRedisJournalParityTests uses this — and because
+      # the URL is set here, it is REQUIRED (not self-skipped): the packaged StackExchange.Redis journal
+      # backend must round-trip a study through this real Redis.
       OPTUNASHARP_REDIS_URL: redis://redis:6379
     depends_on:
       redis:

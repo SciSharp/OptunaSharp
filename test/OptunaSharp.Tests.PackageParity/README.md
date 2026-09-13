@@ -1,23 +1,45 @@
 # OptunaSharp.Tests.PackageParity — the isolated, package-consuming parity gate
 
-This project answers a question the source-referenced suites cannot: **does the OptunaSharp we actually
-ship work, standalone, against its real external dependency graph?** It binds to the **packaged**
-`OptunaSharp.nupkg` (never `src/`), runs in a **clean Docker container**, and demonstrates byte-for-byte
-/ proximity parity of the packaged sampler against **real Optuna driving real ML packages** (xgboost,
-lightgbm, scikit-learn).
+This project answers a question the source-referenced suites cannot: **do the packages we actually ship
+work, standalone, against their real external dependency graphs?** It binds to the **packaged** NuGets —
+**all 20 of them** (`OptunaSharp` Core + every satellite) — from a local feed (never `src/`), runs in a
+**clean Docker container**, and asserts three things: every shipped package restores + loads + carries the
+SciSharp strong-name identity; the packaged sampler shows byte-for-byte / proximity parity against **real
+Optuna driving real ML packages** (xgboost, lightgbm, scikit-learn); and a service-backed satellite (the
+packaged Redis journal backend) round-trips a study through **real Redis**.
 
 ## How isolation is enforced
 
-- **PackageReference, not ProjectReference.** `OptunaSharp` resolves from a local folder feed
-  (`NuGet.config` → `feed/`), so the tests bind to the shipped assembly + its declared deps
-  (`NumSharp`, `NumSharp.Interop.OpenBLAS`) — there is no compile path to `src/`.
-- **Its own `Directory.Build.props`** stops MSBuild's upward search, so the repo-root props (the
-  NumSharp package version, Core references, strong-naming) never apply here — the packaged deps
-  (`NumSharp`, `NumSharp.Interop.OpenBLAS`) restore from nuget.org.
+- **PackageReference, not ProjectReference.** Every OptunaSharp package resolves from a local folder feed
+  (`NuGet.config` source-maps `OptunaSharp*` → `feed/`), so the tests bind to the shipped assemblies + each
+  package's declared deps (from nuget.org) — there is no compile path to `src/`. The 20th package,
+  `OptunaSharp.Cli`, is a `dotnet tool` (no `lib/` to reference), so it is installed from the feed and run.
+- **Its own `Directory.Build.props`** stops MSBuild's upward search, so the repo-root props (package
+  versions, references, strong-naming) never apply here — the packaged third-party deps restore from nuget.org.
+- **`OptunaSharp.Storage.Grpc`** carries a `FrameworkReference` to `Microsoft.AspNetCore.App` (its server
+  rides Kestrel), so the project supplies that shared framework — exactly what a consumer of it must do.
+- **Local convenience:** the `_PackAllOptunaSharpPackagesIntoLocalFeed` MSBuild target (in the `.csproj`,
+  hooked `BeforeTargets=Restore`) packs every `src/*` package into `feed/` on first build / any src change,
+  so a clean checkout builds with no manual step and no cryptic `NU1301`/`NU1101`. It self-disables where
+  there is no `src/` (the CI container), which consumes the pipeline-deployed feed instead.
 - **Container build context is this directory only** (`Dockerfile` + `.dockerignore`), so `src/` is not
   present anywhere in the image. CI additionally sparse-checks-out only this folder.
 
-## How parity works (two-phase replay)
+## What it covers
+
+1. **Every shipped package restores + loads + is ours** (`PackagedAssembliesSmokeTests`, no Python/oracle) —
+   one case per library NuGet (19): the packaged assembly restores against its real declared deps and loads,
+   carrying the SciSharp strong-name token. `PackagedCliToolSmokeTests` covers the 20th (the `optunasharp`
+   `dotnet tool`): it installs from the feed and runs. This is the "does the shipped artifact work at all"
+   gate — the exact class of failure that once surfaced as `NU1101` (unpublished `NumSharp.Interop.OpenBLAS`).
+2. **Sampler parity vs real Optuna + real ML** (`PackageSmokeTests` + `RealPackageParityTests`) — the
+   two-phase replay described next.
+3. **A service-backed satellite works end-to-end** (`PackagedRedisJournalParityTests`, `RequiresRedis`) —
+   the packaged `OptunaSharp.Storage.StackExchange.Redis` journal backend persists a study to **real Redis**
+   and replays it exactly on reload through a fresh connection. Self-skips locally without Redis; required
+   under compose (which sets `OPTUNASHARP_REDIS_URL`).
+
+## How sampler parity works (two-phase replay)
 
 A gist's real objective (xgboost training, etc.) isn't portable to C#, and the packaged OptunaSharp
 can't run xgboost. But a sampler's trajectory is fixed by `(seed, search space, value sequence)` alone,
@@ -37,9 +59,10 @@ the SciSharp strong-name key.
 ## Run it
 
 ```bash
-# Local — the build AUTO-PACKS src/OptunaSharp.Core into feed/ on first build / whenever Core changes
-# (the _PackCoreIntoLocalFeed MSBuild target in the .csproj, hooked BeforeTargets=Restore), so no manual
-# `cp` of a .nupkg is needed. PackageSmokeTests then needs nothing else — no python, no oracle:
+# Local — the build AUTO-PACKS every src/ package into feed/ on first build / whenever any src changes
+# (the _PackAllOptunaSharpPackagesIntoLocalFeed MSBuild target in the .csproj, hooked BeforeTargets=Restore),
+# so no manual `cp` of a .nupkg is needed (first build packs all 20 — a one-time cost; warm builds skip).
+# The smoke + Cli-tool tests then need nothing else — no python, no oracle (the Redis test self-skips):
 dotnet test -c Release -f net10.0 --filter "TestCategory!=RequiresOracle"
 
 # To ALSO run the real-package parity tests, generate the oracle first
@@ -73,17 +96,19 @@ endpoint-configurable backends compose cleanly into that model — `JournalRedis
 `localhost` in `ArtifactEmulators.cs`, so they compose in identically **once that helper honours an
 endpoint env var** — the one change needed to add packaged S3/GCS/Azure artifact parity here.
 
-Redis is up and reachable from the test container today; the **packaged** `JournalRedis` /
-artifact-store **parity tests** that consume it land once the satellite packages
-(`OptunaSharp.Storage.Redis`, `OptunaSharp.Artifacts.*`) are packed into `feed/` alongside Core.
+The **packaged Redis journal parity** (`PackagedRedisJournalParityTests`) consumes that Redis **now** — all
+satellite packages are packed into `feed/` alongside Core. The **artifact-store** parity (packaged
+S3/GCS/Azure) still waits on the one change noted above: `ArtifactEmulators.cs` honouring an endpoint env
+var so the MinIO/Azurite/fake-gcs emulators compose in by service name.
 
 ## Dependency graph restores from nuget.org
 
 `OptunaSharp.Core` depends on `NumSharp` and `NumSharp.Interop.OpenBLAS` (the latter's `<Module>`
-initializer force-loads `OpenBlasEngine`). Both are **published to nuget.org** (`0.70.0`), so the
-packaged OptunaSharp restores its **entire** dependency graph from nuget.org — exactly as any downstream
-consumer would — and the OpenBLAS native LAPACK binaries arrive via the package's `runtimes/<rid>/native`
-+ `buildTransitive` machinery. The local feed carries only the freshly-built `OptunaSharp.<version>.nupkg`.
+initializer force-loads `OpenBlasEngine`); the satellites add their own (AWSSDK, Azure, Google.Cloud,
+StackExchange.Redis, ML.NET, …). All are **published to nuget.org**, so each packaged OptunaSharp restores
+its **entire** dependency graph from nuget.org — exactly as any downstream consumer would — and OpenBLAS's
+native LAPACK binaries arrive via the package's `runtimes/<rid>/native` + `buildTransitive` machinery. The
+local feed carries only the freshly-built OptunaSharp family (all 20 `.nupkg`s).
 
 > Historical note: this gate originally **failed at restore** (`NU1101: Unable to find package
 > NumSharp.Interop.OpenBLAS`) because OpenBLAS wasn't published and nuget.org's NumSharp was a stale

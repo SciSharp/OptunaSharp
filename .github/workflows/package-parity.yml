@@ -47,8 +47,8 @@ jobs:
       - name: Build Core
         run: dotnet build src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
 
-  # 2) PACKAGE — pack the .nupkg, run the strong-name gate, and upload it as the ONLY thing that
-  #    flows to the test stage.
+  # 2) PACKAGE — pack ALL OptunaSharp .nupkgs, run the strong-name gate over the whole feed, and upload
+  #    them as the ONLY thing that flows to the test stage.
   package:
     needs: build
     runs-on: ubuntu-latest
@@ -62,21 +62,27 @@ jobs:
             8.0.x
             10.0.x
           dotnet-quality: 'preview'
-      - name: Pack OptunaSharp (its NumSharp deps come from nuget.org)
+      - name: Pack ALL OptunaSharp packages (their third-party deps come from nuget.org)
         id: pack
         run: |
           mkdir -p feed
-          # Pack ONLY OptunaSharp into the feed. NumSharp + NumSharp.Interop.OpenBLAS are on nuget.org
-          # (the same version Core references), so the test container restores them from there — the feed
-          # carries just the freshly built package under test, exactly the artifact a consumer installs.
-          # GeneratePackageOnBuild is not set on Core, so a plain `dotnet pack` uses restore -> build -> pack.
-          dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release \
-            --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
-          VER=$(ls feed/OptunaSharp.*.nupkg | sed -E 's#.*/OptunaSharp\.(.+)\.nupkg#\1#')
+          # Pack EVERY packable project under src/ into the feed — the isolated gate consumes ALL of them
+          # (see test/OptunaSharp.Tests.PackageParity). Each package's own third-party deps (NumSharp +
+          # NumSharp.Interop.OpenBLAS, AWSSDK, Azure, Google.Cloud, StackExchange.Redis, ML.NET, ...) restore
+          # from nuget.org exactly as a consumer's would; the feed carries only the freshly built OptunaSharp
+          # family. GeneratePackageOnBuild is not set, so each `dotnet pack` does restore -> build -> pack.
+          for proj in src/*/*.csproj; do
+            echo "::group::pack $proj"
+            dotnet pack "$proj" --configuration Release --output feed -p:NoWarn=${{ env.DOTNET_NOWARN }}
+            echo "::endgroup::"
+          done
+          # Core's package is OptunaSharp.<VER>.nupkg (version starts with a digit); every satellite is
+          # OptunaSharp.<Name>.<VER>.nupkg — so match the digit-led name to read Core's version unambiguously.
+          VER=$(ls feed/OptunaSharp.[0-9]*.nupkg | sed -E 's#.*/OptunaSharp\.([0-9][^/]*)\.nupkg#\1#')
           echo "version=$VER" >> "$GITHUB_OUTPUT"
-          echo "packed OptunaSharp $VER into feed:"
+          echo "packed the OptunaSharp family ($VER) into feed:"
           ls -1 feed/*.nupkg
-      - name: Strong-name gate on the packed assembly
+      - name: Strong-name gate on every packed assembly
         run: dotnet run .github/scripts/verify_strong_name.cs -- feed
       - uses: actions/upload-artifact@v4
         with:

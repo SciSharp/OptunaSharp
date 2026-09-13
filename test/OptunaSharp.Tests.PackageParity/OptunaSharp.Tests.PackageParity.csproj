@@ -14,95 +14,142 @@
   <ItemGroup>
     <PackageReference Include="MSTest" Version="3.8.3" />
     <PackageReference Include="AwesomeAssertions" Version="9.3.0" />
+  </ItemGroup>
 
-    <!-- THE ISOLATION BOUNDARY: OptunaSharp arrives as a PACKAGE from the local feed, not a
-         ProjectReference. The tests bind to the shipped assembly and its declared dependency graph
-         (NumSharp + NumSharp.Interop.OpenBLAS), exactly as a downstream consumer would. There is no
-         path from here to src/. -->
+  <!-- OptunaSharp.Storage.Grpc's server self-hosts on Kestrel, so its .nupkg carries a FrameworkReference
+       to Microsoft.AspNetCore.App; a consumer of that package must supply the same shared framework. The
+       .NET SDK (local) and the sdk:10.0 CI image both include it. Restore doesn't need it; building the
+       net10.0 TFM (and net8.0 locally) does. Referencing it here is exactly what a downstream app pulling
+       OptunaSharp.Storage.Grpc has to do. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!--
+    THE ISOLATION BOUNDARY: every OptunaSharp package we ship arrives as a PACKAGE from the local feed
+    (NuGet.config source-maps OptunaSharp* -> feed), never a ProjectReference — there is no compile path
+    from here to src/. Referencing ALL the LIBRARY packages makes this gate prove that each shipped .nupkg
+    restores against its real declared dependency graph (its third-party deps come from nuget.org) and
+    loads standalone carrying the SciSharp strong-name identity — the exact class of failure that once
+    surfaced as NU1101 (an unpublished NumSharp.Interop.OpenBLAS), now covered for the whole set.
+
+    OptunaSharp.Cli is intentionally ABSENT here: it is a `dotnet tool` (PackAsTool) whose .nupkg has no
+    lib/ assembly to reference. It is still packed into the feed (below) and is exercised as a tool —
+    installed from the feed and run — by PackagedCliToolSmokeTests.
+  -->
+  <ItemGroup>
     <PackageReference Include="OptunaSharp" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Storage.Sqlite" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Storage.EFCore" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Storage.Grpc" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Storage.Redis" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Storage.StackExchange.Redis" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Storage.NRedisStack" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Storage.ServiceStack.Redis" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Artifacts.S3" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Artifacts.Gcs" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Artifacts.AzureBlob" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Artifacts.R2" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Integration.LightGbm" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Integration.ML.NET" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Interop.pythonnet" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Interop.BoTorch" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Interop.PyCma" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Interop.Pymoo" Version="$(OptunaSharpPackageVersion)" />
+    <PackageReference Include="OptunaSharp.Visualization.Plotly" Version="$(OptunaSharpPackageVersion)" />
   </ItemGroup>
 
   <!--
     ================================================================================================
-    AUTO-PACK CORE INTO THE LOCAL FEED  — the "no cryptic NU1301/NU1101" convenience
+    AUTO-PACK ALL OPTUNASHARP PACKAGES INTO THE LOCAL FEED  — the "no cryptic NU1301/NU1101" convenience
     ================================================================================================
     WHY THIS EXISTS
-      The PackageReference above resolves OptunaSharp from ./feed (see NuGet.config) — a .gitignored
-      folder the package-parity CI pipeline populates just before the test container runs. On a plain
-      local build (or any clean checkout) that folder is empty, so restore dies with an error nobody
-      can decode without knowing the pipeline:
+      The PackageReferences above (and the Cli tool test) resolve every OptunaSharp package from ./feed
+      (see NuGet.config) — a .gitignored folder the package-parity CI pipeline populates just before the
+      test container runs. On a plain local build (or any clean checkout) that folder is empty, so restore
+      dies with an error nobody can decode without knowing the pipeline:
           NU1301: The local source '...\feed' doesn't exist.   (feed dir missing entirely)
-          NU1101: Unable to find package OptunaSharp ...        (feed dir present but has no .nupkg)
-      This target removes that footgun: it packs src/OptunaSharp.Core into ./feed BEFORE restore, so
-      the very build that would have failed instead produces the package it needs and succeeds — the
-      isolation model is unchanged (OptunaSharp is still consumed as a PACKAGE, never a ProjectReference).
+          NU1101: Unable to find package OptunaSharp ...        (feed present but missing a package)
+      This target removes that footgun: it packs EVERY packable project under src/ into ./feed BEFORE
+      restore, so the very build that would have failed instead produces the packages it needs and
+      succeeds. The isolation model is unchanged (each package is still consumed as a PACKAGE).
 
     WHY IT HOOKS Restore (and not a normal build target)
-      A PackageReference is resolved during RESTORE, which runs before every ordinary build target — so
-      a target scheduled during build would run far too late (restore already failed). BeforeTargets=
-      "Restore" is the only point early enough to drop the .nupkg in first; CollectPackageReferences is
-      listed too as a belt-and-suspenders for SDK/restore variants. MSBuild runs the target at most once
-      per invocation, so the two hooks never double-pack.
+      A PackageReference is resolved during RESTORE, which runs before every ordinary build target — so a
+      build-phase target would be far too late (restore already failed). BeforeTargets="Restore" is the
+      only point early enough to drop the .nupkgs in first; CollectPackageReferences is listed too as a
+      belt-and-suspenders for SDK/restore variants. MSBuild runs the target at most once per invocation.
 
-    FRESHNESS (behaves like a ProjectReference would)
-      Inputs/Outputs let MSBuild SKIP this entirely once feed/OptunaSharp.<ver>.nupkg is newer than every
-      Core source — warm builds pay nothing. When Core changes the nupkg is stale, so the target reruns.
-      The package version is fixed (0.1.0), and NuGet's global-packages cache would otherwise keep serving
-      the FIRST 0.1.0 it ever extracted (the classic local-feed + fixed-version + cache trap), silently
-      testing stale bits — so on a repack the target first evicts exactly that one cached entry
-      (optunasharp/<ver>) to force re-extraction of the freshly packed bits. Blast radius is one
-      package+version; nothing else in the cache is touched (only this project consumes OptunaSharp-as-package).
+    WHAT IT PACKS / NO RECURSION
+      It packs $(_SrcDir)\*\*.csproj — every project under src/ (all are packable, Cli included). The
+      parity project lives under test/, so it is NEVER in that list: packing cannot re-enter this target.
+      First build is a one-time cost (~one `dotnet pack` per package); warm builds skip entirely.
+
+    FRESHNESS (behaves like ProjectReferences would)
+      Inputs/Outputs skip the whole target once feed/.packed-all.stamp is newer than every src source
+      (warm builds pay nothing) and rerun it when any src changes. All packages share the fixed version
+      (0.1.0), and NuGet's global cache would otherwise keep serving the FIRST 0.1.0 of each it ever
+      extracted (the local-feed + fixed-version + cache trap), silently testing stale bits — so a repack
+      first evicts exactly our extractions (every optunasharp* id at this version) to force re-extraction.
+      Blast radius is our package family at one version; nothing else in the cache is touched.
 
     CI / CONTAINER SAFETY
-      Everything here is Condition'd on the Core project existing. The isolated CI container has the feed
-      pre-dropped and NO src/ tree, so the condition is false there — this never runs (nor could it), and
-      CI keeps consuming exactly the artifact it deployed.
+      Everything is Condition'd on src/ existing. The isolated CI container has the feed pre-dropped and
+      NO src/ tree, so the target self-disables there — CI keeps consuming exactly the artifacts it deployed.
 
-    TO FORCE A CLEAN REPACK: delete feed/  (or just feed/OptunaSharp.<ver>.nupkg).
+    TO FORCE A CLEAN REPACK: delete feed/  (or just feed/.packed-all.stamp).
     ================================================================================================
   -->
   <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj')">
-    <_CoreProject>$(MSBuildThisFileDirectory)..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj</_CoreProject>
-    <!-- NormalizePath (NOT NormalizeDirectory) yields NO trailing slash. A trailing '\' inside the quoted
-         output argument would escape the closing quote on Windows ("...\feed\" then a stray quote), swallowing
-         the rest of the command line, so the feed path must stay slash-free; Path.Combine builds the nupkg
-         path independent of the separator. -->
+    <_SrcDir>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)..\..\src'))</_SrcDir>
+    <!-- NormalizePath (NOT NormalizeDirectory) yields NO trailing slash: a trailing '\' inside the quoted
+         output argument would escape the closing quote on Windows and swallow the rest of the command line. -->
     <_LocalFeedDir>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)feed'))</_LocalFeedDir>
-    <_ExpectedCoreNupkg>$([System.IO.Path]::Combine('$(_LocalFeedDir)', 'OptunaSharp.$(OptunaSharpPackageVersion).nupkg'))</_ExpectedCoreNupkg>
+    <_FeedStamp>$([System.IO.Path]::Combine('$(_LocalFeedDir)', '.packed-all.stamp'))</_FeedStamp>
     <!-- Pack in the parity build's configuration; default Release (restore can invoke us with Configuration unset). -->
     <_CorePackConfiguration Condition="'$(Configuration)' != ''">$(Configuration)</_CorePackConfiguration>
     <_CorePackConfiguration Condition="'$(_CorePackConfiguration)' == ''">Release</_CorePackConfiguration>
-    <!-- Resolve the NuGet global-packages folder the way NuGet does, with OS-correct fallbacks, so the
-         one stale extraction a fixed version would pin can be evicted. (A custom globalPackagesFolder in
-         NuGet.config isn't honored here, but none is configured; a miss just no-ops the RemoveDir.) -->
+    <!-- Resolve the NuGet global-packages folder the way NuGet does, with OS-correct fallbacks, so our
+         fixed-version extractions can be evicted. (A custom globalPackagesFolder in NuGet.config isn't
+         honored here, but none is configured; a miss just no-ops the eviction.) -->
     <_NuGetGlobalPackages Condition="'$(NUGET_PACKAGES)' != ''">$(NUGET_PACKAGES)</_NuGetGlobalPackages>
     <_NuGetGlobalPackages Condition="'$(_NuGetGlobalPackages)' == '' and '$(OS)' == 'Windows_NT'">$(USERPROFILE)\.nuget\packages</_NuGetGlobalPackages>
     <_NuGetGlobalPackages Condition="'$(_NuGetGlobalPackages)' == ''">$(HOME)/.nuget/packages</_NuGetGlobalPackages>
-    <!-- NuGet lowercases package ids in the global cache, hence 'optunasharp'. -->
-    <_CoreCachedInGlobal>$([System.IO.Path]::Combine('$(_NuGetGlobalPackages)', 'optunasharp', '$(OptunaSharpPackageVersion)'))</_CoreCachedInGlobal>
   </PropertyGroup>
 
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj')">
-    <!-- Freshness inputs: any Core source or the build files that shape the package. bin/obj are excluded
-         so Core's own build output can never retrigger the pack (which would loop). -->
-    <_CorePackInputs Include="$(MSBuildThisFileDirectory)..\..\src\OptunaSharp.Core\**\*.cs"
-                     Exclude="$(MSBuildThisFileDirectory)..\..\src\OptunaSharp.Core\obj\**\*.*;$(MSBuildThisFileDirectory)..\..\src\OptunaSharp.Core\bin\**\*.*" />
-    <_CorePackInputs Include="$(_CoreProject)" />
-    <_CorePackInputs Include="$(MSBuildThisFileDirectory)..\..\Directory.Build.props" />
+  <ItemGroup Condition="Exists('$(_SrcDir)')">
+    <!-- Every packable project under src/ (all are packable; the parity project is under test/, excluded). -->
+    <_SrcPackable Include="$(_SrcDir)\*\*.csproj" />
+    <!-- Freshness inputs: any src source or the build files that shape the packages. bin/obj are excluded
+         so packages' own build output can never retrigger the pack (which would loop). -->
+    <_PackInputs Include="$(_SrcDir)\**\*.cs" Exclude="$(_SrcDir)\**\obj\**\*.*;$(_SrcDir)\**\bin\**\*.*" />
+    <_PackInputs Include="$(_SrcDir)\*\*.csproj" />
+    <_PackInputs Include="$(MSBuildThisFileDirectory)..\..\Directory.Build.props" />
   </ItemGroup>
 
-  <Target Name="_PackCoreIntoLocalFeed"
+  <!-- Our cached extractions (all shipped ids start with 'optunasharp', lowercased in the global cache),
+       enumerated at eval so a repack can evict exactly the fixed-version subfolder of each. GetDirectories
+       is guarded by Exists so it never throws on a missing cache dir. -->
+  <ItemGroup Condition="Exists('$(_NuGetGlobalPackages)')">
+    <_OurCachedPkgRoot Include="$([System.IO.Directory]::GetDirectories('$(_NuGetGlobalPackages)', 'optunasharp*'))" />
+    <_OurCachedPkgVersionDir Include="@(_OurCachedPkgRoot->'%(Identity)/$(OptunaSharpPackageVersion)')" />
+  </ItemGroup>
+
+  <Target Name="_PackAllOptunaSharpPackagesIntoLocalFeed"
           BeforeTargets="Restore;CollectPackageReferences"
-          Condition="Exists('$(_CoreProject)')"
-          Inputs="@(_CorePackInputs)"
-          Outputs="$(_ExpectedCoreNupkg)">
+          Condition="Exists('$(_SrcDir)')"
+          Inputs="@(_PackInputs)"
+          Outputs="$(_FeedStamp)">
     <Message Importance="high"
-             Text="OptunaSharp.Tests.PackageParity: packing Core into the local isolation feed -> $(_ExpectedCoreNupkg) (first build / on Core change)" />
-    <!-- Evict the fixed-version extraction so restore cannot serve stale bits from a prior 0.1.0 pack. -->
-    <RemoveDir Condition="Exists('$(_CoreCachedInGlobal)')" Directories="$(_CoreCachedInGlobal)" />
-    <!-- Pack Core AS the version the PackageReference requests (its own nested restore+build). PackageVersion
-         pins identity so the feed's file name always equals the requested version, even when CI overrides it. -->
-    <Exec Command="dotnet pack &quot;$(_CoreProject)&quot; --configuration $(_CorePackConfiguration) -p:PackageVersion=$(OptunaSharpPackageVersion) --output &quot;$(_LocalFeedDir)&quot; --nologo -clp:ErrorsOnly" />
+             Text="OptunaSharp.Tests.PackageParity: packing ALL OptunaSharp packages from src/ into the local isolation feed (first build / on any src change; one-time cost)..." />
+    <!-- Evict our fixed-version extractions so restore cannot serve stale bits from a prior pack. Batches
+         over the enumerated dirs; if there are none (nothing cached yet) it is a no-op. -->
+    <RemoveDir Directories="@(_OurCachedPkgVersionDir)" Condition="Exists('%(Identity)')" />
+    <!-- Pack each packable src project into the feed (one dotnet pack per project, batched over the item).
+         PackageVersion pins identity so each feed file name equals the requested version even under CI override. -->
+    <Exec Command="dotnet pack &quot;%(_SrcPackable.FullPath)&quot; --configuration $(_CorePackConfiguration) -p:PackageVersion=$(OptunaSharpPackageVersion) --output &quot;$(_LocalFeedDir)&quot; --nologo -clp:ErrorsOnly" />
+    <!-- Stamp AFTER a successful pack so a failed pack does not mark the feed fresh. -->
+    <Touch Files="$(_FeedStamp)" AlwaysCreate="true" />
   </Target>
 
 </Project>
