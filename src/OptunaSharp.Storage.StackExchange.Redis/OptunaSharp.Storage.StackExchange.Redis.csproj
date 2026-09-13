@@ -23,20 +23,23 @@
     <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 
-  <ItemGroup>
+  <!-- TFM-matched StackExchange.Redis so net8.0 does NOT pull the .NET 10-era Microsoft.Extensions graph.
+       The ENTIRE 3.x line (3.0.0..3.1.31) depends on Logging.Abstractions 10.0.5, which drags DI
+       abstractions to 10.0.x on net8.0; net8.0-clean therefore requires the 2.x line (2.13.17 is the
+       latest, and depends on Logging.Abstractions 8.0.x). This is a major-version downgrade on net8.0
+       ONLY — 3.1.31 stays on net10.0 — and the journal backend uses only the stable
+       IConnectionMultiplexer/IDatabase/ConfigurationOptions surface present in both 2.x and 3.x. The
+       Redis journal wire format is client-version-independent, so cross-language byte-compat is unaffected. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="StackExchange.Redis" Version="2.13.17" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
     <PackageReference Include="StackExchange.Redis" Version="3.1.31" />
   </ItemGroup>
 
-  <!-- net8.0 DI floor: StackExchange.Redis 3.1.31 -> Logging.Abstractions 10.0.5 requires the .NET 10 DI
-       line on net8.0 as well, so match it here (a lower ref is a NU1605 downgrade). Keeping the
-       maintainer-pinned StackExchange.Redis 3.x (the wire/byte-compat-verified client) takes priority
-       over a net8.0-pure DI line here. net10.0 uses 10.0.x. -->
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <MicrosoftExtensionsDIVersion>10.0.5</MicrosoftExtensionsDIVersion>
-  </PropertyGroup>
-
   <!-- Optional Microsoft.Extensions.DependencyInjection wire-up (OptunaSharp.Storages.Journal.Extensions).
-       TFM-matched version from ../../Directory.Build.props (10.0.5 floor on net8.0 per above, 10.0.x on net10.0). -->
+       TFM-matched version from ../../Directory.Build.props (8.0.x on net8.0 — clean, thanks to the
+       StackExchange.Redis split above — 10.0.x on net10.0). -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsDIVersion)" />
   </ItemGroup>

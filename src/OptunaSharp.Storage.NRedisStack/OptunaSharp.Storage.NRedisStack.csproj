@@ -23,22 +23,22 @@
     <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- Redis's official .NET client. Brings StackExchange.Redis transitively (NRedisStack is a
-         superset of it); this backend uses the plain IDatabase surface for GET/SET/INCR/EVAL. -->
+  <!-- Redis's official .NET client. Brings StackExchange.Redis transitively (NRedisStack is a superset of
+       it); this backend uses the plain IDatabase surface for GET/SET/INCR/EVAL. TFM-matched so net8.0
+       does NOT pull the .NET 10-era Microsoft.Extensions graph: NRedisStack 1.6.0+ depends on the
+       StackExchange.Redis 3.x line (-> Logging.Abstractions 10.0.5), so net8.0-clean requires 1.5.0 (the
+       latest NRedisStack on StackExchange.Redis 2.x). This is a downgrade on net8.0 ONLY — 1.7.4 stays on
+       net10.0 — and the backend uses only the stable GetDatabase/IDatabase surface unchanged across both. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="NRedisStack" Version="1.5.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
     <PackageReference Include="NRedisStack" Version="1.7.4" />
   </ItemGroup>
 
-  <!-- net8.0 DI floor: NRedisStack 1.7.4 -> StackExchange.Redis 3.1.31 -> Logging.Abstractions 10.0.5
-       requires the .NET 10 DI line on net8.0 as well, so match it here (a lower ref is a NU1605
-       downgrade). Keeping the maintainer-pinned Redis clients takes priority over a net8.0-pure DI line
-       here. net10.0 uses 10.0.x. -->
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <MicrosoftExtensionsDIVersion>10.0.5</MicrosoftExtensionsDIVersion>
-  </PropertyGroup>
-
   <!-- Optional Microsoft.Extensions.DependencyInjection wire-up (OptunaSharp.Storages.Journal.Extensions).
-       TFM-matched version from ../../Directory.Build.props (10.0.5 floor on net8.0 per above, 10.0.x on net10.0). -->
+       TFM-matched version from ../../Directory.Build.props (8.0.x on net8.0 — clean, thanks to the
+       NRedisStack split above — 10.0.x on net10.0). -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsDIVersion)" />
   </ItemGroup>

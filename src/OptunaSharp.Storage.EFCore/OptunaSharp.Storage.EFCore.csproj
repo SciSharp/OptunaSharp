@@ -25,16 +25,21 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The two EF Core providers this package targets. Both pin to the EF Core 9 line (Pomelo's
-         latest stable), which runs on net8.0 and net10.0 alike. Npgsql brings native-enum support
+    <!-- The two EF Core providers, pinned to the EF Core 9 line on BOTH TFMs. An EF Core 8 (8.0.x-line)
+         split for net8.0 was attempted for a fully-8.0.x DI graph but rejected: the RDB backend binds
+         Npgsql-9-only APIs — NpgsqlDbContextOptionsBuilder.MapEnum and NpgsqlDataSource.ReloadTypes — that
+         do not exist in Npgsql 8, so EF Core 8 would require #if-forking the byte-compat-verified enum
+         mapping + type-reload code and risking schema parity. This is acceptable because EF Core 9's
+         dependency is the .NET 9 DI line (9.0.x), NOT a .NET 10 package pulled into net8.0 — it already
+         meets the "no newer-than-.NET-9 / no .NET 10 on net8.0" goal. Npgsql brings native-enum support
          (studydirection/trialstate/...); Pomelo brings MySqlConnector. -->
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
   </ItemGroup>
 
-  <!-- net8.0 DI floor: EF Core 9's own dependencies require the .NET 9 DI line (9.0.x) on net8.0 too, so
-       match EF Core here rather than reference below it (a lower ref is a NU1605 downgrade). This is EF
-       Core 9's normal .NET 9 footprint, NOT a .NET 10 package pulled into net8.0. net10.0 uses 10.0.x. -->
+  <!-- net8.0 DI floor: EF Core 9 (above) requires the .NET 9 DI line (9.0.x) on net8.0, so match it here
+       rather than reference below it (a lower ref is a NU1605 downgrade). This is EF Core 9's normal .NET 9
+       footprint, NOT a .NET 10 package pulled into net8.0. net10.0 uses 10.0.x. -->
   <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
     <MicrosoftExtensionsDIVersion>9.0.1</MicrosoftExtensionsDIVersion>
   </PropertyGroup>
