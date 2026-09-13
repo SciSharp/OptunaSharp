@@ -13,8 +13,11 @@ namespace OptunaSharp.Tests.Interop;
 ///     resamples mutated-away parameters through the independent MT19937 <see cref="RandomSampler" />,
 ///     and the arithmetic crossovers (BLX-α/SBX/vSBX/SPX) are bit-exact — so every trial's
 ///     params/values/distributions plus the per-trial generation and the study parent-cache trial-id
-///     lists agree bit-for-bit. (UNDX with ≥2 numerical parameters is intentionally excluded: its
-///     managed QR does not reproduce LAPACK's column signs — see <see cref="UNDXCrossover" />.)
+///     lists agree bit-for-bit. UNDX (≥2 numerical parameters) is bit-exact too <b>when the OpenBLAS
+///     backend is present</b>: its PSL basis now rides <c>np.linalg.qr</c> (LAPACK), whose column signs
+///     are byte-identical to NumPy's, so <see cref="UndxCrossover_FullState_IsBitIdentical" /> is
+///     host-pinned to x64 (the managed Householder fallback used on a no-native build sign-diverges —
+///     see <see cref="UNDXCrossover" />).
 /// </summary>
 [TestClass]
 public class NsgaiiSamplerParityTests : OptunaInteropTestBase
@@ -136,6 +139,44 @@ public class NsgaiiSamplerParityTests : OptunaInteropTestBase
             "study = optuna.create_study(study_name='nsga', directions=['minimize', 'maximize'], " +
             $"sampler=optuna.samplers.NSGAIISampler(population_size=6, seed={seed}, " +
             $"crossover=optuna.samplers.nsgaii.{pyCrossover}))\n" +
+            "def _obj(t):\n" +
+            "    a = t.suggest_float('a', -5, 5)\n" +
+            "    b = t.suggest_float('b', -5, 5)\n" +
+            "    c = t.suggest_float('c', -5, 5)\n" +
+            "    return (a * a + b * b + c * c, a - b + c)\n" +
+            "study.optimize(_obj, n_trials=24)\n");
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0)]
+    [DataRow(7)]
+    [DataRow(42)]
+    public void UndxCrossover_FullState_IsBitIdentical(int seed)
+    {
+        // UNDX's orthonormal PSL basis rides np.linalg.qr (LAPACK) — bit-exact vs Optuna only where
+        // OpenBLAS's LAPACK column signs match NumPy's, i.e. host-pinned to x64 like the linalg /
+        // AGE-MOEA-2 parity tiers. (Without OpenBLAS the managed Householder fallback sign-diverges;
+        // that path makes no byte-parity claim, so it is out of scope for this gate.) pop=6 covers
+        // UNDX's n_parents=3; three float params exercise the ≥2-numerical basis that used to diverge.
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "nsga",
+            sampler: new NSGAIISampler(populationSize: 6, seed: seed, crossover: new UNDXCrossover()),
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Maximize });
+        csStudy.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -5, 5);
+            double b = t.SuggestFloat("b", -5, 5);
+            double c = t.SuggestFloat("c", -5, 5);
+            return (IReadOnlyList<double>)new[] { a * a + b * b + c * c, a - b + c };
+        }, nTrials: 24);
+
+        AssertFullParity(csStudy,
+            "study = optuna.create_study(study_name='nsga', directions=['minimize', 'maximize'], " +
+            $"sampler=optuna.samplers.NSGAIISampler(population_size=6, seed={seed}, " +
+            "crossover=optuna.samplers.nsgaii.UNDXCrossover()))\n" +
             "def _obj(t):\n" +
             "    a = t.suggest_float('a', -5, 5)\n" +
             "    b = t.suggest_float('b', -5, 5)\n" +

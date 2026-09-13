@@ -1,5 +1,7 @@
 using System;
 using NumSharp;
+using NumSharp.Interop.OpenBLAS;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.Nsgaii;
 
@@ -9,17 +11,23 @@ namespace OptunaSharp.Samplers.Nsgaii;
 ///
 ///     Generates a child from three parents using a multivariate normal distribution.
 ///
-///     <para><b>[Misaligned] managed QR (n &gt; 1 only).</b> The orthonormal basis orthogonal to the
-///     primary search line comes from <c>np.linalg.qr</c>, i.e. LAPACK <c>dgeqrf</c>/<c>dorgqr</c>.
-///     OptunaSharp uses a managed Householder QR that reproduces numpy's basis vectors to ~1e-14 in
-///     magnitude but <b>not their per-column signs</b> (LAPACK's column-sign bookkeeping is internal
-///     and not portably reproducible — the same managed-vs-LAPACK class the plan excuses in §10).
-///     Because <c>etas ~ N(0, σ²)</c> is symmetric, a sign-flipped basis is still a correct UNDX
-///     sampler, but with two or more numerical parameters the child values differ from Optuna by
-///     O(1), and that difference cascades through the crowding-distance/non-domination selection —
-///     so the study trajectory diverges from Optuna's for such spaces. The Gaussian draw count/order
-///     is identical regardless (the study stays in RNG lock-step within OptunaSharp, so it is
-///     reproducible), and a single numerical parameter is bit-exact (the basis is unused).</para>
+///     <para><b>QR sign parity (n &gt; 1).</b> The orthonormal basis orthogonal to the primary search
+///     line comes from <c>np.linalg.qr</c> (LAPACK <c>dgeqrf</c>/<c>dorgqr</c>). QR is unique only up
+///     to the signs of R's diagonal, and those signs propagate into the basis vectors: get them wrong
+///     and, with two or more numerical parameters, the child values differ from Optuna by O(1), which
+///     then cascades through the crowding-distance/non-domination selection and diverges the whole
+///     study trajectory. So the basis is computed through <see cref="LinAlg.QrQ" /> (OpenBLAS/LAPACK —
+///     column signs byte-identical to NumPy) whenever the native backend is present, which is the
+///     normal case and gives full Optuna parity here (to the ~1e-14 managed-vs-LAPACK tolerance the
+///     downstream selection is insensitive to).</para>
+///
+///     <para><b>[Misaligned] no-native (Tier N) fallback.</b> Without OpenBLAS the basis falls back to
+///     a managed Householder QR (<see cref="HouseholderQ" />) that matches numpy's magnitudes to
+///     ~1e-14 but <b>not its per-column signs</b> (its accumulated <c>Q = Q·Hₖ</c> flips signs vs
+///     <c>orgqr</c>). UNDX still samples correctly — <c>etas ~ N(0, σ²)</c> is symmetric, so a
+///     sign-flipped basis is a valid draw and the study stays in RNG lock-step within OptunaSharp —
+///     but its trajectory can sign-diverge from Optuna for ≥2-numerical-parameter spaces. A single
+///     numerical parameter is bit-exact on either path (the basis is unused).</para>
 /// </summary>
 public class UNDXCrossover : BaseCrossover
 {
@@ -159,7 +167,9 @@ public class UNDXCrossover : BaseCrossover
             for (int j = 0; j < n; j++)
                 at[i, j] = a[j, i];
 
-        var q = HouseholderQ(at, n);
+        // LAPACK QR reproduces numpy's per-column signs (Optuna parity); the managed Householder is a
+        // no-native fallback whose signs can diverge — see the type remarks and HouseholderQ.
+        var q = OpenBlasEngine.LapackAvailable ? LinAlg.QrQ(at) : HouseholderQ(at, n);
         // return Q.T[1:] — rows 1..n-1 of Q^T = columns 1..n-1 of Q.
         var es = new double[n - 1][];
         for (int col = 1; col < n; col++)
@@ -173,9 +183,14 @@ public class UNDXCrossover : BaseCrossover
     }
 
     /// <summary>
-    ///     Householder QR of the <paramref name="n" />×<paramref name="n" /> matrix
-    ///     <paramref name="a" />; returns the orthogonal factor <c>Q</c> such that <c>A = Q R</c>,
-    ///     using the LAPACK sign convention (<c>alpha = -sign(x0)·‖x‖</c>).
+    ///     Managed Householder QR of the <paramref name="n" />×<paramref name="n" /> matrix
+    ///     <paramref name="a" />; returns the orthogonal factor <c>Q</c> such that <c>A = Q R</c>.
+    ///     <b>No-native (Tier N) fallback only</b> — the caller prefers <see cref="LinAlg.QrQ" />
+    ///     (LAPACK) whenever OpenBLAS is present. Although each reflector applies the LAPACK sign
+    ///     convention (<c>alpha = -sign(x0)·‖x‖</c>), the accumulated <c>Q = Q·Hₖ</c> still flips
+    ///     per-column signs vs LAPACK's <c>orgqr</c> (measured: 0/16 column-sign-fingerprint match to
+    ///     numpy), so a study on this path can diverge from Optuna — acceptable because a no-native
+    ///     build makes no byte-parity claim.
     /// </summary>
     /// <param name="a">First numerical array operand.</param>
     /// <param name="n">Number of numerical coordinates.</param>
