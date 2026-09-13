@@ -28,6 +28,7 @@ ones — the same defaults as Optuna.
 | `QMCSampler` | Low-discrepancy space filling | `(qmcType: "sobol", scramble: false, seed: null, …)` |
 | `NSGAIISampler` | Multi-objective (2–3 objectives) | `(populationSize: 50, crossover: null, mutation: null, seed: null, …)` |
 | `NSGAIIISampler` | Multi-objective (many objectives) | `(populationSize: 50, referencePoints: null, dividingParameter: 3, seed: null, …)` |
+| `NSGAIIICptSampler` | NSGA-III + conditional (branch-defined) parameters | `(populationSize: 50, conditionalParams: null, referencePoints: null, dividingParameter: 3, seed: null, …)` |
 | `BruteForceSampler` | Exhaustive define-by-run search | `(int? seed = null, bool avoidPrematureStop = false)` |
 | `PartialFixedSampler` | Fix some params, search the rest | `(IReadOnlyDictionary<string, object?> fixedParams, BaseSampler baseSampler)` |
 
@@ -91,25 +92,29 @@ Available crossovers (all in `OptunaSharp.Samplers.Nsgaii`): `UniformCrossover`,
 `SBXCrossover`, `VSBXCrossover`, `SPXCrossover`, `UNDXCrossover`; mutation: `PolynomialMutation`.
 `NSGAIIISampler` additionally accepts `referencePoints` and `dividingParameter`.
 
-#### Conditional parameters (OptunaSharp extension)
+#### Conditional parameters — NSGA-III-CPT (OptunaSharp extension)
 
 Define-by-run objectives often suggest a parameter only under a branch — `beta1` only when
 `optimizer == "adam"`. Optuna's GA samplers evolve the *intersection* search space (the parameters every
 completed trial has), so such a parameter drops out after the first trial that lacks it and is then
-resampled at random on every trial: no crossover, no mutation, no inheritance. `ConditionalParams`
-(in `OptunaSharp.SearchSpace`) declares the activation structure, so the sampler keeps those parameters
-in the relative search space and evolves them whenever they are active — and leaves them out entirely,
-never blended and never counted, whenever they are not:
+resampled at random on every trial: no crossover, no mutation, no inheritance. **`NSGAIIICptSampler`**
+(NSGA-III with **C**ategorical **P**arameter **T**rees) is the OptunaSharp sampler that closes this gap:
+it is a standalone copy of `NSGAIIISampler` that takes a `ConditionalParams` (in
+`OptunaSharp.Samplers.NsgaiiiCpt`) rule set declaring the activation structure, so it keeps those
+parameters in the relative search space and
+evolves them whenever they are active — and leaves them out entirely, never blended and never counted,
+whenever they are not. The plain `NSGAIISampler` / `NSGAIIISampler` (and `AgeMoea2Sampler` / `RveaSampler`)
+are bit-exact Optuna ports and no longer take rules; the feature lives only in `NSGAIIICptSampler`.
 
 ```csharp
-using OptunaSharp.SearchSpace;
+using OptunaSharp.Samplers.NsgaiiiCpt;
 
 var rules = new ConditionalParams()
     .When("optimizer", "adam", "adamw").Activates("beta1", "beta2")   // rules on one activator OR together
     .When("optimizer", "sgd").Activates("momentum")
     .When("n_layers", v => (long)v! >= 3).Activates("width_3");        // a predicate for ranges
 
-var sampler = new NSGAIIISampler(populationSize: 32, seed: 0, conditionalParams: rules);
+var sampler = new NSGAIIICptSampler(populationSize: 32, seed: 0, conditionalParams: rules);
 
 study.Optimize(t =>
 {
@@ -137,8 +142,8 @@ different activators AND together, activators may themselves be conditional (cha
 rejected. Values compare with Python `==` semantics (`1 == 1.0 == true`, strings ordinal); a predicate
 receives the boxed `long` / `double` / raw choice value. The sampler warns once per parameter when a
 completed trial contradicts the rules (present while inactive, or absent while active) — usually a sign
-the objective's branches and the declaration drifted apart. Both `NSGAIISampler` and `NSGAIIISampler`
-accept `conditionalParams`; with none declared (the default) they stay bit-identical to Optuna. There is
+the objective's branches and the declaration drifted apart. Only `NSGAIIICptSampler` accepts
+`conditionalParams`; constructed with no rules it is bit-identical to `NSGAIIISampler`. There is
 no Optuna analog for the GA samplers (for TPE, Optuna's own answer is `TPESampler(group: true)`).
 
 `examples/ConditionalParameters.cs` prints the effect generation by generation: the same seeded NSGA-III
@@ -148,9 +153,9 @@ rule kind drives the sampler's own proposals, a parameter is learned while activ
 parameter leaves the child and the RNG state bit-identical to a world in which it never existed.
 `ConditionalParamsGateTests` is the null control — the effect happens only when you turn it on: with no
 rules, an empty `ConditionalParams`, or rules that always admit, the study is byte-for-byte the Optuna
-baseline (an empty rule set is a bit-exact no-op even on a branchy study, both samplers, copy-type and
-arithmetic crossover); and activation is per-parameter — declaring one branch-only parameter leaves an
-undeclared sibling exactly at its no-rules random-draw level.
+baseline (an empty rule set is a bit-exact no-op even on a branchy study — NSGA-III-CPT reproduces
+`NSGAIIISampler` parity, copy-type and arithmetic crossover); and activation is per-parameter — declaring
+one branch-only parameter leaves an undeclared sibling exactly at its no-rules random-draw level.
 
 ##### Dormant-value memory (opt-in)
 
@@ -232,7 +237,7 @@ These are the documented, tested differences from Optuna:
 - **GridSampler** may order not-yet-visited grid points differently under concurrency (cosmetic).
 - **NSGAIIISampler** can differ on near-tie reference-point selection; **UNDXCrossover** uses a managed
   QR and diverges for 1-D search spaces.
-- **ConditionalParams** (NSGA-II/III) is an OptunaSharp extension with no Optuna analog, off by default;
+- **ConditionalParams** (`NSGAIIICptSampler` / NSGA-III-CPT) is an OptunaSharp extension with no Optuna analog, off by default;
   its `PreserveDormantValues` mode is a deliberate divergence — a reactivating conditional branch resumes
   its parked value instead of the random re-sample Optuna would do. A parameter that is inactive for a
   child is math-neutral — out of selection, ranking, niching, the tournament, mutation, and the crossover

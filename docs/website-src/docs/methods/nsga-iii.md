@@ -68,8 +68,11 @@ var study = Optuna.CreateStudy(
 
 Supply your own `referencePoints` (a `double[,]` with `n_objectives` columns) to bias the search toward
 preferred regions, or leave it `null` to generate uniformly-spread points from `dividingParameter`. The
-crossover / mutation operators, `crossoverProb`, `swappingProb`, and the `conditionalParams` extension
-are shared with [`NSGAIISampler`](nsga-ii.md) (see the [Samplers](../samplers.md) guide).
+crossover / mutation operators, `crossoverProb`, and `swappingProb` are shared with
+[`NSGAIISampler`](nsga-ii.md). To optimize conditional / branch-defined parameters, use
+**`NSGAIIICptSampler`** (NSGA-III-CPT) — a standalone copy of this sampler that takes a `ConditionalParams`
+rule set; this sampler itself is a bit-exact Optuna port with no such extension (see the
+[Samplers](../samplers.md) guide).
 
 **Parity.** The default path stays in exact MT19937 lock-step with Optuna — generation attribution,
 parent cache, the tournament / crossover / mutation draws, and the niching `rng.shuffle` — and the

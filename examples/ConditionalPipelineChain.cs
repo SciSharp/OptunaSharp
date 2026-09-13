@@ -26,6 +26,7 @@ using System.Linq;
 using OptunaSharp;
 using OptunaSharp.Logging;
 using OptunaSharp.Samplers;
+using OptunaSharp.Samplers.NsgaiiiCpt;
 using OptunaSharp.SearchSpace;
 using OptunaSharp.Storages;
 
@@ -40,7 +41,7 @@ for (int i = 0; i < Net.MaxStages; i++)
 OptunaLogging.SetVerbosity(LogLevel.Warning);
 var study = Optuna.CreateStudy(
     storage: new InMemoryStorage(),
-    sampler: new NSGAIISampler(populationSize: 24, seed: 0, conditionalParams: rules),   // <- wires the chain in
+    sampler: new NSGAIIICptSampler(populationSize: 24, seed: 0, conditionalParams: rules),   // <- wires the chain in
     directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });             // minimize (error, cost)
 study.Optimize(Objective, nTrials: 480);
 

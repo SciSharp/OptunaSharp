@@ -8,6 +8,7 @@ using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
 using OptunaSharp.Samplers.Nsgaii;
+using OptunaSharp.Samplers.NsgaiiiCpt;
 using OptunaSharp.SearchSpace;
 
 namespace OptunaSharp.Tests;
@@ -190,12 +191,12 @@ public class ConditionalParamsTests
         // Optuna's intersection: only what every trial has.
         SearchSpaceFunctions.IntersectionSearchSpaceOf(trials).Keys.Should().Equal("lr", "optimizer");
         // With rules: the conditional parameters stay, sorted by name like the intersection.
-        SearchSpaceFunctions.IntersectionSearchSpaceOf(trials, OptimizerRules()).Keys
+        NsgaiiiCptSearchSpace.IntersectionSearchSpaceOf(trials, OptimizerRules()).Keys
             .Should().Equal("beta1", "beta2", "lr", "momentum", "optimizer");
 
         // The incremental (cached) study-level fold agrees and raises no contradiction warning, since the
         // objective's branches match the rules exactly.
-        var space = new IntersectionSearchSpace(conditionalParams: OptimizerRules());
+        var space = new NsgaiiiCptSearchSpace(OptimizerRules());
         var warnings = CaptureWarnings(() =>
         {
             space.Calculate(study).Keys.Should().Equal("beta1", "beta2", "lr", "momentum", "optimizer");
@@ -217,14 +218,14 @@ public class ConditionalParamsTests
         }, nTrials: 6);
 
         var rules = new ConditionalParams().When("optimizer", "adam").Activates("beta1");
-        SearchSpaceFunctions.IntersectionSearchSpaceOf(study.Trials, rules).Keys.Should().Equal("optimizer");
+        NsgaiiiCptSearchSpace.IntersectionSearchSpaceOf(study.Trials, rules).Keys.Should().Equal("optimizer");
     }
 
     [TestMethod]
     public void SearchSpace_ContradictingTrials_WarnOncePerParameter()
     {
         var rules = new ConditionalParams().When("optimizer", "adam").Activates("beta1");
-        var space = new IntersectionSearchSpace(conditionalParams: rules);
+        var space = new NsgaiiiCptSearchSpace(rules);
         var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 0), direction: StudyDirection.Minimize);
         study.Optimize(t =>
         {
@@ -248,7 +249,7 @@ public class ConditionalParamsTests
     {
         var rules = OptimizerRules();
         var study = Optuna.CreateStudy(
-            sampler: new NSGAIIISampler(populationSize: 8, seed: 1, mutationProb: 0.0, conditionalParams: rules),
+            sampler: new NSGAIIICptSampler(populationSize: 8, seed: 1, mutationProb: 0.0, conditionalParams: rules),
             directions: TwoObjectives);
         study.Optimize(OptimizerObjective, nTrials: 56);
         var trials = study.Trials;
@@ -260,7 +261,7 @@ public class ConditionalParamsTests
         int inherited = 0;
         foreach (var name in rules.Parameters)
         {
-            foreach (var t in trials.Where(t => Generation(t, "NSGAIIISampler") >= 1 && t.Params.ContainsKey(name)))
+            foreach (var t in trials.Where(t => Generation(t, "NSGAIIICptSampler") >= 1 && t.Params.ContainsKey(name)))
             {
                 long bits = BitConverter.DoubleToInt64Bits((double)t.Params[name]!);
                 trials.Where(e => e.Number < t.Number && e.Params.ContainsKey(name))
@@ -290,11 +291,11 @@ public class ConditionalParamsTests
     }
 
     [TestMethod]
-    public void Nsgaii_ConditionalParams_ArithmeticCrossover_NumericalActivator_Runs()
+    public void NsgaiiiCpt_ConditionalParams_ArithmeticCrossover_NumericalActivator_Runs()
     {
         var rules = new ConditionalParams().When("n_layers", 3).Activates("width_3");
         var study = Optuna.CreateStudy(
-            sampler: new NSGAIISampler(
+            sampler: new NSGAIIICptSampler(
                 populationSize: 6, seed: 3, crossover: new SBXCrossover(), mutation: new PolynomialMutation(),
                 conditionalParams: rules),
             directions: TwoObjectives);
@@ -307,7 +308,7 @@ public class ConditionalParamsTests
         }, nTrials: 36);
 
         AssertRuleConsistent(study.Trials, rules);
-        study.Trials.Should().Contain(t => Generation(t, "NSGAIISampler") >= 1 && t.Params.ContainsKey("width_3"));
+        study.Trials.Should().Contain(t => Generation(t, "NSGAIIICptSampler") >= 1 && t.Params.ContainsKey("width_3"));
     }
 
     [TestMethod]
@@ -315,13 +316,13 @@ public class ConditionalParamsTests
     {
         var rules = OptimizerRules();
         var study = Optuna.CreateStudy(
-            sampler: new NSGAIIISampler(populationSize: 6, seed: 5, crossover: new SPXCrossover(), conditionalParams: rules),
+            sampler: new NSGAIIICptSampler(populationSize: 6, seed: 5, crossover: new SPXCrossover(), conditionalParams: rules),
             directions: TwoObjectives);
         study.Optimize(OptimizerObjective, nTrials: 36);
 
         AssertRuleConsistent(study.Trials, rules);
-        study.Trials.Should().Contain(t => Generation(t, "NSGAIIISampler") >= 1 && t.Params.ContainsKey("beta1"));
-        study.Trials.Should().Contain(t => Generation(t, "NSGAIIISampler") >= 1 && t.Params.ContainsKey("momentum"));
+        study.Trials.Should().Contain(t => Generation(t, "NSGAIIICptSampler") >= 1 && t.Params.ContainsKey("beta1"));
+        study.Trials.Should().Contain(t => Generation(t, "NSGAIIICptSampler") >= 1 && t.Params.ContainsKey("momentum"));
     }
 
     [TestMethod]
@@ -332,7 +333,7 @@ public class ConditionalParamsTests
         // absent and never pruned: the conditional path must reduce to the parity path draw for draw.
         var rules = new ConditionalParams().When("z", "a", "b", "c").Activates("y");
         var study = Optuna.CreateStudy(
-            sampler: new NSGAIIISampler(populationSize: 4, seed: 42, conditionalParams: rules),
+            sampler: new NSGAIIICptSampler(populationSize: 4, seed: 42, conditionalParams: rules),
             direction: StudyDirection.Minimize);
         study.Optimize(t =>
         {

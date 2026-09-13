@@ -17,7 +17,8 @@ namespace OptunaSharp.Samplers;
 ///     environmental selection (<see cref="AgeMoea2ElitePopulationSelectionStrategy" /> over
 ///     <see cref="AgeMoea.AgeMoea2Survival" />). Children are generated with SBX + polynomial mutation
 ///     over Optuna's transformed search space, so the sampler works across Optuna's full parameter
-///     space (float / int / categorical, conditional via <see cref="ConditionalParams" />).
+///     space (float / int / categorical). For <i>conditional</i> (branch-defined) parameters use
+///     <see cref="NSGAIIICptSampler" /> (NSGA-III-CPT); this sampler has no such extension.
 ///
 ///     AGE-MOEA-2 (Panichella, GECCO 2022, doi:10.1145/3512290.3528732) is absent from Optuna core, so
 ///     — like LM-CMA and JANUS — this is a beyond-core sampler. <b>Scope of the parity guarantee:</b>
@@ -32,7 +33,6 @@ public class AgeMoea2Sampler : BaseGASampler
     private readonly RandomSampler _randomSampler;
     private readonly LazyRandomState _rng;
     private readonly IntersectionSearchSpace _searchSpace;
-    private readonly ConditionalParams? _conditionalParams;
 
     private readonly AgeMoea2ElitePopulationSelectionStrategy _eliteStrategy;
     private readonly Func<Study, OrderedDict<string, BaseDistribution>, List<FrozenTrial>, OrderedDict<string, object?>>
@@ -49,7 +49,6 @@ public class AgeMoea2Sampler : BaseGASampler
     /// <param name="crossoverProb">Probability that a crossover occurs.</param>
     /// <param name="swappingProb">Probability of swapping each parameter during crossover.</param>
     /// <param name="seed">Seed for the random number generator.</param>
-    /// <param name="conditionalParams">OptunaSharp extension — see <see cref="ConditionalParams" /> and <see cref="NSGAIISampler" />.</param>
     /// <summary>Configures AGE-MOEA-2 survival and the genetic operators used to produce each generation.</summary>
     /// <exception cref="NumSharp.ValueError">Population size is below two or the crossover parent count, or a configured reproduction probability is invalid.</exception>
     public AgeMoea2Sampler(
@@ -59,8 +58,7 @@ public class AgeMoea2Sampler : BaseGASampler
         BaseCrossover? crossover = null,
         double crossoverProb = 0.9,
         double swappingProb = 0.5,
-        int? seed = null,
-        ConditionalParams? conditionalParams = null)
+        int? seed = null)
         : base(populationSize)
     {
         if (populationSize < 2)
@@ -77,12 +75,11 @@ public class AgeMoea2Sampler : BaseGASampler
 
         _randomSampler = new RandomSampler(seed);
         _rng = new LazyRandomState(seed);
-        _searchSpace = new IntersectionSearchSpace(conditionalParams: conditionalParams);
-        _conditionalParams = conditionalParams;
+        _searchSpace = new IntersectionSearchSpace();
 
         _eliteStrategy = new AgeMoea2ElitePopulationSelectionStrategy(populationSize);
         _childGenerationStrategy = new NSGAIIChildGenerationStrategy(
-            mutation, mutationProb, crossover, crossoverProb, swappingProb, null, _rng, conditionalParams).Generate;
+            mutation, mutationProb, crossover, crossoverProb, swappingProb, null, _rng).Generate;
         _afterTrialStrategy = new NSGAIIAfterTrialStrategy(null).Call;
     }
 
@@ -124,9 +121,7 @@ public class AgeMoea2Sampler : BaseGASampler
         var parentPopulation = GetParentPopulation(study, generation);
         if (parentPopulation.Count == 0)
             return new OrderedDict<string, object?>();
-        var child = _childGenerationStrategy(study, searchSpace, parentPopulation);
-        _conditionalParams?.ApplyDormantCarry(study, trial, child, parentPopulation, searchSpace);
-        return child;
+        return _childGenerationStrategy(study, searchSpace, parentPopulation);
     }
 
     /// <inheritdoc />

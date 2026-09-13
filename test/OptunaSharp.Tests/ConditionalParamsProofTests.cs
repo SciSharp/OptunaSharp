@@ -7,6 +7,7 @@ using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Samplers;
 using OptunaSharp.Samplers.Nsgaii;
+using OptunaSharp.Samplers.NsgaiiiCpt;
 using OptunaSharp.SearchSpace;
 
 namespace OptunaSharp.Tests;
@@ -48,7 +49,7 @@ public class ConditionalParamsProofTests
         // is selected against and each rule keeps carriers in the population for the whole run.
         var proposals = new Dictionary<int, OrderedDict<string, object?>>();
         var study = Optuna.CreateStudy(
-            sampler: new NSGAIIISampler(populationSize: 16, seed: 7, conditionalParams: rules),
+            sampler: new NSGAIIICptSampler(populationSize: 16, seed: 7, conditionalParams: rules),
             direction: StudyDirection.Minimize);
         study.Optimize(t =>
         {
@@ -68,7 +69,7 @@ public class ConditionalParamsProofTests
                 // (a) the trial record holds the parameter exactly when the rules say it is active
                 record.ContainsKey(name).Should().Be(rules.IsActive(name, record), $"`{name}` in trial {trial.Number}");
 
-                if (Generation(trial, "NSGAIIISampler") == 0)
+                if (Generation(trial, "NSGAIIICptSampler") == 0)
                     continue;   // generation 0 is pure random sampling: there is no proposal to judge
 
                 bool inProposal = proposal.ContainsKey(name);
@@ -111,10 +112,13 @@ public class ConditionalParamsProofTests
     // ---- claim 2: learns when active, random without the rules ----------------------------------
 
     [TestMethod]
-    [DataRow("NSGAIISampler")]
-    [DataRow("NSGAIIISampler")]
-    public void Learns_WhenActive_StaysRandom_UnderThePlainIntersection(string samplerName)
+    public void Learns_WhenActive_StaysRandom_UnderThePlainIntersection()
     {
+        // The conditional feature lives only in NSGA-III-CPT now, so both arms use it: the rules arm carries
+        // the activation rules; the "plain intersection" arm passes null rules — which is bit-identical to
+        // NSGAIIISampler parity (see ConditionalParamsGateTests). The claim: the rules make the branch-only
+        // parameters learnable where the plain intersection leaves them at the random-draw level.
+        const string samplerName = "NSGAIIICptSampler";
         var rules = new ConditionalParams()
             .When("optimizer", "adam").Activates("beta1")
             .When("optimizer", "sgd").Activates("momentum");
@@ -126,8 +130,8 @@ public class ConditionalParamsProofTests
         var latePlain = new List<FrozenTrial>();
         for (int seed = 0; seed < 3; seed++)
         {
-            var withRules = RunTwoBranch(samplerName, seed, rules);
-            var plain = RunTwoBranch(samplerName, seed, rules: null);
+            var withRules = RunTwoBranch(seed, rules);
+            var plain = RunTwoBranch(seed, rules: null);
 
             // Generation 0 is identical (same seed, pure random sampling): only the rules differ afterwards.
             withRules.Trials.Where(t => Generation(t, samplerName) == 0).Select(t => t.Params["lr"])
@@ -242,7 +246,7 @@ public class ConditionalParamsProofTests
         var rng = new LazyRandomState(seed);
         BaseCrossover crossover = crossoverKind == "sbx" ? new SBXCrossover() : new UniformCrossover(0.5);
         BaseMutation? mutation = crossoverKind == "sbx" ? new PolynomialMutation() : null;
-        var strategy = new NSGAIIChildGenerationStrategy(
+        var strategy = new NsgaiiiCptChildGenerationStrategy(
             mutation, mutationProb: null, crossover, crossoverProb: 0.9, swappingProb: 0.5,
             constraintsFunc: null, rng, rules);
         var child = strategy.Generate(study, space, population);
@@ -291,11 +295,11 @@ public class ConditionalParamsProofTests
         return new[] { 1.0 + shared, shared + Math.Pow(momentum - MomentumOpt, 2.0) };
     }
 
-    private static Study RunTwoBranch(string samplerName, int seed, ConditionalParams? rules)
+    private static Study RunTwoBranch(int seed, ConditionalParams? rules)
     {
-        BaseSampler sampler = samplerName == "NSGAIISampler"
-            ? new NSGAIISampler(populationSize: 24, seed: seed, mutationProb: 0.1, conditionalParams: rules)
-            : new NSGAIIISampler(populationSize: 24, seed: seed, mutationProb: 0.1, conditionalParams: rules);
+        // NSGA-III-CPT is the only sampler carrying the conditional feature; null rules give the plain
+        // NSGA-III intersection behavior (bit-identical to NSGAIIISampler — ConditionalParamsGateTests).
+        var sampler = new NSGAIIICptSampler(populationSize: 24, seed: seed, mutationProb: 0.1, conditionalParams: rules);
         var study = Optuna.CreateStudy(
             sampler: sampler, directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
         study.Optimize(TwoBranchObjective, nTrials: 24 * 16);

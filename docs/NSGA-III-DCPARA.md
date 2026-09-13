@@ -7,6 +7,18 @@
 > the deterministic surrogate probes shipped in `examples/` and `test/`, not benchmark claims — the
 > benchmark study is future work (§13).
 
+> **Consolidation (extraction into NSGA-III-CPT).** The conditional machinery has been extracted into a
+> single standalone sampler, **`NSGAIIICptSampler`** ("NSGA-III with **C**ategorical **P**arameter
+> **T**rees", namespace `OptunaSharp.Samplers`, helpers in `OptunaSharp.Samplers.NsgaiiiCpt`). It is the
+> **sole home** of the feature: `NSGAIISampler`, `NSGAIIISampler`, `AgeMoea2Sampler`, `RveaSampler` and
+> `JanusAgeMoea2CmixSampler` are bit-exact Optuna ports again and no longer accept `conditionalParams`.
+> `NSGAIIICptSampler` reuses the shared, Optuna-parity genetic core (base crossovers, mutations, ranking,
+> reference-point niching) and owns copies of only the customized (conditional) seams. Read every "NSGA-II /
+> NSGA-III" mention below as "NSGA-III-CPT". The rule type `ConditionalParams` is unchanged and still lives
+> in `OptunaSharp.Samplers.NsgaiiiCpt` (moved there from `OptunaSharp.SearchSpace` so the whole CPT class set,
+> config type included, lives in one place and the `SearchSpace` namespace stays a pure Optuna port).
+> Sisyphus.Rock's `AnchorStudy` uses `NSGAIIICptSampler` as its default sampler.
+
 **DCPARA** = *Dynamic Conditional PARAmeterization*: the set of hyperparameters a trial carries is not
 fixed but a function of the values of other hyperparameters, and — optionally — a *dynamic* quantity
 that flows between an active genome and a dormant side channel without losing what was learned.
@@ -53,13 +65,14 @@ untouched path is Optuna 5.x.
 | `71b6610` | `fix(samplers)` — prune-aware conditional crossover: deactivation is math-neutral incl. multi-parent |
 | `a6cf625` | `docs(examples)` — enum-array optional-chain example |
 
-Source of record:
+Source of record (post-consolidation — see the status note above; the conditional seams moved into
+`Samplers/NsgaiiiCpt/` and were removed from the shared machinery):
 
-- Algebra + dormant carry — `src/OptunaSharp.Core/SearchSpace/ConditionalParams.cs`
-- Search-space fold — `src/OptunaSharp.Core/SearchSpace/IntersectionSearchSpace.cs` (`CalculateConditional`)
-- Crossover — `src/OptunaSharp.Core/Samplers/Nsgaii/NsgaiiCrossover.cs` (`PerformConditionalCrossover`)
-- Child generation — `src/OptunaSharp.Core/Samplers/Nsgaii/NSGAIIChildGenerationStrategy.cs`
-- Sampler wiring — `src/OptunaSharp.Core/Samplers/{NSGAIISampler,NSGAIIISampler}.cs`
+- Algebra + dormant carry — `src/OptunaSharp.Core/Samplers/NsgaiiiCpt/ConditionalParams.cs` (the public rule type; consumed only by NSGA-III-CPT)
+- Search-space fold — `src/OptunaSharp.Core/Samplers/NsgaiiiCpt/NsgaiiiCptSearchSpace.cs` (`CalculateConditional`)
+- Crossover — `src/OptunaSharp.Core/Samplers/NsgaiiiCpt/NsgaiiiCptCrossover.cs` (`PerformConditionalCrossover`)
+- Child generation — `src/OptunaSharp.Core/Samplers/NsgaiiiCpt/NsgaiiiCptChildGenerationStrategy.cs`
+- Sampler — `src/OptunaSharp.Core/Samplers/NsgaiiiCpt/NSGAIIICptSampler.cs`
 
 ---
 
@@ -220,10 +233,11 @@ objective.
 
 ### 6.5 Wiring
 
-Both samplers take a trailing optional `conditionalParams:` argument and store it; `SampleRelative`
-calls the (possibly conditional) child-generation strategy and then `ApplyDormantCarry` (§8b). A custom
-`childGenerationStrategy` receives the widened search space and must cope with absent parent genes
-itself.
+`NSGAIIICptSampler` takes a trailing optional `conditionalParams:` argument and stores it; `SampleRelative`
+calls the conditional-aware child-generation strategy and then `ApplyDormantCarry` (§8b). A custom
+`childGenerationStrategy` receives the widened search space and must cope with absent parent genes itself.
+(Historically NSGA-II and NSGA-III both accepted `conditionalParams`; the feature has since been
+consolidated into the standalone `NSGAIIICptSampler` — the other GA samplers are bit-exact Optuna ports again.)
 
 ---
 

@@ -746,6 +746,16 @@ moment OptunaSharp.Core loads. Keep it.
   `docs/NSGA-III-DCPARA.md` (DCPARA — Dynamic Conditional PARAmeterization) writes all of the above up in
   paper form (motivation, the activation algebra, the three seams, the math-neutrality theorem-to-be, the
   dynamic dormant-memory mode, evidence, and open questions).
+  **Consolidation into NSGA-III-CPT (later):** the whole feature was extracted into a single standalone
+  sampler `NSGAIIICptSampler` ("NSGA-III with Categorical Parameter Trees", `Samplers/NsgaiiiCpt/`), which
+  owns copies of the conditional seams (`NsgaiiiCptSearchSpace`, `NsgaiiiCptCrossover`,
+  `NsgaiiiCptChildGenerationStrategy`) and reuses the shared Optuna-parity genetic core (base crossovers,
+  mutations, ranking, reference-point niching). `NSGAIISampler`, `NSGAIIISampler`, `AgeMoea2Sampler`,
+  `RveaSampler` and `JanusAgeMoea2CmixSampler` were reverted to bit-exact Optuna ports (they no longer
+  accept `conditionalParams`); `ConditionalParams` moved to `Samplers/NsgaiiiCpt/` (namespace `OptunaSharp.Samplers.NsgaiiiCpt`) so the
+  whole CPT class set lives in one place and `SearchSpace` stays a pure Optuna port; it is consumed only by
+  `NSGAIIICptSampler`. The `ConditionalParams*` tests now target NSGA-III-CPT (OptunaSharp.Tests green).
+  Sisyphus.Rock defaults its `AnchorStudy` sampler to `NSGAIIICptSampler`.
 - ✅ **2.15** — `feat(linalg): Phase 2.15 — OpenBLAS-backed linalg primitives (LinAlg) for CMA-ES/GP`.
   **Redirected mid-flight by the maintainer** from hand-rolled managed primitives to
   **`NumSharp.Interop.OpenBLAS`** (*"use NumSharp + OpenBLAS any time Optuna uses NumPy"*). Core's csproj

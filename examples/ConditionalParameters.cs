@@ -26,6 +26,7 @@ using System.Globalization;
 using OptunaSharp;
 using OptunaSharp.Logging;
 using OptunaSharp.Samplers;
+using OptunaSharp.Samplers.NsgaiiiCpt;
 using OptunaSharp.SearchSpace;
 using OptunaSharp.Storages;
 
@@ -100,10 +101,10 @@ static Study Run(int seed, ConditionalParams? rules, double? mutationProb)
 {
     var study = Optuna.CreateStudy(
         storage: new InMemoryStorage(),                        // in-memory — nothing persisted
-        sampler: new NSGAIIISampler(
+        sampler: new NSGAIIICptSampler(
             populationSize: PopulationSize, seed: seed,        // seeded, so the two runs share generation 0
             mutationProb: mutationProb,                        // null = Optuna's default 1 / n_params
-            conditionalParams: rules),                         // null = Optuna's intersection-space behavior
+            conditionalParams: rules),                         // null = NSGA-III parity (intersection-space) behavior
         directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
     study.Optimize(Objective, nTrials: PopulationSize * Generations);
     return study;

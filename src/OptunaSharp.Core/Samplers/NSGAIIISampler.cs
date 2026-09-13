@@ -31,20 +31,19 @@ namespace OptunaSharp.Samplers;
 ///     400-config differential plus the live parity seeds — see
 ///     <see cref="NSGAIIIElitePopulationSelectionStrategy" />.</para>
 ///
-///     <para><b>Conditional parameters (OptunaSharp extension).</b> Optuna's GA samplers evolve only the
-///     intersection search space, so a define-by-run parameter suggested under a branch drops out after
-///     the first trial that lacks it and is resampled at random ever after. Passing
-///     <see cref="ConditionalParams" /> declares which parameters are conditional on which activator
-///     values; they then stay in the relative search space and are crossed over, mutated and inherited
-///     whenever active, and are simply absent whenever not. Off by default (parity untouched).</para>
+///     <para><b>Conditional parameters.</b> To optimize <i>conditional</i> (define-by-run, branch-defined)
+///     hyperparameters — which otherwise fall out of the intersection search space and are resampled at
+///     random on every trial — use <see cref="NSGAIIICptSampler" /> (NSGA-III-CPT), the OptunaSharp variant
+///     that carries a <see cref="ConditionalParams" /> rule set. This sampler itself is a bit-exact Optuna
+///     port with no such extension.</para>
 /// </summary>
+/// <seealso cref="NSGAIIICptSampler" />
 /// <seealso href="https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.NSGAIIISampler.html">Official Optuna NSGAIIISampler reference.</seealso>
 public class NSGAIIISampler : BaseGASampler
 {
     private readonly RandomSampler _randomSampler;
     private readonly LazyRandomState _rng;
     private readonly IntersectionSearchSpace _searchSpace;
-    private readonly ConditionalParams? _conditionalParams;
 
     private readonly Func<Study, List<FrozenTrial>, List<FrozenTrial>> _elitePopulationSelectionStrategy;
     private readonly Func<Study, OrderedDict<string, BaseDistribution>, List<FrozenTrial>, OrderedDict<string, object?>>
@@ -87,15 +86,6 @@ public class NSGAIIISampler : BaseGASampler
     /// <param name="elitePopulationSelectionStrategy">Overrides elite selection.</param>
     /// <param name="childGenerationStrategy">Overrides child generation.</param>
     /// <param name="afterTrialStrategy">Overrides the after-trial procedure.</param>
-    /// <param name="conditionalParams">
-    ///     OptunaSharp extension (no Optuna analog): activation rules for parameters that only exist under
-    ///     some values of other parameters — see <see cref="ConditionalParams" />. Declared parameters are
-    ///     evolved (crossed over, mutated, inherited) whenever active instead of falling out of the
-    ///     intersection search space and being resampled at random on every trial. <c>null</c> (default)
-    ///     keeps the Optuna-parity behavior. Only the built-in child generation honors it; a custom
-    ///     <paramref name="childGenerationStrategy" /> receives the widened search space and must cope with
-    ///     parents that lack conditional parameters itself.
-    /// </param>
     /// <summary>Configures NSGA-III reference-point selection, reproduction, and trial-completion hooks.</summary>
     /// <exception cref="NumSharp.ValueError">Population size is below two or the crossover parent count, or a configured reproduction probability is invalid.</exception>
     public NSGAIIISampler(
@@ -112,8 +102,7 @@ public class NSGAIIISampler : BaseGASampler
         Func<Study, List<FrozenTrial>, List<FrozenTrial>>? elitePopulationSelectionStrategy = null,
         Func<Study, OrderedDict<string, BaseDistribution>, List<FrozenTrial>, OrderedDict<string, object?>>?
             childGenerationStrategy = null,
-        Action<Study, FrozenTrial, TrialState, IReadOnlyList<double>?>? afterTrialStrategy = null,
-        ConditionalParams? conditionalParams = null)
+        Action<Study, FrozenTrial, TrialState, IReadOnlyList<double>?>? afterTrialStrategy = null)
         : base(populationSize)
     {
         // Optuna decorates NSGAIIISampler with @experimental_class("3.2.0"), which raises an
@@ -141,16 +130,14 @@ public class NSGAIIISampler : BaseGASampler
 
         _randomSampler = new RandomSampler(seed);
         _rng = new LazyRandomState(seed);
-        _searchSpace = new IntersectionSearchSpace(conditionalParams: conditionalParams);
-        _conditionalParams = conditionalParams;
+        _searchSpace = new IntersectionSearchSpace();
 
         _elitePopulationSelectionStrategy = elitePopulationSelectionStrategy
             ?? new NSGAIIIElitePopulationSelectionStrategy(
                 populationSize, _rng, constraintsFunc, referencePoints, dividingParameter).Select;
         _childGenerationStrategy = childGenerationStrategy
             ?? new NSGAIIChildGenerationStrategy(
-                mutation, mutationProb, crossover, crossoverProb, swappingProb, constraintsFunc, _rng,
-                conditionalParams).Generate;
+                mutation, mutationProb, crossover, crossoverProb, swappingProb, constraintsFunc, _rng).Generate;
         _afterTrialStrategy = afterTrialStrategy
             ?? new NSGAIIAfterTrialStrategy(constraintsFunc).Call;
     }
@@ -196,12 +183,7 @@ public class NSGAIIISampler : BaseGASampler
         var parentPopulation = GetParentPopulation(study, generation);
         if (parentPopulation.Count == 0)
             return new OrderedDict<string, object?>();
-        var child = _childGenerationStrategy(study, searchSpace, parentPopulation);
-        // OptunaSharp extension: opt-in, off unless ConditionalParams.PreserveDormantValues is set. Parks
-        // inactive conditional values out of the equations and resumes reactivating ones from their latent
-        // value instead of a random draw. No-op otherwise, so the parity path is untouched.
-        _conditionalParams?.ApplyDormantCarry(study, trial, child, parentPopulation, searchSpace);
-        return child;
+        return _childGenerationStrategy(study, searchSpace, parentPopulation);
     }
 
     /// <inheritdoc />

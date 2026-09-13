@@ -66,7 +66,8 @@ independent `RandomSampler`, and every draw flows through a `LazyRandomState` on
 never `System.Random`. The arithmetic crossovers (BLX-α/SBX/vSBX/SPX) stay bit-exact; `UNDXCrossover`
 is tolerance-bounded (managed QR vs LAPACK) but keeps the RNG in lock-step. See the
 [Samplers](../samplers.md) and [Multi-objective Optimization](../multi-objective.md) guides for the
-full API, conditional-parameter support, and documented divergences.
+full API and documented divergences. (Conditional / branch-defined parameters are handled by the
+separate [`NSGAIIICptSampler`](nsga-iii.md), NSGA-III-CPT; this sampler is a bit-exact Optuna port.)
 
 ## What the successors keep and change
 

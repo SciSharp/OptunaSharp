@@ -34,6 +34,14 @@
       href: logging.md
 - name: Integrations
   href: ../integrations/index.md
+- name: Our Methods
+  items:
+    - name: Overview
+      href: our-methods/index.md
+    - name: Samplers
+      items:
+        - name: NSGA-III-CPT
+          href: our-methods/nsga-iii-cpt.md
 - name: Methods
   items:
     - name: Overview

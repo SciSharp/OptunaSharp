@@ -7,6 +7,7 @@ using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Samplers;
 using OptunaSharp.Samplers.Nsgaii;
+using OptunaSharp.Samplers.NsgaiiiCpt;
 using OptunaSharp.SearchSpace;
 
 namespace OptunaSharp.Tests;
@@ -104,7 +105,7 @@ public class ConditionalParamsMathNeutralityTests
     {
         var rng = new LazyRandomState(seed);
         var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
-        var strategy = new NSGAIIChildGenerationStrategy(
+        var strategy = new NsgaiiiCptChildGenerationStrategy(
             mutation: null, mutationProb: null, Crossover(crossoverKind), crossoverProb: 0.9, swappingProb: 0.5,
             constraintsFunc: null, rng, rules);
         var child = strategy.Generate(study, searchSpace, population);

@@ -63,7 +63,7 @@ LM-CMA and JANUS — it is a *beyond-core* sampler validated against its referen
 **Layer 2 — `AgeMoea2Sampler` (the public, Optuna-idiomatic face).** An ask/tell sampler that
 reconstructs the population from completed trials exactly like `NSGAIISampler`, but performs AGE-MOEA-2's
 geometry-based environmental selection. It works across Optuna's full parameter space (float / int /
-categorical, and conditional parameters):
+categorical):
 
 ```csharp
 using OptunaSharp;
@@ -82,9 +82,11 @@ study.Optimize((Func<Trial, IReadOnlyList<double>>)(t =>
 ```
 
 Children use SBX (`eta = 15`) and polynomial mutation (`eta = 20`) over Optuna's transformed search
-space; `populationSize`, `crossover`, `mutation`, `crossoverProb`, `swappingProb`, `seed`, and
-`conditionalParams` are configurable. Because it uses Optuna's operators (a different RNG stream than
-pymoo's), Layer 2 is validated **behaviorally**, not bit-for-bit. Multi-objective, unconstrained.
+space; `populationSize`, `crossover`, `mutation`, `crossoverProb`, `swappingProb`, and `seed` are
+configurable. (For conditional / branch-defined parameters use [`NSGAIIICptSampler`](nsga-iii.md); the
+conditional extension was consolidated there and AGE-MOEA-2 is a bit-exact port again.) Because it uses
+Optuna's operators (a different RNG stream than pymoo's), Layer 2 is validated **behaviorally**, not
+bit-for-bit. Multi-objective, unconstrained.
 
 **Layer 1 — `AgeMoea2Optimizer` (the byte-perfect reference driver, internal).** A standalone
 `minimize()`-shaped loop with pymoo-faithful operators that is **generation-by-generation bit-exact

@@ -7,6 +7,7 @@ using NumSharp;
 using OptunaSharp.Distributions;
 using OptunaSharp.Samplers;
 using OptunaSharp.Samplers.Nsgaii;
+using OptunaSharp.Samplers.NsgaiiiCpt;
 using OptunaSharp.SearchSpace;
 
 namespace OptunaSharp.Tests;
@@ -17,13 +18,20 @@ namespace OptunaSharp.Tests;
 ///     Where <see cref="ConditionalParamsProofTests" /> proves the feature does what it claims when turned
 ///     on, these prove it changes nothing when it is off — the measurements behind the claim are in
 ///     <c>examples/ConditionalParameters.cs</c> and were taken with the two-branch study below.
+///
+///     <para>Since the extraction, the conditional feature lives only in <see cref="NSGAIIICptSampler" />
+///     (NSGA-III-CPT), so these controls compare NSGA-III-CPT against its own parity baseline
+///     <see cref="NSGAIIISampler" /> (constructed with no rules), and separately pin that the
+///     Optuna-parity <see cref="NSGAIISampler" /> still reproduces real Optuna bit-for-bit.</para>
 ///     <list type="number">
-///         <item><b>No activation ⇒ the Optuna baseline, bit-for-bit.</b> Passing no rules, an empty
-///         <see cref="ConditionalParams" />, or rules that always admit all reproduce the historical
-///         real-Optuna sequence to the bit on a study whose parameters are always present.</item>
+///         <item><b>No activation ⇒ the parity baseline, bit-for-bit.</b> The parity
+///         <see cref="NSGAIISampler" /> reproduces the historical real-Optuna sequence; and
+///         <see cref="NSGAIIICptSampler" /> with an empty <see cref="ConditionalParams" /> or rules that
+///         always admit reproduces <see cref="NSGAIIISampler" />'s trajectory to the bit on a study whose
+///         parameters are always present.</item>
 ///         <item><b>An empty <see cref="ConditionalParams" /> is a bit-exact no-op</b> on a branchy study
-///         too — across both samplers and a copy-type and an arithmetic crossover — so the effect is gated
-///         behind <i>declaring a rule</i>, not behind passing the object.</item>
+///         too — for a copy-type and an arithmetic crossover — so the effect is gated behind
+///         <i>declaring a rule</i>, not behind passing the object.</item>
 ///         <item><b>Activation is per-parameter.</b> Declaring one branch-only parameter leaves an
 ///         undeclared sibling exactly at the random-draw level it sits at with no rules at all, while the
 ///         declared one is learned.</item>
@@ -33,6 +41,10 @@ namespace OptunaSharp.Tests;
 public class ConditionalParamsGateTests
 {
     private const double LrOpt = 0.3, Beta1Opt = 0.9, MomentumOpt = 0.7;
+
+    // The concrete NSGA-III-CPT sampler class name — the prefix BaseGASampler stamps on its generation
+    // system attribute (`$"{GetType().Name}:generation"`), read below to slice the study by generation.
+    private const string CptGenerationSampler = "NSGAIIICptSampler";
 
     // Real Optuna 5.0.0.dev, NSGA-II population_size=4 seed=42 (the sequence pinned by
     // NsgaiiSamplerTests.DefaultSingleObjective_MatchesOptunaSequence). The objective has no branch, so
@@ -46,18 +58,42 @@ public class ConditionalParamsGateTests
     private static readonly long[] GoldenY = { 10, 0, 10, 3, 6, 3, 0, 10, 0, 0, 0, 10 };
     private static readonly string[] GoldenZ = { "a", "a", "a", "a", "a", "a", "a", "c", "c", "b", "a", "a" };
 
-    // ---- 1. no activation reproduces the Optuna baseline, bit-for-bit ---------------------------
+    // ---- 1. no activation reproduces the parity baseline, bit-for-bit ---------------------------
 
     [TestMethod]
     public void WithoutActivation_ReproducesOptunaBaseline_BitExact()
     {
-        // No rules: the plain Optuna-parity path.
-        AssertMatchesGolden(RunGolden(conditionalParams: null));
-        // An empty rule set: declared, but activates nothing.
-        AssertMatchesGolden(RunGolden(new ConditionalParams()));
-        // A rule that always admits (z is always one of a/b/c, so `y` is always active): present in every
-        // trial anyway, so it is never pruned and the sequence is unchanged.
-        AssertMatchesGolden(RunGolden(new ConditionalParams().When("z", "a", "b", "c").Activates("y")));
+        // The Optuna-parity NSGAIISampler (which no longer carries the conditional extension) still
+        // reproduces the real-Optuna NSGA-II sequence to the bit.
+        AssertMatchesGolden(RunGolden(new NSGAIISampler(populationSize: 4, seed: 42)));
+
+        // NSGA-III-CPT with no active rule reproduces NSGA-III parity bit-for-bit: an empty rule set, and a
+        // rule that always admits (so it never prunes), both leave NSGAIIISampler's trajectory unchanged.
+        AssertCptMatchesNsgaiiiParity(new ConditionalParams());
+        AssertCptMatchesNsgaiiiParity(new ConditionalParams().When("z", "a", "b", "c").Activates("y"));
+    }
+
+    /// <summary>Runs NSGA-III-CPT with the given rules and asserts it equals NSGA-III parity to the bit.</summary>
+    private static void AssertCptMatchesNsgaiiiParity(ConditionalParams rules)
+    {
+        var cpt = RunGolden(new NSGAIIICptSampler(populationSize: 4, seed: 42, conditionalParams: rules));
+        var parity = RunGolden(new NSGAIIISampler(populationSize: 4, seed: 42));
+        AssertSameTrials(cpt, parity);
+    }
+
+    /// <summary>Asserts two studies produced bit-identical (x, y, z) over all 12 trials.</summary>
+    private static void AssertSameTrials(Study actual, Study expected)
+    {
+        var a = actual.Trials;
+        var e = expected.Trials;
+        a.Should().HaveCount(e.Count);
+        for (int i = 0; i < e.Count; i++)
+        {
+            BitConverter.DoubleToInt64Bits((double)a[i].Params["x"]!)
+                .Should().Be(BitConverter.DoubleToInt64Bits((double)e[i].Params["x"]!), $"x at trial {i}");
+            Convert.ToInt64(a[i].Params["y"]).Should().Be(Convert.ToInt64(e[i].Params["y"]), $"y at trial {i}");
+            CategoricalChoice.From(a[i].Params["z"]).Value.Should().Be(CategoricalChoice.From(e[i].Params["z"]).Value, $"z at trial {i}");
+        }
     }
 
     private static void AssertMatchesGolden(Study study)
@@ -76,20 +112,18 @@ public class ConditionalParamsGateTests
     // ---- 2. an empty ConditionalParams is a bit-exact no-op on a branchy study ------------------
 
     [DataTestMethod]
-    [DataRow("NSGAIISampler", "uniform")]
-    [DataRow("NSGAIISampler", "sbx")]
-    [DataRow("NSGAIIISampler", "uniform")]
-    [DataRow("NSGAIIISampler", "sbx")]
-    public void EmptyRules_AreABitExactNoOp_OnABranchyStudy(string samplerName, string crossoverKind)
+    [DataRow("uniform")]
+    [DataRow("sbx")]
+    public void EmptyRules_AreABitExactNoOp_OnABranchyStudy(string crossoverKind)
     {
         // The two-branch study really exercises the conditional code paths (beta1/momentum are branch-only),
-        // yet with nothing declared the whole trajectory — every trial's generation, params, and bits —
-        // must equal the no-rules run exactly. Proven here for copy-type (uniform) and arithmetic (SBX)
-        // crossover, on both samplers, across several seeds.
+        // yet with nothing declared the whole NSGA-III-CPT trajectory — every trial's generation, params, and
+        // bits — must equal the no-rules run exactly. Proven here for copy-type (uniform) and arithmetic (SBX)
+        // crossover, across several seeds.
         for (int seed = 0; seed < 3; seed++)
         {
-            string none = Canonical(RunTwoBranch(samplerName, seed, rules: null, crossoverKind), samplerName);
-            string empty = Canonical(RunTwoBranch(samplerName, seed, new ConditionalParams(), crossoverKind), samplerName);
+            string none = Canonical(RunTwoBranch(seed, rules: null, crossoverKind));
+            string empty = Canonical(RunTwoBranch(seed, new ConditionalParams(), crossoverKind));
             empty.Should().Be(none, $"an empty ConditionalParams must not change anything (seed {seed})");
         }
     }
@@ -102,9 +136,9 @@ public class ConditionalParamsGateTests
         // Pool the late generations over several seeds for each declaration, and compare how close each
         // branch-only parameter gets to its optimum. Random-draw levels: median |beta1-0.9| = 0.150,
         // median |momentum-0.7| = 0.245.
-        var none = Pool("NSGAIISampler", rules: null);
-        var beta1Only = Pool("NSGAIISampler", new ConditionalParams().When("optimizer", "adam").Activates("beta1"));
-        var momentumOnly = Pool("NSGAIISampler", new ConditionalParams().When("optimizer", "sgd").Activates("momentum"));
+        var none = Pool(rules: null);
+        var beta1Only = Pool(new ConditionalParams().When("optimizer", "adam").Activates("beta1"));
+        var momentumOnly = Pool(new ConditionalParams().When("optimizer", "sgd").Activates("momentum"));
 
         // With nothing declared, neither branch-only parameter is learned — both sit near the random level.
         Median(none, "beta1", Beta1Opt).Should().BeGreaterThan(0.10, "no rules ⇒ `beta1` is re-drawn at random");
@@ -128,11 +162,10 @@ public class ConditionalParamsGateTests
 
     // ---- helpers -------------------------------------------------------------------------------
 
-    private static Study RunGolden(ConditionalParams? conditionalParams)
+    /// <summary>Runs the branch-free golden objective (x float, y int, z categorical) under the given sampler.</summary>
+    private static Study RunGolden(BaseSampler sampler)
     {
-        var study = Optuna.CreateStudy(
-            sampler: new NSGAIISampler(populationSize: 4, seed: 42, conditionalParams: conditionalParams),
-            direction: StudyDirection.Minimize);
+        var study = Optuna.CreateStudy(sampler: sampler, direction: StudyDirection.Minimize);
         study.Optimize(t =>
         {
             double x = t.SuggestFloat("x", -5, 5);
@@ -143,13 +176,14 @@ public class ConditionalParamsGateTests
         return study;
     }
 
-    private static Study RunTwoBranch(string samplerName, int seed, ConditionalParams? rules, string crossoverKind)
+    /// <summary>The two-branch study under NSGA-III-CPT (the only sampler carrying the conditional feature).</summary>
+    private static Study RunTwoBranch(int seed, ConditionalParams? rules, string crossoverKind)
     {
         BaseCrossover? crossover = crossoverKind == "sbx" ? new SBXCrossover() : null;
         BaseMutation? mutation = crossoverKind == "sbx" ? new PolynomialMutation() : null;
-        BaseSampler sampler = samplerName == "NSGAIISampler"
-            ? new NSGAIISampler(populationSize: 24, seed: seed, mutationProb: 0.1, crossover: crossover, mutation: mutation, conditionalParams: rules)
-            : new NSGAIIISampler(populationSize: 24, seed: seed, mutationProb: 0.1, crossover: crossover, mutation: mutation, conditionalParams: rules);
+        var sampler = new NSGAIIICptSampler(
+            populationSize: 24, seed: seed, mutationProb: 0.1, crossover: crossover, mutation: mutation,
+            conditionalParams: rules);
         var study = Optuna.CreateStudy(
             sampler: sampler, directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
         study.Optimize(TwoBranchObjective, nTrials: 24 * 16);
@@ -171,26 +205,26 @@ public class ConditionalParamsGateTests
         return new[] { 1.0 + shared, shared + Math.Pow(momentum - MomentumOpt, 2.0) };
     }
 
-    /// <summary>The last four generations of the two-branch study, pooled over three seeds.</summary>
-    private static List<FrozenTrial> Pool(string samplerName, ConditionalParams? rules)
+    /// <summary>The last four generations of the two-branch NSGA-III-CPT study, pooled over three seeds.</summary>
+    private static List<FrozenTrial> Pool(ConditionalParams? rules)
     {
         var pooled = new List<FrozenTrial>();
         for (int seed = 0; seed < 3; seed++)
         {
-            var study = RunTwoBranch(samplerName, seed, rules, crossoverKind: "uniform");
+            var study = RunTwoBranch(seed, rules, crossoverKind: "uniform");
             pooled.AddRange(study.Trials.Where(t =>
-                Convert.ToInt32(t.SystemAttrs[$"{samplerName}:generation"]) >= 12));
+                Convert.ToInt32(t.SystemAttrs[$"{CptGenerationSampler}:generation"]) >= 12));
         }
         return pooled;
     }
 
     /// <summary>A bit-exact, order-sensitive serialization of the whole study (generation + params).</summary>
-    private static string Canonical(Study study, string samplerName)
+    private static string Canonical(Study study)
     {
         var sb = new StringBuilder();
         foreach (var t in study.Trials)
         {
-            sb.Append(t.Number).Append(':').Append(t.SystemAttrs[$"{samplerName}:generation"]).Append('|');
+            sb.Append(t.Number).Append(':').Append(t.SystemAttrs[$"{CptGenerationSampler}:generation"]).Append('|');
             foreach (var key in t.Params.Keys.OrderBy(k => k, StringComparer.Ordinal))
             {
                 object? v = t.Params[key];

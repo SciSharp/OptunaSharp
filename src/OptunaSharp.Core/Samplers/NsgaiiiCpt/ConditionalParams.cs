@@ -6,14 +6,14 @@ using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
 
-namespace OptunaSharp.SearchSpace;
+namespace OptunaSharp.Samplers.NsgaiiiCpt;
 
 /// <summary>
 ///     Declares <b>conditional parameters</b> — parameters that only exist while an <i>activator</i>
-///     parameter holds one of a set of values — for the genetic samplers
-///     (<see cref="Samplers.NSGAIISampler" /> / <see cref="Samplers.NSGAIIISampler" />). An
-///     <b>OptunaSharp extension</b> with no Optuna analog: opt-in, and the samplers' Optuna-parity path is
-///     untouched when none is declared.
+///     parameter holds one of a set of values — the rule set consumed by <see cref="NSGAIIICptSampler" />
+///     (NSGA-III-CPT), the only sampler that accepts it. An <b>OptunaSharp extension</b> with no Optuna
+///     analog: opt-in, and the plain genetic samplers (<see cref="NSGAIISampler" /> /
+///     <see cref="NSGAIIISampler" />) are bit-exact Optuna ports that do not take it.
 ///
 ///     <para><b>Why it exists.</b> Optuna's define-by-run API lets an objective suggest a parameter under
 ///     a branch only (<c>if (optimizer == "adam") t.SuggestFloat("beta1", …)</c>), but the GA samplers
@@ -54,7 +54,7 @@ namespace OptunaSharp.SearchSpace;
 ///         .When("optimizer", "adam", "adamw").Activates("beta1", "beta2")
 ///         .When("optimizer", "sgd").Activates("momentum")
 ///         .When("n_layers", v =&gt; (long)v! &gt;= 3).Activates("width_3");
-///     var sampler = new NSGAIIISampler(populationSize: 32, seed: 0, conditionalParams: rules);
+///     var sampler = new NSGAIIICptSampler(populationSize: 32, seed: 0, conditionalParams: rules);
 ///     </code></example>
 /// </summary>
 public sealed class ConditionalParams

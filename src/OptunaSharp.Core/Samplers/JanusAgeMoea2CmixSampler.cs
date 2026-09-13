@@ -12,7 +12,6 @@ using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
 using OptunaSharp.Samplers.Nsgaii;
-using OptunaSharp.SearchSpace;
 
 namespace OptunaSharp.Samplers;
 
@@ -43,7 +42,6 @@ public sealed class JanusAgeMoea2CmixSampler : AgeMoea2Sampler
     /// <param name="crossover">AGE-MOEA-2 crossover (forwarded).</param>
     /// <param name="crossoverProb">AGE-MOEA-2 crossover probability (forwarded, default 0.9).</param>
     /// <param name="swappingProb">AGE-MOEA-2 swapping probability (forwarded, default 0.5).</param>
-    /// <param name="conditionalParams">AGE-MOEA-2 conditional-parameter activation rules (forwarded).</param>
     /// <summary>Configures curvature-informed candidate injection into an AGE-MOEA-2 population.</summary>
     public JanusAgeMoea2CmixSampler(
         int populationSize = 50,
@@ -61,11 +59,9 @@ public sealed class JanusAgeMoea2CmixSampler : AgeMoea2Sampler
         double? mutationProb = null,
         BaseCrossover? crossover = null,
         double crossoverProb = 0.9,
-        double swappingProb = 0.5,
-        ConditionalParams? conditionalParams = null)
+        double swappingProb = 0.5)
         : base(populationSize: populationSize, mutation: mutation, mutationProb: mutationProb,
-            crossover: crossover, crossoverProb: crossoverProb, swappingProb: swappingProb, seed: seed,
-            conditionalParams: conditionalParams)
+            crossover: crossover, crossoverProb: crossoverProb, swappingProb: swappingProb, seed: seed)
     {
         _cmix = new Janus.JanusMooCmix(
             populationSize, seed, cmixProb, cmixWindow, cmixRidge, cmixLambda, cmixSigma,

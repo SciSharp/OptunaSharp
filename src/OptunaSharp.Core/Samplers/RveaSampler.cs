@@ -68,7 +68,6 @@ public class RveaSampler : BaseGASampler
     private readonly RandomSampler _randomSampler;
     private readonly LazyRandomState _rng;
     private readonly IntersectionSearchSpace _searchSpace;
-    private readonly ConditionalParams? _conditionalParams;
 
     private readonly int _populationSizeTarget;
     private readonly double _alpha;
@@ -107,9 +106,6 @@ public class RveaSampler : BaseGASampler
     ///     <paramref name="populationSize" />.</param>
     /// <param name="childGenerationStrategy">Experimental. Overrides child generation.</param>
     /// <param name="afterTrialStrategy">Experimental. Overrides the after-trial procedure.</param>
-    /// <param name="conditionalParams">OptunaSharp extension (no Optuna analog): activation rules for
-    ///     parameters that only exist under some values of other parameters — see <see cref="ConditionalParams" />.
-    ///     <c>null</c> (default) keeps the parity behavior.</param>
     /// <summary>Configures reference-vector survival, progress-dependent angular penalties, and reproduction.</summary>
     /// <exception cref="NumSharp.ValueError">Population size is too small, alpha is negative, adaptation frequency is outside [0, 1], or the maximum generation count is below one.</exception>
     public RveaSampler(
@@ -127,8 +123,7 @@ public class RveaSampler : BaseGASampler
         int? dividingParameter = null,
         Func<Study, OrderedDict<string, BaseDistribution>, List<FrozenTrial>, OrderedDict<string, object?>>?
             childGenerationStrategy = null,
-        Action<Study, FrozenTrial, TrialState, IReadOnlyList<double>?>? afterTrialStrategy = null,
-        ConditionalParams? conditionalParams = null)
+        Action<Study, FrozenTrial, TrialState, IReadOnlyList<double>?>? afterTrialStrategy = null)
         : base(populationSize)
     {
         if (populationSize < 2)
@@ -156,8 +151,7 @@ public class RveaSampler : BaseGASampler
 
         _randomSampler = new RandomSampler(seed);
         _rng = new LazyRandomState(seed);
-        _searchSpace = new IntersectionSearchSpace(conditionalParams: conditionalParams);
-        _conditionalParams = conditionalParams;
+        _searchSpace = new IntersectionSearchSpace();
 
         _populationSizeTarget = populationSize;
         _alpha = alpha;
@@ -168,8 +162,7 @@ public class RveaSampler : BaseGASampler
 
         _childGenerationStrategy = childGenerationStrategy
             ?? new NSGAIIChildGenerationStrategy(
-                mutation, mutationProb, crossover, crossoverProb, swappingProb, null, _rng,
-                conditionalParams).Generate;
+                mutation, mutationProb, crossover, crossoverProb, swappingProb, null, _rng).Generate;
         _afterTrialStrategy = afterTrialStrategy
             ?? new NSGAIIAfterTrialStrategy(null).Call;
     }
@@ -234,9 +227,7 @@ public class RveaSampler : BaseGASampler
         if (parentPopulation.Count == 0)
             return new OrderedDict<string, object?>();
 
-        var child = _childGenerationStrategy(study, searchSpace, parentPopulation);
-        _conditionalParams?.ApplyDormantCarry(study, trial, child, parentPopulation, searchSpace);
-        return child;
+        return _childGenerationStrategy(study, searchSpace, parentPopulation);
     }
 
     /// <inheritdoc />

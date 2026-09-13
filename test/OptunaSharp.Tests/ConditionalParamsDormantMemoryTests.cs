@@ -7,6 +7,7 @@ using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Samplers;
+using OptunaSharp.Samplers.NsgaiiiCpt;
 using OptunaSharp.SearchSpace;
 using OptunaSharp.Storages;
 
@@ -141,8 +142,7 @@ public class ConditionalParamsDormantMemoryTests
     // ---- end to end: whole studies --------------------------------------------------------------
 
     [DataTestMethod]
-    [DataRow("NSGAIISampler")]
-    [DataRow("NSGAIIISampler")]
+    [DataRow("NSGAIIICptSampler")]
     public void EndToEnd_ParksInactiveBranch_AndStaysStable(string samplerName)
     {
         var study = RunTwoBranch(samplerName, seed: 0, preserve: true);
@@ -177,8 +177,7 @@ public class ConditionalParamsDormantMemoryTests
     }
 
     [DataTestMethod]
-    [DataRow("NSGAIISampler")]
-    [DataRow("NSGAIIISampler")]
+    [DataRow("NSGAIIICptSampler")]
     public void TheFlag_IsTheOnlyThingThatChangesBehavior(string samplerName)
     {
         // Same rules, same seed: flag off is a bit-exact no-op (identical to rules alone); flag on diverges,
@@ -195,8 +194,7 @@ public class ConditionalParamsDormantMemoryTests
     // ---- the headline measurement, as an assertion ----------------------------------------------
 
     [DataTestMethod]
-    [DataRow("NSGAIISampler")]
-    [DataRow("NSGAIIISampler")]
+    [DataRow("NSGAIIICptSampler")]
     public void DormantMemory_ReducesRandomReactivations(string samplerName)
     {
         // "Fresh" = a branch parameter's ACTIVE value is one never seen before on that parameter — the
@@ -258,10 +256,11 @@ public class ConditionalParamsDormantMemoryTests
 
     private static Study RunTwoBranch(string samplerName, int seed, bool preserve)
     {
+        // The conditional feature (and its dormant-value memory) lives only in NSGA-III-CPT now; `samplerName`
+        // is retained only so the callers can read the "NSGAIIICptSampler:generation" system-attribute key.
+        _ = samplerName;
         var rules = Rules(preserve);
-        BaseSampler sampler = samplerName == "NSGAIISampler"
-            ? new NSGAIISampler(populationSize: 16, seed: seed, conditionalParams: rules)
-            : new NSGAIIISampler(populationSize: 16, seed: seed, conditionalParams: rules);
+        BaseSampler sampler = new NSGAIIICptSampler(populationSize: 16, seed: seed, conditionalParams: rules);
         var study = Optuna.CreateStudy(
             storage: new InMemoryStorage(), sampler: sampler,
             directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });

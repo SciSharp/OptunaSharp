@@ -26,6 +26,7 @@
 using OptunaSharp;
 using OptunaSharp.Logging;
 using OptunaSharp.Samplers;
+using OptunaSharp.Samplers.NsgaiiiCpt;
 using OptunaSharp.SearchSpace;
 using OptunaSharp.Storages;
 
@@ -40,7 +41,7 @@ var rules = new ConditionalParams()
 OptunaLogging.SetVerbosity(LogLevel.Warning);
 var study = Optuna.CreateStudy(
     storage: new InMemoryStorage(),
-    sampler: new NSGAIISampler(populationSize: 24, seed: 1, conditionalParams: rules),   // <- wires the rules in
+    sampler: new NSGAIIICptSampler(populationSize: 24, seed: 1, conditionalParams: rules),   // <- wires the rules in
     directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });             // minimize (error, size)
 study.Optimize(Objective, nTrials: 480);
 
