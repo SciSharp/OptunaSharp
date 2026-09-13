@@ -220,7 +220,9 @@ public sealed class VkdCmaSampler : BaseSampler
 
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyGeneration, optimizer.Generation);
 
-        return trans.Untransform(np.array(cmaParams));
+        // View the candidate zero-copy; Untransform copies it into a managed dict, so dispose here.
+        using NDArray nd = np.array(cmaParams, copy: false);
+        return trans.Untransform(nd);
     }
 
     private const string AttrPrefix = "vkdcma:";

@@ -35,46 +35,89 @@ internal static class LinAlg
     /// <returns>The solution vector of the square linear system.</returns>
     /// <exception cref="NumSharp.LinAlgError">The coefficient matrix is singular or incompatible with the right-hand side.</exception>
     internal static double[] Solve(double[,] a, double[] b)
-        => np.linalg.solve(np.array(a), np.array(b)).ToArray<double>();
+    {
+        // View both operands zero-copy (copy: false pins the managed arrays instead of
+        // cloning them) and dispose the transients here — none escape. np.linalg.solve
+        // copies its inputs into internal LAPACK work buffers (it never writes a/b), so a
+        // view is read-only-safe; the returned solution is a fresh owned NDArray.
+        using NDArray na = np.array(a, copy: false);
+        using NDArray nb = np.array(b, copy: false);
+        using NDArray solution = np.linalg.solve(na, nb);
+        return solution.ToArray<double>();
+    }
 
     /// <summary>Matrix product <c>a · b</c> — <c>np.dot</c> (CBLAS <c>gemm</c>, byte-identical to NumPy).</summary>
     /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
     /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
     /// <returns>The matrix or vector product with rows determined by the first operand.</returns>
     internal static double[,] Dot(double[,] a, double[,] b)
-        => To2D(np.dot(np.array(a), np.array(b)), a.GetLength(0), b.GetLength(1));
+    {
+        // Zero-copy views of the operands; np.dot reads both (BLAS gemm) and returns a
+        // fresh product. Dispose all three transients — To2D has copied the values out.
+        using NDArray na = np.array(a, copy: false);
+        using NDArray nb = np.array(b, copy: false);
+        using NDArray product = np.dot(na, nb);
+        return To2D(product, a.GetLength(0), b.GetLength(1));
+    }
 
     /// <summary>Matrix-vector product <c>a · b</c> — <c>np.dot</c> (byte-identical to NumPy).</summary>
     /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
     /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
     /// <returns>The matrix or vector product with rows determined by the first operand.</returns>
     internal static double[] Dot(double[,] a, double[] b)
-        => np.dot(np.array(a), np.array(b)).ToArray<double>();
+    {
+        // Zero-copy views; np.dot reads both operands and returns a fresh vector.
+        using NDArray na = np.array(a, copy: false);
+        using NDArray nb = np.array(b, copy: false);
+        using NDArray product = np.dot(na, nb);
+        return product.ToArray<double>();
+    }
 
     /// <summary>Outer product <c>a ⊗ b</c> — <c>np.outer</c> (an elementwise product, exact).</summary>
     /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
     /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
     /// <returns>The matrix whose (i,j) entry is the product of the corresponding vector elements.</returns>
     internal static double[,] Outer(double[] a, double[] b)
-        => To2D(np.outer(np.array(a), np.array(b)), a.Length, b.Length);
+    {
+        // Zero-copy views; np.outer reads both operands and returns a fresh matrix.
+        using NDArray na = np.array(a, copy: false);
+        using NDArray nb = np.array(b, copy: false);
+        using NDArray product = np.outer(na, nb);
+        return To2D(product, a.Length, b.Length);
+    }
 
     /// <summary>Euclidean norm <c>‖a‖₂</c> — <c>np.linalg.norm</c>.</summary>
     /// <param name="a">The vector whose Euclidean norm is computed.</param>
     /// <returns>The Euclidean length of the vector.</returns>
     internal static double Norm(double[] a)
-        => (double)np.linalg.norm(np.array(a));
+    {
+        // Zero-copy view; norm reads it and returns a fresh scalar NDArray.
+        using NDArray na = np.array(a, copy: false);
+        using NDArray norm = np.linalg.norm(na);
+        return (double)norm;
+    }
 
     /// <summary>The rank of <paramref name="a" /> — <c>np.linalg.matrix_rank</c> (SVD-based tolerance).</summary>
     /// <param name="a">The rectangular matrix whose numerical rank is computed.</param>
     /// <returns>The number of singular values exceeding NumSharp's rank tolerance.</returns>
     internal static int MatrixRank(double[,] a)
-        => (int)Convert.ToInt64(np.linalg.matrix_rank(np.array(a)).GetValue(0));
+    {
+        // Zero-copy view; matrix_rank reads it (SVD) and returns a fresh scalar NDArray.
+        using NDArray na = np.array(a, copy: false);
+        using NDArray rank = np.linalg.matrix_rank(na);
+        return (int)Convert.ToInt64(rank.GetValue(0));
+    }
 
     /// <summary>The determinant of <paramref name="a" /> — <c>np.linalg.det</c> (LAPACK LU).</summary>
     /// <param name="a">The square matrix whose determinant is computed.</param>
     /// <returns>The determinant of the square input matrix.</returns>
     internal static double Det(double[,] a)
-        => (double)np.linalg.det(np.array(a));
+    {
+        // Zero-copy view; det reads it (LU) and returns a fresh scalar NDArray.
+        using NDArray na = np.array(a, copy: false);
+        using NDArray det = np.linalg.det(na);
+        return (double)det;
+    }
 
     /// <summary>
     ///     The lower-triangular Cholesky factor <c>L</c> of a symmetric positive-definite
@@ -87,7 +130,11 @@ internal static class LinAlg
     internal static double[,] Cholesky(double[,] a)
     {
         int n = a.GetLength(0);
-        return To2D(np.linalg.cholesky(np.array(a)), n, n);
+        // np.linalg.cholesky reads a into an internal LAPACK buffer (potrf) — a view is
+        // read-only-safe. Dispose both transients; To2D has copied the factor out.
+        using NDArray na = np.array(a, copy: false);
+        using NDArray factor = np.linalg.cholesky(na);
+        return To2D(factor, n, n);
     }
 
     /// <summary>
@@ -100,8 +147,40 @@ internal static class LinAlg
     internal static (double[] Eigenvalues, double[,] Eigenvectors) Eigh(double[,] a)
     {
         int n = a.GetLength(0);
-        var (w, v) = np.linalg.eigh(np.array(a));
-        return (w.ToArray<double>(), To2D(v, n, n));
+        // eigh reads a (syevd) and returns two fresh arrays; view the input, dispose it
+        // and both outputs once their values have been copied into managed results.
+        using NDArray na = np.array(a, copy: false);
+        var (w, v) = np.linalg.eigh(na);
+        using (w)
+        using (v)
+            return (w.ToArray<double>(), To2D(v, n, n));
+    }
+
+    /// <summary>
+    ///     The reduced orthonormal factor <c>Q</c> of <c>a = Q R</c> — <c>np.linalg.qr</c> (LAPACK
+    ///     <c>geqrf</c>/<c>orgqr</c>). <b>Use this instead of a hand-rolled Householder QR whenever the
+    ///     per-column signs must match Optuna:</b> QR is unique only up to the signs of R's diagonal, and
+    ///     LAPACK's sign convention — reproduced here byte-for-byte with NumPy — is what a managed
+    ///     Householder cannot portably match (its accumulated <c>Q = Q·Hₖ</c> flips column signs vs
+    ///     <c>orgqr</c>). Only the factor <c>Q</c> is returned because that is all the sign-sensitive
+    ///     callers (UNDX crossover's PSL basis) need.
+    /// </summary>
+    /// <param name="a">The matrix to factor, <c>rows ≥ cols</c>; Q comes back <c>rows × min(rows, cols)</c>.</param>
+    /// <returns>The reduced orthonormal factor Q, with LAPACK/NumPy column signs.</returns>
+    /// <exception cref="NumSharp.Interop.OpenBLAS.OpenBlasMissingBackendException">The native OpenBLAS/LAPACK backend is not loaded; gate on <see cref="NumSharp.Interop.OpenBLAS.OpenBlasEngine.LapackAvailable" /> before calling on a no-native (Tier N) build.</exception>
+    internal static double[,] QrQ(double[,] a)
+    {
+        int rows = a.GetLength(0);
+        // Reduced mode: Q is rows×k where k = min(rows, cols); for the square UNDX matrix k == rows.
+        int k = Math.Min(rows, a.GetLength(1));
+        // View the input (qr reads it, geqrf/orgqr on internal buffers). Dispose the input
+        // AND both factors — the R factor is unused here but is still a fresh owned array
+        // that would otherwise leak to the finalizer (the old `_` discard did exactly that).
+        using NDArray na = np.array(a, copy: false);
+        var (q, r) = np.linalg.qr(na);
+        using (q)
+        using (r)
+            return To2D(q, rows, k);
     }
 
     /// <summary>

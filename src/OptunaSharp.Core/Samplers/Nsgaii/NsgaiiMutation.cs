@@ -33,6 +33,8 @@ internal static class NsgaiiMutation
             transValue, rng, study, new[] { bounds[0, 0], bounds[0, 1] });
         transMutatedValue = MathUtil.Clip(transMutatedValue, bounds[0, 0], bounds[0, 1]);
 
-        return transform.Untransform(np.array(new[] { transMutatedValue }))[""];
+        // View the single mutated value zero-copy; Untransform copies it out, so dispose here.
+        using NDArray nd = np.array(new[] { transMutatedValue }, copy: false);
+        return transform.Untransform(nd)[""];
     }
 }

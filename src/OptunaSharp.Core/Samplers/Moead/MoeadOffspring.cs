@@ -88,7 +88,9 @@ internal static class MoeadOffspring
             }
 
             var childNumericalArray = crossover.Crossover(parentsNumerical, rng, study, transform.RawBounds);
-            var childNumericalParams = transform.Untransform(np.array(childNumericalArray));
+            // View the crossover child zero-copy; Untransform copies it out, so dispose here.
+            using NDArray childNd = np.array(childNumericalArray, copy: false);
+            var childNumericalParams = transform.Untransform(childNd);
             foreach (var (k, v) in childNumericalParams)
                 childParams[k] = v;
         }

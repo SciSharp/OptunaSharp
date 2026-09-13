@@ -223,7 +223,9 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyGeneration, optimizer.Generation);
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyIndex, target);
 
-        return trans.Untransform(np.array(deParams));
+        // View the candidate zero-copy; Untransform copies it into a managed dict, so dispose here.
+        using NDArray nd = np.array(deParams, copy: false);
+        return trans.Untransform(nd);
     }
 
     /// <summary>Builds the first population from compatible completed trials when enough individuals are available.</summary>

@@ -836,7 +836,9 @@ internal sealed class JanusOptimizer
             if (!IsFinite(v)) v = _lo[i] + (_hi[i] - _lo[i]) * _rng.uniform(0.0, 1.0).ToArray<double>()[0];
             safe[i] = Clip(v, _lo[i], _hi[i]);
         }
-        return _trans.Untransform(np.array(safe));
+        // View the clamped candidate zero-copy; Untransform copies it out, so dispose here.
+        using NDArray nd = np.array(safe, copy: false);
+        return _trans.Untransform(nd);
     }
 
     /// <summary>Passes a complete pending generation to the host and updates its proposal distribution.</summary>

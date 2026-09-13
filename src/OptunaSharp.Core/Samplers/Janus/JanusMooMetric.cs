@@ -227,9 +227,19 @@ internal static class JanusMooMetric
     internal static double[] MultivariateNormalSvd(double[] z, double[] mean, double[,] cov)
     {
         int d = mean.Length;
-        var (_, s, vh) = np.linalg.svd(np.array(cov));   // cov = U·diag(s)·Vh
-        double[] sv = s.ToArray<double>();
-        double[] vhf = vh.ToArray<double>();             // row-major (d×d)
+        // View cov zero-copy; svd reads it and returns three fresh factors. U is unused here,
+        // but it (and S, Vh) must be disposed — the old `_` discard leaked U to the finalizer.
+        using NDArray ncov = np.array(cov, copy: false);
+        var (u, s, vh) = np.linalg.svd(ncov);            // cov = U·diag(s)·Vh
+        double[] sv;
+        double[] vhf;
+        using (u)
+        using (s)
+        using (vh)
+        {
+            sv = s.ToArray<double>();
+            vhf = vh.ToArray<double>();                   // row-major (d×d)
+        }
         var sample = new double[d];
         for (int j = 0; j < d; j++)
         {

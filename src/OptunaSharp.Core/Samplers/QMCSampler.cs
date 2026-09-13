@@ -167,7 +167,9 @@ public class QMCSampler : BaseSampler
 
         double[] qmcPoint = SampleQmc(study, searchSpace);
         var trans = new SearchSpaceTransform(combined, transform01: true);
-        var sample = trans.Untransform(np.array(qmcPoint));
+        // View the QMC point zero-copy; Untransform copies it into a managed dict, so dispose here.
+        using NDArray nd = np.array(qmcPoint, copy: false);
+        var sample = trans.Untransform(nd);
 
         var result = new OrderedDict<string, object?>();
         foreach (var (name, value) in sample)

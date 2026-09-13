@@ -381,11 +381,16 @@ public sealed class PymooSampler : BaseSampler
                 }
 
                 using PyObject pop = Python.pymoo.Algorithm.ask(_algo);
-                using PyObject fNumpy = PymooInterop.ToNumpy(np.array(f));   // (pop_size, n_obj) objectives
+                // ToNumpy makes an INDEPENDENT copy (ToNumpyCopy), so each source NDArray is a
+                // transient that never escapes — dispose it here. (These are 2-D, so copy: false
+                // is a no-op — np.array flattens either way — but it documents the intent.)
+                using NDArray fNd = np.array(f, copy: false);
+                using PyObject fNumpy = PymooInterop.ToNumpy(fNd);   // (pop_size, n_obj) objectives
                 Python.pymoo.Population.set(pop, "F", fNumpy);
                 if (gMatrix is not null)
                 {
-                    using PyObject gNumpy = PymooInterop.ToNumpy(np.array(gMatrix));   // (pop_size, n_constr)
+                    using NDArray gNd = np.array(gMatrix, copy: false);
+                    using PyObject gNumpy = PymooInterop.ToNumpy(gNd);   // (pop_size, n_constr)
                     Python.pymoo.Population.set(pop, "G", gNumpy);
                 }
                 Python.pymoo.Algorithm.tell(_algo, pop);
@@ -513,8 +518,12 @@ public sealed class PymooSampler : BaseSampler
                             using (PyObject extreme = true.ToPython())
                                 kwargs["extreme_points_as_reference_points"] = extreme;
                         if (options.Weights is not null)
-                            using (PyObject weights = PymooInterop.ToNumpy(np.array(options.Weights)))
-                                kwargs["weights"] = weights;
+                        {
+                            // ToNumpy copies, so the NDArray is a disposable transient.
+                            using NDArray weightsNd = np.array(options.Weights, copy: false);
+                            using PyObject weights = PymooInterop.ToNumpy(weightsNd);
+                            kwargs["weights"] = weights;
+                        }
                     }
                 }
                 else // population-size family
@@ -577,7 +586,9 @@ public sealed class PymooSampler : BaseSampler
                 for (int j = 0; j < nObj; j++)
                     matrix[i, j] = directions[j] == StudyDirection.Maximize ? -refPoints[i][j] : refPoints[i][j];
             }
-            return PymooInterop.ToNumpy(np.array(matrix));
+            // ToNumpy copies, so the matrix NDArray is a disposable transient.
+            using NDArray matrixNd = np.array(matrix, copy: false);
+            return PymooInterop.ToNumpy(matrixNd);
         }
 
         /// <summary>Every search-space parameter is present in the trial, its distribution is compatible,
