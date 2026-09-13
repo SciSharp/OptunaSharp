@@ -85,21 +85,28 @@
        optional `*.Extensions` DI wire-up shipped by Core and the satellite packages
        (AddOptunaStudyFactory / AddSqliteStorage / AddS3ArtifactStore / AddBoTorchSampler / …).
 
-       WHY 10.0.x AND NOT AN 8.0.x FLOOR. We add this as a DIRECT reference to packages that also
-       pull it transitively at a HIGHER version — e.g. Azure.Storage.Blobs 12.29.2 -> Azure.Core
-       1.55.0 -> Hosting.Abstractions 10.0.3 -> DI.Abstractions (>= 10.0.3), and StackExchange.Redis
-       3.1.31 -> Logging.Abstractions 10.0.5 -> DI.Abstractions (>= 10.0.5). A direct reference BELOW a
-       transitive requirement is a package DOWNGRADE (NU1605, and this repo builds warnings-as-errors),
-       so the pinned version must be at least the highest transitive requirement across the whole
-       solution. We therefore pin the LATEST 10.0.x patch, which is above every 10.0.x a transitive
-       dependency here asks for; it has net8.0 + netstandard2.0 assets so it still loads on both our
-       TFMs, and a direct 10.0.x is a roll-FORWARD (never a downgrade) over the lower DI-abstractions
-       versions EF Core 9 / ML.NET 4 pull, so the whole solution restores cleanly. It is a pure-managed
-       BCL-adjacent package (no foreign runtime), so referencing it from Core does not break Core's
-       "no foreign runtime" rule. Bump this one value to raise the version everywhere. (The gRPC storage
-       package does NOT use this: it gets DI from the ASP.NET Core shared framework — see its own csproj.)
+       TFM-MATCHED VERSIONS (do NOT drag .NET 10-era packages into the net8.0 output). A DI-abstractions
+       version tracks the .NET release train, and referencing a 10.0.x from the net8.0 target unifies the
+       whole Microsoft.Extensions.* graph UP to the .NET 10 line on a .NET 8 consumer. So the version is
+       chosen PER TARGET FRAMEWORK below: the 8.0.x line for net8.0, the 10.0.x line for net10.0. Because
+       Directory.Build.props is re-imported in each inner (per-TFM) build, $(TargetFramework) is set when
+       these conditions evaluate, so a single $(MicrosoftExtensionsDIVersion)-driven PackageReference
+       resolves to the right line for each TFM. (net8.0-clean for 13 of the 18 packages.)
+
+       PER-PACKAGE net8.0 OVERRIDE. A direct reference BELOW a transitive requirement is a package
+       DOWNGRADE (NU1605, and this repo builds warnings-as-errors). A few satellites pull a third-party
+       lib whose CURRENT version already requires a higher DI on net8.0 (Storage.EFCore -> EF Core 9 ->
+       9.0.x, the normal .NET 9 footprint; Artifacts.AzureBlob -> Azure.Core -> 10.0.3;
+       Storage.StackExchange.Redis / .NRedisStack -> StackExchange.Redis 3.x -> 10.0.5). Those csprojs
+       raise the net8.0 floor by setting $(MicrosoftExtensionsDIVersion) DIRECTLY in a net8.0-conditional
+       PropertyGroup (a csproj PropertyGroup is evaluated AFTER this import, so it wins for that TFM; the
+       PackageReference item reads the final property value). It is a pure-managed BCL-adjacent package
+       (no foreign runtime), so referencing it from Core does not break Core's "no foreign runtime" rule.
+       (The gRPC storage package does NOT use this: it gets DI from the ASP.NET Core shared framework.)
        ==================================================================================== -->
   <PropertyGroup>
+    <!-- net8.0 -> latest 8.0.x; everything else (net10.0 + the outer multi-target build) -> latest 10.0.x. -->
+    <MicrosoftExtensionsDIVersion Condition="'$(MicrosoftExtensionsDIVersion)' == '' and '$(TargetFramework)' == 'net8.0'">8.0.2</MicrosoftExtensionsDIVersion>
     <MicrosoftExtensionsDIVersion Condition="'$(MicrosoftExtensionsDIVersion)' == ''">10.0.12</MicrosoftExtensionsDIVersion>
   </PropertyGroup>
 

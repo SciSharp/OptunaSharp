@@ -29,8 +29,16 @@
     <PackageReference Include="NRedisStack" Version="1.7.4" />
   </ItemGroup>
 
+  <!-- net8.0 DI floor: NRedisStack 1.7.4 -> StackExchange.Redis 3.1.31 -> Logging.Abstractions 10.0.5
+       requires the .NET 10 DI line on net8.0 as well, so match it here (a lower ref is a NU1605
+       downgrade). Keeping the maintainer-pinned Redis clients takes priority over a net8.0-pure DI line
+       here. net10.0 uses 10.0.x. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <MicrosoftExtensionsDIVersion>10.0.5</MicrosoftExtensionsDIVersion>
+  </PropertyGroup>
+
   <!-- Optional Microsoft.Extensions.DependencyInjection wire-up (OptunaSharp.Storages.Journal.Extensions).
-       Pure-managed abstractions; version single-sourced in ../../Directory.Build.props. -->
+       TFM-matched version from ../../Directory.Build.props (10.0.5 floor on net8.0 per above, 10.0.x on net10.0). -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsDIVersion)" />
   </ItemGroup>

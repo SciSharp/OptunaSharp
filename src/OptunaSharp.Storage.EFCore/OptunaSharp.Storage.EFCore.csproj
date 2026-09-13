@@ -32,9 +32,15 @@
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
   </ItemGroup>
 
+  <!-- net8.0 DI floor: EF Core 9's own dependencies require the .NET 9 DI line (9.0.x) on net8.0 too, so
+       match EF Core here rather than reference below it (a lower ref is a NU1605 downgrade). This is EF
+       Core 9's normal .NET 9 footprint, NOT a .NET 10 package pulled into net8.0. net10.0 uses 10.0.x. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <MicrosoftExtensionsDIVersion>9.0.1</MicrosoftExtensionsDIVersion>
+  </PropertyGroup>
+
   <!-- Optional Microsoft.Extensions.DependencyInjection wire-up (OptunaSharp.Storages.EFCore.Extensions).
-       EF Core 9 already pulls DI abstractions transitively (9.0.x); the direct 10.0.x roll-forward
-       keeps the solution consistent. Version single-sourced in ../../Directory.Build.props. -->
+       TFM-matched version from ../../Directory.Build.props (9.0.x on net8.0 per the floor above, 10.0.x on net10.0). -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsDIVersion)" />
   </ItemGroup>
