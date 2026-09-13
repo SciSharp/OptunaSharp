@@ -2534,9 +2534,9 @@ with eigenvalue λ−1. Since every eigenvalue satisfies (σ2i + λ)−1 ≥(σm
 T ⪰ (5)
 σmax(J)2 + λ I.
 
-The restricted covariance annihilates span(B)⊥from both sides. Any restricted-covariance up-
+The restricted covariance annihilates span(B)⊥from both sides. Any restricted-covariance up-
 date C′ = (1 −α)Chost + αBM ′B⊤with Chost = BMB⊤can be written C′ = B (1 −
-α)M + αM ′B⊤=: B fMB⊤, whose range and corange lie in span(B). With B having or-
+α)M + αM ′B⊤=: B fMB⊤, whose range and corange lie in span(B). With B having or-
 thonormal columns, P⊥= I −BB⊤is the orthogonal projector onto span(B)⊥and B⊤P⊥=
 B⊤−(B⊤B)B⊤= 0. Hence
 
@@ -3775,7 +3775,7 @@ them the set A. Now, we compute the IGD metric as the
 average Euclidean distance of points in set Z with their nearest
 members of all points in set A:
 
-�\|Z\| \|A\|
+∑\|Z\| \|A\|
 IGD(A, Z) = 1 minj=1 d(zi, aj), (6)
 
 \|Z\| i=1
@@ -3809,7 +3809,7 @@ objectives Ref. dirn. popsize popsize
 10 275 276 275
 15 135 136 135
 
-�3−1+12�
+C(3−1+12, 12)
 
 we have used p = 12 in order to obtain H = 12 or
 91 reference points (refer to equation 3). For five-objective
@@ -6348,8 +6348,8 @@ structural integrity of the vehicle) are taken as objectives.
 Mathematical formulation for the three objectives can be found
 in the original study \[55\].
 
-All objectives are to be minimized. For this problem, we�
-choose p = 16 so that there are H = �3−1+1616 or 153
+All objectives are to be minimized. For this problem, we
+choose p = 16 so that there are H = C(3−1+16, 16) or 153
 
 structured reference points. The reference points are initialized
 on the entire normalized hyper-plane in the three-objective
@@ -7251,14 +7251,14 @@ a.panichella@tudelft.nl
 A key idea in many-objective optimization is to approximate the
 optimal Pareto front using a set of representative non-dominated
 solutions. The produced solution set should be close to the opti-
-mal front (convergence) and well-diversi￿ed (diversity). Recent
+mal front (convergence) and well-diversified (diversity). Recent
 studies have shown that measuring both convergence and diver-
 sity depends on the shape (or curvature) of the Pareto front. In
 recent years, researchers have proposed evolutionary algorithms
-that model the shape of the non-dominated front to de￿ne environ-
+that model the shape of the non-dominated front to define environ-
 mental selection strategies that adapt to the underlying geometry.
 This paper proposes a novel method for non-dominated front mod-
-eling using the Newton-Raphson iterative method for roots ￿nding.
+eling using the Newton-Raphson iterative method for roots finding.
 Second, we compute the distance (diversity) between each pair of
 non-dominated solutions using geodesics, which are generaliza-
 tions of the distance on Riemann manifolds (curved topological
@@ -7289,7 +7289,7 @@ ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/3512290.3528732
 Many engineering and real-world problems are inherently multi-
 objective as they require addressing multiple objectives \[4, 16, 24\].
 However, there is no single solution that can satisfy all objectives
-if they are con￿icting. In these scenarios, there are multiple Pareto
+if they are conflicting. In these scenarios, there are multiple Pareto
 
 This work is licensed under a Creative Commons Attribution International 4.0 License.
 
@@ -7298,20 +7298,20 @@ GECCO ’22, July 9–13, 2022, Boston, MA, USA
 ACM ISBN 978-1-4503-9237-2/22/07.
 https://doi.org/10.1145/3512290.3528732
 
-optimal trade-o￿s between the various objectives, which are critical
-for the decision-makers when choosing the solution that best ￿ts
-their constraints. Thus, ￿nding these Pareto optimal trade-o￿s is the
+optimal trade-offs between the various objectives, which are critical
+for the decision-makers when choosing the solution that best fits
+their constraints. Thus, finding these Pareto optimal trade-offs is the
 primary goal of multi- and many-objective optimization algorithms.
 Many-objective Evolutionary algorithms (MOEAs) have been
 successfully used in literature to solve multi and many-objective
-optimization problems (MOPs) with con￿icting objectives. Their
-goal is twofold: (1) produce a set of trade-o￿s that is as close to
+optimization problems (MOPs) with conflicting objectives. Their
+goal is twofold: (1) produce a set of trade-offs that is as close to
 the true Pareto front as possible (convergence); and (2) obtain well-
-distributed trade-o￿s (diversity) for a more complete and informed
+distributed trade-offs (diversity) for a more complete and informed
 decision-making process. The success of MOEAs strongly depends
 on their ability to balance convergence and diversity.
 Over the last two decades, several MOEAs have been proposed
-in the literature. They di￿er in the main mechanisms used to select
+in the literature. They differ in the main mechanisms used to select
 new solutions for the next generations (environmental selection)
 such that both convergence and diversity are promoted. For ex-
 ample, Pareto-based MOEAs like NSGA-II \[14\] divide candidate
@@ -7324,25 +7324,25 @@ best solution for each of the reference points (convergence). Finally,
 indicator-based MOEAs (e.g., IBEA \[41\]) rely on quality indica-
 tors, such as the hypervolume (HV), that measure both solutions
 diversity and convergence. Other widely-used quality indicators
-include the Averaged Hausdor￿distance (Δ?) \[32\], the inverted
+include the Averaged Hausdorffdistance (Δ?) \[32\], the inverted
 generational distance plus (IGD+) \[20\], and R2 \[7\].
 As highlighted in recent studies \[25, 29, 36\], these well-known
-MOEAs use ￿xed diversity and convergence methods that achieve
-di￿erent performances depending on the shape/geometry of the
+MOEAs use fixed diversity and convergence methods that achieve
+different performances depending on the shape/geometry of the
 Pareto front to approximate. For example, Das and Dennis’s sys-
 tematic approach \[11\] used in NSGA-III and MOEA/D places the
 reference points on a normalized hyper-plane, which is optimal for
-￿at Pareto fronts. The angular-based distance used in VaEA \[23\] and
-LMEA \[40\] is instead e￿ective on spherical fronts since the distance
+flat Pareto fronts. The angular-based distance used in VaEA \[23\] and
+LMEA \[40\] is instead effective on spherical fronts since the distance
 on a sphere can be better measured by angles.
 Hence, recent research has been devoted to designing adaptive
 environmental selection strategies depending on the geometry of
-the Pareto front. To this aim, ￿tting methods are used to model
+the Pareto front. To this aim, fitting methods are used to model
 the set of non-dominated solutions produced during the evolution-
 ary process. In particular, Martinez et al. \[25\], and Tian et al. \[36\]
-have applied non-linear ￿tting methods that can e￿ectively model
+have applied non-linear fitting methods that can effectively model
 the shape formed by the non-dominated solution set. However,
-non-linear ￿tting methods like the Levenberg-Marquardt (LM) al-
+non-linear fitting methods like the Levenberg-Marquardt (LM) al-
 gorithm \[36\] incur a substantial overhead, which increases dra-
 matically with the population size and the number of objectives.
 
@@ -7367,7 +7367,7 @@ Instead, AGE-MOEA \[29\] is a recently proposed MOEA that uses sim-
 ple heuristics to model the shape of the Pareto front. In particular,
 it uses one single non-dominated point (the central point), as a
 reference throughout the search. Although simple, the single-point-
-based heuristic has been shown to be e￿ective while incurring a
+based heuristic has been shown to be effective while incurring a
 negligible computational cost.
 In this paper, we observe two areas of improvement in the overall
 AGE-MOEA framework. First, the accuracy of the front-modeling
@@ -7381,11 +7381,11 @@ topological structure (i.e., the curvature).
 This paper introduces two novel strategies (1) to model the
 non-dominated front and (2) to measure the distance among non-
 dominated solutions. In particular, we use the Newton-Raphson
-iterative method for root ￿nding \[38\], which is much more robust
+iterative method for root finding \[38\], which is much more robust
 and less sensitive to the choice of the non-dominated point used
 as reference (as empirically shown in Section 2.2). Second, we use
 geodesic \[27\] to measure the distance between non-dominated so-
-lutions on a curved manifold. In di￿erential geometry, a geodesic
+lutions on a curved manifold. In differential geometry, a geodesic
 is the shortest path between two points on a curved manifold, e.g.,
 the great circle on a sphere. Hence, we rely on these “curved” paths
 on the front models to better measure solution diversity.
@@ -7395,9 +7395,9 @@ the resulting evolutionary algorithm AGE-MOEA-II. To assess the
 performance of the proposed MOEA, we conducted an empiri-
 cal study with 17 test problems from two benchmarks, namely
 WFG \[18\] and SMOP \[37\]. These benchmarks have been widely
-used in literature since they contain problems with di￿erent search
+used in literature since they contain problems with different search
 challenges and Pareto front shapes. Our study considers these test
-problems with a di￿erent number of objective functions "=3, 6,
+problems with a different number of objective functions "=3, 6,
 and 9. Experimental results indicate that AGE-MOEA-II achieves
 higher hypervolume (HV) values than its predecessor AGE-MOEA
 and outperforms other state-of-the-art MOEAs, namely NSGA-III,
@@ -7413,7 +7413,7 @@ mance of AGE-MOEA-II. Finally, Section 5 concludes the paper.
 
 Multi-objective optimization problems are very common in real-
 world engineering problems \[24\]. Without loss of generality, a
-multi-objective optimization problem can be de￿ned as follows:
+multi-objective optimization problem can be defined as follows:
 
 &lt;8=퐹(G) = \[51(G), 52(G), . . . , 5" (G)\]) (1)
 
@@ -7421,7 +7421,7 @@ subject to G 2 ⌦✓R:
 
 where G = (G1, . . . ,G:)) is a :-dimensional solution (or decision)
 vector from the feasible region ⌦⇢R:; 5 : ⌦! R" is an objective
-vector with " con￿icting objective functions (or simply objectives).
+vector with " conflicting objective functions (or simply objectives).
 
 A. Panichella
 
@@ -7450,7 +7450,7 @@ and two objectives. /&lt;0G denotes the nadir point.
 
 Multi-objective problems with more than three objectives (" &gt; 3)
 are often referred to as many-objective in the literature.
-A solution G dominates another solution \~ (G ≺\~), if 58 (G) 
+A solution G dominates another solution \~ (G ≺\~), if 58 (G) ≤
 58 (\~) 858 2 퐹and there exists at least one objective 59 2 퐹such that
 59 (G) &lt; 59 (\~). A Pareto optimal solution G⇤2 ⌦is a solution that
 is non-dominated by any other solution in ⌦, i.e., ö \~ 2 ⌦such
@@ -7460,9 +7460,9 @@ form the so-called Pareto front (PF).
 
 ### 2.1 Pareto front modelling
 
-In recent years, researchers have proposed di￿erent front modeling
-techniques with the goal of de￿ning diversity measures that are
-speci￿c or adaptive w.r.t. the shape (curvature) of the Pareto front.
+In recent years, researchers have proposed different front modeling
+techniques with the goal of defining diversity measures that are
+specific or adaptive w.r.t. the shape (curvature) of the Pareto front.
 The modeling is done using the following family of manifolds:
 ⇣ ⌘1/?
 0?1 + · · · + 0?" = 1 (2)
@@ -7470,18 +7470,18 @@ The modeling is done using the following family of manifolds:
 where08 are the coordinates (objective values) of the non-dominated
 solution 퐴, and ? is the parameter that control the front’s curvature.
 Equation 2 is also referred to as \|\|·\|\|? norm or simply !? space. !? is
-a generalization of the Euclidean (!2) distance \[34\] and de￿nes the
+a generalization of the Euclidean (!2) distance \[34\] and defines the
 so-called unit circle, as shown in Figure 1. In particular, points A, B,
 and C are all at the same Euclidean distance from the origin of the
 axes ($) that is equal to one (i.e., 3(퐴,$) = \|\|퐴−$\|\|2 = 1). Hence,
 !2 accurately models the Pareto front that forms a (hyper) sphere.
-If the Pareto front forms a ￿at hyper-plane, the best ￿tting norm
+If the Pareto front forms a flat hyper-plane, the best fitting norm
 is ? = 1. Instead, for fronts that correspond to hyperbolic mani-
 folds, the corresponding norm has ? &lt; 1 values. Hence, modeling
-the Pareto front requires ￿nding the value of ? that minimizes the
-￿tting error, i.e., the di￿erence between the actual front and the cur-
+the Pareto front requires finding the value of ? that minimizes the
+fitting error, i.e., the difference between the actual front and the cur-
 vature obtained with the !? norm. To this aim, multiple numerical
-methods can be used to solve this non-linear ￿tting problem.
+methods can be used to solve this non-linear fitting problem.
 GFM-MOEA by Tian et al. \[36\] uses a generalized version of the
 !? family of manifolds:
 
@@ -7551,37 +7551,37 @@ Result: Final population %
 15 return %
 
 where 08,9 denotes 9-th objective value for the 8-the non-dominated
-solution. Solving such a system of equations requires ￿nding the
-constants ? and 21, . . . ,2" that minimize the ￿tting error. Given
+solution. Solving such a system of equations requires finding the
+constants ? and 21, . . . ,2" that minimize the fitting error. Given
 this set of non-linear equations, GFM-MOEA uses the Levenberg-
-Marquardt (LM) algorithm. The ￿tting process in \[36\] is particularly
+Marquardt (LM) algorithm. The fitting process in \[36\] is particularly
 expensive since it has an overall complexity of $(⌧0"2(" + \#)),
 where ⌧0 is the number of iterations of the LM algorithm, \# is the
 population size, while " is the number of objectives. Besides, the
-￿tting method must be re-applied in every  generations based
+fitting method must be re-applied in every  generations based
 on a non-dominated set of solutions produced in the latest genera-
 tion/iteration of the evolutionary process.
-While GFM-MOEA uses the entire non-dominated front to ￿nd the
-best ￿tting !? manifold, AGE-MOEA \[29\] uses one single point (called
+While GFM-MOEA uses the entire non-dominated front to find the
+best fitting !? manifold, AGE-MOEA \[29\] uses one single point (called
 central point) to determine the curvature ? of the approximated
 Pareto front. This reduces the cost of modeling the front to $(").
 This much lower computational cost allows to re-compute the ?-
 value in each generation.
 The pseudo-code of AGE-MOEA is reported in Algorithm 1 \[29\].
 There are three key ingredients in AGE-MOEA \[29\]: (1) front normal-
-ization; (2) determining the curvature ? of the ￿rst non-dominated
+ization; (2) determining the curvature ? of the first non-dominated
 front; (3) environmental selection based on proximity and diversity,
-both computed using the ￿tted ?-value. We elaborate on these key
+both computed using the fitted ?-value. We elaborate on these key
 ingredients in the following paragraphs.
 Normalization (line 6 in Algorithm 1). First, the fast non-domina-
 ted sorting algorithm (from NSGA-II \[12\]) groups the population
-(parents and o￿spring) in sub-sequent non-dominated fronts. Then,
+(parents and offspring) in sub-sequent non-dominated fronts. Then,
 all fronts are normalized by scaling the objective scores within
 the range \[0; 1\] using the same procedure of NSGA-III \[5\]. The
 normalization is computed by (i) scaling the ideal point /&lt;8= to
 the origin of the axes, and (ii) diving the objective values based on
 the hyperplane intercepting the extreme points in the front \[29\].
-Front modeling (line 7 in Algorithm 1). Once the ￿rst front is
+Front modeling (line 7 in Algorithm 1). Once the first front is
 normalized, its curvature is computed using the following formula:
 
 ;&gt;6(")
@@ -7609,13 +7609,13 @@ F1 using the estimated ? norm.
 
 ### 2.2 Limitations of Existing Modeling Methods
 
-The ￿rst limitation in the original AGE-MOEA framework regards the
-￿tting accuracy of Equation 4. The accuracy strongly depends on the
+The first limitation in the original AGE-MOEA framework regards the
+fitting accuracy of Equation 4. The accuracy strongly depends on the
 non-dominated solution used as the reference one. To better explain
 this limitation, let us consider the graphical example depicted in
 Figure 1. The plot shows three non-dominated points A, B, and C,
 forming a circular bi-dimensional front (manifold with ?=2). If we
-apply Equation 4 for the di￿erent non-dominated points, we obtain
+apply Equation 4 for the different non-dominated points, we obtain
 the following results:
 
 • For point A, ? = 0.495074054167603
@@ -7628,11 +7628,11 @@ on how close the chosen reference point is to the theoretical center
 of the front. Only if we apply Equation 4 to the theoretical middlep p
 point ⇠⇤= (1/ 2, 1/ 2), we obtain the correct value ?=2.
 Finally, the diversity is computed in AGE-MOEA using the \|\| · \|\|?
-norm for the estimated geometry ?. For example, for a ￿at front
+norm for the estimated geometry ?. For example, for a flat front
 (?=1), the distance between two non-dominated solutions 퐴and ⌫
 is computed using the Manhattan distance, i.e., 3(퐴, ⌫) = \|\|퐴−⌫\|\|1.
 From a geometric point of view, the shortest distance between
-two points in a ￿at space (? = 1) is the length of the straight line
+two points in a flat space (? = 1) is the length of the straight line
 between them computed with the Euclidean distance (or \|\| · \|\|2
 norm). Similarly, the distance between two points 퐴and ⌫on a
 sphere (3-d manifold with ?=2 geometry) is the great circle distance,
@@ -7649,7 +7649,7 @@ This paper introduces (i) a new accurate yet fast method to com-
 pute the curvature of the non-dominated front, and (2) a new
 diversity metrics for the non-dominated solutions based on Rie-
 mannian geometry. We called the resulting evolutionary algorithm
-AGE-MOEA-II. The key di￿erences with its predecessor AGE-MOEA
+AGE-MOEA-II. The key differences with its predecessor AGE-MOEA
 are highlighted in bold-face in Algorithm 2. We discuss them in the
 following sections.
 
@@ -7678,7 +7678,7 @@ This paper proposes a more precise method to determine the curva-
 ture (L? geometry) of the manifold formed by the non-dominated
 front. In particular, we propose to use the Newton-Raphson method,
 which is fast for approximating the roots (zeros) of real-valued func-
-tions of the form 5 (G) = 0 \[19\]. Let 5 (G) be a continuous di￿erential
+tions of the form 5 (G) = 0 \[19\]. Let 5 (G) be a continuous differential
 function; the Newton-Raphson method iteratively approximates
 the root of 5 (G) using the formula:
 
@@ -7688,8 +7688,8 @@ G=+1 = G= + 5 (G=) (6)
 where G=+1 is the root approximation at the = + 1 iteration, while
 G= is the approximation produced in the previous iteration G=. The
 iterative method starts with an initial user-provided point G0 and
-terminates when the di￿erence between two consecutive approxi-
-mations is lower than a given threshold n, i.e., when \|G=+1 −G=\| n.
+terminates when the difference between two consecutive approxi-
+mations is lower than a given threshold n, i.e., when \|G=+1 −G=\| ≤n.
 In our context, we want to determine the value ? that solves the
 following non-linear equation:
 
@@ -7704,7 +7704,7 @@ point 퐴= \{01, . . . ,0"\} and the ideal point I&lt;8=. We consider the
 case where the ideal point I&lt;8= is the origin of the axes (I&lt;8=8 =
 $, 88 = 1 . . . "), which can be easily obtained by normalizing the
 non-dominated fronts within the interval \[0; 1\]. Hence, our problem
-consists of ￿nding the root of the function (after simpli￿cation):
+consists of finding the root of the function (after simplification):
 
 " !
 ’
@@ -7728,16 +7728,16 @@ Equation 8 for a generic non-dominated point 퐴= \{01, . . . ,0"\} is:
 with ?= and ?=+1 being the approximated roots obtained at the
 iterations= and=+1, respectively. To initialize the Newton-Raphson
 method, we have chosen the seed ?0 = 1, which corresponds to a
-￿at manifold (with no curvature). To make Equation 9 well-de￿ned
+flat manifold (with no curvature). To make Equation 9 well-defined
 within the interval ? 2 \[0, +1), we consider (08)?= · ;&gt;6 (08) = 0
 when 08 = 0 since it corresponds to the limit limG!0G · ;&gt;6(G).
 
 We have chosen the Newton-Raphson method over other numeri-
-cal root-￿nding approaches (such as the bisection \[31\] or secant \[2\]
+cal root-finding approaches (such as the bisection \[31\] or secant \[2\]
 methods) because of its fast convergence \[17\] and our function
-5 (?) is di￿erentiable. In our preliminary analysis, we found that
+5 (?) is differentiable. In our preliminary analysis, we found that
 Equation 9 requires, on average, 3 iterations to produce an error of
-\|?=+1−?=\| 0.001 for the benchmark problems we have considered
+\|?=+1−?=\| ≤0.001 for the benchmark problems we have considered
 in our empirical evaluation (See Section 4).
 
 3.1.1 Graphical example. To better explain the advantages of the
@@ -7788,7 +7788,7 @@ Result: Final population %
 
 17 return %
 
-the di￿erent non-dominated points, setting the initial seed ?0 = 1
+the different non-dominated points, setting the initial seed ?0 = 1
 and with only four iterations:
 
 • For point A, ?4 = 1.999983149170659
@@ -7796,7 +7796,7 @@ and with only four iterations:
 • For point C, ?4 = 1.999979682971426
 
 Instead, if we use the equation used in \[29\] for the point closer
-to the bisector of the ￿rst quadrant (e.g., point B), we obtain the
+to the bisector of the first quadrant (e.g., point B), we obtain the
 value ? = 1.628072268133887 (as shown in Section 2.2). Hence,
 the accuracy of the original formula used in AGE-MOEA depends on
 how close the reference point (i.e., the one used to approximate the
@@ -7813,13 +7813,13 @@ given the fast convergence of the method.
 
 ### 3.2 Calculating Diversity with Geodesics
 
-In di￿erential geometry, the minimum distance between two points
+In differential geometry, the minimum distance between two points
 on a non-Euclidean topological space is computed busing geodesics,
 which generalize of the straight line between two points \[22\].
-Geodesics are well-known geometry constructs for de￿ning dis-
+Geodesics are well-known geometry constructs for defining dis-
 tances and metrics on Riemannian topologies \[27\]. Without loss of
 generality, the distance between two points 퐴and ⌫on a manifold
-is de￿ned by the following integral:
+is defined by the following integral:
 
 π ⌫
 
@@ -7829,7 +7829,7 @@ is de￿ned by the following integral:
 퐴
 
 where W is a piecewise smooth curve (geodesic) joining 퐴and ⌫.
-In other words, the distance is the in￿mum of the lengths of all
+In other words, the distance is the infimum of the lengths of all
 piecewise smooth paths between the two points.
 
 568
@@ -7878,9 +7878,9 @@ First Objective First Objective First Objective
 
 (a) Distance approximation for ? = 1 (b) Distance approximation for ? = 2 (c) Distance approximation for ? = 0.5
 
-![Figure 2: Graphical examples on how approximating the distance between two points on fronts with di￿erent curvatures.](K:/source/OptunaSharp/docs/papers/paper-gateway/library/72851351a07ce030/figures/p0005-figure-01.png)
+![Figure 2: Graphical examples on how approximating the distance between two points on fronts with different curvatures.](K:/source/OptunaSharp/docs/papers/paper-gateway/library/72851351a07ce030/figures/p0005-figure-01.png)
 
-Figure 2: Graphical examples on how approximating the distance between two points on fronts with di￿erent curvatures.
+Figure 2: Graphical examples on how approximating the distance between two points on fronts with different curvatures.
 
 To simplify the computation of the distance between two points
 on a generic manifold, we propose using the approximation proce-
@@ -7889,7 +7889,7 @@ dure described in the following subsection.
 3.2.1 Geodesic Approximation. Let us consider a generic normal-
 ized set of non-dominated solutions F and the curvature of ? com-
 puted using Equation 9. To approximate the distance between two
-generic points 퐴= \{01, . . . ,0"\} and ⌫= \{11, . . . ,1"\} 2 F, we ￿rst
+generic points 퐴= \{01, . . . ,0"\} and ⌫= \{11, . . . ,1"\} 2 F, we first
 compute the middle point ⇠, i.e., the point in the middle of the
 straight line connecting the two points:
 
@@ -7918,10 +7918,10 @@ where \|\|퐴−⇠?\|\|2 is the Euclidean distance between 퐴and ⇠?; and
 \|\|⌫−⇠?\|\|2 is the Euclidean distance between ⌫and ⇠?.
 
 3.2.2 Graphical example. . Figure 2 graphically shows how the
-geodesic distance is computed for fronts with three di￿erent cur-
+geodesic distance is computed for fronts with three different cur-
 vatures, i.e., ? 2 \{0.5, 1, 2\}. Let us consider the case ? = 2 shown
 in Figure 2a as an example. In this case, the shape/geometry of
-the front is the unit circle depicted in the ￿gure. Let us assume
+the front is the unit circle depicted in the figure. Let us assume
 we want to compute the geodesic distance between the two non-
 dominated points 퐴= (0, 1) and ⌫= (1, 0). The midpoint computed
 using Equation 11 is ⇠= (0.5, 0.5), while its projection on thep p
@@ -7999,16 +7999,16 @@ WFG \[18\] and SMOP \[37\]. WFG is a well-known test benchmark
 
 GECCO ’22, July 9–13, 2022, Boston, MA, USA A. Panichella
 
-with 9 test problems with di￿erent properties, such as convex
+with 9 test problems with different properties, such as convex
 (WFG1, WFG2), degenerate (WFG3), concave (WFG5, WFG6, WFG7,
 and WFG8), and multimodal (WFG2, WFG9) fronts. SMOP has been
 recently proposed by Tian et al. \[37\] and contains eight large-scale
-sparse test problems with di￿erent shape and optimization chal-
+sparse test problems with different shape and optimization chal-
 lenges, such as deceptive objectives (SMOP2, SMOP3, SMOP8),
 sub-optima (SMOP1, SMOP4, SMOP6, and SMOP7), and epistasis
 (SMOP7 and SMOP8). We have chosen these two benchmarks since
-they cover di￿erent real-world scenarios \[18, 37\], and can be con-
-￿gured with a di￿erent number of objectives and decision variables.
+they cover different real-world scenarios \[18, 37\], and can be con-
+figured with a different number of objectives and decision variables.
 To assess the performance of the selected MOEAs, we considered
 the test problems with &lt; 2 \{3, 6, 9\} objectives. Besides, we set the
 number of decision variables ⇡= 100 for all test problems in both
@@ -8020,11 +8020,11 @@ VaEA \[23\], and LMEA \[40\]. AGE-MOEA \[29\] is an intuitive baseline
 since it is the direct predecessor of AGE-MOEA-II. The main dif-
 ferences between the two variants are related to how the non-
 dominated front is modeled and how the distance/diversity be-
-tween the di￿erent solutions is computed. NSGA-III uses reference
+tween the different solutions is computed. NSGA-III uses reference
 points and Pareto-ranking to compute diversity and convergence of
 the non-dominated fronts. MOEA/D \[28\] relies on a well-distributed
 set of weighted vectors and aggregation functions to produce a
-well-diversi￿ed set of non-dominated solutions. VaEA \[23\] uses an
+well-diversified set of non-dominated solutions. VaEA \[23\] uses an
 angle-based selection strategy that promotes only a few solutions
 within a given minimum angle distance. Finally, LMEA \[40\] is an
 MOEA designed for large-scale problems. It clusters decision vari-
@@ -8032,7 +8032,7 @@ ables into convergence-related and diversity-related ones. Then,
 the environmental selection is based on both the clustering method
 and the diversity of the generated solutions measured using an
 angle-based distance. We have selected these baselines since they
-use di￿erent strategies to balance convergence and diversity (e.g.,
+use different strategies to balance convergence and diversity (e.g.,
 reference point, Pareto-based, decomposition, angle-based distance,
 and clustering methods).
 
@@ -8040,7 +8040,7 @@ and clustering methods).
 test problem to account for their stochastic nature. We stored the
 non-dominated front produced at the end of the search by each
 MOEA on each test problem. To assess the performance of the
-di￿erent MOEAs, we employed the hypervolume (HV) quality indi-
+different MOEAs, we employed the hypervolume (HV) quality indi-
 cator \[33\]. HV takes values in \[0, 1\], and it measures the size (por-
 tion) of the feasible region dominated by the set of non-dominated
 points produced by an MOEA (e.g., AGE-MOEA-II). Hence, a large
@@ -8051,11 +8051,11 @@ it simultaneously measures both convergence and diversity of the
 produced non-dominated fronts. To analyze the results, we report
 the median and the interquartile range (IQR) of the HV values pro-
 duced by each MOEA across the 30 independent runs. Furthermore,
-we apply the Wilcoxon rank-sum test \[10\] to assess the signi￿cance
-of the di￿erence (if any) between AGE-MOEA-II and the baselines
-(other MOEAs). For this test, we use the signi￿cance level U = 0.05.
+we apply the Wilcoxon rank-sum test \[10\] to assess the significance
+of the difference (if any) between AGE-MOEA-II and the baselines
+(other MOEAs). For this test, we use the significance level U = 0.05.
 
-4.1.4 Paremeter se￿ings. For all MOEAs, we used the same parame-
+4.1.4 Paremeter settings. For all MOEAs, we used the same parame-
 ter settings for the shared parameters and genetic operators. Table 1
 
 Table 1: Parameter values used for all MOEAS. " denotes the
@@ -8098,23 +8098,23 @@ following characteristics: 6-Core Intel Core i7 processor running at
 ### 4.2 Empirical Results
 
 Table 2 reports the median and the IQR values for the HV indica-
-tor achieved by the di￿erent MOEAs over 30 independent runs.
+tor achieved by the different MOEAs over 30 independent runs.
 The table highlights the results with H and M when the HV val-
 ues achieved by AGE-MOEA-II are statistically better (larger) or
 worse (smaller) than the baseline MOEA according to the Wilcoxon
 rank-sum test \[10\]. In addition, Table 3 counts the number of test
-problems for which AGE-MOEA-II signi￿cantly outperforms (or is
+problems for which AGE-MOEA-II significantly outperforms (or is
 outperformed by) a baseline (e.g., AGE-MOEA).
 From the tables, we can observe that AGE-MOEA-II achieves a
-signi￿cantly higher HV than NSGA-III in 15 out of 17 test problems
-when " = 3 and " = 6. The 15 test problems with a signi￿cant
-di￿erence are the same independently of the number of objectives.
+significantly higher HV than NSGA-III in 15 out of 17 test problems
+when " = 3 and " = 6. The 15 test problems with a significant
+difference are the same independently of the number of objectives.
 When increasing the number of objectives to " = 9, AGE-MOEA-II
-achieves a signi￿cantly better HV value for an additional test prob-
+achieves a significantly better HV value for an additional test prob-
 lem, namely WFG3. It is worth noting that WFG3 has a degenerate
 true Pareto front with ? = 1 curvature. Our results suggest that
 AGE-MOEA-II outperforms NSGA-III for degenerate fronts only for
-many objectives. Remarkable are the di￿erences when considering
+many objectives. Remarkable are the differences when considering
 a larger number of objectives. We observe 2-3 test problems with
 
 1https://github.com/BIMK/PlatEMO
@@ -8309,16 +8309,16 @@ LMEA AGEMOEA-II
 7.4579e-1 (1.12e-2) H 7.5891e-1 (8.66e-3)
 4.6368e-1 (1.82e-2) H 7.6207e-1 (2.11e-2)
 
-at least one order of magnitude di￿erence in the median HV val-
+at least one order of magnitude difference in the median HV val-
 ues achieved by the two MOEAs (e.g., SMOP7 with "=6). Table 2
 indicates that AGE-MOEA-II outperforms its predecessor AGE-MOEA
 in the large majority of test problems. In particular, this applies in
 13, 15, and 13 problems for " = 3, " = 6, and " = 9, respectively.
 
 There is only one test problem, namely SMPO5, for which AGE-MOEA
-produces signi￿cantly better HV values than AGE-MOEA-II. How-
+produces significantly better HV values than AGE-MOEA-II. How-
 ever, this happens only for " = 3 and " = 9 while there is no
-signi￿cant di￿erence for " = 6. However, we notice that the dif-
+significant difference for " = 6. However, we notice that the dif-
 ference in the median HV is negligible in practice, being 0.0008 on
 
 571
@@ -8354,8 +8354,8 @@ VaEA &lt; AGE-MOEA-II - - -
 AGE-MOEA-II &lt; LMEA 15 14 15
 LMEA &lt; AGE-MOEA-II 1 1 1
 
-average for " = 3 and " = 6. For WFG3, there is no signi￿cant
-di￿erence between AGE-MOEA-II and AGE-MOEA, independently of
+average for " = 3 and " = 6. For WFG3, there is no significant
+difference between AGE-MOEA-II and AGE-MOEA, independently of
 the number of objectives ". This result is expected since the front
 for WFG3 is degenerate (e.g., one single line), for which the dif-
 ference in the numerical methods applied in AGE-MOEA-II and its
@@ -8365,19 +8365,19 @@ icantly outperforms the latter in most test problems independently
 of the number of objectives. In detail, AGE-MOEA-II yielded signif-
 icantly higher HV values than MOEA/D in 16 out of 17 problems
 for "=3, and in 15 problems for both "=6 and "=9. For some
-problems, the di￿erence is very remarkable, e.g., for SMOP7 with
-"=3, where there is one order of magnitude di￿erence in the HV
+problems, the difference is very remarkable, e.g., for SMOP7 with
+"=3, where there is one order of magnitude difference in the HV
 values produced by the two MOEAs. In particular, AGE-MOEA-II
 produced a median HV⇡0.54 against an HV⇡0.04 for MOEA/D. The
 true Pareto front for SMOP7 has a ? = 2 curvature and multiple
-local optima.We generally observe large di￿erences for other de-
+local optima.We generally observe large differences for other de-
 ceptive and multimodal problems such as SMOP3 and WFG8. Vice
 versa, there is only one test problem (namely WFG1 with "=9), for
 which the baseline outperforms AGE-MOEA-II.
-From Tables 2-3, AGE-MOEA-II achieves signi￿cantly larger HV
+From Tables 2-3, AGE-MOEA-II achieves significantly larger HV
 values than VaEA in 16 out of 17 test problems for "=3 and "=9,
-respectively. For "=6, the signi￿cance holds in 15 test problems.
-The largest di￿erence can be observed for SMOP7 with "=9, for
+respectively. For "=6, the significance holds in 15 test problems.
+The largest difference can be observed for SMOP7 with "=9, for
 which the proposed MOEA obtains an average HV⇡0.72 while VaEA
 achieved an average HV=0. Vice versa, in none of the test problems,
 the baseline could outperform AGE-MOEA-II.
@@ -8386,13 +8386,13 @@ AGE-MOEA-II and LMEA. The latter is an MOEA suitably designed
 for large-scale problems, e.g., the SMOP benchmark. As reported in
 Table 3, AGE-MOEA-II statistically outperformed LMEA in 15 out of
 17 test problems for "=3 and "=9. Instead, for "=6, the statistical
-signi￿cance holds for 14 out of 17 test problems. There are various
+significance holds for 14 out of 17 test problems. There are various
 test problems (e.g., SMOP3 and SMOP7 with any ") for which
 LMEA produced a zero HV value while AGE-MOEA achieved non-zero
 values. That indicates that for certain problems (e.g., WFG1 with
 " = 2), LMEA struggles to generate non-dominated solutions that
 reach at least the nadir point of the true Pareto. For " 2 \{3, 6, 9\},
-there is only one test problem where LMEA signi￿cantly outperforms
+there is only one test problem where LMEA significantly outperforms
 AGE-MOEA-II, but the test problem for which this happens varies
 when increasing the number of objectives.
 
@@ -8424,21 +8424,21 @@ LMEA
 1 2 3 4 5 6
 Number of Evaluations 104
 
-![Figure 3: Median HV values achieved by the di￿erent MOEAs for WFG9 with "=6 objectives.](K:/source/OptunaSharp/docs/papers/paper-gateway/library/72851351a07ce030/figures/p0008-figure-01.png)
+![Figure 3: Median HV values achieved by the different MOEAs for WFG9 with "=6 objectives.](K:/source/OptunaSharp/docs/papers/paper-gateway/library/72851351a07ce030/figures/p0008-figure-01.png)
 
-Figure 3: Median HV values achieved by the di￿erent
+Figure 3: Median HV values achieved by the different
 MOEAs for WFG9 with "=6 objectives.
 
 4.2.1 Graphical comparison. To graphically compare the MOEAs,
 Figure 3 depicts the median HV values achieved for WFG9 with
 "=6 and ⇡=100, using the parameters described in Table 1. The
 median HV values achieved by AGE-MOEA-II are larger than those
-achieved by all other MOEAs when varying the number of ￿tness
+achieved by all other MOEAs when varying the number of fitness
 evaluations (FEs). The delta between AGE-MOEA-II and its predeces-
 sor AGE-MOEA increases with a larger number of FEs. Furthermore,
 the delta with the other MOEAs remains very large through the
 generations. Finally, AGE-MOEA yielded the second-best HV results.
-This con￿rms the better e￿ectiveness/performance of MOEAs that
+This confirms the better effectiveness/performance of MOEAs that
 use front modeling techniques.
 
 ## 5 CONCLUSION AND FUTURE WORK
@@ -8457,12 +8457,12 @@ We conducted an empirical study to assess the performance of
 AGE-MOEA-II against its predecessor AGE-MOEA and other four state-
 of-the-art MOEAs, namely NSGA-III, MOEA/D, LMEA, and VaEA. We
 selected 17 test problems from two benchmarks, namely WFG and
-SMOP, that are characterized by di￿erent front shapes and opti-
+SMOP, that are characterized by different front shapes and opti-
 mization challenges. The achieved results show that AGE-MOEA-II
-signi￿cantly outperforms the other MOEAs w.r.t. the HV indicator,
+significantly outperforms the other MOEAs w.r.t. the HV indicator,
 also when increasing the number of objectives from " = 3 to 9.
-In our future work, we aim to assess the impact of using di￿erent
-normalization methods \[5\], di￿erent numerical methods to approx-
+In our future work, we aim to assess the impact of using different
+normalization methods \[5\], different numerical methods to approx-
 imate the geodesic distance, as well as incorporating front model-
 ing methods into other MOEA categories, such as decomposition-
 based \[39\] and clustering-based \[6, 40\] MOEAs. Furthermore, we
@@ -8495,7 +8495,7 @@ for continuous search space. Complex systems 9, 2 (1995), 115–148.
 \[2\] Myron B Allen III and Eli L Isaacson. 2011. Numerical analysis for applied science.
 Vol. 35. John wiley &amp; sons.
 \[3\] Christian Birchler, Nicolas Ganz, Sajad Khatiri, Alessio Gambi, and Sebastiano
-Panichella. 2022. Cost-e￿ective simulation-based test selection in self-driving
+Panichella. 2022. Cost-effective simulation-based test selection in self-driving
 cars software with SDC-Scissor. In 29th IEEE International Conference on Software
 Analysis, Evolution, and Reengineering, Honolulu, USA (online), 15-18 March 2022.
 ZHAW Zürcher Hochschule für Angewandte Wissenschaften.
@@ -8510,13 +8510,13 @@ Multi-Criterion Optimization. Springer, 229–240.
 Peter AN Bosman. 2017. The multi-objective real-valued gene-pool optimal
 mixing evolutionary algorithm. In Proceedings of the Genetic and Evolutionary
 Computation Conference. 537–544.
-\[7\] Dimo Brockho￿, Tobias Wagner, and Heike Trautmann. 2012. On the properties
+\[7\] Dimo Brockhoff, Tobias Wagner, and Heike Trautmann. 2012. On the properties
 of the R2 indicator. In Proceedings of the 14th annual conference on Genetic and
 evolutionary computation. 465–472.
 \[8\] Gerardo Canfora, Andrea De Lucia, Massimiliano Di Penta, Rocco Oliveto, Anni-
 bale Panichella, and Sebastiano Panichella. 2013. Multi-objective cross-project
 defect prediction. In 2013 IEEE Sixth International Conference on Software Testing,
-Veri￿cation and Validation. IEEE, 252–261.
+Verification and Validation. IEEE, 252–261.
 \[9\] Ran Cheng, Miqing Li, Ye Tian, Xingyi Zhang, Shengxiang Yang, Yaochu Jin,
 and Xin Yao. 2017. A benchmark test suite for evolutionary many-objective
 optimization. Complex &amp; Intelligent Systems 3, 1 (01 Mar 2017), 67–81. https:
@@ -8542,7 +8542,7 @@ Conference on Automated Software Engineering (ASE). IEEE, 211–223.
 Ady Arie. 2022. Large-Scale Inverse Design of a Planar On-Chip Mode Sorter.
 ACS Photonics (2022).
 \[17\] JC Ehiwario and SO Aghamie. 2014. Comparative study of bisection, Newton-
-Raphson and secant methods of root-￿nding problems. IOSR Journal of Engineer-
+Raphson and secant methods of root-finding problems. IOSR Journal of Engineer-
 ing 4, 4 (2014), 01–07.
 \[18\] Simon Huband, Philip Hingston, Luigi Barone, and Lyndon While. 2006. A
 review of multiobjective test problems and a scalable test problem toolkit. IEEE
@@ -8550,7 +8550,7 @@ Transactions on Evolutionary Computation 10, 5 (2006), 477–506.
 \[19\] Eugene Isaacson and Herbert Bishop Keller. 2012. Analysis of numerical methods.
 Courier Corporation.
 \[20\] Hisao Ishibuchi, Hiroyuki Masuda, Yuki Tanigaki, and Yusuke Nojima. 2015.
-Modi￿ed distance calculation in generational distance and inverted generational
+Modified distance calculation in generational distance and inverted generational
 distance. In International conference on evolutionary multi-criterion optimization.
 
 Springer, 110–125.
@@ -8573,22 +8573,22 @@ Conference on Parallel Problem Solving from Nature. Springer, 682–691.
 \[26\] Mitchell Olsthoorn and Annibale Panichella. 2021. Multi-objective test case
 selection through linkage learning-based crossover. In International Symposium
 on Search Based Software Engineering. Springer, 87–102.
-\[27\] John Oprea. 2019. Di￿erential geometry and its applications. Vol. 59. American
+\[27\] John Oprea. 2019. Differential geometry and its applications. Vol. 59. American
 Mathematical Soc.
 \[28\] Suat Özdemir, A Attea Bara’a, and Önder A Khalil. 2013. Multi-objective evo-
-lutionary algorithm based on decomposition for energy e￿cient coverage in
+lutionary algorithm based on decomposition for energy efficient coverage in
 wireless sensor networks. Wireless personal communications 71, 1 (2013), 195–215.
 \[29\] Annibale Panichella. 2019. An adaptive evolutionary algorithm based on non-
 euclidean geometry for many-objective optimization. In Proceedings of the Genetic
 and Evolutionary Computation Conference. 595–603.
 \[30\] Annibale Panichella, Fitsum Meshesha Kifetew, and Paolo Tonella. 2015. Refor-
 mulating branch coverage as a many-objective optimization problem. In 2015
-IEEE 8th international conference on software testing, veri￿cation and validation
+IEEE 8th international conference on software testing, verification and validation
 (ICST). IEEE, 1–10.
-\[31\] Al￿o Quarteroni, Riccardo Sacco, and Fausto Saleri. 2010. Numerical mathematics.
+\[31\] Alfio Quarteroni, Riccardo Sacco, and Fausto Saleri. 2010. Numerical mathematics.
 Vol. 37. Springer Science &amp; Business Media.
 \[32\] Günter Rudolph, Oliver Schütze, Christian Grimme, Christian Domínguez-
-Medina, and Heike Trautmann. 2016. Optimal averaged Hausdor￿archives
+Medina, and Heike Trautmann. 2016. Optimal averaged Hausdorffarchives
 for bi-objective problems: theoretical and numerical results. Computational
 Optimization and Applications 64, 2 (2016), 589–618.
 \[33\] Ke Shang, Hisao Ishibuchi, Linjun He, and Lie Meng Pang. 2020. A survey on
