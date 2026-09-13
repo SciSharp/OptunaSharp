@@ -73,6 +73,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Benchmark.Volle
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Tests.Benchmark.VolleyEval", "test\OptunaSharp.Tests.Benchmark.VolleyEval\OptunaSharp.Tests.Benchmark.VolleyEval.csproj", "{7352E87D-A1D4-4103-B5B6-9CC0887816CA}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OptunaSharp.Tests.Hosting", "test\OptunaSharp.Tests.Hosting\OptunaSharp.Tests.Hosting.csproj", "{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -479,6 +481,18 @@ Global
 		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Release|x64.Build.0 = Release|Any CPU
 		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Release|x86.ActiveCfg = Release|Any CPU
 		{7352E87D-A1D4-4103-B5B6-9CC0887816CA}.Release|x86.Build.0 = Release|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Debug|x64.Build.0 = Debug|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Debug|x86.Build.0 = Debug|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Release|x64.ActiveCfg = Release|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Release|x64.Build.0 = Release|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Release|x86.ActiveCfg = Release|Any CPU
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -517,5 +531,6 @@ Global
 		{E29FF9AF-0ADE-40D6-9542-D5CC88CD49B7} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{FD935334-9295-4867-85C7-42EC206D5689} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 		{7352E87D-A1D4-4103-B5B6-9CC0887816CA} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
+		{5EDC2A85-A387-41DF-BF4A-F6E6F3AB7AB9} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 	EndGlobalSection
 EndGlobal
