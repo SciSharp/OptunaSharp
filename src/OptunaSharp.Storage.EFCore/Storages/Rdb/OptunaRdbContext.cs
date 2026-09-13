@@ -1,4 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+#if NET8_0
+using Npgsql.NameTranslation;
+#endif
 
 namespace OptunaSharp.Storages.EFCore;
 
@@ -66,6 +69,21 @@ internal sealed class OptunaRdbContext : DbContext
 
         if (Database.IsNpgsql())
         {
+#if NET8_0
+            // EF Core 8 (net8.0): declare the four native PostgreSQL enum types to the EF model. The
+            // Npgsql EF 8 provider learns the CLR<->PG enum mapping from the model (HasPostgresEnum),
+            // whereas EF Core 9 (net10.0) uses the options-builder MapEnum in RDBStorage.MapPostgresEnums
+            // instead — so this block is net8.0-only to avoid double-registering on net10.0. The verbatim
+            // (null) translator keeps the enum labels' exact names, matching the data-source MapEnum in
+            // RDBStorage.MapOptunaEnums that performs the actual value conversion on both TFMs. No label
+            // list is declared (the ENUM types are created by RdbSchema's raw SQL, not by EF migrations).
+            var enumNames = new NpgsqlNullNameTranslator();
+            b.HasPostgresEnum<DbStudyDirection>(null, "studydirection", enumNames);
+            b.HasPostgresEnum<DbTrialState>(null, "trialstate", enumNames);
+            b.HasPostgresEnum<DbTrialValueType>(null, "trialvaluetype", enumNames);
+            b.HasPostgresEnum<DbTrialIntermediateValueType>(null, "trialintermediatevaluetype", enumNames);
+#endif
+
             // Optuna stores naive UTC in TIMESTAMP WITHOUT TIME ZONE. Npgsql defaults a CLR DateTime to
             // `timestamp with time zone` (requiring Kind=Utc); pin the column type so a naive
             // (Kind=Unspecified) UTC value maps to the plain timestamp SQLAlchemy created.

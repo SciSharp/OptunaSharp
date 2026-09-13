@@ -246,7 +246,13 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         var ob = new DbContextOptionsBuilder<OptunaRdbContext>();
         ob.UseNpgsql(dataSource, npg =>
         {
+#if !NET8_0
+            // EF Core 9 (net10.0): register the native enum types on the EF provider via the v9
+            // options-builder MapEnum. On net8.0 (EF Core 8) that API does not exist; the model's
+            // HasPostgresEnum (OptunaRdbContext.OnModelCreating) fills that role, while the data-source
+            // MapEnum (MapOptunaEnums, applied to _dataSource on both TFMs) performs the value conversion.
             MapPostgresEnums(npg);
+#endif
             options.ConfigureNpgsql?.Invoke(npg);
         });
         options.ConfigureDbContext?.Invoke(ob);
@@ -318,7 +324,13 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         b.MapEnum<DbTrialIntermediateValueType>("trialintermediatevaluetype", _verbatim);
     }
 
-    /// <summary>Registers the Optuna schema enum types on the PostgreSQL EF Core provider.</summary>
+#if !NET8_0
+    /// <summary>
+    ///     Registers the Optuna schema enum types on the PostgreSQL EF Core provider (net10.0 / EF Core 9).
+    ///     Uses the v9-only <c>NpgsqlDbContextOptionsBuilder.MapEnum</c>; on net8.0 (EF Core 8) this API does
+    ///     not exist and the model's <c>HasPostgresEnum</c> (in <see cref="OptunaRdbContext.OnModelCreating" />)
+    ///     performs the equivalent EF-provider registration instead — see the <c>#if NET8_0</c> there.
+    /// </summary>
     /// <param name="b">The provider builder on which Optuna database enum mappings are registered.</param>
     private static void MapPostgresEnums(Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure.NpgsqlDbContextOptionsBuilder b)
     {
@@ -327,6 +339,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         b.MapEnum<DbTrialValueType>("trialvaluetype", nameTranslator: _verbatim);
         b.MapEnum<DbTrialIntermediateValueType>("trialintermediatevaluetype", nameTranslator: _verbatim);
     }
+#endif
 
     /// <summary>Creates an operation-scoped EF Core context using the immutable storage configuration.</summary>
     /// <returns>A new context that the caller must dispose after the operation.</returns>
@@ -373,7 +386,18 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         // connection and caches them per data source. When this storage just created the types (or they
         // were created after the data source connected), that cache is stale — reload it so the enum
         // columns map, instead of failing with "the data type name 'studydirection' isn't present".
+#if NET8_0
+        // Npgsql 8 (net8.0) exposes no NpgsqlDataSource.ReloadTypes() (added in Npgsql 9); reload the
+        // catalog by opening a short-lived connection from the data source and reloading types on it,
+        // which refreshes the data source's cached type mappings just the same.
+        if (_dataSource is not null)
+        {
+            using var reloadConn = _dataSource.OpenConnection();
+            reloadConn.ReloadTypes();
+        }
+#else
         _dataSource?.ReloadTypes();
+#endif
 
         InitVersionInfo(ctx);
         InitAlembic(ctx);

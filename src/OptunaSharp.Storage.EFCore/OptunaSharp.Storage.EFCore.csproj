@@ -24,28 +24,28 @@
     <None Include="..\..\docs\website-src\images\optunasharp-icon.png" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- The two EF Core providers, pinned to the EF Core 9 line on BOTH TFMs. An EF Core 8 (8.0.x-line)
-         split for net8.0 was attempted for a fully-8.0.x DI graph but rejected: the RDB backend binds
-         Npgsql-9-only APIs — NpgsqlDbContextOptionsBuilder.MapEnum and NpgsqlDataSource.ReloadTypes — that
-         do not exist in Npgsql 8, so EF Core 8 would require #if-forking the byte-compat-verified enum
-         mapping + type-reload code and risking schema parity. This is acceptable because EF Core 9's
-         dependency is the .NET 9 DI line (9.0.x), NOT a .NET 10 package pulled into net8.0 — it already
-         meets the "no newer-than-.NET-9 / no .NET 10 on net8.0" goal. Npgsql brings native-enum support
-         (studydirection/trialstate/...); Pomelo brings MySqlConnector. -->
+  <!-- The two EF Core providers, TFM-matched so net8.0 stays on the .NET 8 (8.0.x) line and net10.0 on the
+       current EF Core 9 line — a net8.0 target should ship .NET 8-era dependencies. The RDB backend binds
+       two Npgsql-9-only APIs (NpgsqlDbContextOptionsBuilder.MapEnum, NpgsqlDataSource.ReloadTypes); both
+       are #if NET8_0-forked to their EF Core 8 equivalents (model-level HasPostgresEnum in
+       OptunaRdbContext.OnModelCreating, and connection-level ReloadTypes in RDBStorage.Initialize) so the
+       byte-compat schema is unchanged — the schema DDL is created by RdbSchema's raw SQL (EF-version
+       independent) and the enum value conversion rides the data-source MapEnum on both TFMs. Npgsql brings
+       native-enum support (studydirection/trialstate/...); Pomelo brings MySqlConnector.
+       NOTE: verify with the live-PostgreSQL / MySQL integration tests on net8.0 (Testcontainers) — the
+       EF Core 8 enum path is compile-verified but its byte-exact schema behavior needs the DB harness. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
+    <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="8.0.3" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
   </ItemGroup>
 
-  <!-- net8.0 DI floor: EF Core 9 (above) requires the .NET 9 DI line (9.0.x) on net8.0, so match it here
-       rather than reference below it (a lower ref is a NU1605 downgrade). This is EF Core 9's normal .NET 9
-       footprint, NOT a .NET 10 package pulled into net8.0. net10.0 uses 10.0.x. -->
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <MicrosoftExtensionsDIVersion>9.0.1</MicrosoftExtensionsDIVersion>
-  </PropertyGroup>
-
   <!-- Optional Microsoft.Extensions.DependencyInjection wire-up (OptunaSharp.Storages.EFCore.Extensions).
-       TFM-matched version from ../../Directory.Build.props (9.0.x on net8.0 per the floor above, 10.0.x on net10.0). -->
+       TFM-matched version from ../../Directory.Build.props (8.0.x on net8.0 — clean, thanks to the EF Core
+       provider split above — 10.0.x on net10.0). -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="$(MicrosoftExtensionsDIVersion)" />
   </ItemGroup>
