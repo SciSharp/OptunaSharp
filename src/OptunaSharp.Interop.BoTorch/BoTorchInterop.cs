@@ -84,6 +84,69 @@ internal static class BoTorchInterop
     }
 
     /// <summary>
+    ///     An <see cref="NDArray" /> (1-D vector or 2-D row-major matrix) → a <c>torch.Tensor</c>,
+    ///     VIEW-shared with the array's buffer (NO copy): <see cref="TorchInterop.ToTorch" /> is
+    ///     <c>torch.from_numpy(nd.ToNumpy())</c>, so numpy and torch read the buffer NumSharp already owns,
+    ///     and NumSharp roots that buffer for the tensor's lifetime via a Python <c>weakref.finalize</c>.
+    ///     The tensor keeps <paramref name="data" />'s dtype (float64 for a <c>double</c> array — what
+    ///     botorch.py's <c>SingleTaskGP</c> fits in; a float32 source would silently break parity, so the
+    ///     caller owns the dtype).
+    ///     <para><b>Ownership — the key difference from the <c>double[,]</c>/<c>double[]</c> overloads:</b>
+    ///     those OWN the <see cref="NDArray" /> they build from a managed array and dispose it; this one
+    ///     BORROWS the caller's <paramref name="data" /> and does NOT dispose it. The caller may dispose
+    ///     <paramref name="data" /> as soon as this returns — the export holds its own reference and keeps
+    ///     the buffer alive for the tensor's life — but the tensor ALIASES that buffer, so
+    ///     <paramref name="data" /> must not be MUTATED while the tensor is in use.</para>
+    ///     <para><b>Layout:</b> the zero-copy view requires a writeable, non-negative-stride layout (true
+    ///     for any freshly built or C-contiguous <see cref="NDArray" />); other layouts throw — materialize
+    ///     a contiguous copy first. Under the GIL.</para>
+    /// </summary>
+    /// <param name="data">The caller-owned NumSharp array to expose as a tensor; viewed, not copied, and NOT disposed here.</param>
+    /// <returns>A new owned Python reference (a <c>torch.Tensor</c> of <paramref name="data" />'s dtype); dispose it while holding the GIL. <paramref name="data" /> remains owned by the caller.</returns>
+    /// <exception cref="global::System.ArgumentNullException"><paramref name="data" /> is null.</exception>
+    /// <exception cref="global::System.InvalidOperationException">The array is non-writeable — PyTorch documents writing through a tensor over read-only numpy memory as undefined behavior.</exception>
+    /// <exception cref="global::System.NotSupportedException">The array has a negative-stride layout, which torch tensors cannot view; materialize a C-contiguous copy first.</exception>
+    /// <exception cref="global::Python.Runtime.PythonException">The underlying <c>torch.from_numpy</c> call fails; the original Python diagnostic is preserved.</exception>
+    internal static PyObject ToTensor(NDArray data)
+    {
+        // data is BORROWED (caller-owned): cross it as a zero-copy view and return; do NOT dispose it.
+        // The export roots the buffer for the tensor's life, so the caller may dispose data afterwards.
+        if (data is null) throw new System.ArgumentNullException(nameof(data));
+        return data.ToTorch();
+    }
+
+    /// <summary>
+    ///     An <see cref="NDArray" /> → a <c>torch.Tensor</c> placed on <paramref name="device" /> —
+    ///     botorch.py's <c>torch.from_numpy(x).to(self._device)</c>, for callers already holding an
+    ///     <see cref="NDArray" />. For CPU (or a <c>null</c>/empty device) this is the zero-copy view of
+    ///     the <see cref="ToTensor(NDArray)" /> overload; for any other device (e.g. <c>"cuda"</c>) the CPU
+    ///     view is created, copied to the device via <c>tensor.to(device)</c> (a device tensor cannot alias
+    ///     host memory — the copy is correct), and the throwaway CPU view is disposed. As with
+    ///     <see cref="ToTensor(NDArray)" />, <paramref name="data" /> is BORROWED and NOT disposed here; on
+    ///     the CPU path the returned tensor aliases it (do not mutate it while the tensor lives). Under the GIL.
+    /// </summary>
+    /// <param name="data">The caller-owned NumSharp array to expose as a tensor; viewed, not copied, and NOT disposed here.</param>
+    /// <param name="device">The torch device name; null, empty, or <c>cpu</c> keeps the zero-copy CPU view, while any other device receives a copy.</param>
+    /// <returns>A new owned Python reference (a <c>torch.Tensor</c> on <paramref name="device" />); dispose it while holding the GIL. <paramref name="data" /> remains owned by the caller.</returns>
+    /// <exception cref="global::System.ArgumentNullException"><paramref name="data" /> is null.</exception>
+    /// <exception cref="global::System.InvalidOperationException">The array is non-writeable (CPU/zero-copy path only).</exception>
+    /// <exception cref="global::System.NotSupportedException">The array has a negative-stride layout (CPU/zero-copy path only).</exception>
+    /// <exception cref="global::Python.Runtime.PythonException">The <c>torch.from_numpy</c> or device-transfer call fails; the original Python diagnostic is preserved.</exception>
+    internal static PyObject ToTensor(NDArray data, string? device)
+    {
+        if (data is null) throw new System.ArgumentNullException(nameof(data));
+        // Borrowed view as a CPU tensor (data is never disposed here). For CPU that view IS the result;
+        // for any other device, copy it there (a device tensor cannot alias host memory) and dispose the
+        // throwaway CPU view — mirrors the (double[,], device) overload once the NDArray is in hand.
+        PyObject tensor = data.ToTorch();
+        if (string.IsNullOrEmpty(device) || device == "cpu")
+            return tensor;
+        using (tensor)
+        using (PyObject dev = device.ToPython())
+            return tensor.InvokeMethod("to", dev);
+    }
+
+    /// <summary>
     ///     A <c>torch.Tensor</c> → an independent NumSharp <see cref="NDArray" /> via NumSharp's torch
     ///     adapter (<c>detach().cpu().resolve_conj().resolve_neg().numpy()</c> → <c>ToNDArray</c>): one bulk
     ///     copy, no per-element loop, and detached from the tensor so the tensor may be disposed

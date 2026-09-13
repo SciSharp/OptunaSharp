@@ -64,4 +64,47 @@ internal static class PyCmaInterop
     /// <returns>An independent managed copy of the NumPy candidate coordinates.</returns>
     /// <exception cref="global::Python.Runtime.PythonException">Reading the NumPy array through the interop bridge fails.</exception>
     internal static double[] ToArray(PyObject numpyVector) => numpyVector.ToNDArray().ToArray<double>();
+
+    /// <summary>
+    ///     An <see cref="NDArray" /> (1-D vector → a Python <c>list</c> of floats; 2-D matrix → a
+    ///     <c>list</c> of <c>list</c>s) via a numpy view + <c>tolist()</c> — bit-exact, no per-element C#
+    ///     loop. The <see cref="NDArray" />-accepting counterpart of the <c>double[]</c>/<c>double[,]</c>
+    ///     overloads, for a caller already holding an <see cref="NDArray" /> (it saves the round-trip
+    ///     through a managed array). pycma consumes plain Python lists, not numpy arrays (see the type note
+    ///     on the class) — so this still materializes a list.
+    ///     <para><b>Ownership:</b> <paramref name="data" /> is the CALLER's and is NOT disposed here (unlike
+    ///     the raw-array overloads, which own the <see cref="NDArray" /> they build). Only the transient
+    ///     numpy view this method creates is disposed; <c>tolist()</c> has already copied the values into an
+    ///     independent Python list, so the returned list does not alias <paramref name="data" />.</para>
+    ///     Dispose the returned list. Under the GIL.
+    /// </summary>
+    /// <param name="data">The caller-owned NumSharp array to render as a (nested) Python list; viewed, not copied, and NOT disposed here.</param>
+    /// <returns>A new owned Python reference (a <c>list</c>); dispose it while holding the GIL. <paramref name="data" /> remains owned by the caller.</returns>
+    /// <exception cref="global::System.ArgumentNullException"><paramref name="data" /> is null.</exception>
+    /// <exception cref="global::Python.Runtime.PythonException">NumPy array conversion or its tolist call fails.</exception>
+    internal static PyObject ToPyList(NDArray data)
+    {
+        if (data is null) throw new System.ArgumentNullException(nameof(data));
+        // data is BORROWED: view it zero-copy to numpy, tolist() copies into an independent Python list,
+        // then dispose ONLY the numpy view we created (never data — the caller owns it).
+        using PyObject numpy = data.ToNumpy();
+        return numpy.InvokeMethod("tolist");
+    }
+
+    /// <summary>
+    ///     A numpy array → an independent NumSharp <see cref="NDArray" /> in one bulk copy (no per-element
+    ///     loop), detached so the source may be disposed afterwards. The <see cref="NDArray" />-returning
+    ///     complement to <see cref="ToArray(PyObject)" /> (which returns a <see cref="double" />[]), for a
+    ///     caller that stays in <see cref="NDArray" /> space rather than a managed vector. Under the GIL.
+    /// </summary>
+    /// <param name="numpy">The borrowed NumPy array whose data is copied into managed storage.</param>
+    /// <returns>An independent, C-contiguous NumSharp array whose storage no longer depends on the Python input; the caller owns and disposes it.</returns>
+    /// <exception cref="global::System.ArgumentNullException"><paramref name="numpy" /> is null.</exception>
+    /// <exception cref="global::Python.Runtime.PythonException">Reading the NumPy array through the interop bridge fails.</exception>
+    internal static NDArray ToNDArray(PyObject numpy)
+    {
+        if (numpy is null) throw new System.ArgumentNullException(nameof(numpy));
+        // One bulk copy into a fresh C-contiguous NDArray; it ESCAPES (returned), so the caller owns it.
+        return numpy.ToNDArray();
+    }
 }
