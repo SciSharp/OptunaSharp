@@ -57,13 +57,24 @@ string optimizer = trial.SuggestCategorical("optimizer", new[] { "adam", "sgd", 
 bool   useBn     = trial.SuggestCategorical("batch_norm", new[] { true, false });
 ```
 
+A C# `enum` drives a categorical directly — its members become the string choices and the value comes
+back typed (see [Pythonic search space](key-features/search-space.md)):
+
+```csharp
+enum Optimizer { Adam, Sgd, RmsProp }
+
+// inside the objective — over every declared member:
+Optimizer optimizer = trial.SuggestCategorical<Optimizer>("optimizer");
+```
+
 The full signatures (on the shared `BaseTrial` base):
 
 ```csharp
 double SuggestFloat(string name, double low, double high, double? step = null, bool log = false);
 long   SuggestInt(string name, long low, long high, long step = 1, bool log = false);
 CategoricalChoice SuggestCategorical(string name, IEnumerable<CategoricalChoice> choices);
-// plus typed convenience overloads for string / bool / int / long / double sequences
+// plus typed convenience overloads for string / bool / int / long / double sequences,
+// and SuggestCategorical<TEnum>(name) / (name, subset) for enums
 ```
 
 `step` and `log` are mutually exclusive for floats, exactly as in Optuna. Categorical values are
