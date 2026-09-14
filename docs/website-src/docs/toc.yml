@@ -78,6 +78,8 @@
       href: recipes/wilcoxon-pruner.md
     - name: Ablation Study with Brute Force
       href: recipes/ablation-study.md
+- name: FAQ
+  href: faq.md
 - name: Integrations
   href: ../integrations/index.md
 - name: Our Methods
