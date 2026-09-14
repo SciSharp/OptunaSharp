@@ -32,6 +32,20 @@
       href: visualization.md
     - name: Logging
       href: logging.md
+- name: Key Features
+  items:
+    - name: Overview
+      href: key-features/index.md
+    - name: Lightweight & Platform-Agnostic
+      href: key-features/first.md
+    - name: Pythonic Search Space
+      href: key-features/search-space.md
+    - name: Efficient Optimization Algorithms
+      href: key-features/efficient-algorithms.md
+    - name: Easy Parallelization
+      href: key-features/parallelization.md
+    - name: Quick Visualization
+      href: key-features/visualization.md
 - name: Recipes
   items:
     - name: Overview
