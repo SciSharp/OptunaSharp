@@ -380,6 +380,59 @@ public class ConcurrentOrderedDictTests
 
         sink.Should().BeGreaterThanOrEqualTo(0);
     }
+
+    /// <summary>Concurrent increments through <c>AddOrUpdate</c> on one key lose nothing — the compare-and-swap retry is atomic even with the factory running outside the lock.</summary>
+    [TestMethod]
+    public void Concurrent_AddOrUpdate_NoLostUpdates()
+    {
+        const int workers = 64;
+        const int perWorker = 2_000;
+        var d = new ConcurrentOrderedDict<string, int>();
+        d.Add("k", 0);
+
+        Parallel.For(0, workers, _ =>
+        {
+            for (int i = 0; i < perWorker; i++)
+            {
+                d.AddOrUpdate("k", 1, (_, v) => v + 1);
+            }
+        });
+
+        d["k"].Should().Be(workers * perWorker);
+        d.Count.Should().Be(1);
+    }
+
+    /// <summary>Concurrent <c>GetOrAdd</c> with a factory on one absent key yields a single stored value that every caller observes, even though the factory runs outside the lock.</summary>
+    [TestMethod]
+    public void Concurrent_GetOrAdd_Factory_SingleWinner()
+    {
+        const int workers = 64;
+        var d = new ConcurrentOrderedDict<int, string>();
+        var results = new string[workers];
+
+        Parallel.For(0, workers, w => results[w] = d.GetOrAdd(42, _ => "v" + Guid.NewGuid()));
+
+        d.Count.Should().Be(1);
+        string stored = d.GetByKey(42);
+        results.Distinct().Should().ContainSingle().Which.Should().Be(stored);
+    }
+
+    /// <summary>Concurrent <c>AddOrUpdate</c> across distinct absent keys takes the add branch for every key and adds them all.</summary>
+    [TestMethod]
+    public void Concurrent_AddOrUpdate_DistinctKeys_AllAdded()
+    {
+        const int n = 20_000;
+        var d = new ConcurrentOrderedDict<int, int>();
+
+        Parallel.For(0, n, i => d.AddOrUpdate(i, i, (_, v) => v + 1000));
+
+        d.Count.Should().Be(n);
+        for (int i = 0; i < n; i++)
+        {
+            d.TryGetValue(i, out var v).Should().BeTrue();
+            v.Should().Be(i); // each key was absent -> the add branch ran, so the update factory never applied
+        }
+    }
 }
 
 /// <summary>

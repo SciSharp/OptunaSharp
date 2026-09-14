@@ -45,7 +45,9 @@ namespace OptunaSharp.Collections;
 ///         <see cref="ToArray" /> and index get scan a contiguous array and stay close to <see cref="List{T}" />.
 ///         Insertion is amortized O(1). <b>Writes are serialized</b> by a single lock (unlike the striped write
 ///         locks of the plain concurrent dictionary) because a global insertion order and the contiguous cache
-///         cannot be maintained per-stripe; that is the deliberate cost of the ordering. <b>Order-preserving
+///         cannot be maintained per-stripe; that is the deliberate cost of the ordering. The lock is held only
+///         for the structural mutation and value swap itself — never while a user <c>valueFactory</c> or
+///         <c>updateValueFactory</c> runs (those execute outside it, as in the framework dictionary). <b>Order-preserving
 ///         removal is O(n)</b> (like <see cref="List{T}.RemoveAt" />): it shifts the trailing values down to keep
 ///         indices contiguous. <b>Replacing the value of an existing key is O(1) when <typeparamref name="TValue" />
 ///         is written atomically</b> (reference types and small primitives) and O(n) otherwise (a non-atomically
@@ -370,7 +372,7 @@ public sealed class ConcurrentOrderedDict<TKey, TValue> : IReadOnlyList<TValue>
 
     /// <summary>Returns the existing value for <paramref name="key" />, or appends the result of <paramref name="valueFactory" /> if absent.</summary>
     /// <param name="key">The key to read or add.</param>
-    /// <param name="valueFactory">Invoked with the key to produce the value when the key is absent; runs under the write lock, so keep it fast and non-reentrant.</param>
+    /// <param name="valueFactory">Invoked with the key to produce the value when the key is absent. Runs <b>outside</b> the write lock (writers are never blocked on it); under contention it may be called on more than one thread, like the framework concurrent dictionary, with the losing result discarded.</param>
     /// <returns>The existing value, or the newly produced and added value.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="key" /> or <paramref name="valueFactory" /> is <see langword="null" />.</exception>
     public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
@@ -386,14 +388,17 @@ public sealed class ConcurrentOrderedDict<TKey, TValue> : IReadOnlyList<TValue>
             return e._value;
         }
 
+        // Run the factory OUTSIDE the lock so writers are never blocked on user code. As in the framework
+        // dictionary, under contention the factory may run on several threads; only one result is kept.
+        TValue value = valueFactory(key);
+
         lock (_writeLock)
         {
             if (_byKey.TryGetValue(key, out e))
             {
-                return e._value;
+                return e._value; // lost the race for this key; discard the value we computed
             }
 
-            TValue value = valueFactory(key);
             AppendUnderLock(key, value);
             return value;
         }
@@ -402,7 +407,7 @@ public sealed class ConcurrentOrderedDict<TKey, TValue> : IReadOnlyList<TValue>
     /// <summary>Appends <paramref name="addValue" /> if the key is absent, otherwise replaces the value via <paramref name="updateValueFactory" />.</summary>
     /// <param name="key">The key to add or update.</param>
     /// <param name="addValue">The value to append if the key is absent.</param>
-    /// <param name="updateValueFactory">Invoked with the key and current value to produce the replacement; runs under the write lock.</param>
+    /// <param name="updateValueFactory">Invoked with the key and current value to produce the replacement. Runs <b>outside</b> the write lock (writers are never blocked on it); the result is applied with a compare-and-swap and, like the framework concurrent dictionary, the factory may run more than once under contention.</param>
     /// <returns>The value now stored for the key (the added or the updated value).</returns>
     /// <exception cref="ArgumentNullException"><paramref name="key" /> or <paramref name="updateValueFactory" /> is <see langword="null" />.</exception>
     public TValue AddOrUpdate(TKey key, TValue addValue, Func<TKey, TValue, TValue> updateValueFactory)
@@ -413,17 +418,33 @@ public sealed class ConcurrentOrderedDict<TKey, TValue> : IReadOnlyList<TValue>
             throw new ArgumentNullException(nameof(updateValueFactory));
         }
 
-        lock (_writeLock)
+        // Match the framework dictionary: the factory runs OUTSIDE the lock (writers are never blocked on user
+        // code), and the update is applied with a compare-and-swap, retried if the value moved under us. The
+        // lock is entered only to append an absent key or (via TryUpdate) to perform the swap itself.
+        while (true)
         {
             if (_byKey.TryGetValue(key, out var e))
             {
-                TValue updated = updateValueFactory(key, e._value);
-                ReplaceExistingUnderLock(e, updated);
-                return updated;
+                TValue old = e._value;
+                TValue updated = updateValueFactory(key, old);
+                if (TryUpdate(key, updated, old))
+                {
+                    return updated;
+                }
+
+                continue; // the value changed, or the key was removed, before our swap; recompute and retry
             }
 
-            AppendUnderLock(key, addValue);
-            return addValue;
+            lock (_writeLock)
+            {
+                if (!_byKey.ContainsKey(key))
+                {
+                    AppendUnderLock(key, addValue);
+                    return addValue;
+                }
+            }
+
+            // The key was added concurrently; loop back and take the update path.
         }
     }
 
