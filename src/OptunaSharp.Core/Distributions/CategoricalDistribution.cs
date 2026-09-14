@@ -53,6 +53,14 @@ public class CategoricalDistribution : BaseDistribution
     public CategoricalChoice ChoiceAt(double paramValueInInternalRepr)
         => Choices[(int)paramValueInInternalRepr];
 
+    // Lazy first-index-by-choice map for ToInternalRepr. CategoricalChoice's == IS its Equals and its
+    // GetHashCode is consistent with it (equal-under-== values hash alike), so a default-comparer
+    // dictionary keyed on the FIRST occurrence of each choice returns exactly what the reference linear
+    // scan returns — a hit is the same index, a miss falls through to the same fallback loops. Built on
+    // first use so distributions that never convert externally pay nothing; volatile publish so a racing
+    // reader either sees the finished map or builds its own identical one (idempotent).
+    private volatile Dictionary<CategoricalChoice, int>? _indexByChoice;
+
     /// <summary>Converts an external value into the numeric representation used by samplers.</summary>
     /// <param name="paramValueInExternalRepr">External parameter value to convert to the distribution's numeric representation.</param>
     /// <returns>Index of the first matching choice, treating two NaNs as matching in the fallback comparison.</returns>
@@ -65,6 +73,20 @@ public class CategoricalDistribution : BaseDistribution
         // such as True and 1, or 1.0 and 1. For example, if choices=[True, 1] and external_repr
         // is 1, this method wrongly returns 0 instead of 1. However, we decided to accept this
         // bug for such exceptional choices for less complexity and faster processing.
+        //
+        // O(1) fast path replacing the reference O(n) scan bit-for-bit (see _indexByChoice): a GA genome
+        // suggests every gene of every trial through here, so with hundreds of choices this scan was a
+        // dominant per-trial cost.
+        Dictionary<CategoricalChoice, int>? map = _indexByChoice;
+        if (map is null)
+        {
+            map = new Dictionary<CategoricalChoice, int>(Choices.Count);
+            for (int i = 0; i < Choices.Count; i++)
+                map.TryAdd(Choices[i], i);   // first occurrence wins, like the scan
+            _indexByChoice = map;
+        }
+        if (map.TryGetValue(value, out int found))
+            return found;
         for (int index = 0; index < Choices.Count; index++)
         {
             if (Choices[index] == value)
@@ -107,6 +129,11 @@ public class CategoricalDistribution : BaseDistribution
     /// <returns>True when the distributions have compatible types and equal attributes.</returns>
     public override bool Equals(BaseDistribution? other)
     {
+        // Same instance ⇒ trivially equal — pure shortcut, no semantic change. Callers that reuse one
+        // distribution instance per parameter (a GA genome suggesting the same domains every trial) turn
+        // the per-suggest compatibility check from an O(choices) pairwise compare into O(1).
+        if (ReferenceEquals(this, other))
+            return true;
         // Python: isinstance check (a subclass compares equal to the base by attribute), then
         // choices compared pairwise with _categorical_choice_equal.
         if (other is not CategoricalDistribution o || !GetType().IsInstanceOfType(other) && !other.GetType().IsInstanceOfType(this))

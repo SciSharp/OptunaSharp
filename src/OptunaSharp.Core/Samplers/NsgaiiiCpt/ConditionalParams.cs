@@ -318,8 +318,24 @@ public sealed class ConditionalParams
     /// </summary>
     /// <param name="parentPopulation">The parent trials contributing active and dormant values to a candidate.</param>
     /// <returns>The dormant parameter values collected from the supplied parent trials.</returns>
+    // Single-entry latent cache. The parent population changes once per GENERATION but GatherLatent runs on
+    // every ASK, and its cost is |parents| × |rules| dictionary probes (tens of thousands per ask for a real
+    // genome) — measured as the single largest sampler cost of a cheap-objective study. Parents are
+    // completed trials: their params are immutable and their dormant attr was written before completion, so
+    // the same parent-number multiset ⇒ byte-identical latent map. The key is the exact ascending number
+    // sequence (compared in full — no hashing shortcut), so a hit can never alias a different population.
+    private int[]? _latentKey;
+    private Dictionary<string, object?>? _latentCache;
+
     private Dictionary<string, object?> GatherLatent(IReadOnlyList<FrozenTrial> parentPopulation)
     {
+        int[] key = new int[parentPopulation.Count];
+        for (int i = 0; i < parentPopulation.Count; i++)
+            key[i] = parentPopulation[i].Number;
+        Array.Sort(key);
+        if (_latentCache is not null && _latentKey is not null && _latentKey.AsSpan().SequenceEqual(key))
+            return _latentCache;
+
         var latent = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var trial in parentPopulation.OrderBy(t => t.Number))
         {
@@ -337,6 +353,8 @@ public sealed class ConditionalParams
                 }
             }
         }
+        _latentKey = key;
+        _latentCache = latent;
         return latent;
     }
 

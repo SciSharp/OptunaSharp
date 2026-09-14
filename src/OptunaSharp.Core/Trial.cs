@@ -162,6 +162,19 @@ public class Trial : BaseTrial
         return CategoricalChoice.From(Suggest(name, new CategoricalDistribution(choices)));
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    ///     Reuses <paramref name="distribution" /> as-is — no per-call rebuild, and because the same instance
+    ///     reaches the study's parameter registry on every trial, the per-suggest compatibility check
+    ///     short-circuits by reference. The instance is stored into the trial record; it must stay immutable.
+    /// </remarks>
+    public override CategoricalChoice SuggestCategorical(string name, CategoricalDistribution distribution)
+    {
+        if (distribution is null)
+            throw new ArgumentNullException(nameof(distribution));
+        return CategoricalChoice.From(Suggest(name, distribution));
+    }
+
     /// <summary>
     ///     Report an objective function value for a given step.
     ///

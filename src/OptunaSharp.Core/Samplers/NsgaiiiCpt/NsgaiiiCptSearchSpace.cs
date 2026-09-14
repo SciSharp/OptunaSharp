@@ -30,6 +30,13 @@ public sealed class NsgaiiiCptSearchSpace
     private int _cachedTrialNumber = -1;
     private OrderedDict<string, BaseDistribution>? _searchSpace;
     private int? _studyId;
+    // The sorted result of the last Calculate, valid while the fold advanced nothing: same folded space
+    // instance AND same next-revisit number ⇒ the sorted view cannot differ. Saves the O(P log P) sort and
+    // the O(P) container build on every ask of an unchanged space (P = parameter count, hundreds for a
+    // conditional genome), which is the common case — the space only changes when a new trial finishes.
+    private OrderedDict<string, BaseDistribution>? _sortedCache;
+    private OrderedDict<string, BaseDistribution>? _sortedCacheSource;
+    private int _sortedCacheTrialNumber = -2;
 
     private readonly bool _includePruned;
     private readonly ConditionalParams? _conditionalParams;
@@ -76,11 +83,16 @@ public sealed class NsgaiiiCptSearchSpace
                 throw new NumSharp.ValueError("`NsgaiiiCptSearchSpace` cannot handle multiple studies.");
         }
 
+        // The zero-copy prefix view replaces the per-call list copy of GetTrialsInternal: both folds only
+        // READ the trials (reverse walk, early break at the cache watermark), and the fold's incremental
+        // contract already tolerates the view's live instances — a finished trial is folded exactly once,
+        // and finished trials never change their params/distributions afterwards.
+        IReadOnlyList<FrozenTrial> trials = study.GetTrialsView();
         if (_conditionalParams is null)
         {
             // No rules ⇒ the shared, Optuna-parity intersection fold, byte-for-byte.
             (_searchSpace, _cachedTrialNumber) = SearchSpaceFunctions.Calculate(
-                study.GetTrialsInternal(deepcopy: false, useCache: useCache),
+                trials,
                 _includePruned,
                 _searchSpace,
                 _cachedTrialNumber);
@@ -88,7 +100,7 @@ public sealed class NsgaiiiCptSearchSpace
         else
         {
             (_searchSpace, _cachedTrialNumber) = CalculateConditional(
-                study.GetTrialsInternal(deepcopy: false, useCache: useCache),
+                trials,
                 _includePruned,
                 _searchSpace,
                 _cachedTrialNumber,
@@ -97,7 +109,14 @@ public sealed class NsgaiiiCptSearchSpace
                 _warnedConditional);
         }
         var searchSpace = _searchSpace ?? new OrderedDict<string, BaseDistribution>();
-        return SearchSpaceFunctions.Sorted(searchSpace);
+        // Cache hit: the fold neither replaced the space nor moved its watermark, so the sorted view is the
+        // one already built. Treat the returned dictionary as read-only — every in-repo caller only iterates it.
+        if (ReferenceEquals(searchSpace, _sortedCacheSource) && _cachedTrialNumber == _sortedCacheTrialNumber && _sortedCache is not null)
+            return _sortedCache;
+        _sortedCache = SearchSpaceFunctions.Sorted(searchSpace);
+        _sortedCacheSource = searchSpace;
+        _sortedCacheTrialNumber = _cachedTrialNumber;
+        return _sortedCache;
     }
 
     /// <summary>

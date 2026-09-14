@@ -213,6 +213,16 @@ public class Study
         return Storage.GetAllTrials(StudyId, deepcopy: deepcopy, states: states);
     }
 
+    /// <summary>
+    ///     This study's trials as a zero-copy, fixed-membership window (see
+    ///     <see cref="BaseStorage.GetTrialsPrefixView" />) — the O(1) read GA samplers use on every ask where a
+    ///     copied list would make the loop quadratic in trial count. Treat the result as read-only; reads see
+    ///     each trial's current snapshot (fresher than a copied list under copy-on-write storages).
+    /// </summary>
+    /// <returns>Trials in ascending trial-number order, membership frozen at the call.</returns>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
+    internal IReadOnlyList<FrozenTrial> GetTrialsView() => Storage.GetTrialsPrefixView(StudyId);
+
     /// <summary>Python <c>Study._get_best_trial(deepcopy)</c>.</summary>
     /// <param name="deepcopy">Whether to copy trial records; treat records returned with false as read-only.</param>
     /// <returns>The best feasible completed single-objective trial, copied when requested.</returns>

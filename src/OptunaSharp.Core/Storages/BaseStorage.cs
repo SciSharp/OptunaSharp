@@ -218,6 +218,23 @@ public abstract class BaseStorage
     public abstract List<FrozenTrial> GetAllTrials(
         int studyId, bool deepcopy = true, IReadOnlyCollection<TrialState>? states = null);
 
+    /// <summary>
+    ///     Read all trials of a study as a fixed-membership, zero-copy window when the backend can afford
+    ///     one — the O(1) sibling of <c>GetAllTrials(deepcopy: false)</c> for samplers that consult history
+    ///     on every ask (a per-ask list copy makes the optimization loop quadratic in trial count). The
+    ///     window's membership is frozen at the call; each read returns the trial's current snapshot.
+    /// </summary>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <returns>
+    ///     Trials in identifier order; treat the collection and its records as read-only. The base
+    ///     implementation falls back to <c>GetAllTrials(deepcopy: false)</c>, so backends without a live
+    ///     in-memory list keep their existing (copying) behavior and only <see cref="InMemoryStorage" />-like
+    ///     backends get the O(1) path.
+    /// </returns>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public virtual IReadOnlyList<FrozenTrial> GetTrialsPrefixView(int studyId)
+        => GetAllTrials(studyId, deepcopy: false);
+
     /// <summary>Count the number of trials in a study.</summary>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
     /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>

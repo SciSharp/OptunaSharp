@@ -87,6 +87,33 @@ public abstract class BaseTrial
     /// <exception cref="System.ArgumentNullException">The choices sequence is null.</exception>
     public abstract CategoricalChoice SuggestCategorical(string name, IEnumerable<CategoricalChoice> choices);
 
+    /// <summary>
+    ///     Suggest a value for the categorical parameter from a <b>prebuilt, reusable</b> distribution — the
+    ///     allocation-free sibling of <see cref="SuggestCategorical(string, IEnumerable{CategoricalChoice})" />
+    ///     for callers that suggest the same fixed domain on every trial (a GA genome does this for every gene
+    ///     of every trial, where rebuilding a hundreds-of-choices distribution per call dominates the loop).
+    /// </summary>
+    /// <param name="name">Parameter name; repeated suggestions refer to the same parameter.</param>
+    /// <param name="distribution">
+    ///     The reusable distribution. Treat it as immutable and shared: live trials store this very instance
+    ///     into their record and the study's parameter registry (which is what makes the per-suggest
+    ///     compatibility check O(1) by reference), so mutating it afterwards would corrupt recorded trials.
+    /// </param>
+    /// <returns>The suggested or previously recorded categorical value.</returns>
+    /// <exception cref="NumSharp.ValueError">A required stored parameter is missing, or a repeated suggestion changes its distribution kind or categorical choices.</exception>
+    /// <exception cref="System.ArgumentNullException">The distribution is null.</exception>
+    /// <remarks>
+    ///     The base implementation forwards to the sequence overload (a copy, but correct) so every
+    ///     <see cref="BaseTrial" /> subclass — replay trials included — accepts it; <see cref="Trial" />
+    ///     overrides it to reuse the instance without any copy.
+    /// </remarks>
+    public virtual CategoricalChoice SuggestCategorical(string name, CategoricalDistribution distribution)
+    {
+        if (distribution is null)
+            throw new ArgumentNullException(nameof(distribution));
+        return SuggestCategorical(name, distribution.Choices);
+    }
+
     // Typed convenience overloads mirroring Python's @overload set: the return type follows the
     // element type of `choices`.
 

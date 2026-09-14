@@ -505,6 +505,23 @@ public class InMemoryStorage : BaseStorage
     }
 
     /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
+    /// <remarks>
+    ///     O(1): wraps the live per-study list in a <see cref="TrialsPrefixView" /> (membership frozen at the
+    ///     current count, reads see current copy-on-write instances) instead of copying it — the difference
+    ///     between a linear and a quadratic optimization loop for GA samplers that read history every ask.
+    /// </remarks>
+    public override IReadOnlyList<FrozenTrial> GetTrialsPrefixView(int studyId)
+    {
+        lock (_lock)
+        {
+            CheckStudyId(studyId);
+            List<FrozenTrial> trials = _studies[studyId].Trials;
+            return new TrialsPrefixView(trials, trials.Count);
+        }
+    }
+
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
     /// <param name="deepcopy">Whether to copy trial records; treat records returned with false as read-only.</param>
     /// <param name="states">States to include; null includes every state.</param>
     /// <inheritdoc />

@@ -273,7 +273,12 @@ internal static class OptimizeLoop
         if (updatedState == TrialState.Complete)
         {
             System.Diagnostics.Debug.Assert(values is not null);
-            study.LogCompletedTrial(values!.ToList(), trial.Number, new Collections.OrderedDict<string, object?>(trial.Params));
+            // Build the log arguments only when the INFO line can actually be emitted: `trial.Params` deep-copies
+            // the whole cached trial (attrs included — a conditional genome's dormant map runs to hundreds of
+            // entries), which measured as a dominant PER-TRIAL cost of a cheap-objective study even with logging
+            // silenced. LogCompletedTrial re-checks the level itself, so behavior at INFO is unchanged.
+            if (_logger.IsEnabledFor(LogLevel.Info))
+                study.LogCompletedTrial(values!.ToList(), trial.Number, new Collections.OrderedDict<string, object?>(trial.Params));
         }
         else if (updatedState == TrialState.Pruned)
         {
