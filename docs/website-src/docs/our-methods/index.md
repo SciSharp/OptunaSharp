@@ -13,11 +13,16 @@ never change the behavior of the ported samplers.
 
 ## Samplers
 
-**NSGA-III extensions.**
+**Categorical Parameter Trees (CPT) — conditional-parameter evolution.** A host-agnostic machinery that
+keeps *branch-defined* (define-by-run) hyperparameters in the evolved search space instead of resampling
+them at random. The same CPT seams are wired onto three multi-objective hosts; the difference between them
+is entirely the *survival* rule (and, for the last, an optional JANUS infill layer).
 
 | | Method | Built on |
 |---|---|---|
 | ✅ | [NSGA-III-CPT — Categorical Parameter Trees](nsga-iii-cpt.md) | [NSGA-III (2014)](../methods/nsga-iii.md) |
+| ✅ | [AGE-MOEA-2-CPT — Categorical Parameter Trees](age-moea-2-cpt.md) | [AGE-MOEA-2 (2022)](../methods/age-moea-2.md) |
+| ✅ | [JANUS-AGE-MOEA-2-CMIX-CPT — Categorical Parameter Trees](janus-age-moea-2-cmix-cpt.md) | [AGE-MOEA-2-CPT](age-moea-2-cpt.md) + [JANUS-AGE-MOEA-2-CMIX (2026)](../methods/janus-age-moea-2-cmix.md) |
 
 ## See also
 

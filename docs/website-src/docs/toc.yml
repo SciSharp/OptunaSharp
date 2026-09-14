@@ -90,6 +90,10 @@
       items:
         - name: NSGA-III-CPT
           href: our-methods/nsga-iii-cpt.md
+        - name: AGE-MOEA-2-CPT
+          href: our-methods/age-moea-2-cpt.md
+        - name: JANUS-AGE-MOEA-2-CMIX-CPT
+          href: our-methods/janus-age-moea-2-cmix-cpt.md
 - name: Methods
   items:
     - name: Overview
