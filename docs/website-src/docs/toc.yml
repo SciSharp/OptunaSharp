@@ -32,6 +32,38 @@
       href: visualization.md
     - name: Logging
       href: logging.md
+- name: Recipes
+  items:
+    - name: Overview
+      href: recipes/index.md
+    - name: Saving/Resuming with RDB
+      href: recipes/rdb.md
+    - name: Multi-objective Optimization
+      href: recipes/multi-objective.md
+    - name: User Attributes
+      href: recipes/attributes.md
+    - name: Command-Line Interface
+      href: recipes/cli.md
+    - name: User-Defined Sampler
+      href: recipes/user-defined-sampler.md
+    - name: User-Defined Pruner
+      href: recipes/user-defined-pruner.md
+    - name: Callback for Study.Optimize
+      href: recipes/callback.md
+    - name: Specify Hyperparameters Manually
+      href: recipes/specify-params.md
+    - name: Ask-and-Tell Interface
+      href: recipes/ask-and-tell.md
+    - name: Re-use the Best Trial
+      href: recipes/reuse-best-trial.md
+    - name: Journal-File Storage
+      href: recipes/journal-storage.md
+    - name: Artifacts
+      href: recipes/artifacts.md
+    - name: Wilcoxon Pruner
+      href: recipes/wilcoxon-pruner.md
+    - name: Ablation Study with Brute Force
+      href: recipes/ablation-study.md
 - name: Integrations
   href: ../integrations/index.md
 - name: Our Methods
