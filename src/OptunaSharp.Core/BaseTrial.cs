@@ -167,6 +167,53 @@ public abstract class BaseTrial
     public double SuggestCategorical(string name, IEnumerable<double> choices)
         => (double)SuggestCategorical(name, choices.Select(c => (CategoricalChoice)c)).Value!;
 
+    // Enum convenience overloads (beyond Optuna). A TEnum is optimized as its member-NAME strings: the
+    // choices handed to the primitive are those names, so the emitted CategoricalDistribution — and
+    // everything downstream (storage, samplers, JSON) — is byte-identical to hand-writing the names,
+    // and the enum type is never persisted (it is re-supplied by the caller at read time). Non-virtual,
+    // exactly like the scalar typed overloads above; the `struct, Enum` constraint keeps them from ever
+    // binding for the string/bool/int/long/double overload sets.
+
+    /// <summary>
+    ///     Suggests a categorical parameter over <b>every declared member</b> of <typeparamref name="TEnum" />.
+    ///     Choice order follows <see cref="System.Enum.GetNames{TEnum}" /> — sorted by underlying value,
+    ///     <b>not</b> source-declaration order — which fixes the stored categorical indices; pass an
+    ///     explicit sequence to the sibling overload when a specific order or a subset is required.
+    /// </summary>
+    /// <typeparam name="TEnum">The enum whose declared members are the choices.</typeparam>
+    /// <param name="name">Parameter name; repeated suggestions refer to the same parameter.</param>
+    /// <returns>The suggested (or previously recorded) enum member.</returns>
+    /// <exception cref="NumSharp.ValueError">The enum has no members, a required stored parameter is missing, a repeated suggestion changes the choices, or a stored string is not a declared member of <typeparamref name="TEnum" />.</exception>
+    /// <exception cref="NumSharp.TypeError">A stored categorical value is not a member-name string.</exception>
+    public TEnum SuggestCategorical<TEnum>(string name) where TEnum : struct, Enum
+        => EnumCategorical.Resolve<TEnum>(
+            SuggestCategorical(name, EnumCategorical.Choices<TEnum>()).Value);
+
+    /// <summary>
+    ///     Suggests a categorical parameter over a chosen subset of <typeparamref name="TEnum" /> members,
+    ///     preserving the given order (which determines the stored categorical indices).
+    /// </summary>
+    /// <typeparam name="TEnum">The enum whose members form the choices.</typeparam>
+    /// <param name="name">Parameter name; repeated suggestions refer to the same parameter.</param>
+    /// <param name="choices">Nonempty sequence of members; order is retained and determines stored indices.</param>
+    /// <returns>The suggested (or previously recorded) enum member.</returns>
+    /// <exception cref="System.ArgumentNullException">The choices sequence is null.</exception>
+    /// <exception cref="System.ArgumentException">A supplied member is not a single declared value (a <c>[Flags]</c> combination or an undefined value has no categorical name).</exception>
+    /// <exception cref="NumSharp.ValueError">The choices are empty, a required stored parameter is missing, a repeated suggestion changes the choices, or a stored string is not among the given members.</exception>
+    /// <exception cref="NumSharp.TypeError">A stored categorical value is not a member-name string.</exception>
+    public TEnum SuggestCategorical<TEnum>(string name, IEnumerable<TEnum> choices) where TEnum : struct, Enum
+    {
+        if (choices is null)
+            throw new ArgumentNullException(nameof(choices));
+        // Enum.GetName<TEnum>(TEnum) resolves the member NAME with no boxing; null means the value is not
+        // a single declared member (undefined/[Flags] combo) — reject it here rather than storing a
+        // number-like or comma-joined string that could not round-trip back to a member.
+        var names = choices.Select(c => (CategoricalChoice)(Enum.GetName(c)
+            ?? throw new ArgumentException(
+                $"'{c}' is not a single declared member of enum '{typeof(TEnum).FullName}'.", nameof(choices))));
+        return EnumCategorical.Resolve<TEnum>(SuggestCategorical(name, names).Value);
+    }
+
     /// <param name="value">Intermediate objective value; ignored by replay trials.</param>
     /// <param name="step">Nonnegative reporting step; duplicate reports retain the first observation.</param>
     /// <summary>Records the first intermediate objective value for a nonnegative step.</summary>

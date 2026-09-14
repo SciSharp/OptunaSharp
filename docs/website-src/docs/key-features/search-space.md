@@ -40,6 +40,42 @@ double Objective(Trial trial)
 See [Distributions](../distributions.md) and [Search Spaces](../search-spaces.md) for the full
 semantics, including `CategoricalChoice` Python-equality rules.
 
+## Enums as categoricals
+
+A C# `enum` is optimized as a categorical over its **member names**. The enum type is a typed lens
+applied at the call site — it is *never persisted*; the study stores exactly the same string
+categorical you would get by writing the names by hand, so it stays byte-for-byte compatible with
+Optuna. `SuggestCategorical<TEnum>` suggests over every declared member, and an overload takes an
+explicit subset (whose order fixes the stored choice indices):
+
+```csharp
+enum Optimizer { MomentumSGD, Adam }
+
+double Objective(Trial trial)
+{
+    Optimizer optimizer = trial.SuggestCategorical<Optimizer>("optimizer");     // all members
+    Optimizer scheduler = trial.SuggestCategorical("scheduler",                 // explicit subset/order
+        new[] { Optimizer.Adam, Optimizer.MomentumSGD });
+    return Train(optimizer, scheduler);
+}
+```
+
+Read a stored value back to its enum with the `GetCategorical<TEnum>` lens on any parameter view
+(`trial.Params`, a `FrozenTrial`, or `study.BestParams`):
+
+```csharp
+Optimizer best = study.BestParams.GetCategorical<Optimizer>("optimizer");
+```
+
+Because only the member-name string is persisted:
+
+- **Choice order is by underlying value** (`Enum.GetNames` order), not source-declaration order — pass
+  an explicit sequence when the order matters.
+- The store does **not** remember the enum type: reading with the wrong `<TEnum>`, or after renaming a
+  member, throws at the read site (the type is resolved on demand, not recorded).
+- Enums also work at the **write boundaries** — `EnqueueTrial` and `FixedTrial` accept raw enum values,
+  and `EnumCategorical.Choices<TEnum>()` builds a [`GridSampler`](../samplers.md) axis over an enum.
+
 ## Defining spaces with control flow
 
 Because the space is built while the objective runs, **branches** and **loops** just work — a

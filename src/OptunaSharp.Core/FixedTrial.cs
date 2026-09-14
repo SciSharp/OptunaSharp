@@ -139,7 +139,11 @@ public class FixedTrial : BaseTrial
                 $"The value of the parameter '{name}' is not found. Please set it at " +
                 "the construction of the FixedTrial object.");
 
-        var value = _params[name];
+        // Write-boundary normalize: a boxed enum fixed value becomes its member-NAME string here, so
+        // both the distribution conversion below and the recorded Params see the same string a
+        // SuggestCategorical<TEnum> would — and CategoricalChoice.From (inside ToInternalRepr) never
+        // meets an enum (it still rejects them, matching Optuna). Non-enum values pass through unchanged.
+        var value = EnumCategorical.NormalizeParam(_params[name]);
         double paramValueInInternalRepr = distribution.ToInternalRepr(value);
         if (!distribution.Contains(paramValueInInternalRepr))
             OptunaWarnings.Warn(

@@ -582,6 +582,12 @@ public class Study
         OrderedDict<string, object?>? userAttrs = null,
         bool skipIfExists = false)
     {
+        // Write-boundary normalize: turn any boxed enum value into its member-NAME string BEFORE both
+        // the duplicate check and the stored `fixed_params` payload, so (1) the value JSON-serializes as
+        // the same string a SuggestCategorical<TEnum> emits, and (2) the skip comparison matches an
+        // already-enqueued string. Returns the same dictionary untouched when it holds no enum values.
+        @params = EnumCategorical.NormalizeParams(@params);
+
         if (skipIfExists && ShouldSkipEnqueue(@params))
         {
             _logger.Info($"Trial with params {PythonRepr.DictRepr(@params)} already exists. Skipping enqueue.");
