@@ -70,6 +70,15 @@ only the *documentation*, not the feature.
 | 🚧 | [LM-CMA (2015)](lm-cma.md) | [Loshchilov, arXiv:1511.00221 (2015)](https://arxiv.org/abs/1511.00221) |
 | 🚧 | [CMA-ES (2001)](cma-es.md) | [Hansen & Ostermeier, Evol. Comput. 9(2), 2001](https://doi.org/10.1162/106365601750190398) |
 
+**Natural Evolution Strategies (NES)** — natural-gradient search over a Gaussian distribution, from
+isotropic to full-covariance.
+
+| | Method | Paper |
+|---|---|---|
+| ✅ | [OpenAI-ES (2017)](openai-es.md) | [Salimans et al., arXiv:1703.03864 (2017)](https://arxiv.org/abs/1703.03864) |
+| ✅ | [SNES (2014)](snes.md) | [Wierstra et al., JMLR 15, 2014](https://jmlr.org/papers/v15/wierstra14a.html) |
+| ✅ | [xNES (2014)](xnes.md) | [Wierstra et al., JMLR 15, 2014](https://jmlr.org/papers/v15/wierstra14a.html) |
+
 **Classic population-based & swarm.**
 
 | | Method | Paper |

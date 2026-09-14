@@ -23,8 +23,8 @@ parity tiers and two homes (pure-managed **Core** vs a **satellite bridge packag
 
 | Method | Tier | Home | Parity target | Priority |
 |---|---|---|---|---|
-| **OpenAI-ES** (isotropic NES) | Beyond-core | Core | Behavioral (+ optional bit-parity vs pinned numpy ref) | **P1** |
-| **SNES / xNES** (separable / exponential NES) | Beyond-core | Core | Behavioral | P1 (rides on OpenAI-ES) |
+| **OpenAI-ES** (isotropic NES) | Beyond-core | Core | Behavioral (+ optional bit-parity vs pinned numpy ref) | **P1 ✅ DONE** |
+| **SNES / xNES** (separable / exponential NES) | Beyond-core | Core | Behavioral | **P1 ✅ DONE** |
 | **REMBO** (random-embedding wrapper) | Beyond-core | Core | Behavioral | P2 |
 | **TuRBO / TuRBO-m** (trust-region BO) | Beyond-core | Core | Achieved-value + per-step replay tolerance | **P2** |
 | **SAASBO** (fully-Bayesian sparse GP) | Optuna-integration analog | **Bridge** (`Interop.BoTorch`) | **0-ULP vs `optuna_integration`/BoTorch** | P3 |
@@ -97,6 +97,20 @@ scope**: Optuna itself has no SMAC sampler, and we already have a native RF (the
 ---
 
 ## 3. Phase 1 — Natural Evolution Strategies (OpenAI-ES, SNES, xNES)
+
+> **✅ DONE.** All three landed in Core under `Samplers/EvolutionStrategy/`: the numeric cores
+> (`OpenEsOptimizer` / `SnesOptimizer` / `XnesOptimizer` behind `IEvolutionStrategyOptimizer`), the shared
+> fitness-shaping (`EsFitnessShaping`: centered ranks + NES utilities) and deterministic per-generation
+> Gaussian sampling (`EsSampling`), and the shared Optuna-protocol base `EvolutionStrategySampler` driving
+> the public `OpenAiEsSampler` / `SnesSampler` / `XnesSampler`. Each mirrors the `CmaEsSampler` ask/tell
+> idiom (reconstruct-from-x, chunked state in system attrs, independent-sampler fallback). Validated by 46
+> unit tests (both TFMs) — convergence, same-seed determinism, state round-trip, antithetic pairing — plus
+> a live-numpy parity gate (`EvolutionStrategyNumpyParityTests`) for the natural-gradient math. Deep-dive
+> docs at `methods/{openai-es,snes,xnes}.md`. **Design notes worth carrying forward:** σ is annealed
+> (estool-style) so OpenAI-ES converges in the Optuna regime, but it still settles to a σ-neighborhood
+> (SNES/xNES converge tight); `weightDecay` defaults to 0 because the transformed box's origin is a corner;
+> xNES uses `B` consistently in sample and mean-update (the JMLR box's `Bᵀ` in the sample line is a
+> transpose slip that only holds for symmetric `B`), and its covariance exponential rides OpenBLAS `eigh`.
 
 **Why.** The extraordinary-claim tier of the search: OpenAI-ES ("scalable alternative to RL", ≈1000c)
 is a dead-simple, embarrassingly-parallel, gradient-free optimizer that fills a real gap — OptunaSharp
@@ -358,8 +372,8 @@ Surfaced by the search as SOTA/extraordinary but **out of scope for a define-by-
 
 ## 10. Suggested sequencing
 
-1. **P1 — OpenAI-ES + SNES** (self-contained, pure-managed, high extraordinary-claim value, mirrors
-   existing DE/PSO plumbing → lowest risk). xNES optional.
+1. ~~**P1 — OpenAI-ES + SNES**~~ **✅ DONE** (self-contained, pure-managed, high extraordinary-claim value,
+   mirrors existing DE/PSO plumbing → lowest risk). xNES was also completed (rides OpenBLAS `eigh`).
 2. **P2 — TuRBO-1** (reuses GP stack; big BO win) → then **REMBO** (meta-wrapper) → TuRBO-m.
 3. **P3 — SAASBO** (bridge extension; small, high-parity, once BoTorch bridge is touched anyway).
 4. **P4 — MAP-Elites** (new QD surface; design-gated).

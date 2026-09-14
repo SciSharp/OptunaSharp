@@ -126,6 +126,12 @@
           href: methods/lm-cma.md
         - name: CMA-ES (2001)
           href: methods/cma-es.md
+        - name: OpenAI-ES (2017)
+          href: methods/openai-es.md
+        - name: SNES (2014)
+          href: methods/snes.md
+        - name: xNES (2014)
+          href: methods/xnes.md
         - name: Differential Evolution (1997)
           href: methods/differential-evolution.md
         - name: Particle Swarm Optimization (1995)
