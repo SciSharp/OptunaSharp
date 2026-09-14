@@ -218,6 +218,46 @@ public class CliParityTests
             new[] { "create-study", "--study-name", "mo2", "--directions", "minimize", "maximize" });
     }
 
+    /// <summary>
+    ///     CLI recipe (<c>recipes/cli.md</c>): the shell workflow create-study → ask(--search-space) →
+    ///     tell(--values --state). The recipe's exact −10..10 FloatDistribution search space (seeded for a
+    ///     deterministic suggestion) must give byte-identical <c>ask</c> output to the real <c>optuna</c>
+    ///     CLI, and after a <c>tell --values 0.7 --state complete</c> both CLIs must read the resulting
+    ///     study identically in every text format.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void Recipe_CliAskTellWorkflow_Parity()
+    {
+        const string recipeSpace =
+            "{\"x\": {\"name\": \"FloatDistribution\", \"attributes\": {\"step\": null, \"low\": -10.0, \"high\": 10.0, \"log\": false}}}";
+
+        // (1) `ask` with the recipe's exact search space must match optuna byte-for-byte.
+        AssertFreshStudyParity(
+            new[] { "create-study", "--study-name", "recipe-demo" },
+            new[]
+            {
+                "ask", "--study-name", "recipe-demo", "--sampler", "RandomSampler", "--sampler-kwargs", "{\"seed\": 0}",
+                "--search-space", recipeSpace, "-f", "json",
+            });
+
+        // (2) create → ask → tell(--values 0.7 --state complete): OptunaSharp writes it; both CLIs read it identically.
+        string url = FreshDbUrl("recipe-workflow");
+        RunInProcess("create-study", "--study-name", "recipe-demo", "--storage", url);
+        RunInProcess("ask", "--study-name", "recipe-demo", "--storage", url,
+            "--sampler", "RandomSampler", "--sampler-kwargs", "{\"seed\": 0}", "--search-space", recipeSpace);
+        RunInProcess("tell", "--study-name", "recipe-demo", "--storage", url,
+            "--trial-number", "0", "--values", "0.7", "--state", "complete");
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+
+        foreach (var f in TextFormats)
+        {
+            AssertParity(url, "trials", "--study-name", "recipe-demo", "-f", f);
+            AssertParity(url, "best-trial", "--study-name", "recipe-demo", "-f", f);
+        }
+    }
+
     // ------------------------------------------------------------------ helpers
 
     // For mutating commands (ask/create-study) that cannot share a DB: run `setup` then `command` on a
