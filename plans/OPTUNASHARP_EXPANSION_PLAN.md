@@ -25,7 +25,7 @@ parity tiers and two homes (pure-managed **Core** vs a **satellite bridge packag
 |---|---|---|---|---|
 | **OpenAI-ES** (isotropic NES) | Beyond-core | Core | Behavioral (+ optional bit-parity vs pinned numpy ref) | **P1 ✅ DONE** |
 | **SNES / xNES** (separable / exponential NES) | Beyond-core | Core | Behavioral | **P1 ✅ DONE** |
-| **REMBO** (random-embedding wrapper) | Beyond-core | Core | Behavioral | P2 |
+| **REMBO** (random-embedding wrapper) | Beyond-core | Core | Behavioral | **P2 ✅ DONE** |
 | **TuRBO-1** (trust-region BO) | Beyond-core | Core | Achieved-value + per-step replay tolerance | **P2 ✅ DONE** |
 | **TuRBO-m** (multi-TR bandit) | Beyond-core | Core | Achieved-value + per-step replay tolerance | P2 (follow-on) |
 | **SAASBO** (fully-Bayesian sparse GP) | Optuna-integration analog | **Bridge** (`Interop.BoTorch`) | **0-ULP vs `optuna_integration`/BoTorch** | P3 |
@@ -177,6 +177,29 @@ have full-covariance adaptation in CMA-ES).
 
 ## 4. Phase 2a — REMBO (random-embedding meta-sampler)
 
+> **✅ DONE.** Landed in Core as `Samplers/RandomEmbedding/RandomEmbeddingProjection.cs` (the geometry — the
+> deterministic per-`(run, name)`-seeded Gaussian embedding matrix `A`, the latent box `Y = [−√d, √d]^d`,
+> the round-robin interleaved-run assignment, and the box-projected mapping `x = p_X(A·y)` reusing
+> `SearchSpaceTransform` for the `[0,1]→external` de-normalization) + the public `RandomEmbeddingSampler`
+> (the meta-sampler: it drives an inner sampler — a `GPSampler` by default, matching the paper — over a
+> private in-memory **shadow study** of latent trials, mirroring the real study's finished trials via
+> `create_trial`/`add_trial`, `Ask`-ing the latent point and immediately `Tell`-ing the ask-trial `Fail` so
+> the inner GP never treats it as a pending point, then mapping back to the real parameters). Every trial is
+> embedded through `SampleIndependent` from one cached latent point; categorical/single-valued parameters go
+> to the independent sampler; single-objective only. Validated by 21 unit tests (both TFMs): the embedding
+> geometry (matrix determinism / `N(0,1)` entries / box / clip / int+log+step de-normalization) directly,
+> and end-to-end that **interleaved** embeddings recover a 2-effective-dim optimum buried in 25 dims and beat
+> random search, plus determinism, bounds, the categorical fallback, a TPE inner sampler, latent persistence,
+> and the multi-objective guard. Deep-dive doc `methods/rembo.md`. **Design notes worth carrying forward:**
+> a *single* embedding is genuinely fragile (the box may miss the optimum — the paper's §3.2 caveat, amplified
+> because most of `Y` maps to the clipped boundary), so reliable convergence comes from **interleaved runs**
+> (§3.1, the `nEmbeddings` knob), which is what the convergence tests use; the embedding matrix is generated
+> per-`(run, name)` from a stable FNV+SplitMix seed rather than persisted, so it survives parameter-discovery
+> order / resumption / parallel workers; `nEmbeddingDims` (d) is **required** (no honest default). **Not
+> ported (documented divergences):** the adaptive length-scale scheme (Algorithm 3) — the inner sampler is
+> pluggable, and interleaving substitutes for reliability — and the high-dimensional Hamming kernel for
+> categorical spaces (§3.2). **Still to do under P2:** **TuRBO-m** (the multi-trust-region bandit).
+
 **Why.** The "billion dimensions" extraordinary claim (≈390c). It is the canonical way to run BO on a
 high-`D` space that has a low **effective dimension** `dₑ` — common in hyperparameter tuning where only
 a few knobs matter.
@@ -229,7 +252,7 @@ both TFMs.
 > value sequence (no serialized blob); Thompson sampling draws the EXACT joint posterior via Cholesky, so
 > `numCandidates` defaults to `min(100·d, 500)` (capped below the paper's 5000, which relies on BoTorch's
 > scalable sampler) with cost `O(numCandidates³)`/trial; per-restart Sobol init (`2·d` points). **Still to
-> do under P2:** **REMBO** (random-embedding meta-sampler) and **TuRBO-m** (the multi-trust-region bandit).
+> do under P2:** **TuRBO-m** (the multi-trust-region bandit) — **REMBO** is now done (§4).
 
 **Why.** The SOTA high-dimensional BO baseline (≈150c and rising; the very baseline **JANUS** cites).
 It reuses our existing GP stack, so marginal cost is moderate and it materially strengthens BO on the
@@ -390,8 +413,9 @@ Surfaced by the search as SOTA/extraordinary but **out of scope for a define-by-
 
 1. ~~**P1 — OpenAI-ES + SNES**~~ **✅ DONE** (self-contained, pure-managed, high extraordinary-claim value,
    mirrors existing DE/PSO plumbing → lowest risk). xNES was also completed (rides OpenBLAS `eigh`).
-2. **P2 — TuRBO-1** **✅ DONE** (reused the GP stack; beats global GP on multimodal) → then **REMBO**
-   (meta-wrapper) → **TuRBO-m** (multi-TR bandit) remain.
+2. **P2 — TuRBO-1** **✅ DONE** (reused the GP stack; beats global GP on multimodal) and **REMBO**
+   **✅ DONE** (random-embedding meta-wrapper; interleaved runs recover a low-effective-dim optimum) →
+   **TuRBO-m** (multi-TR bandit) remains.
 3. **P3 — SAASBO** (bridge extension; small, high-parity, once BoTorch bridge is touched anyway).
 4. **P4 — MAP-Elites** (new QD surface; design-gated).
 5. **P5 — MO-CMA-ES** (blocked on paper access).

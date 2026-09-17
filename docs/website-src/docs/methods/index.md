@@ -91,6 +91,7 @@ isotropic to full-covariance.
 | | Method | Paper |
 |---|---|---|
 | ✅ | [TuRBO — Trust-Region Bayesian Optimization (2019)](turbo.md) | [Eriksson et al., NeurIPS 2019 (arXiv:1910.01739)](https://arxiv.org/abs/1910.01739) |
+| ✅ | [REMBO — Random-Embedding Bayesian Optimization (2016)](rembo.md) | [Wang et al., JAIR 55, 2016 (doi:10.1613/jair.4806)](https://doi.org/10.1613/jair.4806) |
 | 🚧 | [GP-BO — Gaussian-Process Bayesian Optimization (2012)](gp.md) | [Snoek et al., NeurIPS 2012 (arXiv:1206.2944)](https://arxiv.org/abs/1206.2944) |
 | 🚧 | [TPE — Tree-structured Parzen Estimator (2011)](tpe.md) | [Bergstra et al., NeurIPS 2011](https://papers.nips.cc/paper_files/paper/2011/hash/86e8f7ab32cfd12577bc2619bc635690-Abstract.html) |
 

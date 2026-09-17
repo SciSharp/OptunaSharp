@@ -142,6 +142,8 @@
           href: methods/pso.md
         - name: TuRBO (2019)
           href: methods/turbo.md
+        - name: REMBO (2016)
+          href: methods/rembo.md
         - name: GP-BO (2012)
           href: methods/gp.md
         - name: TPE (2011)
