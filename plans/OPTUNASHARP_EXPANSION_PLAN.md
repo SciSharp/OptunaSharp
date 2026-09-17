@@ -26,7 +26,8 @@ parity tiers and two homes (pure-managed **Core** vs a **satellite bridge packag
 | **OpenAI-ES** (isotropic NES) | Beyond-core | Core | Behavioral (+ optional bit-parity vs pinned numpy ref) | **P1 ✅ DONE** |
 | **SNES / xNES** (separable / exponential NES) | Beyond-core | Core | Behavioral | **P1 ✅ DONE** |
 | **REMBO** (random-embedding wrapper) | Beyond-core | Core | Behavioral | P2 |
-| **TuRBO / TuRBO-m** (trust-region BO) | Beyond-core | Core | Achieved-value + per-step replay tolerance | **P2** |
+| **TuRBO-1** (trust-region BO) | Beyond-core | Core | Achieved-value + per-step replay tolerance | **P2 ✅ DONE** |
+| **TuRBO-m** (multi-TR bandit) | Beyond-core | Core | Achieved-value + per-step replay tolerance | P2 (follow-on) |
 | **SAASBO** (fully-Bayesian sparse GP) | Optuna-integration analog | **Bridge** (`Interop.BoTorch`) | **0-ULP vs `optuna_integration`/BoTorch** | P3 |
 | **MAP-Elites** (quality-diversity) | New paradigm | Core (+ new QD surface) | Behavioral (archive coverage / QD-score) | P4 |
 | **MO-CMA-ES** (multi-objective CMA) | Beyond-core | Core | Behavioral | P5 (paper access gap — see §9) |
@@ -215,6 +216,21 @@ both TFMs.
 
 ## 5. Phase 2b — TuRBO / TuRBO-m (trust-region Bayesian optimization)
 
+> **✅ TuRBO-1 DONE.** Landed in Core as `Samplers/Turbo/TurboOptimizer.cs` (the TR mechanics — the
+> deterministic expand/shrink/restart state fold, the length-scale-weighted TR box, the masked Sobol
+> perturbation candidate set, and joint-Cholesky Thompson sampling) + the public `TurboSampler`, driven
+> through the Optuna protocol reusing the native GP stack unchanged (`GPRegressor` Matérn-5/2 ARD +
+> `PosteriorJoint` + OpenBLAS Cholesky, `GpSearchSpace` normalization, `ScrambledSobol`). Validated by 26
+> unit tests (both TFMs): the fold's expand→1.6 / shrink→0.4 / restart-after-7-halvings, the anisotropic
+> box, the perturbation mask, Thompson argmax + jitter fallback, and end-to-end convergence — TuRBO beats
+> plain `GPSampler` on multimodal Ackley (≈0.87 vs ≈2.23) and matches it on the sphere. 935/935 unit suite.
+> Deep-dive doc `methods/turbo.md`. **Design notes:** single-objective, Float/Int only (categorical →
+> independent sampler, like CMA); state is RECONSTRUCTED by a deterministic fold over the completed-trial
+> value sequence (no serialized blob); Thompson sampling draws the EXACT joint posterior via Cholesky, so
+> `numCandidates` defaults to `min(100·d, 500)` (capped below the paper's 5000, which relies on BoTorch's
+> scalable sampler) with cost `O(numCandidates³)`/trial; per-restart Sobol init (`2·d` points). **Still to
+> do under P2:** **REMBO** (random-embedding meta-sampler) and **TuRBO-m** (the multi-trust-region bandit).
+
 **Why.** The SOTA high-dimensional BO baseline (≈150c and rising; the very baseline **JANUS** cites).
 It reuses our existing GP stack, so marginal cost is moderate and it materially strengthens BO on the
 1000s-of-evaluations, high-`d` regime where plain `GPSampler` degrades.
@@ -374,7 +390,8 @@ Surfaced by the search as SOTA/extraordinary but **out of scope for a define-by-
 
 1. ~~**P1 — OpenAI-ES + SNES**~~ **✅ DONE** (self-contained, pure-managed, high extraordinary-claim value,
    mirrors existing DE/PSO plumbing → lowest risk). xNES was also completed (rides OpenBLAS `eigh`).
-2. **P2 — TuRBO-1** (reuses GP stack; big BO win) → then **REMBO** (meta-wrapper) → TuRBO-m.
+2. **P2 — TuRBO-1** **✅ DONE** (reused the GP stack; beats global GP on multimodal) → then **REMBO**
+   (meta-wrapper) → **TuRBO-m** (multi-TR bandit) remain.
 3. **P3 — SAASBO** (bridge extension; small, high-parity, once BoTorch bridge is touched anyway).
 4. **P4 — MAP-Elites** (new QD surface; design-gated).
 5. **P5 — MO-CMA-ES** (blocked on paper access).
