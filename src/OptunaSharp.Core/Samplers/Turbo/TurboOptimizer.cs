@@ -165,6 +165,50 @@ internal sealed class TurboOptimizer
     }
 
     /// <summary>
+    ///     Selects the trust-region center x⋆ among the current local run's points (paper §2): the best
+    ///     <b>observation</b> when the objective is noise-free (<paramref name="deterministic" />), otherwise
+    ///     the point with the best <b>posterior mean</b> under the fitted GP. The noisy rule exists so that a
+    ///     single lucky (or unlucky) noise draw cannot anchor the whole trust region on a spurious point —
+    ///     the observed best may be an outlier the GP smooths away. "Best" is the largest value here: scores
+    ///     are maximization-oriented, and because the posterior mean is fitted on the affinely standardized
+    ///     score its argmax is unchanged, so this maximizing argmax realizes the paper's "smallest posterior
+    ///     mean" rule stated in its minimization convention.
+    /// </summary>
+    /// <param name="observedScores">The maximization-oriented observed score of each point in the current run, length m ≥ 1.</param>
+    /// <param name="posteriorMean">The GP posterior mean at those same points; ignored (may be <c>null</c>) when
+    ///     <paramref name="deterministic" /> is true, otherwise required with the same length as <paramref name="observedScores" />.</param>
+    /// <param name="deterministic">True to center on the best observation (noise-free case); false to center on the best posterior mean (noisy case).</param>
+    /// <returns>The index of the chosen center point (the first argmax on a tie).</returns>
+    /// <exception cref="System.ArgumentException"><paramref name="observedScores" /> is empty, or the noisy branch was
+    ///     requested without a <paramref name="posteriorMean" /> of matching length.</exception>
+    internal static int SelectCenterIndex(double[] observedScores, double[]? posteriorMean, bool deterministic)
+    {
+        int m = observedScores.Length;
+        if (m < 1)
+            throw new ArgumentException("observedScores must be non-empty.", nameof(observedScores));
+
+        // Pick the key to argmax over: observations (noise-free) or the GP posterior mean (noisy).
+        double[] key;
+        if (deterministic)
+        {
+            key = observedScores;
+        }
+        else
+        {
+            if (posteriorMean is null || posteriorMean.Length != m)
+                throw new ArgumentException(
+                    "posteriorMean must be supplied with the same length as observedScores in the noisy case.",
+                    nameof(posteriorMean));
+            key = posteriorMean;
+        }
+
+        int best = 0;
+        for (int i = 1; i < m; i++)
+            if (key[i] > key[best]) best = i;
+        return best;
+    }
+
+    /// <summary>
     ///     The trust-region hyperrectangle around <paramref name="xCenter" /> in normalized <c>[0, 1]^d</c>:
     ///     each side is rescaled by the GP length scale, <c>side_i = λ_i · L / (Π_j λ_j)^{1/d}</c> (so the
     ///     total volume stays <c>L^d</c>), and clipped to the unit box. Longer length scales (flatter

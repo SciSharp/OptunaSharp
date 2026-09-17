@@ -1,6 +1,7 @@
 using System;
 using AwesomeAssertions;
 using NumSharp;
+using OptunaSharp.Internal;
 using OptunaSharp.Samplers.Turbo;
 
 namespace OptunaSharp.Tests.Samplers;
@@ -219,6 +220,165 @@ public class TurboOptimizerTests
             return TurboOptimizer.ThompsonArgmax(mean, cov, rng);
         }
         Draw().Should().Be(Draw());
+    }
+
+    // ---- paper claims: trust-region geometry (§2) -------------------------------------------------
+
+    [TestMethod]
+    public void TrustRegionBounds_UnitVolume_ProductOfSidesEqualsLPowD()
+    {
+        // §2: side_i = λ_i·L/(Πλ)^{1/d}, so ∏ side_i = L^d exactly for any length scales — the box rescales
+        // its SHAPE by the length scales but keeps total VOLUME at L^d. Center + L chosen so no side clips.
+        double l = 0.2;
+        var (lb, ub) = Make().TrustRegionBounds(new[] { 0.5, 0.5, 0.5 }, new[] { 4.0, 1.0, 2.0 }, l);
+        double volume = 1.0;
+        for (int j = 0; j < 3; j++) volume *= ub[j] - lb[j];
+        volume.Should().BeApproximately(Math.Pow(l, 3), 1e-12, "the length-scale-weighted box has volume L^d");
+    }
+
+    [TestMethod]
+    public void TrustRegionBounds_LargeLength_CoversWholeUnitBox()
+    {
+        // §2: "If L was large enough for the TR to contain the whole space, this would be equivalent to
+        // running standard global BO." A large base length clips the region to the entire unit cube.
+        var (lb, ub) = Make().TrustRegionBounds(new[] { 0.3, 0.7, 0.5 }, new[] { 1.0, 1.0, 1.0 }, length: 100.0);
+        for (int j = 0; j < 3; j++)
+        {
+            lb[j].Should().Be(0.0);
+            ub[j].Should().Be(1.0);
+        }
+    }
+
+    // ---- paper claims: success is a STRICT improvement (§D) ---------------------------------------
+
+    [TestMethod]
+    public void Fold_StrictImprovement_CountsTieAsFailureAndTinyGainAsSuccess()
+    {
+        // §D: a "success" is a candidate that (strictly) improves the incumbent. With the paper's strict
+        // margin (successTol = 0) any positive gain is a success and an exact tie is a failure; the BoTorch
+        // tutorial's 1e-3 RELATIVE margin instead rejects a sub-0.1%·|best| gain. A +0.05% gain straddles the
+        // two, so it proves both the strict default and the margin knob.
+        var strict = new TurboOptimizer(0.8, 1.0 / 128.0, 1.6, tauSucc: 3, tauFail: 4, successTol: 0.0);
+        var botorch = new TurboOptimizer(0.8, 1.0 / 128.0, 1.6, tauSucc: 3, tauFail: 4, successTol: 1e-3);
+
+        // init [0, 1] ⇒ incumbent best = 1; then a +0.0005 gain (0.05% of |best|).
+        var gain = new double[] { 0.0, 1.0, 1.0005 };
+        strict.ReconstructState(gain, nInit: 2).SuccessCounter.Should()
+            .Be(1, "the strict margin counts any positive improvement as a success");
+        botorch.ReconstructState(gain, nInit: 2).FailureCounter.Should()
+            .Be(1, "a 1e-3 relative margin rejects a 0.05% gain");
+
+        // An exact tie never strictly improves x⋆, so it is a failure even under the strict margin.
+        var tie = new double[] { 0.0, 1.0, 1.0 };
+        strict.ReconstructState(tie, nInit: 2).FailureCounter.Should()
+            .Be(1, "a tie does not strictly improve the incumbent");
+    }
+
+    // ---- paper claims: candidate perturbation rate min(20/d, 1) (§D) ------------------------------
+
+    [TestMethod]
+    public void GenerateCandidates_PerturbationFraction_MatchesProbability()
+    {
+        // §D: each coordinate takes the Sobol value with probability min(20/d, 1) and the center otherwise.
+        // At d = 25 that is 0.8, so ~80% of coordinates across many candidates differ from the center.
+        int d = 25;
+        var opt = Make();
+        var xCenter = new double[d];
+        var ls = new double[d];
+        for (int j = 0; j < d; j++) { xCenter[j] = 0.5; ls[j] = 1.0; }
+        var (lb, ub) = opt.TrustRegionBounds(xCenter, ls, 0.4);
+        var rng = np.random.RandomState();
+        rng.seed(2024u);
+
+        const int n = 400;
+        double[,] cand = opt.GenerateCandidates(xCenter, lb, ub, n, rng);
+        int perturbed = 0;
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < d; j++)
+                if (cand[i, j] != 0.5) perturbed++;   // held-at-center coordinates equal 0.5 exactly
+
+        ((double)perturbed / (n * d)).Should()
+            .BeApproximately(20.0 / d, 0.03, "the empirical perturbation rate matches min(20/d, 1)");
+    }
+
+    // ---- paper claims: Thompson sampling draws the joint posterior (§E) ---------------------------
+
+    [TestMethod]
+    public void ThompsonArgmax_DrawsExactJointPosteriorSample()
+    {
+        // §E: TS draws ONE realization of the GP posterior over the candidate set — the JOINT sample
+        // f = mean + L·z with cov = L·Lᵀ, z ~ N(0, I) — not independent per-candidate marginals. Replicate
+        // the draw from the same seed (z = randn(n); L = chol(cov + 1e-10·I), the first jitter level a
+        // well-conditioned cov needs) and confirm ThompsonArgmax returns argmax(mean + L·z) exactly.
+        var mean = new[] { 0.0, 0.0, 0.0 };
+        var cov = new[,]
+        {
+            { 1.0, 0.9, 0.8 },
+            { 0.9, 1.0, 0.9 },
+            { 0.8, 0.9, 1.0 },
+        };
+        const uint seed = 20240517u;
+
+        var expectRng = np.random.RandomState();
+        expectRng.seed(seed);
+        double[] z = expectRng.randn(3).ToArray<double>();
+        var jittered = (double[,])cov.Clone();
+        for (int i = 0; i < 3; i++) jittered[i, i] += 1e-10;
+        double[] lz = LinAlg.Dot(LinAlg.Cholesky(jittered), z);
+        int expected = 0;
+        for (int i = 1; i < 3; i++) if (mean[i] + lz[i] > mean[expected] + lz[expected]) expected = i;
+
+        var rng = np.random.RandomState();
+        rng.seed(seed);
+        TurboOptimizer.ThompsonArgmax(mean, cov, rng).Should()
+            .Be(expected, "the Thompson pick is the argmax of the exact joint posterior draw mean + L·z");
+    }
+
+    [TestMethod]
+    public void ThompsonArgmax_IsStochasticNotGreedy()
+    {
+        // §E: TS is stochastic — with real posterior variance it does NOT always pick the highest-mean
+        // candidate (that would be greedy exploitation), yet the higher-mean candidate still wins more often.
+        var mean = new[] { 0.0, 0.15 };
+        var cov = new[,] { { 1.0, 0.0 }, { 0.0, 1.0 } };
+        int pick0 = 0, pick1 = 0;
+        for (uint s = 1; s <= 300; s++)
+        {
+            var rng = np.random.RandomState();
+            rng.seed(s);
+            if (TurboOptimizer.ThompsonArgmax(mean, cov, rng) == 0) pick0++; else pick1++;
+        }
+        pick1.Should().BeGreaterThan(pick0, "the higher-mean candidate wins more often");
+        pick0.Should().BeGreaterThan(0, "but Thompson sampling still explores the lower-mean candidate");
+    }
+
+    // ---- paper claims: trust-region center rule (§2) ----------------------------------------------
+
+    [TestMethod]
+    public void SelectCenterIndex_Deterministic_PicksBestObservation()
+    {
+        // §2 noise-free case: center on the best OBSERVATION, ignoring the posterior mean entirely.
+        var observed = new[] { 1.0, 3.0, 2.0 };   // best observation is index 1
+        var postMean = new[] { 5.0, 0.0, 0.0 };   // posterior mean would prefer index 0
+        TurboOptimizer.SelectCenterIndex(observed, postMean, deterministic: true).Should().Be(1);
+        TurboOptimizer.SelectCenterIndex(observed, null, deterministic: true).Should().Be(1);
+    }
+
+    [TestMethod]
+    public void SelectCenterIndex_Noisy_PicksBestPosteriorMean()
+    {
+        // §2 noisy case: center on the best POSTERIOR MEAN, so a spuriously good single observation (index 1)
+        // cannot anchor the region — the GP-smoothed mean (index 2) wins instead.
+        var observed = new[] { 1.0, 9.0, 2.0 };   // index 1 is a lucky outlier
+        var postMean = new[] { 1.1, 1.9, 2.1 };   // the GP mean prefers index 2
+        TurboOptimizer.SelectCenterIndex(observed, postMean, deterministic: false).Should().Be(2);
+    }
+
+    [TestMethod]
+    public void SelectCenterIndex_Noisy_RequiresPosteriorMean()
+    {
+        Action act = () => TurboOptimizer.SelectCenterIndex(new[] { 1.0, 2.0 }, null, deterministic: false);
+        act.Should().Throw<ArgumentException>("the noisy center rule needs the posterior mean");
     }
 
     // ---- constructor validation -------------------------------------------------------------------

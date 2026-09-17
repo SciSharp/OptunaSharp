@@ -74,6 +74,7 @@ public sealed class TurboSampler : BaseSampler
     private readonly double _lengthMax;
     private readonly int _successTolerance;
     private readonly int? _failureTolerance;
+    private readonly double _successMargin;
     private readonly double _minimumNoise;
     private readonly bool _deterministicObjective;
 
@@ -83,11 +84,12 @@ public sealed class TurboSampler : BaseSampler
     /// <param name="seed">Random seed; a fixed seed reproduces the trajectory on a platform.</param>
     /// <param name="nInit">Per-restart initialization trials (Sobol space-filling) before the local GP takes
     ///     over; <c>null</c> uses <c>2·d</c>.</param>
-    /// <param name="numCandidates">Thompson-sampling candidate-set size per trial; <c>null</c> uses
-    ///     <c>min(100·d, 500)</c>. The paper uses <c>min(100·d, 5000)</c> with BoTorch's scalable posterior
-    ///     sampler; this exact managed implementation draws the joint posterior via Cholesky (cost
-    ///     <c>O(numCandidates³)</c> per trial), so the default caps lower to keep the per-trial overhead near
-    ///     the GP-fit cost — raise it toward the paper's value for harder problems if you can afford it.</param>
+    /// <param name="numCandidates">Thompson-sampling candidate-set size per trial; <c>null</c> uses the
+    ///     paper's <c>min(100·d, 5000)</c> (§D). <b>Cost footgun:</b> this exact managed implementation draws
+    ///     the joint posterior via a dense Cholesky (cost <c>O(numCandidates³)</c> per trial), whereas the
+    ///     paper leans on BoTorch's scalable posterior sampler — so at high <c>d</c> the paper-faithful
+    ///     default is genuinely heavy (a 5000-wide Cholesky per trial). Lower it (e.g. a few hundred) to trade
+    ///     discretization fidelity for speed when the per-trial overhead dominates.</param>
     /// <param name="lengthInit">Initial trust-region base side length on a fresh restart (default 0.8).</param>
     /// <param name="lengthMin">Restart floor: when the base length falls below this the region is discarded
     ///     and re-initialized (default <c>2⁻⁷ ≈ 0.0078</c>).</param>
@@ -95,10 +97,20 @@ public sealed class TurboSampler : BaseSampler
     /// <param name="successTolerance">Consecutive improvements required to double the region (default 3, the
     ///     paper supplement value; the BoTorch tutorial uses 10).</param>
     /// <param name="failureTolerance">Consecutive stalls required to halve the region; <c>null</c> uses the
-    ///     paper's <c>max(4, d)</c> (i.e. <c>⌈max(4/q, d/q)⌉</c> with batch <c>q = 1</c>).</param>
-    /// <param name="minimumNoise">Lower floor on the fitted GP observation-noise variance; <c>null</c> uses
-    ///     the GP stack default.</param>
-    /// <param name="deterministicObjective">Treat the objective as noise-free (fix the GP noise at the floor).</param>
+    ///     paper's <c>τ_fail = ⌈d/q⌉ = d</c> (batch <c>q = 1</c>; §D). The authors' reference code and the
+    ///     BoTorch tutorial instead use <c>⌈max(4/q, d/q)⌉ = max(4, d)</c> as a low-dimension guard —
+    ///     identical for <c>d ≥ 4</c> (the paper's whole experimental regime) and different only for
+    ///     <c>d ∈ {1, 2, 3}</c>. Pass <c>Math.Max(4, d)</c> to reproduce that reference-code behavior.</param>
+    /// <param name="successMargin">Relative margin a candidate must clear over the incumbent to count as a
+    ///     <i>success</i>: <c>score &gt; best + successMargin·|best|</c>. Default <c>0.0</c> is the paper's
+    ///     strict improvement (§D); the BoTorch tutorial uses <c>1e-3</c> to ignore negligible gains — pass
+    ///     that to recover BoTorch behavior.</param>
+    /// <param name="minimumNoise">Lower floor on the fitted GP observation-noise variance and the effective
+    ///     lower bound of the §C noise box; <c>null</c> uses the paper's <c>σ² ≥ 0.0005</c> (§C). Must stay
+    ///     below the §C upper bound <c>0.1</c> for a well-posed noise box.</param>
+    /// <param name="deterministicObjective">Treat the objective as noise-free: fix the GP noise at the floor
+    ///     <b>and</b> center the trust region on the best <i>observation</i> (paper §2). When <c>false</c> (the
+    ///     default, noisy case) the center is the training point with the best posterior <i>mean</i> instead.</param>
     /// <summary>Configures TuRBO-1's trust-region schedule, local-GP fit, and independent startup/fallback.</summary>
     /// <exception cref="System.ArgumentException">A length bound is non-positive/ill-ordered, or a count is below one.</exception>
     public TurboSampler(
@@ -112,6 +124,7 @@ public sealed class TurboSampler : BaseSampler
         double lengthMax = 1.6,
         int successTolerance = 3,
         int? failureTolerance = null,
+        double successMargin = 0.0,
         double? minimumNoise = null,
         bool deterministicObjective = false)
     {
@@ -119,6 +132,8 @@ public sealed class TurboSampler : BaseSampler
             throw new ArgumentException("Require 0 < lengthMin ≤ lengthInit ≤ lengthMax.");
         if (successTolerance < 1)
             throw new ArgumentException("successTolerance must be at least 1.", nameof(successTolerance));
+        if (successMargin < 0)
+            throw new ArgumentException("successMargin must be non-negative.", nameof(successMargin));
         if (nInit is int ni && ni < 1)
             throw new ArgumentException("nInit must be at least 1.", nameof(nInit));
         if (numCandidates is int nc && nc < 1)
@@ -136,7 +151,10 @@ public sealed class TurboSampler : BaseSampler
         _lengthMax = lengthMax;
         _successTolerance = successTolerance;
         _failureTolerance = failureTolerance;
-        _minimumNoise = minimumNoise ?? Prior.DefaultMinimumNoiseVar;
+        _successMargin = successMargin;
+        // Paper §C floors observation-noise variance at 0.0005 (not the GP stack's 1e-6 default); this is
+        // also the lower bound of the §C noise box the local GP is fitted under (see TurboGpFit).
+        _minimumNoise = minimumNoise ?? TurboGpFit.NoiseVarMin;
         _deterministicObjective = deterministicObjective;
 
         // A fixed base seed makes the per-trial noise a pure function of (base, trial number). Derived
@@ -192,13 +210,15 @@ public sealed class TurboSampler : BaseSampler
 
         var optimizer = new TurboOptimizer(
             _lengthInit, _lengthMin, _lengthMax, _successTolerance,
-            _failureTolerance ?? Math.Max(4, d), successTol: 1e-3);
+            _failureTolerance ?? DefaultFailureTolerance(d), successTol: _successMargin);
         TurboTrState state = optimizer.ReconstructState(foldScores, nInit);
 
-        int restartCount = completed.Count - state.RestartStart;   // completed trials in the current restart
+        // Completed trials in the CURRENT restart (distinct from state.RestartCount, the number of restarts
+        // so far): while this is below nInit we are still filling the restart's Sobol initialization.
+        int trialsInRestart = completed.Count - state.RestartStart;
 
         // ---- initialization phase: fill the current restart with Sobol space-filling points ----
-        if (restartCount < nInit)
+        if (trialsInRestart < nInit)
         {
             // A per-restart Sobol stream (seeded from the restart index) makes the init reproducible; each
             // init trial takes the next row of that restart's sequence. Mask to 31 bits so the seed is
@@ -206,7 +226,7 @@ public sealed class TurboSampler : BaseSampler
             int restartSeed = (int)(Mix(_baseSeed ^ InitSeedSalt, (ulong)state.RestartCount) & 0x7FFFFFFFu);
             double[,] sobolInit = ScrambledSobol.Random(d, nInit, restartSeed);
             var point = new double[d];
-            for (int j = 0; j < d; j++) point[j] = sobolInit[restartCount, j];
+            for (int j = 0; j < d; j++) point[j] = sobolInit[trialsInRestart, j];
             return Unnormalize(internalSpace, searchSpace, point);
         }
 
@@ -217,22 +237,25 @@ public sealed class TurboSampler : BaseSampler
         double[,] normalizedParams = internalSpace.GetNormalizedParams(
             restartTrials.Select(t => (IReadOnlyDictionary<string, object?>)t.ParamsDict).ToList());
 
-        // Standardize the local run's scores for the GP fit; the (finite-clipped) argmax is the incumbent.
+        // Standardize the local run's scores for the GP fit (the paper standardizes objective values before
+        // fitting; §C). `clipped` keeps the maximization-oriented observations for the center rule.
         var rawScore = new double[m];
         for (int i = 0; i < m; i++) rawScore[i] = ToScore(restartTrials[i].Value, sign);
         double[] clipped = ClipFinite(rawScore);
         double mean = MathUtil.Mean(clipped);
         double std = Math.Max(Eps, MathUtil.Std(clipped));
         var y = new double[m];
-        int incumbent = 0;
-        for (int i = 0; i < m; i++)
-        {
-            y[i] = (clipped[i] - mean) / std;
-            if (clipped[i] > clipped[incumbent]) incumbent = i;
-        }
+        for (int i = 0; i < m; i++) y[i] = (clipped[i] - mean) / std;
 
-        GPRegressor gpr = GPRegressor.FitKernelParams(
+        // Fit the LOCAL GP under the paper's §C hyperparameter box (TurboGpFit), not the shared unconstrained
+        // GPSampler fit — the fitted length scales rescale the trust-region box, so §C keeps them in range.
+        GPRegressor gpr = TurboGpFit.Fit(
             normalizedParams, y, internalSpace.IsCategorical, _minimumNoise, _deterministicObjective);
+
+        // Paper §2 trust-region center x⋆: best observation when noise-free, else the point with the best
+        // posterior mean under the fitted GP (the noisy default). Compute the posterior mean only when needed.
+        double[]? posteriorMean = _deterministicObjective ? null : gpr.Posterior(normalizedParams).Mean;
+        int incumbent = TurboOptimizer.SelectCenterIndex(clipped, posteriorMean, _deterministicObjective);
 
         var xCenter = new double[d];
         for (int j = 0; j < d; j++) xCenter[j] = normalizedParams[incumbent, j];
@@ -244,7 +267,7 @@ public sealed class TurboSampler : BaseSampler
         NumPyRandom rng = np.random.RandomState();
         rng.seed(Mix(_baseSeed, (ulong)trial.Number));
 
-        int numCandidates = _numCandidates ?? Math.Min(100 * d, 500);
+        int numCandidates = _numCandidates ?? DefaultNumCandidates(d);
         double[,] candidates = optimizer.GenerateCandidates(xCenter, lb, ub, numCandidates, rng);
 
         (double[] postMean, double[,] postCov) = gpr.PosteriorJoint(candidates);
@@ -322,6 +345,27 @@ public sealed class TurboSampler : BaseSampler
         z ^= z >> 31;
         return (uint)(z & 0xFFFFFFFFUL);
     }
+
+    /// <summary>
+    ///     The paper's default failure tolerance <c>τ_fail = ⌈d/q⌉</c> (batch <c>q = 1</c> here, so
+    ///     <c>= d</c>); Eriksson et al. 2019, §D. <b>Note the paper-vs-code discrepancy:</b> the authors' own
+    ///     reference implementation and the BoTorch tutorial instead use <c>⌈max(4/q, d/q)⌉ = max(4, d)</c> as
+    ///     a low-dimension guard. The two agree for <c>d ≥ 4</c> — the paper's entire experimental regime — and
+    ///     differ only for <c>d ∈ {1, 2, 3}</c>; pass an explicit <c>failureTolerance = max(4, d)</c> to
+    ///     reproduce the reference-code behavior there.
+    /// </summary>
+    /// <param name="d">The relative-search-space dimension.</param>
+    /// <returns>The paper's <c>τ_fail = d</c>.</returns>
+    internal static int DefaultFailureTolerance(int d) => d;
+
+    /// <summary>
+    ///     The paper's default Thompson-sampling candidate-set size, <c>min(100·d, 5000)</c> (Eriksson et al.
+    ///     2019, §D). See the <c>numCandidates</c> constructor parameter for the <c>O(n³)</c>-per-trial cost
+    ///     this exact managed joint-posterior draw pays at the upper end of that range.
+    /// </summary>
+    /// <param name="d">The relative-search-space dimension.</param>
+    /// <returns>The paper's candidate-set size for dimension <paramref name="d" />.</returns>
+    internal static int DefaultNumCandidates(int d) => Math.Min(100 * d, 5000);
 
     /// <inheritdoc />
     /// <exception cref="NumSharp.ValueError">The study has multiple objectives, but TuRBO-1 requires a scalar objective.</exception>

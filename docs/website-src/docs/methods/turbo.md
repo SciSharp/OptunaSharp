@@ -15,9 +15,10 @@ OptunaSharp ships **TuRBO-1** — the single-trust-region variant.
 Work in the normalized box `Ω = [0, 1]^d`. TuRBO runs a sequence of *local* optimization runs; each run
 maintains a trust region and a local GP fit only to that run's observations.
 
-**Trust region.** A hyperrectangle centered at the incumbent `x⋆` (the best observation so far). It has a
-base side length `L`, and each dimension's side is rescaled by the fitted GP length scale while holding
-the total volume at `L^d`:
+**Trust region.** A hyperrectangle centered at the incumbent `x⋆` — the best *observation* on a noise-free
+objective, or the training point with the best posterior *mean* when the objective is noisy (paper §2), so a
+lucky noise draw can't anchor the region on a spurious point. It has a base side length `L`, and each
+dimension's side is rescaled by the fitted GP length scale while holding the total volume at `L^d`:
 
 ```
 L_i = λ_i · L / (Π_j λ_j)^{1/d}
@@ -34,14 +35,18 @@ realization of the local GP posterior over the candidate set and take its argmin
 x_next ∈ argmin_{x ∈ TR} f̃,   f̃ ∼ GP_posterior
 ```
 
-**Resize & restart.** A *success* is a candidate that improves `x⋆`, a *failure* one that does not. After
-`τ_succ` consecutive successes `L ← min(L_max, 2L)`; after `τ_fail` consecutive failures `L ← L/2`;
+**Resize & restart.** A *success* is a candidate that strictly improves `x⋆`, a *failure* one that does not.
+After `τ_succ` consecutive successes `L ← min(L_max, 2L)`; after `τ_fail` consecutive failures `L ← L/2`;
 counters reset on any resize. When `L` falls below `L_min` the region has collapsed — TuRBO **discards it
 and restarts** a fresh local run (new Sobol initialization, new incumbent). This restart-from-collapse is
 what keeps TuRBO globally effective while each run stays local.
 
-**Defaults** (BoTorch TuRBO tutorial, except `τ_succ` from the paper supplement): `L_init = 0.8`,
-`L_min = 2⁻⁷ ≈ 0.0078`, `L_max = 1.6`, `τ_succ = 3`, `τ_fail = ⌈max(4/q, d/q)⌉ = max(4, d)` (batch `q = 1`).
+**Defaults** (paper supplement §C/§D): `L_init = 0.8`, `L_min = 2⁻⁷ ≈ 0.0078`, `L_max = 1.6`, `τ_succ = 3`,
+`τ_fail = ⌈d/q⌉ = d` (batch `q = 1`), strict-improvement successes, `min(100·d, 5000)` Thompson candidates,
+and a local GP fitted inside the §C hyperparameter box (`λ ∈ [0.005, 2]`, `s² ∈ [0.05, 20]`,
+`σ² ∈ [0.0005, 0.1]`). The authors' reference code / BoTorch tutorial differ in two knobs — `τ_succ = 10` and
+`τ_fail = max(4, d)` (a low-dimension guard, identical for `d ≥ 4`) — both reachable via constructor
+arguments (`successTolerance`, `failureTolerance`).
 
 ## In OptunaSharp
 
@@ -68,9 +73,9 @@ study.Optimize(t =>
 ```
 
 Constructor knobs cover the whole schedule — `nInit` (per-restart Sobol initialization, default `2·d`),
-`numCandidates`, `lengthInit` / `lengthMin` / `lengthMax`, `successTolerance` / `failureTolerance`,
-`minimumNoise`, `deterministicObjective` — plus the shared `independentSampler`, `warnIndependentSampling`,
-and `seed`.
+`numCandidates`, `lengthInit` / `lengthMin` / `lengthMax`, `successTolerance` / `failureTolerance` /
+`successMargin`, `minimumNoise`, `deterministicObjective` — plus the shared `independentSampler`,
+`warnIndependentSampling`, and `seed`.
 
 Three properties worth knowing:
 
@@ -80,10 +85,18 @@ Three properties worth knowing:
 - **State is reconstructed, not persisted.** TuRBO stores no optimizer blob — the region length, resize
   counters, and restart boundaries are recomputed each trial by a deterministic fold over the completed
   trials' objective sequence, so a study resumes from storage with no serialized state.
-- **Cost & candidate count.** The Thompson draw forms the joint posterior over the candidate set and
-  Choleskys it (`O(numCandidates³)` per trial), so the default caps `numCandidates` at `min(100·d, 500)` to
-  keep per-trial overhead near the GP-fit cost. The paper uses `min(100·d, 5000)` with BoTorch's scalable
-  posterior sampler; raise `numCandidates` toward that for harder problems if you can afford it.
+- **Paper-faithful local GP (§C).** The local GP is fitted under the paper's hard hyperparameter box
+  (`λ ∈ [0.005, 2]`, `s² ∈ [0.05, 20]`, `σ² ∈ [0.0005, 0.1]`) — a *bound-constrained* marginal-likelihood
+  fit that reuses the [GP-BO](gp.md) stack unchanged but is distinct from `GPSampler`'s *unconstrained*
+  soft-prior fit. The noise floor defaults to the §C `0.0005` (not the stack's `1e-6`), which caps precision
+  on a truly noise-free objective; pass `deterministicObjective: true` for the paper's noise-free treatment
+  (fix the noise at the floor and center the region on the best observation rather than the best posterior
+  mean), and/or lower `minimumNoise` if you need tighter interpolation.
+- **Cost & candidate count.** `numCandidates` defaults to the paper's `min(100·d, 5000)` (§D). The Thompson
+  draw forms the joint posterior over the candidate set and Choleskys it (`O(numCandidates³)` per trial) — a
+  dense managed draw, where the paper leans on BoTorch's scalable sampler — so at high `d` this default is
+  genuinely heavy (a 5000-wide Cholesky per trial). Lower `numCandidates` (e.g. a few hundred) to trade
+  discretization fidelity for speed when per-trial overhead dominates.
 
 **When to reach for it.** TuRBO's edge over global [GP-BO](gp.md) shows on higher-dimensional and
 multimodal objectives, where a single global GP over-explores — the trust region + restart concentrates the
@@ -93,10 +106,15 @@ budget locally and re-seeds when a basin is exhausted. On smooth low-dimensional
 ## Validation
 
 Behavioral, not bit-exact: GP fitting + Thompson sampling are stochastic and, like the rest of the GP
-stack, tolerance-reproducible vs BoTorch rather than byte-for-byte (the documented GP boundary). The trust
--region mechanics (expand / shrink / restart, the length-scale-weighted box, the masked Sobol candidate
-set, the Thompson argmax) are unit-tested directly; end-to-end the sampler converges on the sphere and
-drives the multimodal Ackley well below a random baseline.
+stack, tolerance-reproducible vs BoTorch rather than byte-for-byte (the documented GP boundary). Beyond
+convergence (the sampler reaches the sphere optimum and drives the multimodal Ackley far below a random
+baseline), the unit tests assert the paper's own claims directly: the length-scale-weighted box has volume
+exactly `L^d` (§2); a large `L` degenerates the trust region to the whole `[0,1]^d` box (§2's "equivalent to
+global BO"); the resize schedule expands at `τ_succ`, shrinks at `τ_fail = d`, and restarts below `L_min`
+(§D); a strict improvement — not a tie — counts as a success (§D); the local GP's fitted hyperparameters land
+inside the §C box; the noisy-case center follows the best posterior mean rather than the best observation
+(§2); and the Thompson draw is the exact joint posterior sample `mean + L·z` (§E), reproduced
+element-for-element from the seed.
 
 ## Relationship to the lineage
 
