@@ -148,9 +148,44 @@ internal sealed class RandomEmbeddingProjection
     /// <param name="name">The real parameter's name (selects its projection row).</param>
     /// <param name="distribution">The parameter's distribution, supplying its bounds and scale.</param>
     /// <param name="latentY">The latent point <c>y ∈ Y</c>; its length must equal <see cref="Dim" />.</param>
-    /// <returns>The external parameter value (a <see cref="double" /> for float parameters, a boxed <see cref="long" /> for integers).</returns>
+    /// <returns>The external parameter value: a <see cref="double" /> for float parameters, a boxed
+    ///     <see cref="long" /> for integers, or a categorical choice for categorical parameters.</returns>
     /// <exception cref="System.ArgumentException"><paramref name="latentY" /> is not <see cref="Dim" />-dimensional.</exception>
     internal object? ToExternal(int run, string name, BaseDistribution distribution, double[] latentY)
+    {
+        double unit = ProjectedUnit(run, name, latentY);
+
+        // Categorical: the paper's s(x) (§3.2) maps the projected coordinate to a discrete value by
+        // "scaling and rounding" — floor(unit · C) into the choice set, so the high-dimensional / Hamming
+        // kernel can treat categoricals. (The low-dimensional kernel delegates categoricals instead.)
+        if (distribution is CategoricalDistribution cat)
+        {
+            int c = cat.Choices.Count;
+            int idx = (int)Math.Floor(unit * c);
+            if (idx >= c) idx = c - 1;   // unit == 1 lands one past the last cell
+            if (idx < 0) idx = 0;
+            return cat.ToExternalRepr(idx);
+        }
+
+        // Numeric: reuse Optuna's canonical [0,1] → external de-normalization so log/step/int semantics
+        // match the rest of the library exactly (this is what RandomSampler/CMA-ES use).
+        var oneParam = new OrderedDict<string, BaseDistribution> { [name] = distribution };
+        var transform = new SearchSpaceTransform(oneParam, transform01: true);
+        var external = transform.Untransform(np.array(new[] { unit }));
+        return external[name];
+    }
+
+    /// <summary>
+    ///     One coordinate of the box-projected embedding as a unit value: <c>((clip(A_name · y, −1, 1) + 1) / 2</c>.
+    ///     This is the raw geometry shared by every parameter kind — the projection <c>p_X</c> (per-coordinate
+    ///     clip of <c>A·y</c> into the rescaled box <c>[−1, 1]</c>) mapped to <c>[0, 1]</c>.
+    /// </summary>
+    /// <param name="run">The embedding (run) index whose matrix row projects this parameter.</param>
+    /// <param name="name">The real parameter's name (selects its projection row).</param>
+    /// <param name="latentY">The latent point <c>y ∈ Y</c>; its length must equal <see cref="Dim" />.</param>
+    /// <returns>The projected, clipped coordinate in <c>[0, 1]</c>.</returns>
+    /// <exception cref="System.ArgumentException"><paramref name="latentY" /> is not <see cref="Dim" />-dimensional.</exception>
+    internal double ProjectedUnit(int run, string name, double[] latentY)
     {
         if (latentY.Length != _dim)
             throw new ArgumentException($"Latent point must have length {_dim}, but got {latentY.Length}.", nameof(latentY));
@@ -162,18 +197,9 @@ internal sealed class RandomEmbeddingProjection
         for (int j = 0; j < _dim; j++)
             raw += row[j] * latentY[j];
 
-        // p_X: the box constraint X is the real box rescaled to [−1, 1]; the paper's projection
-        // p_X(z) = argmin_{u∈X} ‖u − z‖ is per-coordinate clipping for a box. Rescale the clipped value
-        // to the unit interval [0, 1] that SearchSpaceTransform consumes.
+        // p_X box projection: clip into [−1, 1], then rescale to the unit interval.
         double clipped = raw < -1.0 ? -1.0 : raw > 1.0 ? 1.0 : raw;
-        double unit = (clipped + 1.0) * 0.5;
-
-        // Reuse Optuna's canonical [0,1] → external de-normalization so log/step/int semantics match the
-        // rest of the library exactly (this is what RandomSampler/CMA-ES use).
-        var oneParam = new OrderedDict<string, BaseDistribution> { [name] = distribution };
-        var transform = new SearchSpaceTransform(oneParam, transform01: true);
-        var external = transform.Untransform(np.array(new[] { unit }));
-        return external[name];
+        return (clipped + 1.0) * 0.5;
     }
 
     /// <summary>Folds <c>(base seed, run, name hash)</c> into a decorrelated 32-bit seed for one row's MT19937 stream.</summary>

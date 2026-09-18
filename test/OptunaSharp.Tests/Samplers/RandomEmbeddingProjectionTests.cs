@@ -142,6 +142,31 @@ public class RandomEmbeddingProjectionTests
     }
 
     [TestMethod]
+    public void ToExternal_Categorical_ScaleAndRoundsToAChoice()
+    {
+        // §3.2 s(x): the projected coordinate is scaled-and-rounded into the choice set. Every latent point
+        // must yield a valid choice, and the three cells of [0,1] (via engineered ±c·row projections) select
+        // the low / middle / high choice — a monotone map from the projected coordinate to the choice index.
+        var emb = new RandomEmbeddingProjection(baseSeed: 77, dim: 3, nEmbeddings: 1);
+        var cat = new CategoricalDistribution("a", "b", "c");   // ToExternalRepr yields the choice's value (a string)
+        double[] row = emb.ProjectionRow(0, "cat");
+
+        // y = 0 → unit 0.5 → middle cell "b"; y = −c·row → unit 0 → "a"; y = +c·row → unit 1 → last cell "c".
+        emb.ToExternal(0, "cat", cat, new double[3]).Should().Be("b");
+        emb.ToExternal(0, "cat", cat, row.Select(r => r * -10.0).ToArray()).Should().Be("a");
+        emb.ToExternal(0, "cat", cat, row.Select(r => r * 10.0).ToArray()).Should().Be("c");
+
+        // Arbitrary latent points always land on a valid choice.
+        var rng = np.random.RandomState();
+        rng.seed(5u);
+        for (int t = 0; t < 100; t++)
+        {
+            double[] y = rng.uniform(-emb.BoxHalfWidth, emb.BoxHalfWidth, new Shape(3)).ToArray<double>();
+            emb.ToExternal(0, "cat", cat, y).Should().BeOneOf("a", "b", "c");
+        }
+    }
+
+    [TestMethod]
     public void ToExternal_RejectsWrongLatentDimension()
     {
         var emb = new RandomEmbeddingProjection(baseSeed: 1, dim: 3, nEmbeddings: 1);

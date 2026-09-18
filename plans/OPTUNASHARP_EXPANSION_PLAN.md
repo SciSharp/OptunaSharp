@@ -185,20 +185,26 @@ have full-covariance adaptation in CMA-ES).
 > private in-memory **shadow study** of latent trials, mirroring the real study's finished trials via
 > `create_trial`/`add_trial`, `Ask`-ing the latent point and immediately `Tell`-ing the ask-trial `Fail` so
 > the inner GP never treats it as a pending point, then mapping back to the real parameters). Every trial is
-> embedded through `SampleIndependent` from one cached latent point; categorical/single-valued parameters go
-> to the independent sampler; single-objective only. Validated by 21 unit tests (both TFMs): the embedding
-> geometry (matrix determinism / `N(0,1)` entries / box / clip / int+log+step de-normalization) directly,
-> and end-to-end that **interleaved** embeddings recover a 2-effective-dim optimum buried in 25 dims and beat
-> random search, plus determinism, bounds, the categorical fallback, a TPE inner sampler, latent persistence,
-> and the multi-objective guard. Deep-dive doc `methods/rembo.md`. **Design notes worth carrying forward:**
-> a *single* embedding is genuinely fragile (the box may miss the optimum — the paper's §3.2 caveat, amplified
-> because most of `Y` maps to the clipped boundary), so reliable convergence comes from **interleaved runs**
-> (§3.1, the `nEmbeddings` knob), which is what the convergence tests use; the embedding matrix is generated
-> per-`(run, name)` from a stable FNV+SplitMix seed rather than persisted, so it survives parameter-discovery
-> order / resumption / parallel workers; `nEmbeddingDims` (d) is **required** (no honest default). **Not
-> ported (documented divergences):** the adaptive length-scale scheme (Algorithm 3) — the inner sampler is
-> pluggable, and interleaving substitutes for reliability — and the high-dimensional Hamming kernel for
-> categorical spaces (§3.2). **Still to do under P2:** **TuRBO-m** (the multi-trust-region bandit).
+> embedded through `SampleIndependent` from one cached latent point; single-objective only. **Both §3.2
+> kernels are implemented:** the default **low-dimensional** kernel (inner GP over the latent `y`, categoricals
+> delegated) and a **high-dimensional** kernel (`Samplers/RandomEmbedding/RandomEmbeddingGpOptimizer.cs`) that
+> fits a `GPRegressor` in the real (projected) parameter space and maximizes `Acqf.LogEi` over projected
+> Sobol candidate `y`'s — reusing the GP stack unchanged, exactly like `TurboOptimizer`. The high-dimensional
+> kernel removes the low-dimensional kernel's boundary over-exploration (validated below) and **embeds
+> categoricals** via the §3.2 scale-and-round `s(x)` + `GpSearchSpace`'s categorical kernel. Validated by 34
+> unit tests (both TFMs): the embedding geometry (matrix determinism / `N(0,1)` entries / box / clip /
+> int+log+step+categorical de-normalization) directly; end-to-end convergence (interleaved & high-dim),
+> determinism, bounds, mixed types, TPE inner, latent persistence, MO guard; **and a dedicated claims suite
+> proving Theorems 2/3/4/6, Lemma 5, §3.1 (δ^k capture), and §3.2 (high-dim kernel escapes a low-dim stall).**
+> Deep-dive doc `methods/rembo.md`. **Design notes worth carrying forward:** a *single* embedding is genuinely
+> fragile — a **box miss** (fixed by §3.1 interleaving / larger `d`) and, under the low-dim kernel, **boundary
+> over-exploration** (fixed by the high-dim kernel); the embedding matrix is generated per-`(run, name)` from a
+> stable FNV+SplitMix seed rather than persisted, so it survives parameter-discovery order / resumption /
+> parallel workers, and this makes Theorem 4 (invariance to added dims) and D-independence *exact* identities;
+> `nEmbeddingDims` (d) is **required** (no honest default). **Not ported (documented divergence):** only the
+> adaptive length-scale scheme (Algorithm 3), which would need bounds injected into the GP fit — the high-dim
+> kernel addresses the same clipped-boundary over-exploration from another angle. **Still to do under P2:**
+> **TuRBO-m** (the multi-trust-region bandit).
 
 **Why.** The "billion dimensions" extraordinary claim (≈390c). It is the canonical way to run BO on a
 high-`D` space that has a low **effective dimension** `dₑ` — common in hyperparameter tuning where only

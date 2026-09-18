@@ -158,6 +158,50 @@ public class RandomEmbeddingSamplerTests
     }
 
     [TestMethod]
+    public void Sampler_HighDimensionalKernel_Converges()
+    {
+        // The §3.2 high-dimensional kernel fits the GP in the real parameter space; a single embedding
+        // recovers the off-center optimum without needing interleaving here.
+        var study = Optuna.CreateStudy(sampler: new RandomEmbeddingSampler(
+            nEmbeddingDims: 3, kernel: RandomEmbeddingKernel.HighDimensional, seed: 1));
+        study.Optimize(t => Embedded(t, D: 20, effective: 2), nTrials: 150);
+        study.BestValue.Should().BeLessThan(0.5, "the high-dimensional-kernel GP recovers the embedded optimum");
+    }
+
+    [TestMethod]
+    public void Sampler_HighDimensionalKernel_EmbedsCategorical()
+    {
+        // Only the high-dimensional kernel embeds categoricals (§3.2, scale-and-round + the GP's categorical
+        // kernel). Choosing "b" removes a +5 penalty, so a best value below that penalty proves the sampler
+        // both embedded the categorical and drove the continuous coordinates to their optimum.
+        var study = Optuna.CreateStudy(sampler: new RandomEmbeddingSampler(
+            nEmbeddingDims: 4, kernel: RandomEmbeddingKernel.HighDimensional, seed: 7));
+        study.Optimize(t =>
+        {
+            string mode = t.SuggestCategorical("mode", new[] { "a", "b", "c" });
+            double x = t.SuggestFloat("x", -5, 5);
+            double y = t.SuggestFloat("y", -5, 5);
+            return (x - 2) * (x - 2) + (y + 3) * (y + 3) + (mode == "b" ? 0.0 : 5.0);
+        }, nTrials: 200);
+
+        study.BestValue.Should().BeLessThan(1.0, "the categorical was embedded and its best choice found");
+        study.BestTrial.Params["mode"].Should().Be("b", "the embedded categorical converged to the optimal choice");
+    }
+
+    [TestMethod]
+    public void Sampler_HighDimensionalKernel_IsReproducible()
+    {
+        double Run()
+        {
+            var study = Optuna.CreateStudy(sampler: new RandomEmbeddingSampler(
+                nEmbeddingDims: 3, kernel: RandomEmbeddingKernel.HighDimensional, seed: 11));
+            study.Optimize(t => Embedded(t, D: 15, effective: 2), nTrials: 60);
+            return study.BestValue;
+        }
+        Run().Should().Be(Run(), "the high-dimensional kernel is reproducible under a fixed seed");
+    }
+
+    [TestMethod]
     public void Sampler_PersistsLatentPointInSystemAttrs()
     {
         var study = Optuna.CreateStudy(sampler: new RandomEmbeddingSampler(nEmbeddingDims: 3, seed: 5));
