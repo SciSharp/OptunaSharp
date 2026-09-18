@@ -199,12 +199,38 @@ implementation:
   over-exploring the clipped boundary (on a seed where the low-dimensional kernel stalls one effective
   coordinate at ≈ 4, the high-dimensional kernel converges).
 
-**Deliberate scope note.** OptunaSharp implements REMBO's core (Algorithm 2), *both* kernels of §3.2, the
-categorical embedding, and the §3.1 interleaving lever. The one piece not ported is the adaptive length-scale
-scheme (Algorithm 3), which shrinks the inner GP's length-scale upper bound when it exploits too much: it
-would require injecting bounds into the GP fit, and the high-dimensional kernel addresses the same
-clipped-boundary over-exploration from a different angle — so reliability comes from the kernel choice and
-interleaving instead.
+## Differences from the paper
+
+REMBO's *algorithmic* core is faithful — the random Gaussian embedding, the box `Y = [−√d, √d]^d`, the
+projection `g(y) = f(p_X(A·y))`, both §3.2 kernel structures (low-dimensional over `y`; high-dimensional over
+`p_X(A·y)`), the §3.2 categorical Hamming mechanism, the §3.1 interleaving and "increase `d`" levers, and the
+invariances. The differences are concentrated in the *GP machinery*, where OptunaSharp reuses its own stack
+rather than re-deriving the paper's:
+
+- **Embedding matrix generation.** The paper draws one `D×d` matrix `A` up front. OptunaSharp generates each
+  parameter's row lazily from a `(seed, run, name)`-seeded stream — distributionally identical i.i.d.
+  `N(0,1)`, but order-independent, resumption-safe, and concurrency-safe with nothing persisted (and it makes
+  Theorem 4 / D-independence *exact* identities here rather than merely holding in distribution).
+- **Surrogate kernel.** The paper uses an isotropic **squared-exponential** kernel with a single length scale
+  (Def. 7). OptunaSharp reuses the stack's **Matérn-5/2 ARD** kernel (per-coordinate length scales). The
+  §3.2 categorical kernel is likewise the stack's Hamming-mismatch categorical kernel (per-coordinate
+  indicator, ARD-weighted, in the Matérn-5/2 form) rather than the paper's `exp(−λ²·h²)` with a single `λ`.
+- **Acquisition.** The paper maximizes **Expected Improvement** with DIRECT + CMA-ES ("tens of thousands of
+  evaluations"). OptunaSharp maximizes **log-EI** (same argmax) — under the low-dimensional kernel by the
+  inner sampler's mixed Sobol + gradient acquisition optimizer, and under the high-dimensional kernel by
+  argmax over a scrambled-Sobol candidate set (default `min(5000, max(1000, 200·d))`, fewer than "tens of
+  thousands", and a discrete scan rather than a continuous DIRECT/CMA-ES optimization).
+- **Length-scale adaptation (Algorithm 3) — not implemented.** The paper's scheme shrinks the length-scale
+  *upper bound* when the search exploits too much (`[L, U] = [0.01, 50]`, `t_σ = 0.002`, re-fit every 20
+  iterations or after 5 exploiting steps). OptunaSharp instead fits hyperparameters by the stack's soft-prior
+  marginal likelihood; the high-dimensional kernel addresses the same clipped-boundary over-exploration from
+  a different angle, so reliability comes from the kernel choice and interleaving.
+- **Startup and generality.** A short random startup (`nStartupTrials`, default 10) precedes each embedding's
+  GP — the paper's Algorithm 2 leaves the initial design unspecified — and the low-dimensional kernel accepts
+  *any* inner sampler (e.g. [`TPESampler`](tpe.md)), a generalization beyond the paper's GP-only loop.
+- **Integration.** The paper is a standalone BO loop; OptunaSharp exposes REMBO as a define-by-run
+  meta-sampler (the low-dimensional inner optimizer runs against a private in-memory *shadow study* of latent
+  trials), and flips the sign for OptunaSharp's minimize-by-default convention. Neither changes the algorithm.
 
 ## Relationship to the lineage
 
