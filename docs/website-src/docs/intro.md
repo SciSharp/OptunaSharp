@@ -6,7 +6,7 @@ is built on top of [NumSharp](https://github.com/SciSharp/NumSharp) for numerica
 
 > **Status: core surface ported.** The core algorithm surface is in place — studies, trials,
 > distributions, samplers, pruners, storages, importance, terminator, and visualization — with more
-> landing module-by-module. See the [Porting Roadmap](roadmap.md) for where each module stands.
+> landing module-by-module.
 
 ## The study / trial model
 
@@ -48,4 +48,4 @@ Connect your trainer, storage, Python optimizer, cloud artifacts, or charts thro
 [Integrations catalog](../integrations/index.md). It covers every optional package and the
 training integrations built into Core.
 
-Continue to [Getting Started](getting-started.md) or the [Porting Roadmap](roadmap.md).
+Continue to [Getting Started](getting-started.md).

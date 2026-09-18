@@ -4,8 +4,20 @@
   href: intro.md
 - name: Getting Started
   href: getting-started.md
-- name: Porting Roadmap
-  href: roadmap.md
+- name: Key Features
+  items:
+    - name: Overview
+      href: key-features/index.md
+    - name: Lightweight & Platform-Agnostic
+      href: key-features/first.md
+    - name: Pythonic Search Space
+      href: key-features/search-space.md
+    - name: Efficient Optimization Algorithms
+      href: key-features/efficient-algorithms.md
+    - name: Easy Parallelization
+      href: key-features/parallelization.md
+    - name: Quick Visualization
+      href: key-features/visualization.md
 - name: Guides
   items:
     - name: Study and Trials
@@ -32,20 +44,8 @@
       href: visualization.md
     - name: Logging
       href: logging.md
-- name: Key Features
-  items:
-    - name: Overview
-      href: key-features/index.md
-    - name: Lightweight & Platform-Agnostic
-      href: key-features/first.md
-    - name: Pythonic Search Space
-      href: key-features/search-space.md
-    - name: Efficient Optimization Algorithms
-      href: key-features/efficient-algorithms.md
-    - name: Easy Parallelization
-      href: key-features/parallelization.md
-    - name: Quick Visualization
-      href: key-features/visualization.md
+    - name: Exceptions
+      href: exceptions.md
 - name: Recipes
   items:
     - name: Overview
@@ -78,22 +78,76 @@
       href: recipes/wilcoxon-pruner.md
     - name: Ablation Study with Brute Force
       href: recipes/ablation-study.md
-- name: FAQ
-  href: faq.md
 - name: Integrations
-  href: ../integrations/index.md
-- name: Our Methods
   items:
     - name: Overview
-      href: our-methods/index.md
-    - name: Samplers
+      href: ../integrations/index.md
+    - name: Model training
+      href: ../integrations/training/index.md
       items:
-        - name: NSGA-III-CPT
-          href: our-methods/nsga-iii-cpt.md
-        - name: AGE-MOEA-2-CPT
-          href: our-methods/age-moea-2-cpt.md
-        - name: JANUS-AGE-MOEA-2-CMIX-CPT
-          href: our-methods/janus-age-moea-2-cmix-cpt.md
+        - name: Native scikit-learn-style search
+          href: ../integrations/training/scikit-learn.md
+        - name: ML.NET
+          href: ../integrations/training/ml-net.md
+        - name: LightGBM
+          href: ../integrations/training/lightgbm.md
+        - name: Training-loop pruning
+          href: ../integrations/training/pruning.md
+    - name: Storage
+      href: ../integrations/storage/index.md
+      items:
+        - name: SQLite
+          href: ../integrations/storage/sqlite.md
+        - name: EF Core (PostgreSQL / MySQL)
+          href: ../integrations/storage/ef-core.md
+        - name: Redis
+          href: ../integrations/storage/redis/index.md
+          items:
+            - name: StackExchange.Redis
+              href: ../integrations/storage/redis/stackexchange-redis.md
+            - name: NRedisStack
+              href: ../integrations/storage/redis/nredisstack.md
+            - name: ServiceStack.Redis
+              href: ../integrations/storage/redis/servicestack-redis.md
+        - name: gRPC
+          href: ../integrations/storage/grpc/index.md
+          items:
+            - name: Client
+              href: ../integrations/storage/grpc/client.md
+            - name: Server
+              href: ../integrations/storage/grpc/server.md
+            - name: Cross-language use
+              href: ../integrations/storage/grpc/cross-language.md
+    - name: Python bridges
+      href: ../integrations/python/index.md
+      items:
+        - name: Python.NET runtime
+          href: ../integrations/python/pythonnet.md
+        - name: OptunaHub
+          href: ../integrations/python/optunahub.md
+        - name: BoTorch
+          href: ../integrations/python/botorch.md
+        - name: PyCma
+          href: ../integrations/python/pycma.md
+        - name: pymoo
+          href: ../integrations/python/pymoo.md
+    - name: Cloud artifacts
+      href: ../integrations/artifacts/index.md
+      items:
+        - name: Amazon S3
+          href: ../integrations/artifacts/s3.md
+        - name: Google Cloud Storage
+          href: ../integrations/artifacts/gcs.md
+        - name: Azure Blob Storage
+          href: ../integrations/artifacts/azure-blob.md
+        - name: Cloudflare R2
+          href: ../integrations/artifacts/r2.md
+    - name: Visualization
+      items:
+        - name: Plotly.NET
+          href: ../integrations/visualization/plotly.md
+    - name: Command-line tool
+      href: ../integrations/cli.md
 - name: Methods
   items:
     - name: Overview
@@ -228,3 +282,5 @@
           href: methods/reference-directions.md
         - name: QMC Sequences (1967)
           href: methods/qmc-sequences.md
+- name: FAQ
+  href: faq.md

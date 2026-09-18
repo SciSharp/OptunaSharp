@@ -7,6 +7,6 @@ entry points, setup, examples, and implementation references.
 > **Status: core surface ported.** The public surface now spans the core Optuna modules —
 > `distributions`, `trial`, `study`, `samplers`, `pruners`, `storages`, `importance`, `terminator`,
 > and `visualization` — generated from the OptunaSharp assemblies. More types appear here
-> automatically as further modules from the [porting roadmap](../docs/roadmap.md) land.
+> automatically as further modules land.
 
 Use the table of contents on the left to browse namespaces and types.

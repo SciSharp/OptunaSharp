@@ -15,7 +15,6 @@
       <a class="ns-home-button ns-home-button-primary" href="docs/intro.md">Introduction</a>
       <a class="ns-home-button" href="docs/getting-started.md">Getting started</a>
       <a class="ns-home-button" href="integrations/index.md">Integrations</a>
-      <a class="ns-home-button" href="docs/roadmap.md">Porting roadmap</a>
       <a class="ns-home-button" href="api/index.md">API reference</a>
     </div>
   </section>
@@ -52,11 +51,6 @@ study.optimize(objective, n_trials=100)</code></pre>
         <span>Setup</span>
         <strong>Getting started</strong>
         <p>Install, build, test, and pack. How the NumSharp reference resolves.</p>
-      </a>
-      <a class="ns-doc-card" href="docs/roadmap.md">
-        <span>Plan</span>
-        <strong>Porting roadmap</strong>
-        <p>Where each Optuna module stands, and the "Optuna is the source of truth" methodology.</p>
       </a>
       <a class="ns-doc-card" href="api/index.md">
         <span>Reference</span>
