@@ -9,7 +9,9 @@ to a high-dimensional search space. Its insight is that many real problems — h
 especially — have a **low effective dimensionality**: only a few parameters actually move the objective, but
 you do not know which. REMBO draws a *random* linear embedding into a small space and runs an ordinary
 Bayesian optimizer there, so the surrogate only ever sees a handful of dimensions no matter how many real
-parameters the study has. OptunaSharp ships it as a **meta-sampler** that wraps any inner optimizer.
+parameters the study has. OptunaSharp runs REMBO's **actual paper method** by default — a squared-exponential
+GP with expected improvement maximized by DIRECT + CMA-ES and the paper's adaptive length scale (Algorithm 3)
+— and can still wrap any inner optimizer as an override.
 
 ## The idea
 
@@ -36,11 +38,12 @@ taking `ε = log(d)/√d` in their empirical `‖B⁻¹x‖∞` bound.
       ▼
   sample ONE latent point y ∈ Y = [−√d, √d]^d      (cached — every real parameter of the trial maps from it)
       │
-      ├─ LowDimensional kernel:  the inner sampler (a GP by default) proposes y from this
-      │        embedding's latent history — a GP in the d-dimensional latent space
+      ├─ LowDimensional kernel:  fit the squared-exponential GP over the latent y (a GP in d dims);
+      │        maximize expected improvement over Y by DIRECT + CMA-ES → the argmax y       (§3.2)
       │
-      └─ HighDimensional kernel: fit a GP in the REAL parameter space over this embedding's history,
-      │        then maximize expected improvement over projected candidates → take the argmax y   (§3.2)
+      └─ HighDimensional kernel: fit the same GP in the REAL projected space p_X(A·y) over this
+      │        embedding's history; maximize EI over Y the same way → the argmax y           (§3.2)
+      │   (length scale ℓ re-fit each cadence by bounded marginal likelihood — Algorithm 3, §3.3)
       ▼
   map every real parameter through the embedding:   xᵢ = de-normalize( p_X( Aᵢ · y ) )            (§3)
       │        Aᵢ = parameter i's projection row (d i.i.d. N(0,1), seeded by (run, name))
@@ -60,8 +63,8 @@ of `Y` maps onto the *boundary* of `X` — a fact that shapes the two kernels be
 **The two kernels (§3.2).** REMBO can measure the inner GP's similarity in either of two spaces, and the
 choice is the main reliability dial:
 
-- **Low-dimensional kernel** (default) — the inner sampler models `g` as a function of the latent point `y`
-  directly, a GP in `d` dimensions: `k^d_ℓ(y₁, y₂) = K_SE((y₁ − y₂)/ℓ)`. Cheap — and the only feasible option
+- **Low-dimensional kernel** (default) — the GP models `g` as a function of the latent point `y`
+  directly, a squared-exponential GP in `d` dimensions: `k^d_ℓ(y₁, y₂) = K_SE((y₁ − y₂)/ℓ)`. Cheap — and the only feasible option
   at very high extrinsic `D`, where the high-dimensional kernel's `D`-shaped GP is out of reach. Its weakness
   is the boundary: two far-apart `y`'s that both project onto (nearly) the same clipped point look *distant*
   to this kernel, so it can waste budget re-exploring the flat region of `Y` outside `X`.
@@ -70,9 +73,9 @@ choice is the main reliability dial:
   REMBO evaluates, this is simply a GP over the real (embedded) parameters, with the acquisition (expected
   improvement) maximized over the reachable subspace by scoring projected candidate `y`'s. The two `y`'s
   above now look *identical* — the boundary over-exploration disappears — and because the GP lives in the
-  real parameter space it also **embeds categorical parameters** (the §3.2 categorical / Hamming kernel, via
-  the GP's categorical equality kernel). It fits a GP in `D`-shaped inputs, so it suits *moderate* extrinsic
-  `D`; it reuses the native GP stack (`GPRegressor`) exactly as [`TurboSampler`](turbo.md) does.
+  real parameter space it also **embeds categorical parameters** (the §3.2 categorical / Hamming kernel
+  `exp(−(λ/2)·h²)`, `h` = Hamming distance). It fits a GP in `D`-shaped inputs, so it suits *moderate*
+  extrinsic `D`.
 
 **Raising the success rate (§3.1).** A single embedding's box captures the optimum only with some
 probability; with probability `δ` it misses. Two levers, both available here, drive `δ` down: run `k`
@@ -95,15 +98,17 @@ inherent trade-offs of the method, not implementation defects.
 REMBO is **absent from Optuna core**, so — like [TuRBO](turbo.md), [LM-CMA](lm-cma.md), and the
 [OpenAI-ES](openai-es.md) family — it is a *beyond-core*, convergence-validated sampler with no Optuna
 counterpart. Randomness flows through the NumPy-exact MT19937 `RandomState` (never `System.Random`), so a
-seeded study is reproducible under sequential optimization. The high-dimensional kernel **reuses the native
-GP stack** ([GP-BO](gp.md)'s `GPRegressor` + `LogEi` + normalized search space) unchanged — no new surrogate
-machinery is introduced.
+seeded study is reproducible under sequential optimization. REMBO's default optimizer is the paper's own — a
+squared-exponential single-length-scale GP with expected improvement maximized by DIRECT + CMA-ES and the
+Algorithm-3 adaptive length scale — implemented in a **beyond-core GP toolkit** shared with
+[TuRBO](turbo.md): a fork of the parity GP stack, so these samplers evolve their surrogate without ever
+touching [GP-BO](gp.md)'s (which keeps its Matérn-5/2 ARD GP for Optuna parity).
 
-`RandomEmbeddingSampler` is a **meta-sampler**: the study keeps the user's `D` real parameters, while REMBO
-maintains `d` latent coordinates internally. Under the low-dimensional kernel the inner optimizer runs
-against a private in-memory *shadow study* whose trials are the latent coordinates of the real study's
-finished trials; each proposed latent point is mapped back to the real parameters, and its latent coordinates
-are stored in the trial's system attributes so the shadow can be rebuilt after resumption.
+`RandomEmbeddingSampler` keeps the user's `D` real parameters while REMBO maintains `d` latent coordinates
+internally. By default the latent point is chosen by the paper-faithful optimizer above, fit on the finished
+trials' latent points; passing an `innerSampler` instead runs it over a private in-memory *shadow study* of
+those points (the beyond-paper "bring your own inner BO" override). Either way each latent point is stored in
+the trial's system attributes so a run can be rebuilt after resumption.
 
 ```csharp
 using OptunaSharp;
@@ -125,24 +130,19 @@ study.Optimize(t =>
 }, nTrials: 240);
 ```
 
-**Constructor knobs.** The one that matters is `nEmbeddingDims`; the rest tune the two levers and (for the
-high-dimensional kernel) the GP (`src` cites the paper section):
+**Constructor knobs.** The one that matters is `nEmbeddingDims`; the rest tune the §3.1 / §3.2 levers:
 
 ```
 knob                     default                    controls
 ───────────────────────  ─────────────────────────  ─────────────────────────────────────────────────────
 nEmbeddingDims (d)        (required)                 embedding dimension; set ≥ the guessed effective dim d_e
 nEmbeddings (k)           1                          §3.1 · interleaved independent embeddings (round-robin)
-kernel                   LowDimensional             §3.2 · LowDimensional (GP over y) | HighDimensional
-innerSampler             GPSampler                  low-dim kernel: the BO run in the latent box (TPE works too)
+kernel                   LowDimensional             §3.2 · LowDimensional (GP over y) | HighDimensional (GP over p_X(A·y))
+innerSampler             (none: paper SE-GP)        override the paper optimizer with your own BO over a shadow study (e.g. TPE)
 independentSampler       RandomSampler              parameters REMBO does not embed (see below)
 warnIndependentSampling  true                       warn when a parameter is sampled independently
+nStartupTrials           10                         uniform-random latent points before an embedding's GP engages
 seed                     OS entropy                 reproducible trajectory (sequential) + fixes the matrix A
-   ── high-dimensional kernel only ──
-nStartupTrials           10                          random latent points before an embedding's GP takes over
-numCandidates            min(5000, max(1000, 200·d)) §3.3 · projected candidates scored per proposal
-minimumNoise             GP-stack default            GP observation-noise-variance floor
-deterministicObjective   false                       treat the objective as noise-free
 ```
 
 Properties worth knowing:
@@ -195,42 +195,42 @@ implementation:
   non-axis-aligned effective subspace (a diagonal direction) where variable-selection methods fail.
 - **Section 3.1** — interleaved embeddings raise the box-capture probability (`δ^k`); the `k` embeddings are
   nested here, so capture is provably monotone in `k`.
-- **Section 3.2** — the high-dimensional kernel escapes a stall the low-dimensional kernel suffers from
-  over-exploring the clipped boundary (on a seed where the low-dimensional kernel stalls one effective
-  coordinate at ≈ 4, the high-dimensional kernel converges).
+- **Section 3.2** — the kernel mechanism, proved geometrically: two far-apart latent points that clip to the
+  same real point are *identical* to the high-dimensional kernel (over `p_X(A·y)`) yet *distant* to the
+  low-dimensional kernel (over `y`); plus the high-dimensional kernel converges on a single embedding. (With
+  Algorithm 3 now implemented, the low-dimensional kernel no longer reliably stalls — the boundary
+  over-exploration the paper warned about is curbed, confirmed across many seeds.)
 
 ## Differences from the paper
 
-REMBO's *algorithmic* core is faithful — the random Gaussian embedding, the box `Y = [−√d, √d]^d`, the
-projection `g(y) = f(p_X(A·y))`, both §3.2 kernel structures (low-dimensional over `y`; high-dimensional over
-`p_X(A·y)`), the §3.2 categorical Hamming mechanism, the §3.1 interleaving and "increase `d`" levers, and the
-invariances. The differences are concentrated in the *GP machinery*, where OptunaSharp reuses its own stack
-rather than re-deriving the paper's:
+REMBO's default is now the paper's method **end-to-end** — the random Gaussian embedding, the box
+`Y = [−√d, √d]^d`, the projection `g(y) = f(p_X(A·y))`, both §3.2 kernels (the isotropic squared-exponential
+over `y`; the same over `p_X(A·y)`, with the §3.2 `exp(−(λ/2)·h²)` categorical Hamming kernel), **Expected
+Improvement maximized by DIRECT + CMA-ES** (§3.3), the **Algorithm 3** adaptive length scale
+(`[L, U] = [0.01, 50]`, `t_σ = 0.002`, `U ← max(0.9·ℓ, L)` after 5 exploiting steps, re-fit every 20 steps),
+the §3.1 interleaving / "increase `d`" levers, and the invariances. The surrogate is a dedicated
+squared-exponential GP with a single length scale `ℓ` (amplitude profiled out) — **not** the stack's
+Matérn-5/2 ARD GP — living in a beyond-core toolkit so it never perturbs [GP-BO](gp.md)'s parity GP.
+
+The remaining, deliberate differences are small:
 
 - **Embedding matrix generation.** The paper draws one `D×d` matrix `A` up front. OptunaSharp generates each
   parameter's row lazily from a `(seed, run, name)`-seeded stream — distributionally identical i.i.d.
-  `N(0,1)`, but order-independent, resumption-safe, and concurrency-safe with nothing persisted (and it makes
-  Theorem 4 / D-independence *exact* identities here rather than merely holding in distribution).
-- **Surrogate kernel.** The paper uses an isotropic **squared-exponential** kernel with a single length scale
-  (Def. 7). OptunaSharp reuses the stack's **Matérn-5/2 ARD** kernel (per-coordinate length scales). The
-  §3.2 categorical kernel is likewise the stack's Hamming-mismatch categorical kernel (per-coordinate
-  indicator, ARD-weighted, in the Matérn-5/2 form) rather than the paper's `exp(−λ²·h²)` with a single `λ`.
-- **Acquisition.** The paper maximizes **Expected Improvement** with DIRECT + CMA-ES ("tens of thousands of
-  evaluations"). OptunaSharp maximizes **log-EI** (same argmax) — under the low-dimensional kernel by the
-  inner sampler's mixed Sobol + gradient acquisition optimizer, and under the high-dimensional kernel by
-  argmax over a scrambled-Sobol candidate set (default `min(5000, max(1000, 200·d))`, fewer than "tens of
-  thousands", and a discrete scan rather than a continuous DIRECT/CMA-ES optimization).
-- **Length-scale adaptation (Algorithm 3) — not implemented.** The paper's scheme shrinks the length-scale
-  *upper bound* when the search exploits too much (`[L, U] = [0.01, 50]`, `t_σ = 0.002`, re-fit every 20
-  iterations or after 5 exploiting steps). OptunaSharp instead fits hyperparameters by the stack's soft-prior
-  marginal likelihood; the high-dimensional kernel addresses the same clipped-boundary over-exploration from
-  a different angle, so reliability comes from the kernel choice and interleaving.
-- **Startup and generality.** A short random startup (`nStartupTrials`, default 10) precedes each embedding's
-  GP — the paper's Algorithm 2 leaves the initial design unspecified — and the low-dimensional kernel accepts
-  *any* inner sampler (e.g. [`TPESampler`](tpe.md)), a generalization beyond the paper's GP-only loop.
-- **Integration.** The paper is a standalone BO loop; OptunaSharp exposes REMBO as a define-by-run
-  meta-sampler (the low-dimensional inner optimizer runs against a private in-memory *shadow study* of latent
-  trials), and flips the sign for OptunaSharp's minimize-by-default convention. Neither changes the algorithm.
+  `N(0,1)`, but order-independent, resumption-safe, and concurrency-safe with nothing persisted. This is a
+  *strengthening*: it makes Theorem 4 and the "billion dimensions" `D`-independence **exact** identities here,
+  not merely equalities in distribution.
+- **log-EI vs EI.** The acquisition value is the numerically stable **log** expected improvement, whose
+  argmax is identical to EI's — DIRECT and CMA-ES optimize exactly the EI landscape the paper does.
+- **Algorithm-3 state across resumption.** The shrinking length-scale upper bound and the exploit counter are
+  kept in memory per embedding and advance during a run; a cold restart from storage re-initializes them and
+  re-fits from the stored history. The paper has no notion of resumption, so this is a run-contiguous
+  fidelity, not an algorithmic change.
+- **Startup and generality.** A short uniform-random startup (`nStartupTrials`, default 10) precedes each
+  embedding's GP — Algorithm 2 leaves the initial design unspecified — and an optional `innerSampler` lets a
+  different history-reconstructing BO (e.g. [`TPESampler`](tpe.md)) drive the latent search, a generalization
+  beyond the paper's GP-only loop.
+- **Integration & orientation.** REMBO is exposed as a define-by-run meta-sampler and flips the sign for
+  OptunaSharp's minimize-by-default convention. Neither changes the algorithm.
 
 ## Relationship to the lineage
 
