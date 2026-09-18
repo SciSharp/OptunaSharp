@@ -15,7 +15,6 @@ using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
-using OptunaSharp.Samplers.ModelBased.Gp;
 using OptunaSharp.Logging;
 using OptunaSharp.Samplers.RandomEmbedding;
 using OptunaSharp.SearchSpace;
@@ -48,8 +47,9 @@ public enum RandomEmbeddingKernel
 
 /// <summary>
 ///     A sampler implementing REMBO — Random EMbedding Bayesian Optimization (Wang et al. 2016). It
-///     draws a fixed random Gaussian matrix <c>A ∈ ℝ^{D×d}</c>, runs an inner Bayesian optimizer (a
-///     <see cref="GPSampler" /> by default, matching the paper) in the small box <c>Y = [−√d, √d]^d</c>,
+///     draws a fixed random Gaussian matrix <c>A ∈ ℝ^{D×d}</c>, runs the paper's inner Bayesian optimizer
+///     (by default a squared-exponential GP with expected improvement maximized by DIRECT + CMA-ES and
+///     the Algorithm-3 adaptive length scale) in the small box <c>Y = [−√d, √d]^d</c>,
 ///     and maps each latent point <c>y</c> to the study's real parameters through <c>x = p_X(A·y)</c>
 ///     (a box-constrained projection). This lets BO scale to a search space of (in principle) enormous
 ///     dimension <c>D</c> as long as the objective's <b>effective</b> dimensionality <c>d_e</c> is low —
@@ -68,10 +68,12 @@ public enum RandomEmbeddingKernel
 ///     <para><b>How it fits the Optuna protocol.</b> Every real parameter is produced through
 ///     <see cref="SampleIndependent" /> from a single latent point sampled once per trial — so all real
 ///     parameters of a trial come from one coherent <c>y</c>, and even the very first trial is embedded
-///     (its observation feeds the inner optimizer). The latent point is chosen by the inner sampler over
-///     a private in-memory <i>shadow study</i> whose trials are the latent coordinates of the real study's
-///     finished trials; it is persisted in the real trial's system attributes so the shadow can be rebuilt
-///     after resumption. <b>Float and integer</b> parameters are embedded (integers/steps/log honored via
+///     (its observation feeds the inner optimizer). By default the latent point is chosen by REMBO's
+///     paper-faithful optimizer — a squared-exponential GP with expected improvement maximized by
+///     DIRECT + CMA-ES and the Algorithm-3 adaptive length scale — fit on the finished trials' latent
+///     points; an overridden inner sampler is driven over a private in-memory <i>shadow study</i> of them
+///     instead. Either way the latent point is persisted in the real trial's system attributes so the run
+///     can be rebuilt after resumption. <b>Float and integer</b> parameters are embedded (integers/steps/log honored via
 ///     the standard de-normalization); <b>categorical and single-valued</b> parameters are delegated to an
 ///     independent sampler, as in <see cref="CmaEsSampler" /> / <see cref="TurboSampler" />. Single-objective
 ///     only.</para>
@@ -106,13 +108,18 @@ public sealed class RandomEmbeddingSampler : BaseSampler
 
     private readonly RandomEmbeddingProjection _embedding;
     private readonly RandomEmbeddingKernel _kernel;
-    private readonly BaseSampler _innerSampler;
+
+    // The inner Bayesian optimizer. When null (the default) REMBO uses the paper-faithful `_proposer`
+    // (squared-exponential GP + DIRECT/CMA-ES + Algorithm 3); a supplied one is driven over a private shadow
+    // study instead — the beyond-paper "bring your own inner BO" override.
+    private readonly BaseSampler? _innerSampler;
     private readonly BaseSampler _independentSampler;
     private readonly bool _warnIndependentSampling;
 
-    // High-dimensional-kernel state (unused by the low-dimensional kernel): the GP proposer, the source of
-    // the embedded real search space, and a base seed anchoring the per-trial candidate RNG.
-    private readonly RandomEmbeddingGpOptimizer? _gpOptimizer;
+    // The paper-faithful inner optimizer (Wang et al. 2016, §3.2-3.3), non-null exactly when `_innerSampler`
+    // is null. `_searchSpace` supplies the embedded real search space the high-dimensional kernel projects
+    // into; `_baseSeed` anchors both the embedding and the proposer's deterministic streams.
+    private readonly RemboGpProposer? _proposer;
     private readonly IntersectionSearchSpace _searchSpace;
     private readonly uint _baseSeed;
 
@@ -133,28 +140,26 @@ public sealed class RandomEmbeddingSampler : BaseSampler
     /// <param name="nEmbeddingDims">The internal embedding dimension <c>d</c> the inner optimizer searches
     ///     over — the core REMBO knob. Set it to at least the guessed effective dimensionality of the
     ///     objective; larger values raise the chance the box captures the optimum but slow convergence.</param>
-    /// <param name="innerSampler">The Bayesian optimizer run in the latent box; <c>null</c> uses a
-    ///     <see cref="GPSampler" /> (the paper's choice). Pass any history-reconstructing sampler
-    ///     (e.g. <see cref="TPESampler" /> for a cheaper pure-managed variant); samplers that persist an
-    ///     optimizer blob across trials (CMA-ES / ES) are not intended here.</param>
+    /// <param name="innerSampler">Optional override for the inner Bayesian optimizer. <c>null</c> (the
+    ///     default) runs REMBO's paper-faithful optimizer directly (a squared-exponential GP with expected
+    ///     improvement maximized by DIRECT + CMA-ES and the Algorithm-3 adaptive length scale). Supplying one
+    ///     instead drives it over a private shadow study of the latent points — a beyond-paper generalization
+    ///     for bringing another history-reconstructing sampler (e.g. <see cref="TPESampler" />); samplers that
+    ///     persist an optimizer blob across trials (CMA-ES / ES) are not intended here, and the
+    ///     <paramref name="kernel" /> choice does not apply to an overridden sampler.</param>
     /// <param name="nEmbeddings">The number of interleaved independent embeddings <c>k</c> (Section 3.1),
     ///     default 1; trials are assigned to embeddings round-robin.</param>
-    /// <param name="kernel">Which REMBO kernel (§3.2) the inner optimizer uses. The default
-    ///     <see cref="RandomEmbeddingKernel.LowDimensional" /> models the objective over the latent <c>y</c>
-    ///     via <paramref name="innerSampler" />; <see cref="RandomEmbeddingKernel.HighDimensional" /> fits a
-    ///     GP in the real parameter space (more reliable for a single embedding, and it also embeds
-    ///     categorical parameters), ignoring <paramref name="innerSampler" />.</param>
+    /// <param name="kernel">Which REMBO kernel (§3.2) the paper-faithful optimizer uses. The default
+    ///     <see cref="RandomEmbeddingKernel.LowDimensional" /> models the objective over the latent <c>y</c>;
+    ///     <see cref="RandomEmbeddingKernel.HighDimensional" /> fits the GP in the projected real parameter
+    ///     space (more reliable for a single embedding, and it also embeds categorical parameters). Applies
+    ///     only to the default optimizer, not to an overridden <paramref name="innerSampler" />.</param>
     /// <param name="independentSampler">Sampler for parameters REMBO does not embed — single-valued, and
     ///     (under the low-dimensional kernel) categorical; <c>null</c> uses <see cref="RandomSampler" />.</param>
     /// <param name="warnIndependentSampling">Emit a warning when a parameter is sampled independently rather
     ///     than embedded.</param>
-    /// <param name="nStartupTrials">High-dimensional kernel only: completed trials of an embedding required
-    ///     before its GP takes over from random sampling (default 10, as <see cref="GPSampler" />).</param>
-    /// <param name="numCandidates">High-dimensional kernel only: projected candidates scored per proposal;
-    ///     <c>null</c> uses <c>min(5000, max(1000, 200·d))</c>.</param>
-    /// <param name="minimumNoise">High-dimensional kernel only: lower floor on the fitted GP noise variance;
-    ///     <c>null</c> uses the GP stack default.</param>
-    /// <param name="deterministicObjective">High-dimensional kernel only: treat the objective as noise-free.</param>
+    /// <param name="nStartupTrials">Completed trials of an embedding required before its GP takes over from
+    ///     uniform-random latent sampling (default 10). Used by the paper-faithful default optimizer.</param>
     /// <param name="seed">Random seed anchoring the embedding matrix and the default inner/independent
     ///     samplers; a fixed seed reproduces the trajectory under sequential (single-worker) optimization.</param>
     /// <summary>Configures the random embedding, its inner Bayesian optimizer (low- or high-dimensional
@@ -168,9 +173,6 @@ public sealed class RandomEmbeddingSampler : BaseSampler
         BaseSampler? independentSampler = null,
         bool warnIndependentSampling = true,
         int nStartupTrials = 10,
-        int? numCandidates = null,
-        double? minimumNoise = null,
-        bool deterministicObjective = false,
         int? seed = null)
     {
         if (nEmbeddingDims < 1)
@@ -179,8 +181,6 @@ public sealed class RandomEmbeddingSampler : BaseSampler
             throw new ArgumentException("nEmbeddings must be at least 1.", nameof(nEmbeddings));
         if (nStartupTrials < 1)
             throw new ArgumentException("nStartupTrials must be at least 1.", nameof(nStartupTrials));
-        if (numCandidates is int nc && nc < 1)
-            throw new ArgumentException("numCandidates must be at least 1.", nameof(numCandidates));
 
         // Anchor the embedding matrix through a LazyRandomState so a null seed draws from OS entropy without
         // ever touching System.Random, and a fixed seed makes the matrix (and thus the whole run) reproducible.
@@ -190,18 +190,18 @@ public sealed class RandomEmbeddingSampler : BaseSampler
         _kernel = kernel;
         _searchSpace = new IntersectionSearchSpace();
 
-        // The default inner GP runs on the private shadow study; silence its independent-sampling warnings so
-        // the shadow's startup randomness never surfaces to the user (their own inner sampler keeps its setting).
-        _innerSampler = innerSampler ?? new GPSampler(seed: seed, warnIndependentSampling: false);
+        // A null inner sampler selects the paper-faithful default (SE-GP + DIRECT/CMA-ES + Algorithm 3); a
+        // supplied one is kept as the shadow-study override. The independent fallback handles the parameters
+        // REMBO does not embed.
+        _innerSampler = innerSampler;
         _independentSampler = independentSampler ?? new RandomSampler(seed);
         _warnIndependentSampling = warnIndependentSampling;
 
-        // The high-dimensional kernel replaces the shadow-study inner sampler with a GP fit directly in the
-        // real parameter space; build its proposer only in that mode.
-        _gpOptimizer = kernel == RandomEmbeddingKernel.HighDimensional
-            ? new RandomEmbeddingGpOptimizer(
-                _embedding, nStartupTrials, numCandidates,
-                minimumNoise ?? Prior.DefaultMinimumNoiseVar, deterministicObjective)
+        // Build the paper-faithful proposer for the default path only. Its high-dimensional kernel makes it
+        // fit the GP in the projected real parameter space (and embed categoricals) rather than over y.
+        _proposer = innerSampler is null
+            ? new RemboGpProposer(
+                _embedding, kernel == RandomEmbeddingKernel.HighDimensional, nStartupTrials, _baseSeed)
             : null;
     }
 
@@ -287,8 +287,10 @@ public sealed class RandomEmbeddingSampler : BaseSampler
                 return restored;
             }
 
-            double[] y = _kernel == RandomEmbeddingKernel.HighDimensional
-                ? ComputeLatentHighDim(study, run, trial)
+            // Default path → the paper-faithful proposer (both §3.2 kernels + Algorithm 3); an overridden
+            // inner sampler → the shadow-study path over the latent y.
+            double[] y = _innerSampler is null
+                ? ComputeLatentPaper(study, run)
                 : ComputeLatentLowDim(study, run);
 
             // Persist the latent point so future rebuilds (and resumption) can recover this trial.
@@ -322,46 +324,36 @@ public sealed class RandomEmbeddingSampler : BaseSampler
     }
 
     /// <summary>
-    ///     Proposes a latent point with the high-dimensional kernel: fit a GP in the real (embedded)
-    ///     parameter space over this embedding's completed trials, then maximize expected improvement over
-    ///     the reachable subspace by scoring projected candidate latent points.
+    ///     Proposes a latent point with REMBO's paper-faithful optimizer (Wang et al. 2016, §3.2-3.3): a
+    ///     squared-exponential GP whose expected improvement is maximized over <c>Y</c> by DIRECT + CMA-ES
+    ///     with the Algorithm-3 adaptive length scale, fit on this embedding's completed-trial history
+    ///     (the latent <c>y</c> for the low-dimensional kernel, or the projected real parameters for the
+    ///     high-dimensional one).
     /// </summary>
-    /// <param name="study">The real study supplying the embedded search space and this run's history.</param>
-    /// <param name="run">The embedding (run) index whose trials train the GP.</param>
-    /// <param name="trial">The running trial (its number anchors the reproducible candidate RNG).</param>
+    /// <param name="study">The real study supplying this embedding's completed trials and their values.</param>
+    /// <param name="run">The embedding (run) index whose history trains the GP.</param>
     /// <returns>The proposed latent coordinates.</returns>
-    private double[] ComputeLatentHighDim(Study study, int run, FrozenTrial trial)
+    private double[] ComputeLatentPaper(Study study, int run)
     {
         OrderedDict<string, BaseDistribution> embeddedSpace = EmbeddedSpace(study);
         double sign = study.Direction == StudyDirection.Minimize ? -1.0 : 1.0;
 
-        // Gather this embedding's completed trials as (embedded params, maximization-oriented value) rows,
-        // dropping any trial missing an embedded parameter or carrying a non-finite value.
-        var trainParams = new List<IReadOnlyDictionary<string, object?>>();
-        var trainValues = new List<double>();
-        foreach (var t in study.GetTrialsInternal(deepcopy: false, states: new[] { TrialState.Complete }, useCache: true))
+        // This embedding's completed trials in evaluation order, as (stored latent point, maximization value).
+        // A trial without a finite value or a recoverable latent point (e.g. all-categorical under the
+        // low-dimensional kernel) carries no observation the GP can use, so it is skipped.
+        var latents = new List<double[]>();
+        var values = new List<double>();
+        foreach (var t in study.GetTrialsInternal(deepcopy: false, states: new[] { TrialState.Complete }, useCache: true)
+                     .OrderBy(t => t.Number))
         {
             if (_embedding.RunForTrial(t.Number) != run) continue;
             if (t.Value is not double v || double.IsNaN(v) || double.IsInfinity(v)) continue;
-
-            var p = new Dictionary<string, object?>(embeddedSpace.Count);
-            bool complete = true;
-            foreach (string name in embeddedSpace.Keys)
-            {
-                if (t.ParamsDict.TryGetValue(name, out object? value)) p[name] = value;
-                else { complete = false; break; }
-            }
-            if (!complete) continue;
-            trainParams.Add(p);
-            trainValues.Add(sign * v);
+            if (!TryReadStoredLatent(t, out double[] y)) continue;
+            latents.Add(y);
+            values.Add(sign * v);
         }
 
-        // Per-trial RNG (a pure function of the base seed and trial number) makes the candidate set — and
-        // thus the proposal — reproducible regardless of execution order, as in TurboSampler.
-        NumPyRandom rng = np.random.RandomState();
-        rng.seed(Mix(_baseSeed, (ulong)trial.Number));
-
-        return _gpOptimizer!.Propose(run, embeddedSpace, trainParams, trainValues.ToArray(), rng);
+        return _proposer!.Propose(run, latents, values, embeddedSpace);
     }
 
     /// <summary>The embedded real search space (float / integer / categorical) shared by all embeddings.</summary>
@@ -374,20 +366,6 @@ public sealed class RandomEmbeddingSampler : BaseSampler
             if (IsEmbedded(distribution))
                 space[name] = distribution;
         return space;
-    }
-
-    /// <summary>SplitMix64 finalizer folding the base seed and a trial number into a well-scrambled 32-bit seed.</summary>
-    /// <param name="seed">The persisted base seed.</param>
-    /// <param name="counter">The per-trial index.</param>
-    /// <returns>A 32-bit seed for <c>RandomState.seed</c>.</returns>
-    private static uint Mix(uint seed, ulong counter)
-    {
-        ulong z = ((ulong)seed << 32) ^ counter;
-        z += 0x9E3779B97F4A7C15UL;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
-        z ^= z >> 31;
-        return (uint)(z & 0xFFFFFFFFUL);
     }
 
     /// <summary>Returns the shadow study for one embedding, creating an in-memory one (same direction) on first use.</summary>
