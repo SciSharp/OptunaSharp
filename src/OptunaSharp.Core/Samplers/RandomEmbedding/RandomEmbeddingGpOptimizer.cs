@@ -12,8 +12,8 @@ using System.Collections.Generic;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
-using OptunaSharp.Gp;
 using OptunaSharp.Internal;
+using OptunaSharp.Samplers.ModelBased.Gp;
 
 namespace OptunaSharp.Samplers.RandomEmbedding;
 

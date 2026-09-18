@@ -19,8 +19,8 @@
 // optimum — so the fitted parameters are guaranteed to satisfy §C, which the parity tests assert directly.
 
 using System;
-using OptunaSharp.Gp;
 using OptunaSharp.Internal;
+using OptunaSharp.Samplers.ModelBased.Gp;
 
 namespace OptunaSharp.Samplers.Turbo;
 
