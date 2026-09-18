@@ -1,9 +1,12 @@
-// Sampler for TuRBO-1 — Trust-Region Bayesian Optimization (Eriksson et al., NeurIPS 2019). Drives the
-// `TurboOptimizer` trust-region mechanics through the Optuna study protocol, reusing the native GP stack
-// (GPRegressor: Matérn-5/2 ARD, OpenBLAS Cholesky) that GPSampler already ships. TuRBO is NOT part of the
-// Optuna ecosystem, so — like DifferentialEvolutionSampler / LmCmaSampler — this is a native
-// implementation validated by convergence (GP + Thompson sampling is stochastic and not bit-exact vs the
-// BoTorch reference), on NumSharp's MT19937 (never System.Random).
+// Sampler for TuRBO — Trust-Region Bayesian Optimization (Eriksson et al., NeurIPS 2019): TuRBO-1 (a single
+// trust region, the default) and TuRBO-m (m simultaneous trust regions with an implicit multi-armed bandit,
+// selected by `numTrustRegions > 1`). Drives the `TurboOptimizer` trust-region mechanics through the Optuna
+// study protocol, reusing the native GP stack (GPRegressor: Matérn-5/2 ARD, OpenBLAS Cholesky) that GPSampler
+// already ships. Everything inside a region is unchanged TuRBO-1; the only mechanic TuRBO-m adds is the
+// cross-region competition in `TurboMOptimizer`. TuRBO is NOT part of the Optuna ecosystem, so — like
+// DifferentialEvolutionSampler / LmCmaSampler — this is a native implementation validated by convergence (GP +
+// Thompson sampling is stochastic and not bit-exact vs the BoTorch/uber-research reference), on NumSharp's
+// MT19937 (never System.Random).
 
 using System;
 using System.Collections.Generic;
@@ -20,13 +23,22 @@ using OptunaSharp.SearchSpace;
 namespace OptunaSharp.Samplers;
 
 /// <summary>
-///     A sampler using TuRBO-1 — single-trust-region Bayesian optimization (Eriksson et al. 2019). It fits
-///     a <b>local</b> Matérn-5/2 GP to the observations of the current local run, keeps a trust region (a
+///     A sampler using TuRBO — trust-region Bayesian optimization (Eriksson et al. 2019). It fits a
+///     <b>local</b> Matérn-5/2 GP to the observations of the current local run, keeps a trust region (a
 ///     length-scale-weighted hyperrectangle) around the incumbent, and proposes the next point by Thompson
 ///     sampling over a Sobol perturbation set inside that region. The region expands after consecutive
 ///     improvements, shrinks after stalls, and restarts once it collapses — the mechanism that lets TuRBO
 ///     keep making progress in higher dimension where a single global GP (see <see cref="GPSampler" />)
 ///     over-explores.
+///
+///     <para><b>TuRBO-1 vs TuRBO-m.</b> With the default <c>numTrustRegions = 1</c> this is TuRBO-1, a single
+///     trust region restarted sequentially. With <c>numTrustRegions = m &gt; 1</c> it is TuRBO-m: <c>m</c>
+///     trust regions run simultaneously, each an independent TuRBO-1 with its own local GP, incumbent, and
+///     resize counters, and an implicit multi-armed bandit (a Thompson sample drawn from every region, global
+///     best wins) allocates each evaluation to the most promising region. TuRBO-m concentrates the budget on
+///     the best of several basins (§3.7) but <b>divides</b> that budget across the regions, so it is not
+///     uniformly better — it wins on multimodal/deceptive problems and can tie or slightly lose on easy ones;
+///     the paper accordingly reports TuRBO-1 <b>and</b> TuRBO-5/-20 by regime.</para>
 ///
 ///     <para><b>Beyond-core, convergence-validated.</b> TuRBO has no Optuna counterpart, so — like
 ///     <see cref="LmCmaSampler" /> and <see cref="DifferentialEvolutionSampler" /> — it is validated by
@@ -39,13 +51,18 @@ namespace OptunaSharp.Samplers;
 ///     the independent sampler, exactly as in <see cref="CmaEsSampler" />. Dynamic search spaces fall back
 ///     to independent sampling with a warning. Single-objective only.</para>
 ///
-///     <para><b>State is reconstructed, not persisted.</b> Unlike CMA-ES/DE, TuRBO stores no optimizer
-///     blob: the trust-region length, resize counters, and restart boundaries are recomputed each trial by
-///     a deterministic fold over the completed-trial objective sequence (<see cref="TurboOptimizer.ReconstructState" />),
-///     so a study resumes from storage with no serialized state.</para>
+///     <para><b>State is reconstructed, not persisted (with one small exception for TuRBO-m).</b> TuRBO-1
+///     stores no optimizer blob: the trust-region length, resize counters, and restart boundaries are
+///     recomputed each trial by a deterministic fold over the completed-trial objective sequence
+///     (<see cref="TurboOptimizer.ReconstructState" />), so a study resumes from storage with no serialized
+///     state. TuRBO-m adds the minimum needed to fold each region: because a trial's region is the
+///     seeded competition winner (a function of which prior trials landed in which region, not of the values
+///     alone), <c>m &gt; 1</c> persists one small per-trial region label (system attr <c>"turbo:tr"</c>);
+///     each region then folds exactly as TuRBO-1 over its labeled subsequence.</para>
 /// </summary>
 /// <example>
 ///     <code>
+///     // TuRBO-1 (single trust region, the default).
 ///     var study = Optuna.CreateStudy(sampler: new TurboSampler(seed: 42));
 ///     study.Optimize(t =>
 ///     {
@@ -53,12 +70,28 @@ namespace OptunaSharp.Samplers;
 ///         for (int i = 0; i &lt; 10; i++) { double x = t.SuggestFloat($"x{i}", -5, 5); s += x * x; }
 ///         return s;
 ///     }, nTrials: 200);
+///
+///     // TuRBO-5 (five simultaneous trust regions) for a multimodal objective with several basins.
+///     var multi = Optuna.CreateStudy(sampler: new TurboSampler(seed: 42, numTrustRegions: 5));
+///     multi.Optimize(t =>
+///     {
+///         double s = 0;
+///         for (int i = 0; i &lt; 10; i++) { double x = t.SuggestFloat($"x{i}", -5, 5); s += x * x - 10 * Math.Cos(2 * Math.PI * x); }
+///         return s + 100;
+///     }, nTrials: 400);
 ///     </code>
 /// </example>
 public sealed class TurboSampler : BaseSampler
 {
     private const double Eps = 1e-10;
     private const uint InitSeedSalt = 0x5eed_1117u;   // de-correlates the per-restart init Sobol stream
+
+    // Per-trial trust-region label persisted for TuRBO-m (m > 1). Unlike TuRBO-1, a trial's region is the
+    // stochastic-but-seeded competition winner — a function of which prior trials landed in which region —
+    // so it is NOT recoverable from the value sequence alone; the label is the one piece of state TuRBO-m
+    // persists (a small int per trial), and each region's L/counters/restart boundaries then fold cheaply
+    // from (labels, values). See docs/TURBO_M_PORTING.md §2.
+    private const string AttrKeyTrustRegion = "turbo:tr";
 
     private static readonly Logger Logger = OptunaLogging.GetLogger("optuna.samplers.turbo");
 
@@ -77,6 +110,7 @@ public sealed class TurboSampler : BaseSampler
     private readonly double _successMargin;
     private readonly double _minimumNoise;
     private readonly bool _deterministicObjective;
+    private readonly int _numTrustRegions;
 
     /// <param name="independentSampler">Sampler for parameters outside the relative search space, and for the
     ///     per-restart initialization when it is not Sobol (default <see cref="RandomSampler" />).</param>
@@ -111,7 +145,17 @@ public sealed class TurboSampler : BaseSampler
     /// <param name="deterministicObjective">Treat the objective as noise-free: fix the GP noise at the floor
     ///     <b>and</b> center the trust region on the best <i>observation</i> (paper §2). When <c>false</c> (the
     ///     default, noisy case) the center is the training point with the best posterior <i>mean</i> instead.</param>
-    /// <summary>Configures TuRBO-1's trust-region schedule, local-GP fit, and independent startup/fallback.</summary>
+    /// <param name="numTrustRegions">Number of simultaneous trust regions <c>m</c> (paper §2). Default <c>1</c> is
+    ///     TuRBO-1 (single region), a provably byte-identical path — the <c>m &gt; 1</c> multi-region bandit code
+    ///     never runs at <c>m = 1</c>. Pass <c>5</c> for the paper's common "TuRBO-5". <b>Consequences of
+    ///     <c>m &gt; 1</c>:</b> the evaluation budget is <b>divided</b> across the regions (each pays a <c>2·d</c>
+    ///     init tax and gets fewer exploitation steps), so TuRBO-m is <i>not</i> uniformly better — it wins on
+    ///     multimodal/deceptive problems with several basins (§3.7) and can tie or slightly lose on easy/unimodal
+    ///     ones (which is why the paper reports TuRBO-1 <b>and</b> TuRBO-5/-20 by regime). And because a trial's
+    ///     region is the seeded competition winner (not a function of the values alone), <c>m &gt; 1</c> persists
+    ///     one small per-trial region label to storage (system attr <c>"turbo:tr"</c>); a trial whose relative
+    ///     search space is empty (all-categorical) carries no label and never joins a region.</param>
+    /// <summary>Configures TuRBO's trust-region schedule, local-GP fit, region count, and independent startup/fallback.</summary>
     /// <exception cref="System.ArgumentException">A length bound is non-positive/ill-ordered, or a count is below one.</exception>
     public TurboSampler(
         BaseSampler? independentSampler = null,
@@ -126,12 +170,15 @@ public sealed class TurboSampler : BaseSampler
         int? failureTolerance = null,
         double successMargin = 0.0,
         double? minimumNoise = null,
-        bool deterministicObjective = false)
+        bool deterministicObjective = false,
+        int numTrustRegions = 1)
     {
         if (!(lengthMin > 0 && lengthInit >= lengthMin && lengthMax >= lengthInit))
             throw new ArgumentException("Require 0 < lengthMin ≤ lengthInit ≤ lengthMax.");
         if (successTolerance < 1)
             throw new ArgumentException("successTolerance must be at least 1.", nameof(successTolerance));
+        if (numTrustRegions < 1)
+            throw new ArgumentException("numTrustRegions must be at least 1.", nameof(numTrustRegions));
         if (successMargin < 0)
             throw new ArgumentException("successMargin must be non-negative.", nameof(successMargin));
         if (nInit is int ni && ni < 1)
@@ -156,6 +203,7 @@ public sealed class TurboSampler : BaseSampler
         // also the lower bound of the §C noise box the local GP is fitted under (see TurboGpFit).
         _minimumNoise = minimumNoise ?? TurboGpFit.NoiseVarMin;
         _deterministicObjective = deterministicObjective;
+        _numTrustRegions = numTrustRegions;
 
         // A fixed base seed makes the per-trial noise a pure function of (base, trial number). Derived
         // through a LazyRandomState so a null seed draws from OS entropy without touching System.Random.
@@ -191,6 +239,28 @@ public sealed class TurboSampler : BaseSampler
         if (searchSpace.Count == 0)
             return new OrderedDict<string, object?>();
 
+        // TuRBO-1 (the default single region) runs the original, untouched path; m > 1 activates the
+        // multi-trust-region bandit (TuRBO-m). Branching on m keeps the single-region trajectory provably
+        // byte-identical — the multi-region code below never executes at m = 1.
+        return _numTrustRegions == 1
+            ? SampleRelativeSingleTrustRegion(study, trial, searchSpace)
+            : SampleRelativeMultiTrustRegion(study, trial, searchSpace);
+    }
+
+    /// <summary>
+    ///     The single-trust-region path (TuRBO-1): the deterministic state fold over the completed-trial
+    ///     objective sequence, the Sobol initialization phase, then the Bayesian-optimization phase (fit the
+    ///     local GP, choose the center, build the trust-region box + candidate set, Thompson-sample,
+    ///     unnormalize). Reached only when <c>numTrustRegions == 1</c>; the body is unchanged from the original
+    ///     TuRBO-1 sampler, so its trajectory is byte-identical to the pre-TuRBO-m release.
+    /// </summary>
+    /// <param name="study">The study whose completed trials drive the reconstructed trust-region state and direction.</param>
+    /// <param name="trial">The trial being sampled; its number seeds the per-trial candidate/Thompson RNG.</param>
+    /// <param name="searchSpace">The relative (Float/Int) search space to sample over.</param>
+    /// <returns>The next point's external parameter values in search-space order.</returns>
+    private OrderedDict<string, object?> SampleRelativeSingleTrustRegion(
+        Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
+    {
         // Completed trials in evaluation (creation) order — the fold's input sequence.
         var completed = study.GetTrialsInternal(deepcopy: false, states: null, useCache: true)
             .Where(t => t.State == TrialState.Complete)
@@ -278,6 +348,175 @@ public sealed class TurboSampler : BaseSampler
         return Unnormalize(internalSpace, searchSpace, chosenPoint);
     }
 
+    /// <summary>
+    ///     The multi-trust-region path (TuRBO-m, paper §2): maintain <c>m</c> simultaneous trust regions and let
+    ///     an implicit multi-armed bandit decide which region spends this trial. Read the persisted per-trial
+    ///     region labels, partition the completed trials into <c>m</c> slots, and fold each slot independently
+    ///     (each slot's <c>L</c>/counters/restart boundaries are exactly TuRBO-1 over its labeled subsequence).
+    ///     Then either fill the lowest slot still initializing (deterministic slot-by-slot / post-collapse
+    ///     re-init) or, when every slot is ready, run the cross-region Thompson competition and propose the
+    ///     winner's candidate. Finally persist this trial's winning region label so the fold reproduces next time.
+    /// </summary>
+    /// <param name="study">The study whose completed trials + persisted labels reconstruct the per-region state.</param>
+    /// <param name="trial">The trial being sampled; its number seeds the per-trial competition RNG and receives the region label.</param>
+    /// <param name="searchSpace">The relative (Float/Int) search space to sample over.</param>
+    /// <returns>The next point's external parameter values in search-space order.</returns>
+    private OrderedDict<string, object?> SampleRelativeMultiTrustRegion(
+        Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
+    {
+        // Completed trials in evaluation (creation) order — the per-region folds' input sequence.
+        var completed = study.GetTrialsInternal(deepcopy: false, states: null, useCache: true)
+            .Where(t => t.State == TrialState.Complete)
+            .OrderBy(t => t.Number)
+            .ToList();
+
+        var internalSpace = new GpSearchSpace(searchSpace);
+        int d = internalSpace.Dim;
+        int nInit = _nInit ?? 2 * d;
+        int m = _numTrustRegions;
+        double sign = study.Direction == StudyDirection.Minimize ? -1.0 : 1.0;
+
+        // Partition the completed trials into m region slots by their persisted label. A trial with no valid
+        // label (a foreign-sampler warm-start, or an all-categorical trial whose relative space was empty) joins
+        // no region — TuRBO-m builds each region only from its OWN proposals.
+        var slotTrials = new List<FrozenTrial>[m];
+        for (int s = 0; s < m; s++) slotTrials[s] = new List<FrozenTrial>();
+        foreach (FrozenTrial t in completed)
+        {
+            int label = ReadTrustRegionLabel(t);
+            if (label >= 0 && label < m) slotTrials[label].Add(t);
+        }
+
+        // The per-region mechanics are unchanged TuRBO-1: one shared, stateless optimizer folded per slot.
+        var optimizer = new TurboOptimizer(
+            _lengthInit, _lengthMin, _lengthMax, _successTolerance,
+            _failureTolerance ?? DefaultFailureTolerance(d), successTol: _successMargin);
+
+        // Fold every slot independently to its current restart's state + how far its initialization has filled.
+        var states = new TurboTrState[m];
+        var trialsInRestart = new int[m];
+        for (int s = 0; s < m; s++)
+        {
+            var scores = new double[slotTrials[s].Count];
+            for (int i = 0; i < scores.Length; i++) scores[i] = ToScore(slotTrials[s][i].Value, sign);
+            states[s] = optimizer.ReconstructState(scores, nInit);
+            trialsInRestart[s] = slotTrials[s].Count - states[s].RestartStart;
+        }
+
+        // ---- initialization phase: fill the lowest slot still short of its nInit Sobol points ----
+        // This fills slots slot-by-slot at startup and forces a collapsed slot's fresh nInit re-init burst
+        // before the competition resumes, keeping all m regions live (turbo_m.py's per-region init/re-init).
+        int initSlot = TurboMOptimizer.NextInitSlot(trialsInRestart, nInit);
+        if (initSlot >= 0)
+        {
+            // Per-(slot, restart) Sobol seed: pack the slot into the high bits and the restart count into the low
+            // bits so different slots and restarts draw independent designs. Mask to 31 bits (numpy's
+            // SeedSequence rejects negative entropy). No per-trial RNG is consumed in the init phase.
+            ulong initCounter = ((ulong)(uint)initSlot << 32) | (uint)states[initSlot].RestartCount;
+            int restartSeed = (int)(Mix(_baseSeed ^ InitSeedSalt, initCounter) & 0x7FFFFFFFu);
+            double[,] sobolInit = ScrambledSobol.Random(d, nInit, restartSeed);
+            var point = new double[d];
+            for (int j = 0; j < d; j++) point[j] = sobolInit[trialsInRestart[initSlot], j];
+            PersistTrustRegionLabel(study, trial, initSlot);
+            return Unnormalize(internalSpace, searchSpace, point);
+        }
+
+        // ---- competition phase: every slot is ready, so the bandit picks which region spends this trial ----
+        // Per-trial MT19937 stream: a pure function of (base seed, trial number). Each region consumes the
+        // stream in a fixed slot order (candidate generation here, then the Thompson z-draw in the competition),
+        // so the winner reproduces bit-for-bit from (seed, labels).
+        NumPyRandom rng = np.random.RandomState();
+        rng.seed(Mix(_baseSeed, (ulong)trial.Number));
+
+        int numCandidates = _numCandidates ?? DefaultNumCandidates(d);
+        var regions = new List<TrustRegionSample>(m);
+        for (int s = 0; s < m; s++)
+            regions.Add(BuildRegionSample(s, slotTrials[s], states[s], optimizer, internalSpace, d, numCandidates, sign, rng));
+
+        (int winnerIndex, int winnerCandidate) = TurboMOptimizer.SelectAcrossTrustRegions(regions, rng);
+        TrustRegionSample winner = regions[winnerIndex];
+
+        var chosen = new double[d];
+        for (int j = 0; j < d; j++) chosen[j] = winner.Candidates[winnerCandidate, j];
+        PersistTrustRegionLabel(study, trial, winner.Slot);
+        return Unnormalize(internalSpace, searchSpace, chosen);
+    }
+
+    /// <summary>
+    ///     Builds one ready region's cross-region-competition payload: fits the region's local GP on its
+    ///     <b>current run only</b> (trials from its last restart onward, discarding pre-collapse points exactly
+    ///     as the reference marks them <c>_idx = −1</c>), chooses the trust-region center (§2), builds the box +
+    ///     Sobol candidate set, and evaluates the joint GP posterior over those candidates. The GP fit, center
+    ///     rule, box, and candidate generation are the same per-region TuRBO-1 primitives the single-region path
+    ///     uses. The returned payload also carries the region's score standardization constants so the
+    ///     competition can un-standardize this region's Thompson draw into shared objective units.
+    /// </summary>
+    /// <param name="slot">The region's slot index (persisted as the label if this region wins).</param>
+    /// <param name="slotTrials">All of this slot's labeled completed trials in evaluation order.</param>
+    /// <param name="state">The slot's folded trust-region state (its current base length and restart boundary).</param>
+    /// <param name="optimizer">The shared per-region trust-region optimizer (box + candidate generation).</param>
+    /// <param name="internalSpace">The GP-internal normalized search space (parameter normalization + categorical flags).</param>
+    /// <param name="d">The relative-search-space dimension.</param>
+    /// <param name="numCandidates">The Thompson candidate-set size for this trial.</param>
+    /// <param name="sign">+1 for a maximizing study, −1 for a minimizing study (maps values to maximization-oriented scores).</param>
+    /// <param name="rng">The per-trial RNG; this region's candidate generation advances it in slot order.</param>
+    /// <returns>The region's candidate set, standardized joint posterior, and score-standardization constants.</returns>
+    private TrustRegionSample BuildRegionSample(
+        int slot, IReadOnlyList<FrozenTrial> slotTrials, TurboTrState state, TurboOptimizer optimizer,
+        GpSearchSpace internalSpace, int d, int numCandidates, double sign, NumPyRandom rng)
+    {
+        // Fit on the current run only — trials before the restart boundary were discarded on collapse.
+        var restartTrials = new List<FrozenTrial>(slotTrials.Count - state.RestartStart);
+        for (int i = state.RestartStart; i < slotTrials.Count; i++) restartTrials.Add(slotTrials[i]);
+        int mRestart = restartTrials.Count;
+
+        double[,] normalizedParams = internalSpace.GetNormalizedParams(
+            restartTrials.Select(t => (IReadOnlyDictionary<string, object?>)t.ParamsDict).ToList());
+
+        // Standardize the run's maximization-oriented scores for the GP fit; keep mean/std to un-standardize the
+        // Thompson draw for the cross-region comparison (each region standardizes by its OWN constants).
+        var rawScore = new double[mRestart];
+        for (int i = 0; i < mRestart; i++) rawScore[i] = ToScore(restartTrials[i].Value, sign);
+        double[] clipped = ClipFinite(rawScore);
+        double mean = MathUtil.Mean(clipped);
+        double std = Math.Max(Eps, MathUtil.Std(clipped));
+        var y = new double[mRestart];
+        for (int i = 0; i < mRestart; i++) y[i] = (clipped[i] - mean) / std;
+
+        // Local GP under the paper's §C hyperparameter box (same fit the single-region path uses per region).
+        GPRegressor gpr = TurboGpFit.Fit(
+            normalizedParams, y, internalSpace.IsCategorical, _minimumNoise, _deterministicObjective);
+
+        // §2 center: best observation when noise-free, else the training point with the best posterior mean.
+        double[]? posteriorMean = _deterministicObjective ? null : gpr.Posterior(normalizedParams).Mean;
+        int incumbent = TurboOptimizer.SelectCenterIndex(clipped, posteriorMean, _deterministicObjective);
+        var xCenter = new double[d];
+        for (int j = 0; j < d; j++) xCenter[j] = normalizedParams[incumbent, j];
+
+        (double[] lb, double[] ub) = optimizer.TrustRegionBounds(xCenter, gpr.LengthScales, state.Length);
+        double[,] candidates = optimizer.GenerateCandidates(xCenter, lb, ub, numCandidates, rng);
+        (double[] postMean, double[,] postCov) = gpr.PosteriorJoint(candidates);
+
+        return new TrustRegionSample(slot, candidates, postMean, postCov, mean, std);
+    }
+
+    /// <summary>Reads a completed trial's persisted TuRBO-m region label (system attr <c>"turbo:tr"</c>), or
+    ///     <c>−1</c> when it is absent — a trial from before this sampler ran, or an all-categorical trial whose
+    ///     relative search space was empty and so never proposed a region.</summary>
+    /// <param name="trial">The completed trial snapshot to read the label from.</param>
+    /// <returns>The stored region slot index, or <c>−1</c> if the trial carries no valid label.</returns>
+    private static int ReadTrustRegionLabel(FrozenTrial trial)
+        => trial.SystemAttrs.TryGetValue(AttrKeyTrustRegion, out object? v) ? (int)Convert.ToInt64(v) : -1;
+
+    /// <summary>Persists this trial's winning region slot as the system attr <c>"turbo:tr"</c> so the per-region
+    ///     fold can reconstruct which region proposed it. This is the one piece of state TuRBO-m stores (a small
+    ///     int per trial); each worker writes only its own trial's label, so it is parallel-worker-safe.</summary>
+    /// <param name="study">The study whose storage backs the write.</param>
+    /// <param name="trial">The trial receiving the label (identified by its trial id).</param>
+    /// <param name="slot">The winning region slot index to persist.</param>
+    private static void PersistTrustRegionLabel(Study study, FrozenTrial trial, int slot)
+        => study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyTrustRegion, slot);
+
     /// <summary>Maps a completed trial's objective value to a maximization-oriented score (higher = better).</summary>
     /// <param name="value">The trial's scalar objective value (null for an unfinished trial).</param>
     /// <param name="sign">+1 for a maximizing study, −1 for a minimizing study.</param>
@@ -350,9 +589,10 @@ public sealed class TurboSampler : BaseSampler
     ///     The paper's default failure tolerance <c>τ_fail = ⌈d/q⌉</c> (batch <c>q = 1</c> here, so
     ///     <c>= d</c>); Eriksson et al. 2019, §D. <b>Note the paper-vs-code discrepancy:</b> the authors' own
     ///     reference implementation and the BoTorch tutorial instead use <c>⌈max(4/q, d/q)⌉ = max(4, d)</c> as
-    ///     a low-dimension guard. The two agree for <c>d ≥ 4</c> — the paper's entire experimental regime — and
-    ///     differ only for <c>d ∈ {1, 2, 3}</c>; pass an explicit <c>failureTolerance = max(4, d)</c> to
-    ///     reproduce the reference-code behavior there.
+    ///     a low-dimension guard (and the authors' TuRBO-<i>m</i> code uses <c>max(5, d)</c>). All three agree
+    ///     for <c>d ≥ 5</c> — the paper's entire experimental regime — and differ only for small <c>d</c>; pass
+    ///     an explicit <c>failureTolerance = max(4, d)</c> (or <c>max(5, d)</c> for the multi-region reference)
+    ///     to reproduce that behavior there. This same default is used per region in TuRBO-m.
     /// </summary>
     /// <param name="d">The relative-search-space dimension.</param>
     /// <returns>The paper's <c>τ_fail = d</c>.</returns>

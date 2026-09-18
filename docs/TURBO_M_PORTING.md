@@ -7,11 +7,16 @@ supplement §C/§D. No Optuna/OptunaHub counterpart; the operational details (in
 competition) come from the paper + the authors' reference code (`uber-research/TuRBO`, `turbo_m.py`) and the
 BoTorch TuRBO tutorial's multi-region variant.
 
-**Status.** TuRBO-1 is DONE and paper-faithful (`Samplers/Turbo/{TurboOptimizer,TurboSampler,TurboGpFit}.cs`;
-commits `19c2e07` → `1c13785` → `88f049b`). TuRBO-m — the multi-trust-region bandit — is the last remaining
-Expansion-Plan **P2** item (`plans/OPTUNASHARP_EXPANSION_PLAN.md` §5). This document plans it by reproducing
-the exact techniques we used for TuRBO-1, **in the same order**, and calls out the one place TuRBO-m must
-diverge (minimal state persistence).
+**Status. ✅ DONE.** TuRBO-1 was DONE and paper-faithful (`Samplers/Turbo/{TurboOptimizer,TurboSampler,TurboGpFit}.cs`;
+commits `19c2e07` → `1c13785` → `88f049b`). **TuRBO-m — the multi-trust-region bandit — is now implemented**,
+completing Expansion-Plan **P2** (`plans/OPTUNASHARP_EXPANSION_PLAN.md` §5). It followed this plan: the one new
+mechanic (the cross-region Thompson competition + the init-fill schedule) lives in
+`Samplers/Turbo/TurboMOptimizer.cs`; `TurboOptimizer`/`TurboGpFit` are reused unchanged, once per region;
+`TurboSampler` gained a `numTrustRegions` ctor arg with the `m == 1` path left byte-identical; and the one
+required departure — persisting the per-trial region label (system attr `"turbo:tr"`) — is realized exactly as
+§2 below describes. Validated by 17 new tests (`TurboMOptimizerTests` + m>1 `TurboSamplerTests`) on both TFMs;
+1048/1048 unit suite green. This document is retained as the design record. The rest of it is the plan as
+written before implementation.
 
 ---
 

@@ -27,7 +27,7 @@ parity tiers and two homes (pure-managed **Core** vs a **satellite bridge packag
 | **SNES / xNES** (separable / exponential NES) | Beyond-core | Core | Behavioral | **P1 ✅ DONE** |
 | **REMBO** (random-embedding wrapper) | Beyond-core | Core | Behavioral | **P2 ✅ DONE** |
 | **TuRBO-1** (trust-region BO) | Beyond-core | Core | Achieved-value + per-step replay tolerance | **P2 ✅ DONE** |
-| **TuRBO-m** (multi-TR bandit) | Beyond-core | Core | Achieved-value + per-step replay tolerance | P2 (follow-on) |
+| **TuRBO-m** (multi-TR bandit) | Beyond-core | Core | Achieved-value + per-step replay tolerance | **P2 ✅ DONE** |
 | **SAASBO** (fully-Bayesian sparse GP) | Beyond-core | **Core** (native, forked GP toolkit) | Behavioral / paper-claim (sparse-subspace recovery) | **P3 ✅ DONE (native, not bridge — see §6)** |
 | **MAP-Elites** (quality-diversity) | New paradigm | Core (+ new QD surface) | Behavioral (archive coverage / QD-score) | P4 |
 | **MO-CMA-ES** (multi-objective CMA) | Beyond-core | Core | Behavioral | P5 (paper access gap — see §9) |
@@ -204,8 +204,8 @@ have full-covariance adaptation in CMA-ES).
 > parallel workers, and this makes Theorem 4 (invariance to added dims) and D-independence *exact* identities;
 > `nEmbeddingDims` (d) is **required** (no honest default). **Not ported (documented divergence):** only the
 > adaptive length-scale scheme (Algorithm 3), which would need bounds injected into the GP fit — the high-dim
-> kernel addresses the same clipped-boundary over-exploration from another angle. **Still to do under P2:**
-> **TuRBO-m** (the multi-trust-region bandit).
+> kernel addresses the same clipped-boundary over-exploration from another angle. **P2 is now complete:**
+> **TuRBO-m** (the multi-trust-region bandit) shipped (§5).
 
 **Why.** The "billion dimensions" extraordinary claim (≈390c). It is the canonical way to run BO on a
 high-`D` space that has a low **effective dimension** `dₑ` — common in hyperparameter tuning where only
@@ -258,8 +258,27 @@ both TFMs.
 > independent sampler, like CMA); state is RECONSTRUCTED by a deterministic fold over the completed-trial
 > value sequence (no serialized blob); Thompson sampling draws the EXACT joint posterior via Cholesky, so
 > `numCandidates` defaults to `min(100·d, 500)` (capped below the paper's 5000, which relies on BoTorch's
-> scalable sampler) with cost `O(numCandidates³)`/trial; per-restart Sobol init (`2·d` points). **Still to
-> do under P2:** **TuRBO-m** (the multi-trust-region bandit) — **REMBO** is now done (§4).
+> scalable sampler) with cost `O(numCandidates³)`/trial; per-restart Sobol init (`2·d` points).
+
+> **✅ TuRBO-m DONE — P2 complete.** The multi-trust-region bandit shipped in the SAME `TurboSampler` behind a
+> `numTrustRegions` ctor arg (default `1` = TuRBO-1, a **byte-identical** path; `> 1` = TuRBO-m). The one new
+> mechanic — the cross-region Thompson competition — lives in `Samplers/Turbo/TurboMOptimizer.cs`
+> (`SelectAcrossTrustRegions`: draw one joint sample per region, **un-standardize each to shared objective
+> units** — the load-bearing `y_cand = mu + sigma·y_cand` from the authors' `turbo_m.py` — then global argmax;
+> plus `NextInitSlot` for the slot-by-slot / post-collapse init-fill). `TurboOptimizer`/`TurboGpFit` are
+> **reused unchanged**, once per region; each region *is* a TuRBO-1 fold over its own labelled subsequence.
+> The one required departure from TuRBO-1's zero-persistence rule (a trial's region is the seeded competition
+> winner, not a function of the values alone): persist the per-trial region label as system attr `"turbo:tr"`
+> (compact, resumable, parallel-worker-safe) — see `docs/TURBO_M_PORTING.md` §2. Per-region `τ_fail = d` and
+> `n_init = 2·d` kept paper-faithful (authors' code uses `max(5, d)` for TuRBO-m — reachable via the ctor).
+> Validated by 17 new tests (both TFMs): `TurboMOptimizerTests` (competition returns the global argmax,
+> un-standardizes before comparing, init-fill order, tie-break, determinism) + end-to-end
+> `TurboSamplerTests` (every region used, the bandit concentrates one region's share above the uniform `1/m`,
+> independent restarts, disjoint label partition, reproducibility, no severe regression). **Honest scope
+> (like the TuRBO-1 "not vs global GP" call):** the budget is divided across regions, so `m>1` wins by regime
+> (multimodal/several basins) rather than uniformly — probed `m>1` at 2–3/5 seeds on Ackley, so the tests
+> assert the robust claims, not a fragile head-to-head. 1048/1048 unit suite. Deep-dive doc `methods/turbo.md`
+> extended with a TuRBO-m section + multi-region mechanism diagram.
 
 **Why.** The SOTA high-dimensional BO baseline (≈150c and rising; the very baseline **JANUS** cites).
 It reuses our existing GP stack, so marginal cost is moderate and it materially strengthens BO on the
@@ -444,9 +463,10 @@ Surfaced by the search as SOTA/extraordinary but **out of scope for a define-by-
 
 1. ~~**P1 — OpenAI-ES + SNES**~~ **✅ DONE** (self-contained, pure-managed, high extraordinary-claim value,
    mirrors existing DE/PSO plumbing → lowest risk). xNES was also completed (rides OpenBLAS `eigh`).
-2. **P2 — TuRBO-1** **✅ DONE** (reused the GP stack; beats global GP on multimodal) and **REMBO**
-   **✅ DONE** (random-embedding meta-wrapper; interleaved runs recover a low-effective-dim optimum) →
-   **TuRBO-m** (multi-TR bandit) remains.
+2. ~~**P2 — TuRBO-1 + REMBO + TuRBO-m**~~ **✅ DONE.** TuRBO-1 (reused the GP stack; beats global GP on
+   multimodal), REMBO (random-embedding meta-wrapper; interleaved runs recover a low-effective-dim optimum),
+   and TuRBO-m (multi-TR bandit behind `numTrustRegions`, reusing TuRBO-1 per region + a cross-region Thompson
+   competition in `TurboMOptimizer`) all shipped. **P2 complete.**
 3. ~~**P3 — SAASBO**~~ **✅ DONE** (implemented natively in Core — managed NUTS + hand-derived SAAS-GP
    gradient — rather than the originally-planned BoTorch bridge; see §6).
 4. **P4 — MAP-Elites** (new QD surface; design-gated).

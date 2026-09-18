@@ -8,7 +8,9 @@ TuRBO (Trust-Region Bayesian Optimization) fixes the failure mode of global [GP-
 dimension: a single global surrogate, fit under stationary-kernel assumptions, over-explores and wastes
 the budget. TuRBO instead keeps a **local** GP inside a **trust region** around the incumbent, proposes by
 Thompson sampling within that region, and grows/shrinks/restarts the region from the observed progress.
-OptunaSharp ships **TuRBO-1** — the single-trust-region variant.
+OptunaSharp ships **both variants behind one sampler**: **TuRBO-1** (a single trust region, the default) and
+**TuRBO-m** (`m` trust regions run simultaneously with an implicit multi-armed bandit across them), selected
+by the `numTrustRegions` constructor argument.
 
 ## The idea
 
@@ -121,6 +123,7 @@ failureTolerance        ⌈d/q⌉ = d            §D · consecutive failures ⇒
 successMargin           0.0 (strict)         §D · relative gain to count as a success (BoTorch: 1e-3)
 minimumNoise            5e-4                 §C · GP noise-variance floor & §C-box lower bound
 deterministicObjective  false                §2 · noise-free ⇒ fix noise + centre on best observation
+numTrustRegions         1 (TuRBO-1)          §2 · m simultaneous trust regions (m>1 ⇒ TuRBO-m; see below)
 independentSampler      RandomSampler        categorical / single-valued / init fallback
 ```
 
@@ -154,6 +157,77 @@ budget locally and re-seeds when a basin is exhausted. On smooth low-dimensional
 enough budget (and `nInit`) to actually exploit its region before it collapses, and drop `numCandidates` if
 the per-trial `O(n³)` draw becomes the bottleneck.
 
+## TuRBO-m: the multi-region bandit
+
+TuRBO-1 runs **one** trust region, restarting it sequentially on collapse. The paper's full method (§2) runs
+**`m`** trust regions **simultaneously** and lets an implicit multi-armed bandit decide which region spends
+each evaluation. Set `numTrustRegions = m > 1` to activate it (the common choice is `5`, the paper's
+"TuRBO-5"); `numTrustRegions = 1` is TuRBO-1, a provably byte-identical code path.
+
+Each region is **exactly TuRBO-1** — its own local GP, incumbent `x⋆_ℓ`, base length `L_ℓ`, and
+success/failure counters. The only new mechanic is the competition **across** regions:
+
+```
+   each trial
+      │
+      ▼
+  read the persisted per-trial region labels, partition the completed trials into the m regions,
+  fold each region independently (TuRBO-1 over its own labelled subsequence)
+      │
+      ├─ any region still initializing (< nInit trials this run)?
+      │     └─▶ INIT-FILL the lowest such region: propose its next Sobol point   (fills slot-by-slot at
+      │          startup; forces a collapsed region's fresh nInit re-init burst)  → label the trial with it
+      │
+      └─ every region ready ⇒ THE BANDIT COMPETES:
+            for each region ℓ:  fit GP_ℓ, build its candidate set, draw ONE joint Thompson sample f̃_ℓ
+            un-standardize each region's draw to shared objective units  (each region standardizes by
+                                                                          its OWN mean/std — required!)
+            winner = argmax over ALL regions and candidates   ⇒  x_i ∈ argmin_ℓ argmin_{x∈TR_ℓ} f̃_ℓ
+            → propose the winner's candidate, label the trial with the winning region
+```
+
+Because the winner is whichever region's Thompson draw looked best, promising regions naturally win more
+evaluations — that emergent allocation *is* the bandit (there is no separate arm-selection rule). Each region
+resizes and restarts on its **own** counters (paper §D: a batch is a success for region ℓ only if a point
+drawn from it beats ℓ's own incumbent), independently of the others, so a collapsed region is discarded and
+re-initialized in place while the rest keep going — `m` regions stay live throughout.
+
+**The one required departure from TuRBO-1: a persisted label.** TuRBO-1 persists nothing because its restart
+boundaries reconstruct from the value sequence alone (restarts are contiguous blocks). TuRBO-m *interleaves*
+the regions — a trial's region is the *seeded competition winner*, a function of which prior trials landed in
+which region, **not** of the values alone — so replaying it from scratch would cost `O(n²·m)` GP fits.
+Instead each trial records its winning region as one small system attr (`"turbo:tr"`); every region then
+folds cheaply (`O(n·m)` total) from `(labels, values)`, exactly TuRBO-1 over its labelled subsequence. This
+is the middle ground between TuRBO-1 (persists nothing) and CMA-ES (persists a full serialized blob); each
+worker writes only its own trial's label, so it stays parallel-worker-safe and resumable.
+
+**Honest scope.** The budget is **divided** across the `m` regions (each pays a `2·d` init tax and gets fewer
+exploitation steps), so TuRBO-m is **not** uniformly better than TuRBO-1: it wins on multimodal/deceptive
+problems with several basins (§3.7 — restarts land in distant basins of varying quality, and the bandit
+concentrates on the best) and can tie or slightly lose on easy/unimodal ones. This is exactly why the paper
+reports TuRBO-1 **and** TuRBO-5 **and** TuRBO-20 by regime, and why our tests assert the robust claims (every
+region is used, the bandit concentrates on one region far beyond the uniform `1/m` share, regions restart
+independently, no severe regression) rather than a fragile "`m>1` always beats `m=1`".
+
+```csharp
+// TuRBO-5: five trust regions competing on a multimodal objective with several basins.
+var study = Optuna.CreateStudy(sampler: new TurboSampler(seed: 42, numTrustRegions: 5));
+study.Optimize(t =>
+{
+    double s = 100;
+    for (int i = 0; i < 10; i++)
+    {
+        double x = t.SuggestFloat($"x{i}", -5, 5);
+        s += x * x - 10 * Math.Cos(2 * Math.PI * x);   // Rastrigin — many local basins
+    }
+    return s;
+}, nTrials: 400);
+```
+
+Everything else — the §C-boxed local GP fit, the length-scale-weighted region, the Sobol-in-TR candidate set,
+the joint Thompson draw, and the per-region resize schedule — is the unchanged TuRBO-1 machinery above, reused
+once per region.
+
 ## Validation
 
 Behavioral, not bit-exact: GP fitting + Thompson sampling are stochastic and, like the rest of the GP
@@ -167,13 +241,21 @@ inside the §C box; the noisy-case center follows the best posterior mean rather
 (§2); and the Thompson draw is the exact joint posterior sample `mean + L·z` (§E), reproduced
 element-for-element from the seed.
 
+For **TuRBO-m** the tests add the multi-region claims: the cross-region competition returns the global argmax
+across regions **after un-standardizing** each region's draw to shared units (a strong region and a
+low-variance region are otherwise compared on incompatible z-scales); the init-fill picks the lowest region
+still initializing; and end-to-end over a real run every region is used, the bandit concentrates one region's
+share far above the uniform `1/m`, regions restart independently, the labels partition the trials disjointly
+(§D — only the winner's region owns a trial), and a fixed seed reproduces the whole multi-region trajectory.
+
 ## Relationship to the lineage
 
 - **From [GP-BO (2012)](gp.md):** reuses the identical Matérn-5/2 ARD GP surrogate and its fit; replaces the
   global acquisition optimization with a local trust region + Thompson sampling.
-- **TuRBO-m (not yet ported):** the paper's full method maintains `m` trust regions with an implicit
-  multi-armed bandit across them; TuRBO-1 is the single-region special case and the recommended default for
-  most problems.
+- **TuRBO-1 ↔ TuRBO-m:** the paper's full method maintains `m` trust regions with an implicit multi-armed
+  bandit across them (`numTrustRegions = m`); TuRBO-1 (`numTrustRegions = 1`, the default) is the
+  single-region special case and the recommended choice for smooth or unimodal problems, while TuRBO-m earns
+  its divided budget on multimodal landscapes with several basins.
 
 ## See also
 

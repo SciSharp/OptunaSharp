@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using AwesomeAssertions;
 using NumSharp;
@@ -383,5 +384,137 @@ public class TurboSamplerTests
     {
         Action act = () => new TurboSampler(successMargin: -1e-6);
         act.Should().Throw<ArgumentException>("successMargin must be non-negative");
+    }
+
+    [TestMethod]
+    public void Constructor_RejectsNonPositiveNumTrustRegions()
+    {
+        Action act = () => new TurboSampler(numTrustRegions: 0);
+        act.Should().Throw<ArgumentException>("numTrustRegions must be at least 1");
+    }
+
+    // ---- TuRBO-m: multi-trust-region bandit (paper §2) -------------------------------------------
+
+    /// <summary>Per-region win counts read off a completed study's persisted <c>"turbo:tr"</c> labels — how many
+    ///     trials each of the <c>m</c> regions proposed (init points included). A region with zero count was
+    ///     never used.</summary>
+    private static int[] RegionWinCounts(Study study, int m)
+    {
+        var counts = new int[m];
+        foreach (var t in study.Trials.Where(t => t.State == TrialState.Complete))
+            if (t.SystemAttrs.TryGetValue("turbo:tr", out object? v))
+            {
+                int r = (int)Convert.ToInt64(v);
+                if (r >= 0 && r < m) counts[r]++;
+            }
+        return counts;
+    }
+
+    /// <summary>Total number of trust-region collapses/restarts across all <c>m</c> regions, reconstructed by
+    ///     folding each region's labeled subsequence with the sampler's default schedule — the same per-region
+    ///     TuRBO-1 fold the sampler runs internally, so this reads the internal restart dynamics off the run.</summary>
+    private static int TotalRegionRestarts(Study study, int m, int d)
+    {
+        var opt = new TurboOptimizer(0.8, 1.0 / 128.0, 1.6, tauSucc: 3, tauFail: d, successTol: 0.0);
+        var slots = new List<double>[m];
+        for (int s = 0; s < m; s++) slots[s] = new List<double>();
+        foreach (var t in study.Trials.Where(t => t.State == TrialState.Complete).OrderBy(t => t.Number))
+            if (t.SystemAttrs.TryGetValue("turbo:tr", out object? v))
+            {
+                int r = (int)Convert.ToInt64(v);
+                if (r >= 0 && r < m) slots[r].Add(-(t.Value ?? double.NaN));   // maximization-oriented score
+            }
+        int restarts = 0;
+        for (int s = 0; s < m; s++) restarts += opt.ReconstructState(slots[s].ToArray(), 2 * d).RestartCount;
+        return restarts;
+    }
+
+    [TestMethod]
+    public void MultiRegion_UsesEveryTrustRegion()
+    {
+        // §2: TuRBO-m maintains m regions simultaneously; each is seeded with its own 2·d Sobol init, so all m
+        // regions are genuinely used (the bandit exercises every lever), not just one.
+        int m = 3;
+        var study = Optuna.CreateStudy(sampler: new TurboSampler(seed: 1, numCandidates: 120, numTrustRegions: m));
+        study.Optimize(t => Ackley(t, 2), nTrials: 60);
+
+        int[] wins = RegionWinCounts(study, m);
+        wins.Count(w => w > 0).Should().Be(m, "every trust region is initialized and used");
+    }
+
+    [TestMethod]
+    public void MultiRegion_BanditConcentratesOnOneRegion()
+    {
+        // §2/§3.7: the implicit bandit is NOT uniform allocation — a Thompson sample from every region with the
+        // global best winning naturally concentrates evaluations on the most promising region, so its share of
+        // proposals sits far above the uniform 1/m. (Measured: ~0.53 for this seed; uniform would be 0.33.)
+        int m = 3;
+        var study = Optuna.CreateStudy(sampler: new TurboSampler(seed: 1, numCandidates: 120, numTrustRegions: m));
+        study.Optimize(t => Ackley(t, 2), nTrials: 60);
+
+        int[] wins = RegionWinCounts(study, m);
+        double maxShare = (double)wins.Max() / wins.Sum();
+        maxShare.Should().BeGreaterThan(1.0 / m,
+            "the bandit concentrates the budget on the best region rather than spreading it uniformly");
+    }
+
+    [TestMethod]
+    public void MultiRegion_RegionsRestartIndependently()
+    {
+        // §2/§3.7: each region shrinks and, on collapse below L_min, is discarded and re-initialized in place —
+        // independently of the others. On a multimodal objective at least one region collapses over the run.
+        int m = 3, d = 2;
+        var study = Optuna.CreateStudy(sampler: new TurboSampler(seed: 1, numCandidates: 120, numTrustRegions: m));
+        study.Optimize(t => Ackley(t, d), nTrials: 60);
+
+        TotalRegionRestarts(study, m, d).Should().BeGreaterThanOrEqualTo(1,
+            "a collapsed region is discarded and restarts a fresh local run, independently per region (§3.7)");
+    }
+
+    [TestMethod]
+    public void MultiRegion_PersistsALabelPerTrialAndPartitionsDisjointly()
+    {
+        // The one required departure from TuRBO-1 (docs/TURBO_M_PORTING.md §2): every proposed trial carries its
+        // winning region as the system attr "turbo:tr" (the first trial excepted — its relative search space is
+        // empty, so it is sampled independently and joins no region). §D "only the winner's region updates" holds
+        // at the fold level: the labels partition the trials disjointly, so each trial feeds exactly one region.
+        int m = 3;
+        var study = Optuna.CreateStudy(sampler: new TurboSampler(seed: 2, numCandidates: 120, numTrustRegions: m));
+        study.Optimize(t => Ackley(t, 2), nTrials: 50);
+
+        var completed = study.Trials.Where(t => t.State == TrialState.Complete).ToList();
+        var labeled = completed.Where(t => t.SystemAttrs.ContainsKey("turbo:tr")).ToList();
+        labeled.Count.Should().Be(completed.Count - 1, "every trial after the independent first one is labeled");
+        foreach (var t in labeled)
+            ((int)Convert.ToInt64(t.SystemAttrs["turbo:tr"])).Should().BeInRange(0, m - 1, "labels index a valid region");
+        RegionWinCounts(study, m).Sum().Should().Be(labeled.Count,
+            "the labels partition the trials disjointly — each trial feeds exactly one region (§D)");
+    }
+
+    [TestMethod]
+    public void MultiRegion_MakesRealProgress_NoSevereRegression()
+    {
+        // Honest scope (like the TuRBO-1 "not vs global GP" decision): dividing the budget across m regions means
+        // TuRBO-m is NOT uniformly better than TuRBO-1 at this small scale (verified by probing: m>1 won ~3/5
+        // seeds on Ackley-2D, lost on Sphere), so a head-to-head m>1 < m=1 assertion would be flaky. The robust,
+        // paper-consistent claim is that the multi-region run still solves the multimodal Ackley — far below an
+        // undirected random search (~5) — i.e. the bandit introduces no severe regression.
+        var turbo = Optuna.CreateStudy(sampler: new TurboSampler(seed: 1, numCandidates: 120, numTrustRegions: 3));
+        turbo.Optimize(t => Ackley(t, 2), nTrials: 60);
+        turbo.BestValue.Should().BeLessThan(1.5, "TuRBO-m converges well on the multimodal Ackley (random sits ~5)");
+    }
+
+    [TestMethod]
+    public void MultiRegion_SameSeed_IsReproducible()
+    {
+        // The competition is a pure function of (seed, persisted labels), so a fixed seed reproduces the whole
+        // multi-region trajectory on a platform — including the deterministic init-fill and per-region restarts.
+        double Run()
+        {
+            var study = Optuna.CreateStudy(sampler: new TurboSampler(seed: 7, numCandidates: 120, numTrustRegions: 3));
+            study.Optimize(t => Ackley(t, 2), nTrials: 50);
+            return study.BestValue;
+        }
+        Run().Should().Be(Run(), "a fixed seed gives an identical multi-region trajectory on a platform");
     }
 }
