@@ -22,8 +22,10 @@ g(y) = f( p_X(A·y) ),    y ∈ Y = [−√d, √d]^d
 ```
 
 with an inner Bayesian optimizer over the small box `Y`. Theorem 2 guarantees that, with probability one,
-some `y⋆` maps to the true optimum whenever `d ≥ d_e`; Theorem 3 justifies the box `[−√d, √d]^d` (the paper's
-practical choice, `ε = log(d)/√d`).
+some `y⋆` maps to the true optimum whenever `d ≥ d_e`. Theorem 3 bounds *how large* `Y` must be to still
+contain that optimizer (a ball of radius `√(d_e)/ε · ‖x⋆‖`, w.p. `1 − ε`); the specific box `[−√d, √d]^d` is
+**not** from Theorem 3 — the authors note it "is not useful for this choice" — but from a simulation study,
+taking `ε = log(d)/√d` in their empirical `‖B⁻¹x‖∞` bound.
 
 ```
    each trial
@@ -59,10 +61,10 @@ of `Y` maps onto the *boundary* of `X` — a fact that shapes the two kernels be
 choice is the main reliability dial:
 
 - **Low-dimensional kernel** (default) — the inner sampler models `g` as a function of the latent point `y`
-  directly, a GP in `d` dimensions: `k^d_ℓ(y₁, y₂) = K_SE((y₁ − y₂)/ℓ)`. Cheap, and the paper's choice for
-  very high extrinsic `D`. Its weakness is the boundary: two far-apart `y`'s that both project onto (nearly)
-  the same clipped point look *distant* to this kernel, so it can waste budget re-exploring the flat region
-  of `Y` outside `X`.
+  directly, a GP in `d` dimensions: `k^d_ℓ(y₁, y₂) = K_SE((y₁ − y₂)/ℓ)`. Cheap — and the only feasible option
+  at very high extrinsic `D`, where the high-dimensional kernel's `D`-shaped GP is out of reach. Its weakness
+  is the boundary: two far-apart `y`'s that both project onto (nearly) the same clipped point look *distant*
+  to this kernel, so it can waste budget re-exploring the flat region of `Y` outside `X`.
 - **High-dimensional kernel** — the GP measures similarity in the *projected* real space,
   `k^D_ℓ(y₁, y₂) = K_SE((p_X(A·y₁) − p_X(A·y₂))/ℓ)`. Since `p_X(A·y)` is precisely the real parameter vector
   REMBO evaluates, this is simply a GP over the real (embedded) parameters, with the acquisition (expected
@@ -182,8 +184,9 @@ implementation:
 - **Theorem 2** — the effective optimum is reachable through the random embedding (its latent preimage is
   constructed explicitly, and the effective submatrix is non-singular over a large ensemble — its
   "probability 1" full rank).
-- **Theorem 3** — the box `Y = [−√d, √d]^d` captures the optimum with a rate that rises with `d`
-  (≈ 67 % at `d = d_e = 2`, ≈ 99.5 % at `d = 4`, ≈ 100 % by `d = 6`), the paper's `ε = log(d)/√d` choice.
+- **Theorem 3 (box capture)** — the box `Y = [−√d, √d]^d` contains the optimizer's preimage increasingly
+  often as `d` grows (≈ 67 % at `d = d_e = 2`, ≈ 99.5 % at `d = 4`, ≈ 100 % by `d = 6`) — the empirical
+  capture behind Theorem 3's `1 − ε` guarantee and the §3.1 "increase `d`" lever.
 - **Theorem 4** — invariance to adding unimportant dimensions. Because rows are seeded by name, this is an
   *exact, deterministic* identity here: the trajectory for `D = 2` and `D = 30` is bitwise identical. Its
   corollary — independence of the extrinsic dimension `D`, the "billion dimensions" claim — is likewise exact
