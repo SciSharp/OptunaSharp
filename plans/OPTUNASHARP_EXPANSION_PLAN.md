@@ -28,7 +28,7 @@ parity tiers and two homes (pure-managed **Core** vs a **satellite bridge packag
 | **REMBO** (random-embedding wrapper) | Beyond-core | Core | Behavioral | **P2 ✅ DONE** |
 | **TuRBO-1** (trust-region BO) | Beyond-core | Core | Achieved-value + per-step replay tolerance | **P2 ✅ DONE** |
 | **TuRBO-m** (multi-TR bandit) | Beyond-core | Core | Achieved-value + per-step replay tolerance | P2 (follow-on) |
-| **SAASBO** (fully-Bayesian sparse GP) | Optuna-integration analog | **Bridge** (`Interop.BoTorch`) | **0-ULP vs `optuna_integration`/BoTorch** | P3 |
+| **SAASBO** (fully-Bayesian sparse GP) | Beyond-core | **Core** (native, forked GP toolkit) | Behavioral / paper-claim (sparse-subspace recovery) | **P3 ✅ DONE (native, not bridge — see §6)** |
 | **MAP-Elites** (quality-diversity) | New paradigm | Core (+ new QD surface) | Behavioral (archive coverage / QD-score) | P4 |
 | **MO-CMA-ES** (multi-objective CMA) | Beyond-core | Core | Behavioral | P5 (paper access gap — see §9) |
 | ~~CMA-ES-LRA~~ | — | — | **ALREADY DONE** — `CmaEsSampler(lrAdapt: true)` | — |
@@ -41,8 +41,9 @@ must respect:
   `LazyRandomState` port (MT19937 / PCG64). **Never `System.Random`.** This is what makes any
   bit-parity claim testable against a reference.
 - **Core stays pure-managed (NumSharp only).** Anything needing a foreign runtime (torch, pyro/NUTS,
-  JAX) is a **separate satellite package** — the `NumSharp.Interop.OpenBLAS` pattern. This is why
-  SAASBO is a **bridge**, not a Core sampler (see §6).
+  JAX) is a **separate satellite package** — the `NumSharp.Interop.OpenBLAS` pattern. This originally
+  motivated planning SAASBO as a bridge; it was instead **implemented natively in Core** (a managed NUTS
+  over a hand-derived SAAS-GP gradient — no torch/pyro), see §6 for the revised decision.
 
 ---
 
@@ -302,16 +303,29 @@ parity vs the BoTorch TuRBO tutorial (tolerance). Full XML docs; both TFMs.
 
 ---
 
-## 6. Phase 3 — SAASBO (fully-Bayesian sparse-GP BO) — BoTorch bridge
+## 6. Phase 3 — SAASBO (fully-Bayesian sparse-GP BO) — ✅ DONE (native Core)
 
-**Why.** SOTA sample-efficient high-dim BO ("outperforms strong baselines"); it is the missing model in
-our existing bridge.
+**Why.** SOTA sample-efficient high-dim BO ("outperforms strong baselines"); the missing sparse-GP model.
 
-**Home / shape — BRIDGE, not Core.** SAASBO's engine is a **fully-Bayesian GP** whose hierarchical
-sparsity prior is sampled by **NUTS/HMC** (Eriksson & Jankowiak §4.2, via NumPyro). Re-implementing
-NUTS-over-a-GP byte-exact in managed code is infeasible and low-value; the correct move is to **extend
-the existing `OptunaSharp.Interop.BoTorch` pythonnet bridge** — which already drives real torch/botorch
-at **0-ULP vs `optuna_integration`**.
+**Home / shape — NATIVE Core (revised from the original bridge plan).** The plan originally scoped SAASBO
+as a BoTorch bridge, reasoning that a byte-exact NUTS-over-a-GP was infeasible in managed code. The
+maintainer directed a **native, paper-faithful implementation** instead (the TuRBO/REMBO convention:
+paper parity by algorithm + behavioral validation, *not* 0-ULP vs a foreign library) — cloning the GP
+toolkit rather than modifying it so TuRBO/REMBO/GPSampler parity is untouched. It shipped in
+`Samplers/ModelBased/Saas/` (`SaasGaussianProcess` RBF-ARD GP with the SAAS log-joint + **hand-derived
+analytic gradient**, `NoUTurnSampler` = managed NUTS with dual-averaging + diagonal-metric adaptation,
+`SaasMapOptimizer` = Adam+LOO MAP, `SaasAcquisition` = sample-averaged EI via Sobol+L-BFGS-B) + the
+public `SaasboSampler` (Algorithm 1). No torch/pyro/JAX — the gradient is closed-form, so Core stays
+pure-managed. **Not a byte-exact port** (HMC is stochastic; validated behaviorally — the gradients match
+finite differences to ~1e-8, NUTS recovers a known Gaussian's moments, and SAAS recovers the sparse
+relevant subspace of §5.2). The BoTorch **bridge** remains a viable *additional* future path (a
+`SaasFullyBayesian` candidates-func on `Interop.BoTorch`) for anyone wanting 0-ULP vs `optuna_integration`,
+but is now redundant for having the method.
+
+**Original bridge rationale (superseded, kept for context).** Re-implementing NUTS-over-a-GP byte-exact
+against NumPyro is infeasible; a bridge that extends `OptunaSharp.Interop.BoTorch` would drive real
+torch/botorch at 0-ULP. The native route was chosen because paper parity here means *faithful to the
+algorithm*, which a managed NUTS + hand-derived GP gradient achieves without a foreign runtime.
 
 ### 6.1 Algorithm contract (Eriksson & Jankowiak §4.1–4.3)
 
@@ -319,24 +333,35 @@ at **0-ULP vs `optuna_integration`**.
   **default `α = 0.1`**; per-dim inverse-squared lengthscales `ρᵢ ~ HalfCauchy(τ)` (ARD → most dims
   "off" unless data turns them on); RBF or Matérn-5/2 kernel; noise `σ² → 1e-6` (noise-free) or a weak
   `LN(0,10²)` prior.
-- **Inference:** NUTS → `L` posterior hyperparameter samples (BoTorch default 256 warmup / 256 samples,
-  thinning 16); or MAP over pre-selected `τ ∈ {1e-1,1e-2,1e-3}`. Cost `O(N³D)`, best for `N ≲ 500`.
-- **Acquisition:** EI (single-obj) / qLogEI over the sampled-hyperparameter GP; qLogNEHVI for MO.
+- **Inference (shipped):** NUTS (default) → `L` posterior hyperparameter samples (paper's §A.1 default
+  512 warmup / 256 samples, thinning 16 ⇒ `L=16`, max tree depth 6; reparameterized `ρ = τ·ρ̃`,
+  `ρ̃ ~ HC(1)`); or MAP — Adam (1500 steps, lr 0.02, β₁ 0.50) over pre-selected `τ ∈ {1, 1e-1, 1e-2, 1e-3}`
+  with leave-one-out selection. RBF kernel; noise `σ² = 1e-6`. Cost `O(N³D)` per leapfrog, best for
+  `N ≲ 500` (paper-faithful defaults documented as a cost footgun on `SaasboSampler`, exactly like TuRBO).
+- **Acquisition (shipped):** EI averaged over the sample bag (Eqn 10), maximized with the paper's §B
+  strategy — a scrambled-Sobol screen (`Q=5000`) → top `K=3` → L-BFGS-B (≤100 evals). Single-objective.
 
-### 6.2 Integration notes
+### 6.2 Integration (as shipped, native)
 
-- Add `SaasFullyBayesian` to `BoTorchCandidatesFunc` (enum) + a `saas_candidates_func` in
-  `BoTorchCandidates.cs` that builds `SaasFullyBayesianSingleTaskGP`, runs
-  `fit_fully_bayesian_model_nuts`, then `qLogExpectedImprovement` (single) / `qLogNEHVI` (MO), mirroring
-  the existing candidate funcs. Expose NUTS knobs (`warmup_steps`, `num_samples`, `thinning`) on
-  `BoTorchSampler`.
-- Public API stays pythonnet-free (enum + sampler options), exactly like the current bridge.
+- `Samplers/ModelBased/Saas/` forks the GP toolkit: `SaasGaussianProcess` (RBF-ARD GP, hand-derived
+  marginal-likelihood gradient), `SaasModel` (SAAS reparameterized log-joint + MAP objective, both with
+  analytic gradients), `NoUTurnSampler` (managed NUTS, Hoffman & Gelman Alg. 6 + dual averaging +
+  diagonal metric), `SaasMapOptimizer`, `SaasPosterior`, `SaasAcquisition`, `SaasboOptimizer`. Public
+  `SaasboSampler` (`BaseSampler`, Algorithm 1: Sobol init → per-trial fit + EI-max) + `SaasboInferenceMethod`
+  enum. Continuous/integer only (categoricals delegated, like TuRBO); state reconstructed each trial.
+- **Deferred BoTorch-bridge alternative (optional, redundant now):** `SaasFullyBayesian` on
+  `BoTorchCandidatesFunc` + a `saas_candidates_func` building `SaasFullyBayesianSingleTaskGP` /
+  `fit_fully_bayesian_model_nuts` + `qLogExpectedImprovement`/`qLogNEHVI` — the only path to 0-ULP vs
+  `optuna_integration` and to MO/qLogNEHVI. Left for a future session if byte parity is ever wanted.
 
-### 6.3 Oracle & DoD
+### 6.3 Oracle & DoD (as shipped)
 
-**0-ULP vs `optuna_integration.BoTorchSampler` with a SAAS candidates func** (the bridge's existing
-byte-exact contract) — cached-module discipline, `PYTHONNET_PYDLL`, try-import guard. `[RequiresPython]`
-interop tests both TFMs. Full XML docs.
+Behavioral / paper-claim, on MT19937 (the TuRBO/REMBO tier). Gates (all green, both TFMs): analytic GP /
+log-joint / MAP / posterior / EI gradients vs finite differences (~1e-8); NUTS recovers a known diagonal
+Gaussian's moments; **SAAS recovers the sparse relevant subspace** (§5.2 — posterior-median `ρ` picks the
+active dim); embedded-objective convergence (NUTS + MAP); same-seed determinism; bounds / mixed
+int-float-step-log / categorical fallback / MO-raises. Full XML docs. (The deferred bridge alternative
+would instead carry the 0-ULP-vs-`optuna_integration` contract.)
 
 ---
 
@@ -422,7 +447,8 @@ Surfaced by the search as SOTA/extraordinary but **out of scope for a define-by-
 2. **P2 — TuRBO-1** **✅ DONE** (reused the GP stack; beats global GP on multimodal) and **REMBO**
    **✅ DONE** (random-embedding meta-wrapper; interleaved runs recover a low-effective-dim optimum) →
    **TuRBO-m** (multi-TR bandit) remains.
-3. **P3 — SAASBO** (bridge extension; small, high-parity, once BoTorch bridge is touched anyway).
+3. ~~**P3 — SAASBO**~~ **✅ DONE** (implemented natively in Core — managed NUTS + hand-derived SAAS-GP
+   gradient — rather than the originally-planned BoTorch bridge; see §6).
 4. **P4 — MAP-Elites** (new QD surface; design-gated).
 5. **P5 — MO-CMA-ES** (blocked on paper access).
 
