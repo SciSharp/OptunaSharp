@@ -38,6 +38,17 @@ public class TurboSamplerTests
         return -20 * Math.Exp(-0.2 * Math.Sqrt(s1 / d)) - Math.Exp(s2 / d) + 20 + Math.E;
     }
 
+    private static double Rastrigin(Trial t, int d)
+    {
+        double s = 10 * d;
+        for (int i = 0; i < d; i++)
+        {
+            double x = t.SuggestFloat($"x{i}", -5, 5);
+            s += x * x - 10 * Math.Cos(2 * Math.PI * x);
+        }
+        return s;
+    }
+
     [TestMethod]
     public void Sampler_MinimizesSphere()
     {
@@ -240,6 +251,124 @@ public class TurboSamplerTests
         TurboSampler.DefaultNumCandidates(10).Should().Be(1000);
         TurboSampler.DefaultNumCandidates(50).Should().Be(5000);
         TurboSampler.DefaultNumCandidates(200).Should().Be(5000);
+    }
+
+    // ---- paper claims: end-to-end behavioral dynamics over a real run (§2, §3.6, §3.7) ------------
+
+    /// <summary>Reconstructs the trust-region base-length trajectory the sampler actually followed during a
+    ///     completed study — the same deterministic fold the sampler runs internally, with its default
+    ///     schedule (nInit = 2d, τ_succ = 3, τ_fail = d, L ∈ [2⁻⁷, 1.6], strict success) — and reports the
+    ///     smallest base length the region reached and how many times it collapsed and restarted. This reads
+    ///     the internal TR state (not otherwise exposed) off the run's real proposals.</summary>
+    private static (double MinLength, int Restarts) ReconstructTrajectory(Study study, int d)
+    {
+        double[] scores = study.Trials
+            .Where(t => t.State == TrialState.Complete).OrderBy(t => t.Number)
+            .Select(t => -(t.Value ?? double.NaN))   // minimize ⇒ maximization-oriented score (sampler's convention)
+            .ToArray();
+        var opt = new TurboOptimizer(0.8, 1.0 / 128.0, 1.6, tauSucc: 3, tauFail: d, successTol: 0.0);
+        double minL = double.MaxValue;
+        for (int k = 1; k <= scores.Length; k++)                       // fold each prefix to trace L over the run
+            minL = Math.Min(minL, opt.ReconstructState(scores[..k], 2 * d).Length);
+        return (minL, opt.ReconstructState(scores, 2 * d).RestartCount);
+    }
+
+    /// <summary>Mean Euclidean distance, in normalized <c>[0,1]^d</c> space, from each post-initialization
+    ///     proposal to the best point seen before it — small when proposals concentrate around the incumbent
+    ///     (the locality the trust region enforces), large for an undirected global sampler.</summary>
+    private static double AvgPostInitDistanceToBest(Study study, int d, int nInit)
+    {
+        var completed = study.Trials.Where(t => t.State == TrialState.Complete).OrderBy(t => t.Number).ToList();
+        double bestVal = double.MaxValue;
+        double[]? bestPoint = null;
+        double sum = 0; int count = 0;
+        for (int i = 0; i < completed.Count; i++)
+        {
+            var pt = new double[d];
+            for (int j = 0; j < d; j++) pt[j] = ((double)completed[i].Params[$"x{j}"]! + 5.0) / 10.0;   // [-5,5] ⇒ [0,1]
+            if (i >= nInit && bestPoint != null)
+            {
+                double sq = 0;
+                for (int j = 0; j < d; j++) sq += (pt[j] - bestPoint[j]) * (pt[j] - bestPoint[j]);
+                sum += Math.Sqrt(sq); count++;
+            }
+            double v = completed[i].Value ?? double.MaxValue;
+            if (v < bestVal) { bestVal = v; bestPoint = pt; }
+        }
+        return sum / count;
+    }
+
+    [TestMethod]
+    public void Sampler_TrustRegionShrinksAndRestarts_OnHardMultimodal()
+    {
+        // §2 + §3.7: on a hard multimodal objective the trust region shrinks rapidly (the paper's Fig 6,
+        // "the volume of any given trust region decreases rapidly") and, once it collapses below L_min, TuRBO
+        // discards it and starts a fresh local run. Reconstructing the L-trajectory the sampler followed over
+        // a real Rastrigin run shows both: L falls far below L_init = 0.8, and the region restarts.
+        var study = Optuna.CreateStudy(sampler: new TurboSampler(seed: 1, numCandidates: 150));
+        study.Optimize(t => Rastrigin(t, 4), nTrials: 140);
+
+        (double minLength, int restarts) = ReconstructTrajectory(study, 4);
+        minLength.Should().BeLessThan(0.1, "the trust region shrinks rapidly on a stuck multimodal run (paper Fig 6)");
+        restarts.Should().BeGreaterThanOrEqualTo(1, "a collapsed trust region is discarded and restarts a fresh local run (§3.7)");
+    }
+
+    [TestMethod]
+    public void Sampler_ProposalsStayLocal_UnlikeGlobalSearch()
+    {
+        // §2 / §3.6: TuRBO is a LOCAL method — after initialization its proposals cluster in the trust region
+        // around the incumbent, whereas an undirected global sampler scatters across the whole box. Measured
+        // in normalized space, TuRBO's mean proposal-to-incumbent distance is far below RandomSampler's.
+        int d = 6, n = 120, nInit = 2 * d;
+        var turbo = Optuna.CreateStudy(sampler: new TurboSampler(seed: 1, numCandidates: 150));
+        turbo.Optimize(t => Ackley(t, d), n);
+        var random = Optuna.CreateStudy(sampler: new RandomSampler(1));
+        random.Optimize(t => Ackley(t, d), n);
+
+        double turboLocality = AvgPostInitDistanceToBest(turbo, d, nInit);
+        double randomLocality = AvgPostInitDistanceToBest(random, d, nInit);
+        turboLocality.Should().BeLessThan(randomLocality * 0.6,
+            "TuRBO concentrates its proposals near the incumbent (the trust region), unlike a global sampler");
+    }
+
+    [TestMethod]
+    public void Sampler_OutperformsUndirectedGlobalSearch_OnMultimodalAckley()
+    {
+        // §3: TuRBO's local model + restart strategy makes real progress on a multimodal objective where an
+        // undirected global search stalls near the rim. (A head-to-head against a global GP is deliberately
+        // NOT asserted: the paper's GP-beating edge is a high-dimensional, large-budget result — Fig 4 is
+        // 200D — and at the d ≲ 8 / ~100-trial scale a unit test can afford, a global GP is competitive
+        // (verified by probing: TuRBO won only 1 of 4 seeds vs GPSampler at d = 8, n = 60), so such an
+        // assertion would be flaky. The robust, paper-consistent claim at this scale is beating random search.)
+        var turbo = Optuna.CreateStudy(sampler: new TurboSampler(seed: 1, numCandidates: 150));
+        turbo.Optimize(t => Ackley(t, 5), 80);
+        var random = Optuna.CreateStudy(sampler: new RandomSampler(1));
+        random.Optimize(t => Ackley(t, 5), 80);
+
+        turbo.BestValue.Should().BeLessThan(random.BestValue * 0.5,
+            "the trust-region local model drives Ackley far below undirected random search");
+    }
+
+    [TestMethod]
+    public void Sampler_InitializationIsSpaceFilling()
+    {
+        // A restart begins with a scrambled-Sobol space-filling design over [0,1]^d, not a cluster: across
+        // the first nInit = 2d proposals every dimension spans most of its range.
+        int d = 5, nInit = 2 * d;
+        var study = Optuna.CreateStudy(sampler: new TurboSampler(seed: 1, numCandidates: 120));
+        study.Optimize(t => Ackley(t, d), nInit);
+
+        var init = study.Trials.Where(t => t.State == TrialState.Complete).OrderBy(t => t.Number).Take(nInit).ToList();
+        for (int j = 0; j < d; j++)
+        {
+            double lo = 1.0, hi = 0.0;
+            foreach (var tr in init)
+            {
+                double v = ((double)tr.Params[$"x{j}"]! + 5.0) / 10.0;
+                lo = Math.Min(lo, v); hi = Math.Max(hi, v);
+            }
+            (hi - lo).Should().BeGreaterThan(0.5, $"the Sobol initialization spreads across dimension x{j}");
+        }
     }
 
     [TestMethod]
