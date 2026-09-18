@@ -57,6 +57,22 @@ namespace OptunaSharp.Samplers;
 ///     <para><b>State is reconstructed, not persisted.</b> Like <see cref="TurboSampler" />, SAASBO stores no
 ///     optimizer blob: each trial re-fits the GP to the completed observations, so a study resumes from
 ///     storage with no serialized state.</para>
+///
+///     <para><b>Conformance to the paper (audited; see <c>SaasboPaperClaimsTests</c>).</b> The RBF kernel
+///     (Eqn 1), closed-form posterior (Eqns 4-5), SAAS prior (Eqn 8) with the reparameterization (Eqn 12),
+///     the EI acquisition and its sample-averaging (Eqns 6-7, 10), the NUTS budget (§A.1), the MAP recipe
+///     (§A.2), and the EI-maximization strategy (§B) are all implemented as stated; the empirical claims of
+///     §5.2 (relevant-subspace identification, α controlling shrinkage) and §4.1/§5.7 (adaptive sparsity —
+///     more data turns on more dimensions) are asserted on seeded chains. Four deliberate, documented scope
+///     choices differ from the paper's full generality, none of them a correctness gap: (1) the <b>RBF</b>
+///     kernel only — the paper's default — not the optional Matérn-5/2; (2) a <b>fixed</b> tiny noise
+///     (the paper's noise-free primary setting), so the noisy-objective extension (a <c>LN(0,10²)</c> prior
+///     on <c>σ²</c>) is not modeled; (3) <b>standardized</b> targets (a numerical convention shared with the
+///     reference implementation and the rest of the GP stack); and (4) SAASBO-MAP maximizes the density in
+///     the constrained parameter (the paper's literal Eqn 13, "maximize <c>U_s</c> w.r.t. <c>ψ</c>"), not the
+///     unconstrained-space mode. The MAP shrinkage grid follows the authoritative §A.2 (<c>S=4</c>,
+///     <c>{1,1e-1,1e-2,1e-3}</c>), resolving the main text's smaller §4.2.2 list. Parity is <b>behavioral</b>
+///     (HMC is stochastic), not byte-exact vs NumPyro/BoTorch — the TuRBO/REMBO validation tier.</para>
 /// </summary>
 /// <example>
 ///     <code>
@@ -86,6 +102,14 @@ public sealed class SaasboSampler : BaseSampler
     private readonly uint _baseSeed;
     private readonly int _nStartupTrials;
     private readonly SaasboConfig _config;
+
+    /// <summary>The resolved SAASBO configuration (inference method, prior, NUTS/MAP, and acquisition knobs) —
+    ///     exposed to tests to assert the constructor defaults equal the paper's (Eriksson &amp; Jankowiak
+    ///     2021, §A.1 / §A.2 / §B).</summary>
+    internal SaasboConfig Configuration => _config;
+
+    /// <summary>The number of Sobol initialization trials before the SAAS GP takes over (the paper's <c>m</c>).</summary>
+    internal int StartupTrials => _nStartupTrials;
 
     /// <param name="independentSampler">Sampler for parameters outside the relative search space and for the
     ///     Sobol-init fallback (default <see cref="RandomSampler" />).</param>
