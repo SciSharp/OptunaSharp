@@ -28,12 +28,86 @@ ones — the same defaults as Optuna.
 | `QMCSampler` | Low-discrepancy space filling | `(qmcType: "sobol", scramble: false, seed: null, …)` |
 | `NSGAIISampler` | Multi-objective (2–3 objectives) | `(populationSize: 50, crossover: null, mutation: null, seed: null, …)` |
 | `NSGAIIISampler` | Multi-objective (many objectives) | `(populationSize: 50, referencePoints: null, dividingParameter: 3, seed: null, …)` |
-| `NSGAIIICptSampler` | NSGA-III + conditional (branch-defined) parameters | `(populationSize: 50, conditionalParams: null, referencePoints: null, dividingParameter: 3, seed: null, …)` |
 | `BruteForceSampler` | Exhaustive define-by-run search | `(int? seed = null, bool avoidPrematureStop = false)` |
 | `PartialFixedSampler` | Fix some params, search the rest | `(IReadOnlyDictionary<string, object?> fixedParams, BaseSampler baseSampler)` |
 
 Pass `seed:` for reproducibility. All RNG flows through a `LazyRandomState` built on NumSharp's
 MT19937, never `System.Random` — this is what makes runs bit-identical to Python.
+
+> **Reproducibility under parallelism.** A seeded sampler reproduces a run bit-for-bit only with
+> `nJobs: 1`. When `study.Optimize(..., nJobs: n)` with `n != 1` spawns more than one worker, each
+> worker **reseeds** its sampler — so parallel workers don't draw the same parameters — exactly as
+> Optuna does, which makes a multi-worker run *not* reproducible. For distributed optimization across
+> processes, for the same reason use either `seed: null` or a **different** seed value per process.
+
+## Capabilities, cost, and budget
+
+The nine samplers OptunaSharp ports 1-to-1 from Optuna support the following, reproducing Optuna's own
+capability matrix. Read the marks as **✓** supported · **▲** works, but inefficiently · **✗** errors or
+has no interface.
+
+### Parameter types and search space
+
+| Sampler | Float | Int | Categorical | Conditional | Multivariate |
+|---------|:-----:|:---:|:-----------:|:-----------:|:------------:|
+| `RandomSampler` | ✓ | ✓ | ✓ | ✓ | ▲ |
+| `TPESampler` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `GPSampler` | ✓ | ✓ | ✓ | ▲ | ✓ |
+| `CmaEsSampler` | ✓ | ✓ | ▲ | ▲ | ✓ |
+| `NSGAIISampler` | ▲ | ▲ | ✓ | ▲ | ▲ |
+| `NSGAIIISampler` | ▲ | ▲ | ✓ | ▲ | ▲ |
+| `GridSampler` | ✓ † | ✓ | ✓ | ▲ | ▲ |
+| `QMCSampler` | ✓ | ✓ | ▲ | ▲ | ▲ |
+| `BruteForceSampler` | ✓ † | ✓ | ✓ | ✓ | ▲ |
+
+† `✗` for an infinite (unbounded) float domain.
+
+### Optimization modes
+
+| Sampler | Pruning | Multi-objective | Constrained | Batch | Distributed |
+|---------|:-------:|:---------------:|:-----------:|:-----:|:-----------:|
+| `RandomSampler` | ✓ | ✓ | ▲ | ✓ | ✓ |
+| `TPESampler` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `GPSampler` | ▲ | ✓ | ✓ | ✓ | ✓ |
+| `CmaEsSampler` | ▲ | ✗ | ▲ | ✓ | ✓ |
+| `NSGAIISampler` | ✗ ‡ | ✓ ‡ | ✓ | ✓ | ✓ |
+| `NSGAIIISampler` | ✗ ‡ | ✓ ‡ | ✓ | ✓ | ✓ |
+| `GridSampler` | ✓ | ✓ | ▲ | ✓ | ✓ |
+| `QMCSampler` | ✓ | ✓ | ▲ | ✓ | ✓ |
+| `BruteForceSampler` | ✓ | ✓ | ▲ | ✓ | ✓ |
+
+‡ The NSGA samplers are multi-objective by design: `✗`/`✓` shown is for multi-objective use, but each
+degrades to `▲` on a single-objective study.
+
+### Cost and recommended budget
+
+| Sampler | Time complexity per trial | Recommended budget (#trials) |
+|---------|---------------------------|------------------------------|
+| `RandomSampler` | O(*d*) | as many as you like |
+| `TPESampler` | O(*dn* log *n*) | 100–1000 |
+| `GPSampler` | O(*n*³) | up to ~500 |
+| `CmaEsSampler` | O(*d*³) | 1000–10000 |
+| `NSGAIISampler` | O(*mp*²) | 100–10000 |
+| `NSGAIIISampler` | O(*mp*²) | 100–10000 |
+| `GridSampler` | O(*dn*) | number of combinations |
+| `QMCSampler` | O(*dn*) | as many as you like |
+| `BruteForceSampler` | O(*dn*) | number of combinations |
+
+where *d* is the search-space dimension, *n* the number of finished trials, *m* the number of
+objectives, and *p* the population size. The complexities are for the sampling step in
+single-objective optimization (the NSGA rows are the multi-objective exception); OptunaSharp also spends
+O(*d*) to call the suggest methods and O(*n*) to collect finished trials, which the table omits.
+The recommended budget includes any `nStartupTrials` a sampler takes, and depends on the number of
+parameters and objectives.
+
+Beyond these nine, OptunaSharp ports many more samplers — CMA-ES variants (separable, with-margin,
+LM-CMA, VkD-CMA), the natural-evolution-strategy family (OpenAI-ES, SNES, xNES), trust-region and
+random-embedding Bayesian optimization (TuRBO, REMBO, SAASBO), the JANUS infill family, and additional
+MOEAs (SMS-EMOA, AGE-MOEA-2, MOEA/D, RVEA, PSO, Differential Evolution) — each documented on its own
+[Methods](methods/index.md) page. Optuna's table also lists two samplers that live outside Core:
+**AutoSampler** (not ported; reachable through the [OptunaHub bridge](../integrations/python/optunahub.md))
+and **BoTorchSampler** (O(*n*³) per trial, 10–100 trials; available through the
+[BoTorch bridge](../integrations/python/botorch.md)).
 
 ## The workhorses
 
@@ -92,94 +166,6 @@ Available crossovers (all in `OptunaSharp.Samplers.Nsgaii`): `UniformCrossover`,
 `SBXCrossover`, `VSBXCrossover`, `SPXCrossover`, `UNDXCrossover`; mutation: `PolynomialMutation`.
 `NSGAIIISampler` additionally accepts `referencePoints` and `dividingParameter`.
 
-#### Conditional parameters — NSGA-III-CPT (OptunaSharp extension)
-
-Define-by-run objectives often suggest a parameter only under a branch — `beta1` only when
-`optimizer == "adam"`. Optuna's GA samplers evolve the *intersection* search space (the parameters every
-completed trial has), so such a parameter drops out after the first trial that lacks it and is then
-resampled at random on every trial: no crossover, no mutation, no inheritance. **`NSGAIIICptSampler`**
-(NSGA-III with **C**ategorical **P**arameter **T**rees) is the OptunaSharp sampler that closes this gap:
-it is a standalone copy of `NSGAIIISampler` that takes a `ConditionalParams` (in
-`OptunaSharp.Samplers.NsgaiiiCpt`) rule set declaring the activation structure, so it keeps those
-parameters in the relative search space and
-evolves them whenever they are active — and leaves them out entirely, never blended and never counted,
-whenever they are not. The plain `NSGAIISampler` / `NSGAIIISampler` (and `AgeMoea2Sampler` / `RveaSampler`)
-are bit-exact Optuna ports and no longer take rules; the feature lives only in `NSGAIIICptSampler`.
-
-```csharp
-using OptunaSharp.Samplers.NsgaiiiCpt;
-
-var rules = new ConditionalParams()
-    .When("optimizer", "adam", "adamw").Activates("beta1", "beta2")   // rules on one activator OR together
-    .When("optimizer", "sgd").Activates("momentum")
-    .When("n_layers", v => (long)v! >= 3).Activates("width_3");        // a predicate for ranges
-
-var sampler = new NSGAIIICptSampler(populationSize: 32, seed: 0, conditionalParams: rules);
-
-study.Optimize(t =>
-{
-    string optimizer = t.SuggestCategorical("optimizer", new[] { "adam", "adamw", "sgd" });
-    if (optimizer is "adam" or "adamw")
-    {
-        t.SuggestFloat("beta1", 0.5, 0.999);
-        t.SuggestFloat("beta2", 0.9, 0.9999);
-    }
-    else
-    {
-        t.SuggestFloat("momentum", 0.0, 0.99);
-    }
-    // ...
-});
-```
-
-How it behaves: a conditional parameter joins the relative search space once any completed trial has
-suggested it (as long as its distribution never changes); crossover runs over the parameters the selected
-parents share, a parameter only some parents carry is inherited from one of them, and every conditional
-parameter that is inactive for the child is pruned before mutation, so it neither counts toward the
-default `1 / n_params` mutation probability nor reaches the trial. The objective's own `Suggest*` calls
-stay the final word, as always in define-by-run. Rules for the same activator OR together, rules for
-different activators AND together, activators may themselves be conditional (chains), and cycles are
-rejected. Values compare with Python `==` semantics (`1 == 1.0 == true`, strings ordinal); a predicate
-receives the boxed `long` / `double` / raw choice value. The sampler warns once per parameter when a
-completed trial contradicts the rules (present while inactive, or absent while active) — usually a sign
-the objective's branches and the declaration drifted apart. Only `NSGAIIICptSampler` accepts
-`conditionalParams`; constructed with no rules it is bit-identical to `NSGAIIISampler`. There is
-no Optuna analog for the GA samplers (for TPE, Optuna's own answer is `TPESampler(group: true)`).
-
-`examples/ConditionalParameters.cs` prints the effect generation by generation: the same seeded NSGA-III
-study with and without the rules, where the branch-only parameters converge on their optima with rules
-and sit at the random-draw level without. `ConditionalParamsProofTests` pins the three guarantees: every
-rule kind drives the sampler's own proposals, a parameter is learned while active, and a deactivated
-parameter leaves the child and the RNG state bit-identical to a world in which it never existed.
-`ConditionalParamsGateTests` is the null control — the effect happens only when you turn it on: with no
-rules, an empty `ConditionalParams`, or rules that always admit, the study is byte-for-byte the Optuna
-baseline (an empty rule set is a bit-exact no-op even on a branchy study — NSGA-III-CPT reproduces
-`NSGAIIISampler` parity, copy-type and arithmetic crossover); and activation is per-parameter — declaring
-one branch-only parameter leaves an undeclared sibling exactly at its no-rules random-draw level.
-
-##### Dormant-value memory (opt-in)
-
-By default a reactivating branch is re-sampled from scratch: when `optimizer` flips back to `adam` and no
-selected parent happened to carry `beta1`, `beta1` is drawn at random and everything learned about it last
-time is lost. Set `PreserveDormantValues = true` on the rule set to keep it instead:
-
-```csharp
-var rules = new ConditionalParams { PreserveDormantValues = true }
-    .When("optimizer", "adam").Activates("beta1")
-    .When("optimizer", "sgd").Activates("momentum");
-```
-
-While a branch is inactive its parameter's last value is parked in a latent side channel (a trial system
-attribute) — never suggested, never scored, never crossed or mutated, so it stays out of every equation
-and does not change while dormant — and a reactivating branch **resumes from that value instead of a random
-draw**, then evolves normally from there. The hyperparameter list stays fluid, but toggling a branch off
-and on no longer throws its tuning away. This is a genuine divergence (Optuna re-samples), so it is off
-unless you ask for it. Measured on a 256-trial two-branch study, it removes 40–60% of the random
-reactivations; `ConditionalParamsDormantMemoryTests` pins the resume/park/no-op behavior and that effect.
-
-The design, the math-neutrality guarantee, and the paper-oriented write-up of all of this live in
-[`docs/NSGA-III-DCPARA.md`](../../NSGA-III-DCPARA.md).
-
 ### GridSampler and BruteForceSampler
 
 `GridSampler` enumerates an explicit grid you provide and stops when it is exhausted
@@ -237,15 +223,6 @@ These are the documented, tested differences from Optuna:
 - **GridSampler** may order not-yet-visited grid points differently under concurrency (cosmetic).
 - **NSGAIIISampler** can differ on near-tie reference-point selection; **UNDXCrossover** uses a managed
   QR and diverges for 1-D search spaces.
-- **ConditionalParams** (`NSGAIIICptSampler` / NSGA-III-CPT) is an OptunaSharp extension with no Optuna analog, off by default;
-  its `PreserveDormantValues` mode is a deliberate divergence — a reactivating conditional branch resumes
-  its parked value instead of the random re-sample Optuna would do. A parameter that is inactive for a
-  child is math-neutral — out of selection, ranking, niching, the tournament, mutation, and the crossover
-  operator (including the multi-parent operators' partial-carrier draw) — proven bit-for-bit against a
-  "never existed" world (`ConditionalParamsMathNeutralityTests`). The single residual: the conditional
-  crossover rejects out-of-box children and redraws, so a box-overshooting operator (**vSBXCrossover**) can
-  let a parameter that is *active on a rejected attempt* shift the redraw stream — an active-parameter
-  effect on a discarded attempt, not a deactivated one; rare and absent from the default `UniformCrossover`.
 
 All are marked in the source and pinned by tests.
 

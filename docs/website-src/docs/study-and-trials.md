@@ -39,7 +39,9 @@ public static Study CreateStudy(
 
 Related module functions on `Optuna`: `LoadStudy`, `DeleteStudy`, `CopyStudy`,
 `GetAllStudySummaries`, and `GetAllStudyNames`. Pass a persistent [storage](storage.md) plus
-`studyName` and `loadIfExists: true` to make a run resumable.
+`studyName` and `loadIfExists: true` to make a run resumable. `GetAllStudySummaries` returns
+`StudySummary` records — a study's name, direction(s), best trial, trial count, timestamps, and
+attributes — a lightweight snapshot that never loads every trial.
 
 ## Suggesting hyperparameters
 
@@ -141,6 +143,22 @@ trial.SetUserAttr("fold", 3);                       // …or on a trial
 study.EnqueueTrial(new() { ["x"] = 0.0 });          // evaluate specific params next
 study.AddTrial(FrozenTrial.CreateTrial(             // inject an already-evaluated trial
     value: 0.5, @params: new() { ["x"] = 1.5 }));
+```
+
+## Callbacks and trial limits
+
+`Optimize` takes a `callbacks` list of `Action<Study, FrozenTrial>` run after every trial — for logging,
+early exit, or bookkeeping. `MaxTrialsCallback` caps a study at a **total** number of trials in chosen
+states across every worker, independent of how many `nTrials` any single `Optimize` call requested
+(useful when several processes share one storage):
+
+```csharp
+using OptunaSharp;
+
+study.Optimize(Objective, nTrials: 1000, callbacks: new[]
+{
+    new MaxTrialsCallback(100, new[] { TrialState.Complete }).Invoke,   // stop once 100 have completed
+});
 ```
 
 ## Trial types

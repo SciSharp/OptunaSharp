@@ -31,6 +31,12 @@ public static List<ArtifactMeta> GetAllArtifactMeta(object studyOrTrial, BaseSto
 `studyOrTrial` accepts a `Trial`, `FrozenTrial`, or `Study`; `UploadArtifact` returns the generated
 artifact id and records an `ArtifactMeta` (id, filename, MIME type, encoding) on the target.
 
+> **Removal is store-level.** Matching Optuna, `ArtifactFunctions` provides no user-facing removal
+> function — only upload, download, and metadata listing. To delete an artifact call the store's own
+> `Remove(artifactId)`; that erases the blob but leaves the trial/study `ArtifactMeta` in place. See
+> [How can I delete all the artifacts uploaded to a study?](faq.md) for the full pattern and the
+> warning about removing artifacts a live study still references.
+
 ## Uploading and downloading
 
 ```csharp

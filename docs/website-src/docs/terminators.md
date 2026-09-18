@@ -5,10 +5,11 @@ A **terminator** stops the *whole study* once more trials are unlikely to help â
 improvement against the noise in your evaluation, and calls it done when improvement no longer clears
 the noise. OptunaSharp ports `optuna.terminator` into **`OptunaSharp.Terminator`**.
 
-> **Deprecated in Optuna.** The `optuna.terminator` module is deprecated as of Optuna v4.9.0.
-> OptunaSharp ports it for parity and reproduces the deprecation: `Terminator`, `TerminatorCallback`,
-> and `ReportCrossValidationScores` emit a warning when used. It remains functional; prefer a fixed
-> trial budget or a [pruner](pruners.md) for new code.
+> **Deprecated in Optuna.** The `optuna.terminator` module is deprecated as of Optuna v4.9.0 and is
+> scheduled for removal in Optuna v6.0.0, with its functionality planned to move to
+> [hub.optuna.org](https://hub.optuna.org). OptunaSharp ports it for parity and reproduces the
+> deprecation: `Terminator`, `TerminatorCallback`, and `ReportCrossValidationScores` emit a warning
+> when used. It remains functional; prefer a fixed trial budget or a [pruner](pruners.md) for new code.
 
 ## How termination is decided
 

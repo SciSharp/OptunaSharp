@@ -5,6 +5,10 @@ you report intermediate values (a validation loss per epoch, say); the pruner co
 trajectory against the others seen so far and decides whether to abandon it. OptunaSharp ports
 `optuna.pruners` into **`OptunaSharp.Pruners`**.
 
+> **Single-objective only.** Like Optuna, pruning is defined only for single-objective studies. In a
+> multi-objective study `trial.Report` throws `NotImplementedException` (matching Optuna, whose
+> `trial.report` raises there), so `ShouldPrune` is never reached and a pruner never runs.
+
 ## The pruning loop
 
 Pruning is a contract between your objective and the pruner: you `Report` and then check

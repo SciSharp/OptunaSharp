@@ -37,6 +37,11 @@ Implement `ILogHandler` to bridge into your application's logging framework (Ser
 `Microsoft.Extensions.Logging`, a file, a test sink). `GetLogger(string name)` returns the `Logger`
 used internally, should you need to emit records under the same configuration.
 
+**Divergence.** Optuna's `enable_propagation` / `disable_propagation` — which toggle whether records
+bubble up to Python's *root* logger — have no analog here: OptunaSharp is not built on the Python
+`logging` package, so there is no root logger to propagate to. Route records into another framework by
+adding your own `ILogHandler` (or removing the default handler) instead.
+
 ## Relationship to Optuna
 
 | Optuna (Python) | OptunaSharp |
