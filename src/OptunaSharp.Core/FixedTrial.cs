@@ -117,15 +117,8 @@ public class FixedTrial : BaseTrial
     /// <summary>Updates the local user attribute by name.</summary>
     public override void SetUserAttr(string key, object? value) => _userAttrs[key] = value;
 
-    /// <param name="key">Attribute name; an existing attribute is overwritten.</param>
-    /// <param name="value">Value retained in this replay record's local internal-attribute dictionary.</param>
-    /// <summary>Updates the local internal attribute by name.</summary>
-    [Obsolete(DeprecationMessages.SetSystemAttr)]
-    public override void SetSystemAttr(string key, object? value)
-    {
-        OptunaWarnings.Warn(DeprecationMessages.SetSystemAttr, WarningCategory.FutureWarning);
-        _systemAttrs[key] = value;
-    }
+    // FixedTrial.set_system_attr (deprecated 3.1.0) was removed in Optuna 5.0.0 (#6834); the read-only
+    // SystemAttrs view stays, as it does in Optuna. Constraints still land in it via SetConstraint.
 
     /// <param name="name">Parameter name; repeated suggestions refer to the same parameter.</param>
     /// <param name="distribution">Distribution defining the parameter representation and allowed values.</param>
@@ -168,8 +161,12 @@ public class FixedTrial : BaseTrial
     /// <summary>Gets the user metadata attached to this trial.</summary>
     public override IReadOnlyDictionary<string, object?> UserAttrs => _userAttrs;
 
-    /// <summary>Gets the internal metadata used by samplers and storage.</summary>
-    public override IReadOnlyDictionary<string, object?> SystemAttrs => _systemAttrs;
+    /// <summary>
+    ///     Gets the internal metadata recorded on this fixed trial (e.g. the constraint values written by
+    ///     <see cref="SetConstraint" />). Still part of Optuna 5.0.0's <c>FixedTrial</c>; only the setter was
+    ///     removed (#6834).
+    /// </summary>
+    public IReadOnlyDictionary<string, object?> SystemAttrs => _systemAttrs;
 
     /// <summary>Gets the local time at which this replay trial was constructed.</summary>
     public override DateTime? DatetimeStart => _datetimeStart;

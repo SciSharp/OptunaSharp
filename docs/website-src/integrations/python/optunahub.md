@@ -61,6 +61,15 @@ A benchmark wrapper reads `Directions` and `SearchSpace` eagerly, preserving Pyt
 Its objective first calls C# `SuggestFloat`, `SuggestInt` or `SuggestCategorical` for each parameter,
 then passes the resulting dictionary to Python `evaluate(params)`.
 
+With OptunaHub 0.5.0 or newer installed, the objective does what `BaseProblem.__call__` does between those
+two steps: it calls the problem's `evaluate_constraints(params)` and records each value on the trial with
+`trial.SetConstraint(name, value)`, before `evaluate` runs. Constraint-aware samplers then see each trial's
+feasibility through `FrozenTrial.Constraints`, with no `constraints_func`. A trial is feasible when every
+value is zero or less. A benchmark package written for an older OptunaHub returns a list instead of a
+dictionary: its values are named `"0"`, `"1"`, … and OptunaHub's own `FutureWarning` is raised, exactly as
+in Python. With an OptunaHub older than 0.5.0, nothing is recorded, because that version's `__call__` never
+applied constraints.
+
 For example, after installing the requirements of `benchmarks/bbob`:
 
 ```csharp

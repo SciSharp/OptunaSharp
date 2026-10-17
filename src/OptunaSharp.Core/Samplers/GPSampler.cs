@@ -28,10 +28,11 @@ namespace OptunaSharp.Samplers;
 ///     <para><b>Scope (PORTING_PLAN Phase 3.2 part 3e — complete):</b> every path is ported. Sequential
 ///     (no running trials): single-objective unconstrained (<see cref="LogEI" />), constrained
 ///     (<see cref="LogCEI" />), multi-objective (<see cref="LogEHVI" />), and multi-objective constrained
-///     (<see cref="LogCEHVI" />). With running trials (asked but not yet told): the q-batch acqfs
-///     (<see cref="QLogEI" />, <see cref="QLogCEI" />, <see cref="QLogEHVI" />) built on the
-///     <see cref="ConditionalGPRegressor" />, and the Kriging-Believer <see cref="LogCEHVI" /> for the
-///     multi-objective constrained case.</para>
+///     (<see cref="LogCEHVI" />). With running trials (asked but not yet told): the q-batch acqfs built
+///     on the <see cref="ConditionalGPRegressor" /> — <see cref="QLogEI" />, <see cref="QLogCEI" />,
+///     <see cref="QLogEHVI" />, and (since Optuna 5.0.0, #6804) <see cref="QLogCEHVI" /> for the
+///     multi-objective constrained case, which earlier versions handled with a Kriging-Believer
+///     <see cref="LogCEHVI" />.</para>
 /// </summary>
 /// <example>
 ///     <code>
@@ -192,7 +193,7 @@ public class GPSampler : BaseSampler
         double[,] normalizedParams = internalSearchSpace.GetNormalizedParams(completedParams);
 
         // The running trials' normalized params (via the shared gp:relative_params attrs) — the
-        // q-batch / Kriging-Believer acquisition functions condition on the trials already in flight.
+        // q-batch acquisition functions condition on the trials already in flight.
         bool hasRunning = runningTrials.Count > 0;
         double[,]? normalizedParamsOfRunningTrials = hasRunning
             ? internalSearchSpace.GetNormalizedParams(runningTrials.Select(GetParams).ToList())
@@ -296,13 +297,18 @@ public class GPSampler : BaseSampler
                 (List<GPRegressor> constrGprList, double[] constrThresholdList) =
                     GetConstraintsAcqfArgs(constraintVals, internalSearchSpace, normalizedParams);
                 bool isAllInfeasible = !isFeasible.Any(f => f);
-                // The MO-constrained running path stays the Kriging-Believer LogCEHVI (not a q-acqf):
-                // running params are forwarded and appended as fantasies inside LogEHVI/LogPI.
+                // Optuna 5.0.0 (#6804): with running trials the MO-constrained case is the q-batch
+                // qLogCEHVI (fantasy-conditioned); without them it stays the sequential LogCEHVI. Both
+                // branches draw exactly one QMC seed, so the sampler's RNG stream is unchanged.
                 int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
                 double[,]? yFeasible = isAllInfeasible ? null : FilterRows(standardizedScoreVals, isFeasible);
-                acqf = new LogCEHVI(
-                    gprsList.ToArray(), internalSearchSpace, yFeasible, _nQmcSamplesEhvi, qmcSeed,
-                    constrGprList, constrThresholdList, normalizedParamsOfRunningTrials);
+                acqf = hasRunning
+                    ? new QLogCEHVI(
+                        gprsList.ToArray(), internalSearchSpace, yFeasible, _nQmcSamplesEhvi, qmcSeed,
+                        constrGprList, constrThresholdList, normalizedParamsOfRunningTrials!)
+                    : new LogCEHVI(
+                        gprsList.ToArray(), internalSearchSpace, yFeasible, _nQmcSamplesEhvi, qmcSeed,
+                        constrGprList, constrThresholdList);
                 bestParams = isAllInfeasible
                     ? null
                     : GetBestParamsForMultiObjective(

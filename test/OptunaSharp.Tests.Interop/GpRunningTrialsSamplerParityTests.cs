@@ -13,9 +13,10 @@ namespace OptunaSharp.Tests.Interop;
 /// <summary>
 ///     Per-suggestion parity of the <b>running-trial</b> <see cref="GPSampler" /> paths (PORTING_PLAN
 ///     Phase 3.2 part 3e-6) against live Optuna. When trials are in flight (asked but not yet told),
-///     GPSampler switches to the q-batch / Kriging-Believer acquisition functions — <c>qLogEI</c>
-///     (single-objective), <c>qLogCEI</c> (single-objective constrained), <c>qLogEHVI</c>
-///     (multi-objective), and the Kriging-Believer <c>LogCEHVI</c> (multi-objective constrained).
+///     GPSampler switches to the q-batch acquisition functions — <c>qLogEI</c> (single-objective),
+///     <c>qLogCEI</c> (single-objective constrained), <c>qLogEHVI</c> (multi-objective), and, since
+///     Optuna 5.0.0 (#6804), <c>qLogCEHVI</c> (multi-objective constrained; before 5.0.0 this case was the
+///     Kriging-Believer <c>LogCEHVI</c>).
 ///
 ///     <para>OptunaSharp drives an <c>Ask</c>/<c>Tell</c> schedule that <b>leaves some trials running</b>
 ///     (asked + suggested, never told) so the trial under test sees them; Optuna then <b>replays</b> the
@@ -126,7 +127,7 @@ public class GpRunningTrialsSamplerParityTests : OptunaInteropTestBase
     [DataRow(42)]
     public void MultiObjectiveConstrainedWithRunning_PerSuggestion_MatchesLiveOptuna(int seed)
     {
-        // Kriging-Believer LogCEHVI — multi-objective constrained with running trials.
+        // qLogCEHVI (Optuna 5.0.0, #6804) — multi-objective constrained with running trials.
         RunAndAssert(
             seed, nDir: 2, hasConstraints: true, nCompletedGp: 3, nRunning: 3,
             objective: (a, b) => (new[] { a * a + b * b, (a - 2) * (a - 2) + b * b }, new[] { a - 1.0 }));

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using AwesomeAssertions;
 using OptunaSharp.Collections;
@@ -94,6 +95,31 @@ public class SearchSpaceTransformTests
         // Values at/above high clamp to nextafter(high, high-1) — high itself is unreachable.
         var back = trans.Untransform(NumSharp.np.array(new[] { 1.0 }));
         ((double)back["x"]!).Should().Be(MathUtil.NextAfter(1.0, 0.0));
+    }
+
+    /// <summary>
+    ///     Optuna 5.0.0 (#6799) clips a log float to <c>[low, nextafter(high, high - 1)]</c> on BOTH ends.
+    ///     <c>exp(log(1e-7))</c> rounds to <c>9.999999999999994e-08</c>, so before the fix a coordinate on
+    ///     the lower edge of the transformed box came back one ULP below <c>low</c> — outside the
+    ///     distribution the value is then suggested from.
+    /// </summary>
+    [TestMethod]
+    public void Untransform_Clamps_LogFloat_To_Both_Bounds()
+    {
+        var distribution = new FloatDistribution(1e-7, 1.0, log: true);
+        var space = new OrderedDict<string, BaseDistribution> { ["x"] = distribution };
+        var trans = new SearchSpaceTransform(space);
+
+        // Guard: the exp/log round trip genuinely undershoots this bound, so the assertion below keeps
+        // exercising the low clamp rather than passing because the round trip happened to be exact.
+        Math.Exp(Math.Log(1e-7)).Should().BeLessThan(1e-7);
+
+        ((double)trans.Untransform(NumSharp.np.array(new[] { Math.Log(1e-7) }))["x"]!)
+            .Should().Be(1e-7, "the lower edge clamps to low exactly");
+        ((double)trans.Untransform(NumSharp.np.array(new[] { Math.Log(1.0) }))["x"]!)
+            .Should().Be(MathUtil.NextAfter(1.0, 0.0), "high itself stays unreachable, as before");
+        double.IsNaN((double)SearchSpaceTransform.UntransformNumericalParam(double.NaN, distribution, transformLog: true))
+            .Should().BeTrue("np.clip propagates NaN instead of clamping it");
     }
 
     [TestMethod]

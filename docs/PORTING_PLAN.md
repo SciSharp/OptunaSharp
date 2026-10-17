@@ -1,6 +1,8 @@
 # OptunaSharp — Optuna → C# Conversion Plan
 
-**Source of truth:** `optuna/optuna` @ `f6898da` (v5.0.0.dev, cloned at `K:/source/optuna`, vendored as a pinned submodule at `refs/optuna`) — 24,474 core SLOC
+**Source of truth:** `optuna/optuna` @ `01ddd17` (the **v5.0.0 release**, vendored as a pinned submodule at `refs/optuna`; re-pinned on
+2026-10-17 from the pre-release `f6898da` 5.0.0.dev snapshot the port was built against — the delta was #6799 log-float clamp,
+#6804 `qLogCEHVI`, #6834 `system_attrs` removal, all ported) — 24,474 core SLOC at the original pin
 (tokenizer-counted, comments/docstrings excluded). Secondary reference: `optuna/rustuna` @ `8acb2dd`
 (`K:/source/rustuna`) — used ONLY where it accelerates (SQLite schema, Sobol tables, static-type designs);
 Optuna's Python behavior always wins on conflict.
@@ -956,7 +958,7 @@ moment OptunaSharp.Core loads. Keep it.
   6 unit tests (fixed-datetime bars, exact indented-JSON+`<br>` hovertext, `n_recent_trials` slice,
   non-positive `ValueError`, running-trial `complete>start`, empty study) + 2 live parity (hovertext + n_recent
   slice). Suite: **465 unit + 205 interop**, both TFMs, none skipped. **Phase 3.1 done — 13/13 viz builders.**
-- ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `refs/optuna` @ `f6898da`.
+- ✅ Reference vendored — `chore: vendor optuna submodule` (`474db6d`), `refs/optuna` @ `f6898da` (re-pinned to the v5.0.0 release `01ddd17` on 2026-10-17).
 - ✅ Test suites — `test: Phase 0+1 proven` (`cdb3b7b`) + `test(parity): deep parity engine` (`21ff67f`).
 
 ### 🟩 Byproducts already landed that later items depend on (don't re-port these)

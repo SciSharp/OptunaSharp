@@ -10,8 +10,8 @@ namespace OptunaSharp.Tests.Interop;
 /// <summary>
 ///     Live parity of the <b>q-batch</b> GP acquisition functions (PORTING_PLAN Phase 3.2 part 3e-6)
 ///     against Optuna — the running-trial surface built on <see cref="ConditionalGPRegressor" />
-///     (<c>gp.py: ConditionalGPRegressor.sample_joint_posterior</c>): <c>qLogEI</c> (this file grows to
-///     cover <c>qLogPI</c>/<c>qLogCEI</c>/<c>qLogEHVI</c> as they land). Both sides fit <b>fixed</b>
+///     (<c>gp.py: ConditionalGPRegressor.sample_joint_posterior</c>): <c>qLogEI</c>, <c>qLogPI</c>,
+///     <c>qLogCEI</c>, <c>qLogEHVI</c>, and the Optuna 5.0.0 <c>qLogCEHVI</c> (#6804). Both sides fit <b>fixed</b>
 ///     kernel hyperparameters (no fit) and share the QMC seed, so the comparison isolates the
 ///     conditional-posterior conditioning + the <c>amax</c>/<c>logsumexp</c> reduction (and its
 ///     hand-derived gradient — the hardest gradient in the GP stack) from the fit's ULP drift.
@@ -58,6 +58,12 @@ public class GpQBatchAcqfParityTests : OptunaInteropTestBase
         "def _qlogehvi(X, isc, Ytrain, Ys, isls, kss, nvs, n_qmc, seed, Xr, xs):\n" +
         "    gprs = [_build(X, np.array(Ys[i]), isc, np.array(isls[i]), kss[i], nvs[i]) for i in range(len(Ys))]\n" +
         "    a = _acqf.qLogEHVI(gprs, _space(X.shape[1]), torch.from_numpy(Ytrain), n_qmc, seed, Xr)\n" +
+        "    return a.eval_acqf_no_grad(xs).tolist(), _grads(a, xs)\n" +
+        "def _qlogcehvi(X, isc, Yfeas, Ys, isls, kss, nvs, Yc, islc, ksc, nvc, cthrs, n_qmc, seed, Xr, xs):\n" +
+        "    gprs = [_build(X, np.array(Ys[i]), isc, np.array(isls[i]), kss[i], nvs[i]) for i in range(len(Ys))]\n" +
+        "    gc = [_build(X, np.array(Yc[i]), isc, np.array(islc[i]), ksc[i], nvc[i]) for i in range(len(Yc))]\n" +
+        "    yf = None if Yfeas is None else torch.from_numpy(np.array(Yfeas, dtype=float))\n" +
+        "    a = _acqf.qLogCEHVI(gprs, _space(X.shape[1]), yf, n_qmc, seed, gc, list(cthrs), Xr)\n" +
         "    return a.eval_acqf_no_grad(xs).tolist(), _grads(a, xs)\n";
 
     // Compare grads element-wise, excluding entries where Optuna's autograd is non-finite.
@@ -282,6 +288,105 @@ public class GpQBatchAcqfParityTests : OptunaInteropTestBase
                 CompareGrad);
             PyFloat("d_eval").Should().BeLessThan(1e-7, $"qLogEHVI eval trial={trial} nObj={nObj} nRun={nRunning}");
             PyFloat("d_grad").Should().BeLessThan(1e-5, $"qLogEHVI grad trial={trial} nObj={nObj} nRun={nRunning}");
+        }
+    }
+
+    /// <summary>
+    ///     Live parity of <see cref="QLogCEHVI" /> (Optuna 5.0.0, #6804 — multi-objective constrained with
+    ///     running trials) against <c>optuna._gp.acqf.qLogCEHVI</c>, eval and hand-derived gradient, on fixed
+    ///     hyperparameters. The sweep varies the objective and constraint counts, the running-trial count
+    ///     and the constraint thresholds (straddling the data so the per-draw fantasy feasibility mask
+    ///     genuinely varies), and takes the <c>Y_feasible = None</c> marginal-LogPI branch on every fourth
+    ///     trial; the other trials pass a random non-empty subset of the training rows as the feasible
+    ///     baseline.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void QLogCEHVI_EvalAndGrad_MatchesOptuna_Sweep()
+    {
+        PythonSession.EnsureOrInconclusive();
+        PyExec(Helper);
+        var rng = new Random(424242);
+        for (int trial = 0; trial < 16; trial++)
+        {
+            int dim = 1 + rng.Next(2);
+            int nObj = 2 + rng.Next(2);
+            int nCons = 1 + rng.Next(2);
+            int nPoints = dim + 6 + rng.Next(3);
+            int nRunning = 1 + rng.Next(3);
+            int nQuery = 5;
+            int nQmc = 32;
+            int qmcSeed = rng.Next(1, 1_000_000);
+            var isCat = new bool[dim];
+            bool allInfeasible = trial % 4 == 0;
+
+            double[,] x = RandMatrix(rng, nPoints, dim);
+            var ys = new double[nObj][];
+            var isls = new double[nObj][];
+            var kss = new double[nObj];
+            var nvs = new double[nObj];
+            var yTrain = new double[nPoints, nObj];
+            var gprs = new GPRegressor[nObj];
+            for (int o = 0; o < nObj; o++)
+            {
+                (double[] y, double[] isl, double ks, double nv, _, _) = RandGp(rng, nPoints, dim);
+                for (int i = 0; i < nPoints; i++) yTrain[i, o] = y[i];
+                ys[o] = y; isls[o] = isl; kss[o] = ks; nvs[o] = nv;
+                var gpr = new GPRegressor(isCat, x, y, isl, ks, nv);
+                gpr.CacheMatrix();
+                gprs[o] = gpr;
+            }
+
+            var yc = new double[nCons][];
+            var islc = new double[nCons][];
+            var ksc = new double[nCons];
+            var nvc = new double[nCons];
+            var cthrs = new double[nCons];
+            var consGprs = new GPRegressor[nCons];
+            for (int c = 0; c < nCons; c++)
+            {
+                (double[] y, double[] isl, double ks, double nv, double cmin, double cmax) = RandGp(rng, nPoints, dim);
+                yc[c] = y; islc[c] = isl; ksc[c] = ks; nvc[c] = nv;
+                cthrs[c] = cmin - 0.3 + rng.NextDouble() * (cmax - cmin + 0.6);
+                var g = new GPRegressor(isCat, x, y, isl, ks, nv);
+                g.CacheMatrix();
+                consGprs[c] = g;
+            }
+
+            // A random non-empty subset of the training rows stands in for the feasible baseline.
+            double[,]? yFeasible = null;
+            if (!allInfeasible)
+            {
+                var rows = new System.Collections.Generic.List<int>();
+                for (int i = 0; i < nPoints; i++)
+                    if (rng.NextDouble() < 0.6) rows.Add(i);
+                if (rows.Count == 0) rows.Add(rng.Next(nPoints));
+                yFeasible = new double[rows.Count, nObj];
+                for (int k = 0; k < rows.Count; k++)
+                    for (int o = 0; o < nObj; o++)
+                        yFeasible[k, o] = yTrain[rows[k], o];
+            }
+            double[,] xr = RandMatrix(rng, nRunning, dim);
+            double[,] xs = RandMatrix(rng, nQuery, dim);
+
+            var acqf = new QLogCEHVI(gprs, DummySpace(dim), yFeasible, nQmc, qmcSeed, consGprs, cthrs, xr);
+            double[] ng = acqf.EvalAcqfNoGrad(xs);
+            double[][] grads = RowGrads(acqf, xs);
+
+            PyExec(
+                $"X = np.array({Lit(x)}, dtype=float)\nisc = np.array({Lit(isCat)})\n" +
+                $"Yfeas = {(yFeasible == null ? "None" : Lit(yFeasible))}\n" +
+                $"Ys = {Lit2(ys)}\nisls = {Lit2(isls)}\nkss = {Lit(kss)}\nnvs = {Lit(nvs)}\n" +
+                $"Yc = {Lit2(yc)}\nislc = {Lit2(islc)}\nksc = {Lit(ksc)}\nnvc = {Lit(nvc)}\ncthrs = {Lit(cthrs)}\n" +
+                $"Xr = np.array({Lit(xr)}, dtype=float)\nxs = np.array({Lit(xs)}, dtype=float)\n" +
+                $"ng_cs = np.array({Lit(ng)})\ngr_cs = {Lit2(grads)}\n" +
+                $"ng_py, gr_py = _qlogcehvi(X, isc, Yfeas, Ys, isls, kss, nvs, Yc, islc, ksc, nvc, cthrs, {nQmc}, {qmcSeed}, Xr, xs)\n" +
+                "ng_py = np.array(ng_py)\n" +
+                "d_eval = float(np.max(np.abs(ng_py - ng_cs) / (1.0 + np.abs(ng_py))))\n" +
+                CompareGrad);
+            string context = $"trial={trial} nObj={nObj} nCons={nCons} nRun={nRunning} allInfeasible={allInfeasible}";
+            PyFloat("d_eval").Should().BeLessThan(1e-7, $"qLogCEHVI eval {context}");
+            PyFloat("d_grad").Should().BeLessThan(1e-5, $"qLogCEHVI grad {context}");
         }
     }
 

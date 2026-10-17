@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using AwesomeAssertions;
 using NumSharp;
+using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
@@ -256,6 +257,72 @@ public class QmcSamplerTests
         }
 
         captured.Should().BeNull();
+    }
+
+    /// <summary>
+    ///     The six numerical distributions Optuna's <c>RelativeSamplerTestCase.test_sample_relative_numerical</c>
+    ///     crosses for both parameters (<c>optuna/testing/pytest_samplers.py</c>).
+    /// </summary>
+    /// <returns>Fresh distribution instances in Optuna's parametrize order.</returns>
+    private static BaseDistribution[] RelativeNumericalDistributions() => new BaseDistribution[]
+    {
+        new FloatDistribution(-1.0, 1.0),
+        new FloatDistribution(1e-7, 1.0, log: true),
+        new FloatDistribution(-10, 10, step: 0.5),
+        new IntDistribution(3, 10),
+        new IntDistribution(1, 100, log: true),
+        new IntDistribution(3, 9, step: 2),
+    };
+
+    /// <summary>
+    ///     Port of the coverage Optuna 5.0.0 restored for <c>QMCSampler</c> (#6799 adds it to
+    ///     <c>TestRelativeSampler</c>): for every pair of numerical distributions, each relative sample lies
+    ///     inside its distribution and keeps the distribution's numeric type. The first Sobol' point is the
+    ///     origin, so a log float lands exactly on its lower edge — the case that came back one ULP below
+    ///     <c>low</c> before <see cref="SearchSpaceTransform" /> clamped both ends.
+    /// </summary>
+    [TestMethod]
+    public void RelativeSamples_StayInsideEveryNumericalDistribution()
+    {
+        foreach (BaseDistribution xDistribution in RelativeNumericalDistributions())
+        foreach (BaseDistribution yDistribution in RelativeNumericalDistributions())
+        {
+            var searchSpace = new OrderedDict<string, BaseDistribution>
+            {
+                ["x"] = xDistribution,
+                ["y"] = yDistribution,
+            };
+            var sampler = new QMCSampler(seed: 0, warnIndependentSampling: false);
+            var study = Optuna.CreateStudy(sampler: sampler);
+
+            // One completed trial over the same space, exactly like the Optuna test's ask/tell preamble.
+            Trial first = study.Ask(searchSpace);
+            study.Tell(first, Convert.ToDouble(first.Params["x"]) + Convert.ToDouble(first.Params["y"]));
+
+            // Optuna samples 10 points for the bounds check plus one more for the type check; each call
+            // advances the QMC sample id, so the first call is the Sobol' origin (every lower edge).
+            for (int k = 0; k < 11; k++)
+            {
+                int trialId = study.Storage.CreateNewTrial(study.StudyId);
+                OrderedDict<string, object?> sampled =
+                    sampler.SampleRelative(study, study.Storage.GetTrial(trialId), searchSpace);
+                foreach (var (name, distribution) in searchSpace)
+                {
+                    string because = $"{name} ~ {distribution}, sample {k}";
+                    switch (distribution)
+                    {
+                        case FloatDistribution f:
+                            sampled[name].Should().BeOfType<double>(because);
+                            ((double)sampled[name]!).Should().BeInRange(f.Low, f.High, because);
+                            break;
+                        case IntDistribution i:
+                            sampled[name].Should().BeOfType<long>(because);
+                            ((long)sampled[name]!).Should().BeInRange(i.Low, i.High, because);
+                            break;
+                    }
+                }
+            }
+        }
     }
 
     [DataTestMethod]

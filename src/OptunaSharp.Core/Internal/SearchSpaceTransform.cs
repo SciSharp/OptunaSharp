@@ -289,7 +289,19 @@ internal sealed class SearchSpaceTransform
             _ => throw new InvalidOperationException("Should not reach. Unexpected distribution."),
         };
 
-    /// <summary>Python <c>_untransform_numerical_param</c>. Returns a boxed double (float) or long (int).</summary>
+    /// <summary>
+    ///     Maps one transformed numerical coordinate back to the external value a sampler hands to the
+    ///     trial (Python <c>_untransform_numerical_param</c>): a boxed <see cref="double" /> for float
+    ///     distributions or a boxed <see cref="long" /> for int distributions, always inside the
+    ///     distribution's bounds so the suggested value passes the distribution's own containment check.
+    /// </summary>
+    /// <remarks>
+    ///     The clamping is deliberately asymmetric, exactly as in Optuna 5.0.0: a log float is clipped to
+    ///     <c>[low, nextafter(high, high - 1)]</c> (both ends), a plain float only has its upper end pulled
+    ///     below <c>high</c>, a stepped float snaps to the grid inside <c>[low, high]</c>, and ints round
+    ///     half-up (linear) or half-to-even (log) before clamping to <c>[low, high]</c>. A NaN coordinate
+    ///     stays NaN on the float branches, matching <c>np.clip</c>/<c>min</c> in Python.
+    /// </remarks>
     /// <param name="transParam">The scalar coordinate in the transformed numerical space.</param>
     /// <param name="distribution">The distribution defining the external value's numeric support and scale.</param>
     /// <param name="transformLog">Whether logarithmic distributions are mapped through their natural logarithm.</param>
@@ -307,8 +319,13 @@ internal sealed class SearchSpaceTransform
                 if (f.Log)
                 {
                     param = transformLog ? Math.Exp(transParam) : transParam;
+                    // Optuna 5.0.0 (#6799) clamps BOTH ends here: exp(log(low)) rounds to one ULP below
+                    // low for roughly a third of possible bounds (exp(log(1e-7)) == 9.999999999999994e-08),
+                    // so a sample on the lower edge of the box — QMC's first Sobol point, a CMA-ES bound
+                    // repair, a GA clip — would otherwise leave the distribution. Clip propagates NaN the
+                    // way np.clip does, so a NaN coordinate still reaches the caller unchanged.
                     if (!f.Single())
-                        param = Math.Min(param, MathUtil.NextAfter(f.High, f.High - 1));
+                        param = MathUtil.Clip(param, f.Low, MathUtil.NextAfter(f.High, f.High - 1));
                 }
                 else if (f.Step is not null)
                 {

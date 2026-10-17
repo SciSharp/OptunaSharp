@@ -243,13 +243,10 @@ public abstract class BaseTrial
     public void SetComponentLosses(ReadOnlySpan<double> components)
         => SetUserAttr(ComponentLosses.Key, ComponentLosses.Validate(components));
 
-    // Abstract, so the runtime FutureWarning lives in each concrete override (Trial / FrozenTrial /
-    // FixedTrial), each of which Optuna decorates with @deprecated_func individually.
-    /// <param name="key">Attribute name; an existing attribute is overwritten.</param>
-    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
-    /// <summary>Stores a internal attribute by name.</summary>
-    [Obsolete(DeprecationMessages.SetSystemAttr)]
-    public abstract void SetSystemAttr(string key, object? value);
+    // Optuna 5.0.0 (#6834) removed the abstract set_system_attr and system_attrs from BaseTrial (both had
+    // been deprecated since 3.1.0 for removal in 5.0.0). System attributes are optuna-internal state:
+    // samplers and storages read and write them through the storage API, and the read-only views that
+    // remain (FrozenTrial.SystemAttrs, FixedTrial.SystemAttrs) are declared on those classes directly.
 
     /// <summary>Gets parameters already suggested through this trial, using their external values.</summary>
     public abstract IReadOnlyDictionary<string, object?> Params { get; }
@@ -259,9 +256,6 @@ public abstract class BaseTrial
 
     /// <summary>Gets the user metadata attached to this trial.</summary>
     public abstract IReadOnlyDictionary<string, object?> UserAttrs { get; }
-
-    /// <summary>Gets the internal metadata used by samplers and storage.</summary>
-    public abstract IReadOnlyDictionary<string, object?> SystemAttrs { get; }
 
     /// <summary>Gets the trial creation or start time, or null for a waiting trial.</summary>
     public abstract DateTime? DatetimeStart { get; }

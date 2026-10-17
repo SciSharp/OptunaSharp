@@ -267,20 +267,8 @@ public class Study
         }
     }
 
-    /// <summary>Return system attributes of the study.</summary>
-    [Obsolete(DeprecationMessages.SystemAttrs)]
-    public OrderedDict<string, object?> SystemAttrs
-    {
-        get
-        {
-            OptunaWarnings.Warn(DeprecationMessages.SystemAttrs, WarningCategory.FutureWarning);
-            var attrs = Storage.GetStudySystemAttrs(StudyId);
-            var copy = new OrderedDict<string, object?>(attrs.Count);
-            foreach (var (key, value) in attrs)
-                copy[key] = PyJson.DeepCopy(value);
-            return copy;
-        }
-    }
+    // Study.system_attrs (deprecated 3.1.0) was removed in Optuna 5.0.0 (#6834). Study-level system
+    // attributes are optuna-internal; read them through Storage.GetStudySystemAttrs(StudyId).
 
     /// <summary>
     ///     Return metric names. Use <see cref="SetMetricNames" /> to set the metric names first.
@@ -538,18 +526,8 @@ public class Study
     /// <param name="value">A value of the attribute. The value should be JSON serializable.</param>
     public void SetUserAttr(string key, object? value) => Storage.SetStudyUserAttr(StudyId, key, value);
 
-    /// <summary>
-    ///     Set a system attribute to the study. Note that Optuna internally uses this method to
-    ///     save system messages.
-    /// </summary>
-    /// <param name="key">Attribute or constraint name; setting an existing name replaces its value.</param>
-    /// <param name="value">Value to store or convert.</param>
-    [Obsolete(DeprecationMessages.SetSystemAttr)]
-    public void SetSystemAttr(string key, object? value)
-    {
-        OptunaWarnings.Warn(DeprecationMessages.SetSystemAttr, WarningCategory.FutureWarning);
-        Storage.SetStudySystemAttr(StudyId, key, value);
-    }
+    // Study.set_system_attr (deprecated 3.1.0) was removed in Optuna 5.0.0 (#6834). Optuna-internal
+    // writers go through Storage.SetStudySystemAttr(StudyId, key, value); users keep SetUserAttr.
 
     /// <summary>
     ///     Exit from the current optimization loop after the running trials finish.

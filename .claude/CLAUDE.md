@@ -26,7 +26,7 @@ to build and in what order**.
 
 - **Optuna (the source of truth):** a full clone lives at `K:/source/optuna` (pinned in the plan) and
   is **vendored in-repo as a pinned git submodule at `refs/optuna`** (`github.com/optuna/optuna` @
-  `f6898da`, v5.0.0.dev) — alongside the other reference-only submodules, so the reference source restores
+  `01ddd17`, the v5.0.0 release) — alongside the other reference-only submodules, so the reference source restores
   reproducibly from a clean checkout (`git submodule update --init refs/optuna`). Use it as the
   authoritative reference for API behavior, edge cases, defaults, and error messages. **Run actual
   Python/Optuna first, observe, then replicate in C#.**
@@ -90,7 +90,7 @@ OptunaSharp/
 │   │   ├── Version.cs               #   OptunaSharp.OptunaSharpVersion (the version constant)
 │   │   └── README.md                #   packed into the .nupkg
 │   └── OptunaSharp.*/               # optional satellite packages — Storage.{Sqlite,EFCore,Grpc,Redis,…}, Visualization.Plotly, Integration.{LightGbm,ML.NET}, Interop.{pythonnet,BoTorch,PyCma}, Artifacts.{S3,Gcs,AzureBlob,R2}, Cli
-├── refs/                            # reference-only pinned submodules (NOT built) — optuna @ f6898da (v5.0.0.dev, the porting reference), NumSharp @ v0.70.0, optunahub, optuna-integration, shap, scikit-learn
+├── refs/                            # reference-only pinned submodules (NOT built) — optuna @ v5.0.0 (01ddd17, the porting reference), NumSharp @ v0.70.0, optunahub @ v0.5.0, optuna-integration @ v5.0.0, shap, scikit-learn
 ├── test/
 │   ├── OptunaSharp.Tests/           # unit tests — MSTest v3 + AwesomeAssertions
 │   ├── OptunaSharp.Tests.Interop/   # LIVE-Optuna parity harness (pythonnet)

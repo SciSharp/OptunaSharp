@@ -20,8 +20,9 @@
 > `OptunaSharp.Visualization` namespace) into interactive **plotly figures** using
 > [Plotly.NET](https://plotly.net/), driven from **raw C#** (bare `Trace`/`Layout` objects + the
 > `DynamicObj` escape hatch — not the F# DSL, not the `Chart2D` sugar). One Tier X satellite package,
-> pure managed. Port target: `optuna.visualization` (the plotly backend), Optuna @ `f6898da`
-> (v5.0.0.dev, vendored at `refs/optuna`).
+> pure managed. Port target: `optuna.visualization` (the plotly backend), Optuna @ `01ddd17`
+> (the v5.0.0 release, vendored at `refs/optuna`; written against the pre-release `f6898da` —
+> `optuna/visualization` did not change between the two).
 
 ---
 

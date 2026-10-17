@@ -250,23 +250,8 @@ public class Trial : BaseTrial
         _cachedFrozenTrial.UserAttrsDict[key] = value;
     }
 
-    /// <summary>
-    ///     Set system attributes to the trial. Note that Optuna internally uses this method to
-    ///     save system messages such as failure reason of trials. Please use
-    ///     <see cref="SetUserAttr" /> to set users' attributes.
-    /// </summary>
-    /// <param name="key">Attribute name; an existing attribute is overwritten.</param>
-    /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
-    /// <exception cref="OptunaSharp.UpdateFinishedTrialError">The storage record is already finished.</exception>
-    /// <exception cref="NumSharp.KeyError">The trial was removed from storage.</exception>
-    /// <exception cref="System.Exception">A configured storage or sampler implementation fails; its exception propagates.</exception>
-    [Obsolete(DeprecationMessages.SetSystemAttr)]
-    public override void SetSystemAttr(string key, object? value)
-    {
-        OptunaWarnings.Warn(DeprecationMessages.SetSystemAttr, WarningCategory.FutureWarning);
-        Storage.SetTrialSystemAttr(TrialId, key, value);
-        _cachedFrozenTrial.SystemAttrsDict[key] = value;
-    }
+    // Trial.set_system_attr (deprecated 3.1.0) was removed in Optuna 5.0.0 (#6834). Optuna-internal
+    // writers call Storage.SetTrialSystemAttr(TrialId, key, value) directly; users keep SetUserAttr.
 
     /// <summary>Python <c>Trial._suggest</c>.</summary>
     /// <param name="name">Parameter name; repeated suggestions refer to the same parameter.</param>
@@ -393,7 +378,6 @@ public class Trial : BaseTrial
     /// <returns>A shallow view of the local trial with system attributes loaded from storage on first access.</returns>
     internal FrozenTrial GetLatestTrial()
     {
-        // TODO(eukaryo): Remove this method after `system_attrs` property is removed.
         var latestTrial = _cachedFrozenTrial.ShallowCopy();
         latestTrial.SetLazySystemAttrs(() => Storage.GetTrialSystemAttrs(TrialId) is OrderedDict<string, object?> d
             ? d
@@ -413,20 +397,9 @@ public class Trial : BaseTrial
     public override IReadOnlyDictionary<string, object?> UserAttrs
         => _cachedFrozenTrial.DeepCopy().UserAttrsDict;
 
-    /// <summary>Return system attributes.</summary>
-    // Optuna deprecates `Trial.system_attrs` specifically (FrozenTrial / FixedTrial keep theirs), so
-    // this override is obsolete over a non-obsolete base member on purpose — hence the CS0809 mute.
-#pragma warning disable CS0809
-    [Obsolete(DeprecationMessages.SystemAttrs)]
-    public override IReadOnlyDictionary<string, object?> SystemAttrs
-    {
-        get
-        {
-            OptunaWarnings.Warn(DeprecationMessages.SystemAttrs, WarningCategory.FutureWarning);
-            return new OrderedDict<string, object?>(Storage.GetTrialSystemAttrs(TrialId));
-        }
-    }
-#pragma warning restore CS0809
+    // Trial.system_attrs (deprecated 3.1.0) was removed in Optuna 5.0.0 (#6834); FrozenTrial and
+    // FixedTrial keep theirs. A live trial's system attributes are optuna-internal storage state:
+    // read them with Storage.GetTrialSystemAttrs(TrialId), or through GetLatestTrial().
 
     /// <summary>Return start datetime.</summary>
     public override DateTime? DatetimeStart => _cachedFrozenTrial.DatetimeStart;

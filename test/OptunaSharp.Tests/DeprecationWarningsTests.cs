@@ -17,9 +17,11 @@ namespace OptunaSharp.Tests;
 ///     <c>[Obsolete]</c> attribute alone has no runtime effect).
 ///
 ///     The expected strings below are the <b>verbatim</b> messages captured from live Optuna 5.x —
-///     including Optuna's Python member names (<c>suggest_uniform</c>, <c>system_attrs</c>) and its
-///     raw reStructuredText role markup — so this guards byte-for-byte parity and catches any drift
-///     in <see cref="DeprecationMessages" />.
+///     including Optuna's Python member names (<c>suggest_uniform</c>, …) and its raw
+///     reStructuredText role markup — so this guards byte-for-byte parity and catches any drift in
+///     <see cref="DeprecationMessages" />. The <c>system_attrs</c>/<c>set_system_attr</c> members reached
+///     their removal version in Optuna 5.0.0 (#6834); their surface is pinned by
+///     <see cref="SystemAttrMembers_Match_Optuna_5_0_0_Surface" /> instead.
 /// </summary>
 [TestClass]
 public class DeprecationWarningsTests
@@ -99,40 +101,37 @@ public class DeprecationWarningsTests
             "See https://github.com/optuna/optuna/releases/tag/v3.0.0. Use suggest_float(..., step=...) instead.");
     }
 
+    /// <summary>
+    ///     Optuna 5.0.0 (#6834) deleted the v3.1.0-deprecated <c>set_system_attr</c>/<c>system_attrs</c> from
+    ///     <c>Study</c>, <c>Trial</c> and the abstract <c>BaseTrial</c>, and <c>set_system_attr</c> from
+    ///     <c>FrozenTrial</c>/<c>FixedTrial</c>, while keeping the read-only <c>system_attrs</c> of the latter
+    ///     two. Pins that exact public surface, so neither a resurrected member nor a lost getter goes unnoticed.
+    /// </summary>
     [TestMethod]
-    public void DeprecatedSetSystemAttr_Warns_Verbatim_On_Every_Trial_Kind_And_Study()
+    public void SystemAttrMembers_Match_Optuna_5_0_0_Surface()
     {
-        const string expected =
-            "set_system_attr has been deprecated in v3.1.0. This feature will be removed in v5.0.0. " +
-            "See https://github.com/optuna/optuna/releases/tag/v3.1.0.";
+        const System.Reflection.BindingFlags Public =
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance;
 
-        var study = Optuna.CreateStudy(sampler: new RandomSampler(0));
-        var trial = study.Ask();
-        var frozen = FrozenTrial.CreateTrial(value: 1.0);
-        var fixedTrial = new FixedTrial(new OrderedDict<string, object?>());
-
-        AssertWarns(() => trial.SetSystemAttr("k", "v"), expected);
-        AssertWarns(() => frozen.SetSystemAttr("k", "v"), expected);
-        AssertWarns(() => fixedTrial.SetSystemAttr("k", "v"), expected);
-        AssertWarns(() => study.SetSystemAttr("k", "v"), expected);
+        foreach (Type removedBoth in new[] { typeof(Study), typeof(Trial), typeof(BaseTrial) })
+        {
+            removedBoth.GetProperty("SystemAttrs", Public).Should().BeNull($"{removedBoth.Name}.system_attrs was removed");
+            removedBoth.GetMethod("SetSystemAttr", Public).Should().BeNull($"{removedBoth.Name}.set_system_attr was removed");
+        }
+        foreach (Type keptGetter in new[] { typeof(FrozenTrial), typeof(FixedTrial) })
+        {
+            keptGetter.GetProperty("SystemAttrs", Public).Should().NotBeNull($"{keptGetter.Name}.system_attrs is kept");
+            keptGetter.GetMethod("SetSystemAttr", Public).Should().BeNull($"{keptGetter.Name}.set_system_attr was removed");
+        }
     }
 
+    /// <summary>
+    ///     The <c>system_attrs</c> getters Optuna 5.0.0 keeps (<c>FrozenTrial</c>, <c>FixedTrial</c>) were never
+    ///     deprecated, so reading them must raise no warning at all.
+    /// </summary>
     [TestMethod]
-    public void DeprecatedSystemAttrs_Warns_Verbatim_On_Trial_And_Study_Only()
+    public void SystemAttrs_On_FrozenTrial_And_FixedTrial_Stays_Silent()
     {
-        const string expected =
-            "system_attrs has been deprecated in v3.1.0. This feature will be removed in v5.0.0. " +
-            "See https://github.com/optuna/optuna/releases/tag/v3.1.0.";
-
-        var study = Optuna.CreateStudy(sampler: new RandomSampler(0));
-        var trial = study.Ask();
-
-        // Optuna deprecates `Trial.system_attrs` and `Study.system_attrs` specifically.
-        AssertWarns(() => { _ = trial.SystemAttrs; }, expected);
-        AssertWarns(() => { _ = study.SystemAttrs; }, expected);
-
-        // FrozenTrial.system_attrs and FixedTrial.system_attrs are NOT deprecated in Optuna, so they
-        // must stay silent.
         var frozen = FrozenTrial.CreateTrial(value: 1.0);
         var fixedTrial = new FixedTrial(new OrderedDict<string, object?>());
         var stray = new List<string>();

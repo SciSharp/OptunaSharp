@@ -32,7 +32,9 @@ Console.WriteLine(study.BestValue);
 
 `problem.Directions` and `problem.SearchSpace` are exposed as OptunaSharp types; `problem.Objective`
 (multi-objective) / `problem.SingleObjective` suggest each parameter on the C# trial, then call the
-Python `evaluate`.
+Python `evaluate`. With OptunaHub ≥ 0.5.0 they first record the problem's `evaluate_constraints(params)`
+on the trial through `trial.SetConstraint`, as `BaseProblem.__call__` does, so constraint-aware samplers
+see feasibility without a `constraints_func`.
 
 ## Samplers — drive an OptunaSharp study with a hub sampler
 

@@ -5,7 +5,8 @@
 > **real** Optuna **in-process via pythonnet**, exactly like `OptunaSharp.Interop.BoTorch` drives real
 > BoTorch (committed Phase 6.5-A, `803242d`) and `OptunaSharp.Interop.pythonnet` drives real OptunaHub.
 > One Tier X satellite; foreign-runtime (embedded CPython + matplotlib). Port target:
-> `optuna/visualization/matplotlib/*.py`, Optuna @ `f6898da`.
+> `optuna/visualization/matplotlib/*.py`, Optuna @ `01ddd17` (the v5.0.0 release; written against the
+> pre-release `f6898da` — `optuna/visualization` did not change between the two).
 
 ---
 

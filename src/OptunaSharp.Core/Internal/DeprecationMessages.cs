@@ -26,9 +26,8 @@ internal static class DeprecationMessages
         " has been deprecated in v3.0.0. This feature will be removed in v6.0.0. " +
         "See https://github.com/optuna/optuna/releases/tag/v3.0.0.";
 
-    private const string DeprecatedV31V50 =
-        " has been deprecated in v3.1.0. This feature will be removed in v5.0.0. " +
-        "See https://github.com/optuna/optuna/releases/tag/v3.1.0.";
+    // The v3.1.0 -> v5.0.0 pair is gone: its only members (set_system_attr / system_attrs on Study, Trial
+    // and BaseTrial) reached their removal version and were deleted in Optuna 5.0.0 (#6834).
 
     // Distributions (deprecated_class, v3.0.0 -> v6.0.0).
     /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>UniformDistribution</c>.</summary>
@@ -63,11 +62,4 @@ internal static class DeprecationMessages
     /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>SuggestDiscreteUniform</c>.</summary>
     internal const string SuggestDiscreteUniform =
         "suggest_discrete_uniform" + DeprecatedV30V60 + " Use suggest_float(..., step=...) instead.";
-
-    // system-attrs members (deprecated_func, v3.1.0 -> v5.0.0, no extra text).
-    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>SetSystemAttr</c>.</summary>
-    internal const string SetSystemAttr = "set_system_attr" + DeprecatedV31V50;
-
-    /// <summary>The shared compile-time and runtime Optuna deprecation text for <c>SystemAttrs</c>.</summary>
-    internal const string SystemAttrs = "system_attrs" + DeprecatedV31V50;
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using AwesomeAssertions;
 using OptunaSharp.Distributions;
 using OptunaSharp.Gp;
@@ -387,5 +388,243 @@ public class AcqfTests
             grad[0].Should().BeApproximately(fd, 1e-4 * (1 + Math.Abs(fd)),
                 $"analytic ∂qLogEHVI/∂x at {xv} must match the central difference");
         }
+    }
+
+    // ---- qLogCEHVI (Optuna 5.0.0, #6804 — multi-objective constrained with running trials) ----------
+
+    /// <summary>
+    ///     The 1-D two-objective scenario of <see cref="FitCehviScenario" /> plus a second constraint GP and
+    ///     two running trials. <paramref name="allInfeasible" /> selects the <c>Y_feasible = None</c> branch.
+    /// </summary>
+    /// <param name="allInfeasible">Whether to pass no feasible observations (the marginal-LogPI branch).</param>
+    /// <returns>The acquisition function plus the pieces the identity tests rebuild independently.</returns>
+    private static (QLogCEHVI Acqf, GPRegressor[] ConstraintGprs, double[] Thresholds, GpSearchSpace Space) FitQLogCehviScenario(
+        bool allInfeasible = false)
+    {
+        (GPRegressor[] gprs, GpSearchSpace space, double[,] yTrain, GPRegressor cgpr0) = FitCehviScenario();
+        var x = new double[,] { { 0.1 }, { 0.35 }, { 0.5 }, { 0.72 }, { 0.9 }, { 0.25 }, { 0.6 }, { 0.8 } };
+        var yc1 = new[] { -0.20, 0.55, 0.10, -0.65, 0.40, 0.95, -0.30, 0.05 };
+        var cgpr1 = GPRegressor.FitKernelParams(x, yc1, new[] { false }, 1e-6, false, null, 1e-2);
+        var constraintGprs = new[] { cgpr0, cgpr1 };
+        var thresholds = new[] { 0.1, -0.2 };
+
+        // A strict subset of the trials stands in for the feasible rows (any rows are a valid baseline).
+        double[,]? yFeasible = null;
+        if (!allInfeasible)
+        {
+            int[] feasibleRows = { 0, 2, 4, 6 };
+            yFeasible = new double[feasibleRows.Length, 2];
+            for (int i = 0; i < feasibleRows.Length; i++)
+                for (int o = 0; o < 2; o++)
+                    yFeasible[i, o] = yTrain[feasibleRows[i], o];
+        }
+        var xRunning = new double[,] { { 0.42 }, { 0.66 } };
+        var acqf = new QLogCEHVI(
+            gprs, space, yFeasible, nQmcSamples: 64, qmcSeed: 13, constraintGprs, thresholds, xRunning);
+        return (acqf, constraintGprs, thresholds, space);
+    }
+
+    /// <summary>
+    ///     The batched <c>eval_acqf_no_grad</c> must equal the single-point evaluation row by row, bit for bit:
+    ///     the optimizer screens candidates in batches and refines them one at a time, so any drift between
+    ///     the two paths would make it rank a point differently from how it then scores it.
+    /// </summary>
+    [TestMethod]
+    public void QLogCEHVI_BatchMatchesSinglePoint()
+    {
+        (QLogCEHVI acqf, _, _, _) = FitQLogCehviScenario();
+        double[] batch = acqf.EvalAcqfNoGrad(new double[,] { { 0.15 }, { 0.45 }, { 0.7 } });
+        batch[0].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.15 }));
+        batch[1].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.45 }));
+        batch[2].Should().Be(acqf.EvalAcqfNoGrad(new[] { 0.7 }));
+    }
+
+    /// <summary>
+    ///     The value returned with the gradient must match the no-gradient value in both regimes, so the
+    ///     L-BFGS-B ascent and the screening pass optimize the same function.
+    /// </summary>
+    /// <param name="allInfeasible">Whether to exercise the marginal-LogPI branch (<c>Y_feasible = None</c>) instead of the feasible-baseline branch.</param>
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void QLogCEHVI_ValueAndGrad_ForwardsAgree(bool allInfeasible)
+    {
+        (QLogCEHVI acqf, _, _, _) = FitQLogCehviScenario(allInfeasible);
+        foreach (double xv in new[] { 0.2, 0.55, 0.9 })
+        {
+            (double val, _) = acqf.EvalAcqfWithGrad(new[] { xv });
+            val.Should().BeApproximately(acqf.EvalAcqfNoGrad(new[] { xv }), 1e-12);
+        }
+    }
+
+    /// <summary>
+    ///     The hand-derived gradient (softmax over draws of the constraint log-sigmoid and log-HVI
+    ///     derivatives) must agree with a central finite difference — the independent check that replaces
+    ///     autograd for this port.
+    /// </summary>
+    /// <param name="allInfeasible">Whether to exercise the marginal-LogPI branch (<c>Y_feasible = None</c>) instead of the feasible-baseline branch.</param>
+    [DataTestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void QLogCEHVI_Gradient_MatchesFiniteDifference(bool allInfeasible)
+    {
+        (QLogCEHVI acqf, _, _, _) = FitQLogCehviScenario(allInfeasible);
+        const double eps = 1e-7;
+        foreach (double xv in new[] { 0.15, 0.3, 0.45, 0.7, 0.85 })
+        {
+            (double _, double[] grad) = acqf.EvalAcqfWithGrad(new[] { xv });
+            double fPlus = acqf.EvalAcqfNoGrad(new[] { xv + eps });
+            double fMinus = acqf.EvalAcqfNoGrad(new[] { xv - eps });
+            double fd = (fPlus - fMinus) / (2 * eps);
+            grad[0].Should().BeApproximately(fd, 1e-4 * (1 + Math.Abs(fd)),
+                $"analytic ∂qLogCEHVI/∂x at {xv} (allInfeasible={allInfeasible}) must match the central difference");
+        }
+    }
+
+    /// <summary>
+    ///     With no feasible trial the acqf must be exactly the sum of plain <see cref="LogPI" /> terms built
+    ///     WITHOUT running trials — Optuna's tower-property reduction; a regression here would mean the
+    ///     running trials leak into (or mutate the GPs of) the all-infeasible branch.
+    /// </summary>
+    [TestMethod]
+    public void QLogCEHVI_NoFeasible_IsMarginalLogPiSum()
+    {
+        // Y_feasible = None ⇒ the tower property leaves Σ_c LogPI_c(x) with NO running-trial conditioning:
+        // fresh LogPI objects built without running trials must reproduce the value exactly.
+        (QLogCEHVI acqf, GPRegressor[] constraintGprs, double[] thresholds, GpSearchSpace space) =
+            FitQLogCehviScenario(allInfeasible: true);
+        foreach (double xv in new[] { 0.3, 0.7 })
+        {
+            double expected = 0.0;
+            for (int c = 0; c < constraintGprs.Length; c++)
+                expected += new LogPI(constraintGprs[c], space, thresholds[c]).EvalAcqfNoGrad(new[] { xv });
+            acqf.EvalAcqfNoGrad(new[] { xv }).Should().Be(expected);
+        }
+    }
+
+    /// <summary>
+    ///     Rebuilding the acqf from the same inputs must give bit-identical values: every QMC stream (objectives
+    ///     and constraints) is seeded, which is what keeps the sampler reproducible and parity-testable.
+    /// </summary>
+    [TestMethod]
+    public void QLogCEHVI_IsDeterministic()
+    {
+        // Every QMC stream is seeded, so rebuilding the acqf gives bit-identical values.
+        (QLogCEHVI a1, _, _, _) = FitQLogCehviScenario();
+        (QLogCEHVI a2, _, _, _) = FitQLogCehviScenario();
+        a1.EvalAcqfNoGrad(new[] { 0.33 }).Should().Be(a2.EvalAcqfNoGrad(new[] { 0.33 }));
+    }
+
+    /// <summary>
+    ///     Port of Optuna 5.0.0's <c>tests/gp_tests/test_acqf.py::test_eval_q_logcehvi</c>: fixed-hyperparameter
+    ///     GPs from <c>get_gpr</c>, objectives <c>[1, 2, 3] ⊕ additional_values</c>, the same values as
+    ///     constraints (threshold 0, feasible rows where every value is ≤ 0), one running trial at
+    ///     <c>(0.4, 0.6)</c>, <c>stabilizing_noise = 0</c>; <c>verify_eval_acqf</c> asserts one finite value
+    ///     per query row and a finite gradient — for an unbatched and a batched query.
+    /// </summary>
+    /// <param name="caseIndex">Which of the four <c>parametrized_additional_values</c> cases to use.</param>
+    [DataTestMethod]
+    [DataRow(0)]
+    [DataRow(1)]
+    [DataRow(2)]
+    [DataRow(3)]
+    public void QLogCEHVI_EvalAcqf_PortOfOptunaTest(int caseIndex)
+    {
+        double[][,] additionalValuesCases =
+        {
+            new double[,] { { 0.2 }, { 0.3 }, { -0.4 } },
+            new double[,] { { 0.2, 0.3, 0.4 }, { 0.2, 0.3, 0.4 }, { 0.2, 0.3, 0.4 } },
+            new double[,] { { 0.2, 0.3, 0.4 }, { 0.2, 0.3, -0.4 }, { -0.2, -0.3, -0.4 } },
+            new double[,] { { -0.2, -0.3, -0.4 }, { -0.2, -0.3, -0.4 }, { -0.2, -0.3, -0.4 } },
+        };
+        double[,] c = additionalValuesCases[caseIndex];
+        int nRows = c.GetLength(0), nCols = c.GetLength(1);
+
+        // Y = hstack([[1, 2, 3]ᵀ, additional_values]).
+        int nObjectives = 1 + nCols;
+        var y = new double[nRows, nObjectives];
+        for (int i = 0; i < nRows; i++)
+        {
+            y[i, 0] = i + 1.0;
+            for (int j = 0; j < nCols; j++)
+                y[i, 1 + j] = c[i, j];
+        }
+
+        var objectiveGprs = new GPRegressor[nObjectives];
+        for (int o = 0; o < nObjectives; o++)
+            objectiveGprs[o] = GetGpr(Column(y, o));
+        var constraintGprs = new GPRegressor[nCols];
+        var thresholds = new double[nCols];
+        for (int j = 0; j < nCols; j++)
+            constraintGprs[j] = GetGpr(Column(c, j));
+
+        // is_feasible = np.all(c <= 0, axis=1); Y_feasible = None when nothing is feasible.
+        var feasible = new List<int>();
+        for (int i = 0; i < nRows; i++)
+        {
+            bool all = true;
+            for (int j = 0; j < nCols; j++) all &= c[i, j] <= 0;
+            if (all) feasible.Add(i);
+        }
+        double[,]? yFeasible = null;
+        if (feasible.Count > 0)
+        {
+            yFeasible = new double[feasible.Count, nObjectives];
+            for (int k = 0; k < feasible.Count; k++)
+                for (int o = 0; o < nObjectives; o++)
+                    yFeasible[k, o] = y[feasible[k], o];
+        }
+
+        var space = new GpSearchSpace(new System.Collections.Generic.Dictionary<string, BaseDistribution>
+        {
+            ["a"] = new FloatDistribution(0.0, 1.0),
+            ["b"] = new FloatDistribution(0.0, 1.0),
+        });
+        var acqf = new QLogCEHVI(
+            objectiveGprs, space, yFeasible, nQmcSamples: 32, qmcSeed: 42, constraintGprs, thresholds,
+            normalizedParamsOfRunningTrials: new double[,] { { 0.4, 0.6 } }, stabilizingNoise: 0.0);
+
+        // Unbatched x = [0.15, 0.12] and batched [[0.15, 0.12], [0.0, 1.0]].
+        double[,] batch = { { 0.15, 0.12 }, { 0.0, 1.0 } };
+        double[] values = acqf.EvalAcqfNoGrad(batch);
+        values.Should().HaveCount(2);
+        values.Should().OnlyContain(v => double.IsFinite(v));
+        foreach (double[] row in new[] { new[] { 0.15, 0.12 }, new[] { 0.0, 1.0 } })
+        {
+            (double value, double[] grad) = acqf.EvalAcqfWithGrad(row);
+            double.IsFinite(value).Should().BeTrue();
+            grad.Should().HaveCount(2).And.OnlyContain(g => double.IsFinite(g));
+        }
+    }
+
+    /// <summary>
+    ///     <c>get_gpr</c> from Optuna's <c>test_acqf.py</c>: three fixed 2-D training points and fixed
+    ///     hyperparameters (inverse squared lengthscales <c>[2, 3]</c>, kernel scale 4, noise 0.1), no fit.
+    /// </summary>
+    /// <param name="yTrain">The three training targets.</param>
+    /// <returns>A cached regressor ready for posterior queries.</returns>
+    private static GPRegressor GetGpr(double[] yTrain)
+    {
+        var gpr = new GPRegressor(
+            new[] { false, false },
+            new double[,] { { 0.1, 0.2 }, { 0.2, 0.3 }, { 0.3, 0.1 } },
+            yTrain,
+            new[] { 2.0, 3.0 },
+            4.0,
+            0.1);
+        gpr.CacheMatrix();
+        return gpr;
+    }
+
+    /// <summary>Copies one column of a matrix.</summary>
+    /// <param name="m">The source matrix.</param>
+    /// <param name="j">The column index.</param>
+    /// <returns>A new array holding column <paramref name="j" /> of <paramref name="m" />.</returns>
+    private static double[] Column(double[,] m, int j)
+    {
+        var col = new double[m.GetLength(0)];
+        for (int i = 0; i < col.Length; i++)
+            col[i] = m[i, j];
+        return col;
     }
 }

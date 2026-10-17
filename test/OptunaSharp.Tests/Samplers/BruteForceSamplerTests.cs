@@ -11,7 +11,7 @@ using OptunaSharp.Storages;
 namespace OptunaSharp.Tests.Samplers;
 
 /// <summary>
-///     BruteForceSampler parity against the vendored Optuna reference (v5.0.0.dev, <c>f6898da</c>).
+///     BruteForceSampler parity against the vendored Optuna reference (v5.0.0, <c>01ddd17</c>).
 ///     These mirror Optuna's own <c>tests/samplers_tests/test_brute_force.py</c>: coverage tests
 ///     assert the exhaustive-search set (the sampler self-stops at exhaustion), and the two
 ///     <c>seed=42</c> ask/tell cases pin the exact RNG-driven suggestions hardcoded in that test —

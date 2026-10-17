@@ -148,6 +148,212 @@ internal static class Acqf
         }
         return (value, grad);
     }
+
+    /// <summary>
+    ///     <c>torch.special.logsumexp</c> over a vector — <c>m + log Σ exp(v − m)</c> with <c>m = max v</c>,
+    ///     so large terms cannot overflow. An all-<c>−∞</c> (or empty) input returns <c>−∞</c> instead of
+    ///     the <c>NaN</c> the naive shift would produce, matching torch.
+    /// </summary>
+    /// <param name="vals">The terms to combine; NaN entries propagate to the result.</param>
+    /// <returns>The logarithm of the sum of the exponentials of <paramref name="vals" />.</returns>
+    internal static double LogSumExp(double[] vals)
+    {
+        double m = double.NegativeInfinity;
+        foreach (double v in vals) if (v > m) m = v;
+        if (double.IsNegativeInfinity(m)) return m;
+        double sum = 0.0;
+        foreach (double v in vals) sum += Math.Exp(v - m);
+        return m + Math.Log(sum);
+    }
+
+    /// <summary>
+    ///     The log of the mean of exponentials, <c>logsumexp(v) − log(len(v))</c> — the Monte-Carlo
+    ///     expectation over QMC draws that the q-batch acquisition functions take in log space.
+    /// </summary>
+    /// <param name="vals">The per-draw log utilities; must be non-empty for the mean to be defined.</param>
+    /// <returns>The logarithm of the arithmetic mean of the exponentials of <paramref name="vals" />.</returns>
+    internal static double LogMeanExp(double[] vals) => LogSumExp(vals) - Math.Log(vals.Length);
+}
+
+/// <summary>
+///     Per-QMC-draw Pareto baselines and the log hypervolume improvement over them — port of
+///     <c>acqf._PerSampleParetoBaseline</c> (Optuna 5.0.0, #6804). For every QMC draw it unions the
+///     baseline observations with that draw's fantasy observations (which a caller may have filtered
+///     beforehand — <see cref="QLogCEHVI" /> keeps only fantasies sampled as feasible), decomposes the
+///     non-dominated region into boxes, and scores a candidate's per-draw log HVI against those boxes.
+///     Shared by <see cref="QLogEHVI" /> and <see cref="QLogCEHVI" />.
+/// </summary>
+/// <remarks>
+///     <para><b>Padding is part of the value.</b> Optuna stacks the per-draw box lists with
+///     <c>pad_sequence</c>: missing boxes get lower bound <c>0</c> and width <c>EPS</c>. A padded box
+///     clamps every coordinate to exactly <c>EPS</c>, so each one adds the constant
+///     <c>EPS^n_objectives</c> to that draw's HVI sum (and nothing to its gradient). The padding is
+///     reproduced here rather than skipped, because draws with very different box counts — routine once
+///     fantasies are feasibility-filtered — would otherwise disagree with Optuna in low-HVI regions.</para>
+///     <para>The reference point comes from the baseline observations alone, exactly as in Optuna, so a
+///     fantasy worse than the reference point simply drops out of that draw's decomposition.</para>
+/// </remarks>
+internal sealed class PerSampleParetoBaseline
+{
+    private const double Eps = 1e-12;   // _EPS in acqf.py: keeps log() and the gradient finite
+
+    private readonly int _nObjectives;
+    private readonly double[][,] _lowerBounds;   // per QMC draw: (n_boxes_max, n_obj), padded with 0
+    private readonly double[][,] _intervals;     // per QMC draw: (n_boxes_max, n_obj), clamped ≥ EPS, padded with EPS
+
+    /// <summary>Decomposes, for every QMC draw, the region dominated by the baseline plus that draw's fantasies.</summary>
+    /// <param name="yBaseline">The baseline observations, one row per trial and one column per objective, in the maximization convention.</param>
+    /// <param name="fantasySamplesPerQmc">
+    ///     One fantasy matrix per QMC draw, each <c>(n_fantasies_for_draw, n_objectives)</c>; a draw may have
+    ///     zero rows, in which case its baseline is <paramref name="yBaseline" /> alone.
+    /// </param>
+    internal PerSampleParetoBaseline(double[,] yBaseline, IReadOnlyList<double[,]> fantasySamplesPerQmc)
+    {
+        _nObjectives = yBaseline.GetLength(1);
+        double[] refPoint = LogEHVI.GetReferencePoint(yBaseline);
+        int nQmc = fantasySamplesPerQmc.Count;
+
+        var lowers = new double[nQmc][,];
+        var uppers = new double[nQmc][,];
+        int nBoxesMax = 0;
+        for (int s = 0; s < nQmc; s++)
+        {
+            double[,] fantasy = fantasySamplesPerQmc[s];
+            double[,] y = fantasy.GetLength(0) > 0 ? ConcatRows(yBaseline, fantasy) : yBaseline;
+            (lowers[s], uppers[s]) = LogEHVI.GetNonDominatedBoxBoundsMax(y, refPoint);
+            nBoxesMax = Math.Max(nBoxesMax, lowers[s].GetLength(0));
+        }
+
+        // pad_sequence(batch_first=True): every draw gets n_boxes_max rows; the padding rows keep the
+        // default lower bound 0.0 and the interval padding_value _EPS (see the remarks for why it matters).
+        _lowerBounds = new double[nQmc][,];
+        _intervals = new double[nQmc][,];
+        for (int s = 0; s < nQmc; s++)
+        {
+            int nBoxes = lowers[s].GetLength(0);
+            var lower = new double[nBoxesMax, _nObjectives];
+            var interval = new double[nBoxesMax, _nObjectives];
+            for (int b = 0; b < nBoxesMax; b++)
+                for (int o = 0; o < _nObjectives; o++)
+                {
+                    if (b < nBoxes)
+                    {
+                        lower[b, o] = lowers[s][b, o];
+                        interval[b, o] = Math.Max(Eps, uppers[s][b, o] - lowers[s][b, o]);
+                    }
+                    else
+                    {
+                        interval[b, o] = Eps;
+                    }
+                }
+            _lowerBounds[s] = lower;
+            _intervals[s] = interval;
+        }
+    }
+
+    /// <summary>The number of QMC draws this baseline was built for.</summary>
+    internal int NQmc => _lowerBounds.Length;
+
+    /// <summary>
+    ///     <c>compute_per_sample_log_hvi(Y_post)</c> — for each QMC draw <c>s</c>, the log HVI
+    ///     <c>logsumexp_b Σ_o log(clamp(Y_post[s,o] − lower[s,b,o], EPS, interval[s,b,o]))</c>.
+    /// </summary>
+    /// <param name="yPost">The candidate's per-draw objective samples, shape <c>(n_qmc, n_objectives)</c>.</param>
+    /// <returns>The per-draw log hypervolume improvement, shape <c>(n_qmc,)</c>.</returns>
+    internal double[] ComputePerSampleLogHvi(double[,] yPost) => PerSampleLogHvi(yPost, out _);
+
+    /// <summary>
+    ///     <see cref="ComputePerSampleLogHvi" /> plus its gradient with respect to the candidate point —
+    ///     the analytic replacement for autograd: a softmax over each draw's boxes times the two-sided
+    ///     clamp mask times <c>1/raw</c> times the objective samples' own gradient.
+    /// </summary>
+    /// <param name="yPost">The candidate's per-draw objective samples, shape <c>(n_qmc, n_objectives)</c>.</param>
+    /// <param name="dYPost">Per objective, the <c>(n_qmc, dim)</c> derivative of its samples with respect to the candidate point.</param>
+    /// <returns>The per-draw log HVI and its <c>(n_qmc, dim)</c> gradient.</returns>
+    internal (double[] LogHvi, double[,] DLogHvi) ComputePerSampleLogHviWithGrad(double[,] yPost, double[][,] dYPost)
+    {
+        double[] hvi = PerSampleLogHvi(yPost, out double[][] termsPerS);
+        int nQmc = hvi.Length;
+        int dim = dYPost[0].GetLength(1);
+        var dHvi = new double[nQmc, dim];
+        for (int s = 0; s < nQmc; s++)
+        {
+            double[,] lower = _lowerBounds[s];
+            double[,] interval = _intervals[s];
+            double[] term = termsPerS[s];
+            for (int b = 0; b < term.Length; b++)
+            {
+                double w = Math.Exp(term[b] - hvi[s]);   // this box's share of the draw's logsumexp
+                if (w == 0.0) continue;
+                for (int o = 0; o < _nObjectives; o++)
+                {
+                    double raw = yPost[s, o] - lower[b, o];
+                    // Two-sided clamp: the gradient exists only strictly inside (EPS, interval). A padded
+                    // box has interval == EPS, so it never contributes here, exactly like autograd.
+                    if (!(raw > Eps && raw < interval[b, o]))
+                        continue;
+                    double factor = w / raw;
+                    double[,] ds = dYPost[o];
+                    for (int d = 0; d < dim; d++)
+                        dHvi[s, d] += factor * ds[s, d];
+                }
+            }
+        }
+        return (hvi, dHvi);
+    }
+
+    /// <summary>
+    ///     The per-draw log HVI and the per-box log terms it reduces (kept for the gradient's box softmax).
+    /// </summary>
+    /// <param name="yPost">The candidate's per-draw objective samples, shape <c>(n_qmc, n_objectives)</c>.</param>
+    /// <param name="termsPerS">Receives, per draw, the <c>Σ_o log(clamped diff)</c> term of every (padded) box.</param>
+    /// <returns>The per-draw log hypervolume improvement.</returns>
+    private double[] PerSampleLogHvi(double[,] yPost, out double[][] termsPerS)
+    {
+        int nQmc = _lowerBounds.Length;
+        var hvi = new double[nQmc];
+        termsPerS = new double[nQmc][];
+        for (int s = 0; s < nQmc; s++)
+        {
+            double[,] lower = _lowerBounds[s];
+            double[,] interval = _intervals[s];
+            int nBoxes = lower.GetLength(0);
+            var term = new double[nBoxes];
+            for (int b = 0; b < nBoxes; b++)
+            {
+                double sumLog = 0.0;
+                for (int o = 0; o < _nObjectives; o++)
+                {
+                    double raw = yPost[s, o] - lower[b, o];
+                    double iv = interval[b, o];
+                    // clamp_(min=EPS, max=interval); a NaN sample stays NaN, as in torch.
+                    double diff = raw < Eps ? Eps : (raw > iv ? iv : raw);
+                    sumLog += Math.Log(diff);
+                }
+                term[b] = sumLog;
+            }
+            hvi[s] = Acqf.LogSumExp(term);
+            termsPerS[s] = term;
+        }
+        return hvi;
+    }
+
+    /// <summary>Stacks two row-major matrices vertically (<c>torch.cat([top, bottom], dim=0)</c>).</summary>
+    /// <param name="top">The rows placed first; its column count defines the result's width.</param>
+    /// <param name="bottom">The rows appended after <paramref name="top" />; must have the same column count.</param>
+    /// <returns>A new matrix holding the rows of <paramref name="top" /> followed by those of <paramref name="bottom" />.</returns>
+    private static double[,] ConcatRows(double[,] top, double[,] bottom)
+    {
+        int nTop = top.GetLength(0), nBottom = bottom.GetLength(0), cols = top.GetLength(1);
+        var result = new double[nTop + nBottom, cols];
+        for (int i = 0; i < nTop; i++)
+            for (int j = 0; j < cols; j++)
+                result[i, j] = top[i, j];
+        for (int i = 0; i < nBottom; i++)
+            for (int j = 0; j < cols; j++)
+                result[nTop + i, j] = bottom[i, j];
+        return result;
+    }
 }
 
 /// <summary>
@@ -417,6 +623,11 @@ internal sealed class QLogEI : IAcquisitionFunc
 ///     forms the joint-posterior sample over the running trials plus the query point
 ///     (<see cref="ConditionalGPRegressor" />), applies the smooth feasibility indicator
 ///     <c>logsigmoid((y − threshold)/τ)</c> (τ = 1e-2), and reduces with <see cref="Acqf.MeanMaxUtility" />.
+///
+///     <para>Since Optuna 5.0.0 it also serves <see cref="QLogCEHVI" /> (multi-objective constrained
+///     with running trials) through two lower-level entry points: the candidate-only feasibility
+///     (<see cref="ComputeCandidateLogUtility" />) and the per-draw feasibility of the running fantasies
+///     (<see cref="IsFantasyAboveThreshold" />), which decides which fantasies enter the Pareto baseline.</para>
 /// </summary>
 internal sealed class QLogPI : IAcquisitionFunc
 {
@@ -488,6 +699,65 @@ internal sealed class QLogPI : IAcquisitionFunc
                 dq[s, d] = dlog * dSamples[s, d];
         }
         return (PerSampleLogUtility(yPost), dq);
+    }
+
+    /// <summary>
+    ///     <c>compute_candidate_log_utility(x)</c> (Optuna 5.0.0, #6804) — the smooth feasibility
+    ///     <c>logsigmoid((y − threshold)/τ)</c> of the CANDIDATE column only, one value per QMC draw.
+    ///     <see cref="QLogCEHVI" /> uses it instead of <see cref="ComputePerSampleLogUtility" /> because the
+    ///     running trials' feasibility is already folded into its per-draw Pareto baseline.
+    /// </summary>
+    /// <param name="x">The candidate point in normalized search-space coordinates.</param>
+    /// <returns>The per-draw candidate log feasibility, shape <c>(n_qmc,)</c>.</returns>
+    internal double[] ComputeCandidateLogUtility(double[] x)
+    {
+        double[] yPost = _condGpr.SampleQuerySamples(x);
+        var lu = new double[yPost.Length];
+        for (int s = 0; s < yPost.Length; s++)
+            lu[s] = LogSigmoid((yPost[s] - _threshold) / _tau);
+        return lu;
+    }
+
+    /// <summary>
+    ///     <see cref="ComputeCandidateLogUtility" /> plus its gradient with respect to the candidate point:
+    ///     <c>sigmoid(−arg)/τ · ∂y/∂x</c> per draw (the analytic replacement for autograd).
+    /// </summary>
+    /// <param name="x">The candidate point in normalized search-space coordinates.</param>
+    /// <returns>The per-draw candidate log feasibility and its <c>(n_qmc, dim)</c> gradient.</returns>
+    internal (double[] LogUtil, double[,] DLogUtil) ComputeCandidateLogUtilityWithGrad(double[] x)
+    {
+        (double[] yPost, double[,] dSamples) = _condGpr.SampleQueryWithGrad(x);
+        int nQmc = yPost.Length;
+        int dim = dSamples.GetLength(1);
+        var lu = new double[nQmc];
+        var dlu = new double[nQmc, dim];
+        for (int s = 0; s < nQmc; s++)
+        {
+            double arg = (yPost[s] - _threshold) / _tau;
+            lu[s] = LogSigmoid(arg);
+            // d logsigmoid(arg)/d y = sigmoid(−arg)/τ = 1/((1 + e^arg)·τ).
+            double dlog = 1.0 / (1.0 + Math.Exp(arg)) / _tau;
+            for (int d = 0; d < dim; d++)
+                dlu[s, d] = dlog * dSamples[s, d];
+        }
+        return (lu, dlu);
+    }
+
+    /// <summary>
+    ///     <c>is_fantasy_above_threshold()</c> (Optuna 5.0.0, #6804) — whether each running trial's fantasy
+    ///     satisfies this constraint in each QMC draw. The comparison is inclusive (<c>&gt;=</c>), exactly
+    ///     like Optuna, so a fantasy sitting on the threshold counts as feasible.
+    /// </summary>
+    /// <returns>A <c>(n_qmc, n_running)</c> mask; <c>true</c> where the fantasy is at or above the threshold.</returns>
+    internal bool[,] IsFantasyAboveThreshold()
+    {
+        double[,] fantasy = _condGpr.GetFantasySamples();
+        int nQmc = fantasy.GetLength(0), nRunning = fantasy.GetLength(1);
+        var mask = new bool[nQmc, nRunning];
+        for (int s = 0; s < nQmc; s++)
+            for (int r = 0; r < nRunning; r++)
+                mask[s, r] = fantasy[s, r] >= _threshold;
+        return mask;
     }
 
     /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
@@ -645,7 +915,10 @@ internal sealed class QLogCEI : IAcquisitionFunc
 ///     <c>normalizedParamsOfRunningTrials</c> is given, the running points are appended to the GP with
 ///     their posterior mean as the fantasy objective value (<see cref="GPRegressor.AppendRunningData" />),
 ///     so the feasible-probability accounts for the trials already in flight (Optuna's
-///     <c>append_running_data</c> path; PORTING_PLAN Phase 3.2 part 3e-6).</para>
+///     <c>append_running_data</c> path; PORTING_PLAN Phase 3.2 part 3e-6). <b>Footgun:</b> this mutates
+///     the supplied GP. Optuna 5.0.0 keeps the parameter but no longer passes it from the sampler — the
+///     multi-objective constrained running case moved to <see cref="QLogCEHVI" /> (#6804) — so in the
+///     sampler every <see cref="LogPI" /> is now built without running trials.</para>
 /// </summary>
 internal sealed class LogPI : IAcquisitionFunc
 {
@@ -846,9 +1119,11 @@ internal sealed class LogCEI : IAcquisitionFunc
 ///     <c>normalizedParamsOfRunningTrials</c> is given, each objective GP is extended with the running
 ///     points (their posterior mean as the fantasy value) via
 ///     <see cref="GPRegressor.AppendRunningData" />, so the posterior accounts for the trials already in
-///     flight (Optuna's <c>append_running_data</c> path; used by the MO-constrained
-///     <see cref="LogCEHVI" /> with running trials, PORTING_PLAN Phase 3.2 part 3e-6). The box
-///     decomposition still uses the completed-trial <c>Y_train</c>.</para>
+///     flight (Optuna's <c>append_running_data</c> path, PORTING_PLAN Phase 3.2 part 3e-6). The box
+///     decomposition still uses the completed-trial <c>Y_train</c>. Until Optuna 5.0.0 the
+///     MO-constrained <see cref="LogCEHVI" /> used this path for running trials; 5.0.0 (#6804) routes
+///     that case to <see cref="QLogCEHVI" />, so the sampler no longer passes running trials here (the
+///     parameter stays, as in Optuna's class, and it mutates the supplied GPs when used).</para>
 /// </summary>
 internal sealed class LogEHVI : IAcquisitionFunc
 {
@@ -1170,11 +1445,19 @@ internal sealed class LogEHVI : IAcquisitionFunc
 ///     optimization <b>with running trials</b> (PORTING_PLAN Phase 3.2 part 3e-6). Unlike
 ///     <see cref="LogEHVI" /> (independent per-objective sampling + one box decomposition), each QMC
 ///     draw gets its <b>own</b> box decomposition — computed from that draw's running fantasies
-///     (<see cref="ConditionalGPRegressor.GetFantasySamples" />) appended to <c>Y_train</c> — and the
-///     per-objective conditional query sample (<see cref="ConditionalGPRegressor.SampleQuerySamples" />).
+///     (<see cref="ListConditionalGPRegressor.GetFantasySamples" />) appended to <c>Y_train</c> — and the
+///     per-objective conditional query sample (<see cref="ListConditionalGPRegressor.SampleCandidatePosterior" />).
 ///     Per draw the log HVI is a <c>logsumexp</c> over that draw's boxes; the acqf is the log-mean-exp
 ///     of those per-sample HVIs (Eq. (3) of arxiv 2006.05078). One conditional GP per objective, each
 ///     seeded <c>qmc_seed + i</c>.
+///
+///     <para><b>Structure (Optuna 5.0.0, #6804):</b> the conditional regressors live in a
+///     <see cref="ListConditionalGPRegressor" /> and the per-draw decomposition in a
+///     <see cref="PerSampleParetoBaseline" />, both shared with <see cref="QLogCEHVI" />. Upstream's
+///     refactor left the values unchanged. On the C# side the shared baseline also brings in Optuna's
+///     <c>pad_sequence</c> padding of the per-draw box lists (every missing box adds
+///     <c>EPS^n_objectives</c> to that draw's HVI), which the earlier per-draw layout here had skipped;
+///     the effect is only visible where a draw's real HVI is itself near <c>EPS^n_objectives</c>.</para>
 ///
 ///     <para><b>Gradient</b> (the autograd replacement): the fantasies (hence the boxes) are constant,
 ///     so the gradient flows only through the query samples; it chains a nested softmax (over the boxes
@@ -1183,13 +1466,8 @@ internal sealed class LogEHVI : IAcquisitionFunc
 /// </summary>
 internal sealed class QLogEHVI : IAcquisitionFunc
 {
-    private const double Eps = 1e-12;
-
-    private readonly ConditionalGPRegressor[] _condGprList;
-    private readonly int _nObjectives;
-    private readonly int _nQmc;
-    private readonly double[][,] _lowerBounds;   // per QMC draw: (n_boxes_s, n_obj) box lower bounds
-    private readonly double[][,] _intervals;     // per QMC draw: (n_boxes_s, n_obj) box widths, clamped ≥ EPS
+    private readonly ListConditionalGPRegressor _condGpr;
+    private readonly PerSampleParetoBaseline _baseline;
 
     /// <summary>Configures batch log expected hypervolume improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
     /// <param name="gprList">One Gaussian-process model per objective, in objective order.</param>
@@ -1203,41 +1481,10 @@ internal sealed class QLogEHVI : IAcquisitionFunc
         GPRegressor[] gprList, GpSearchSpace searchSpace, double[,] yTrain, int nQmcSamples, int qmcSeed,
         double[,] normalizedParamsOfRunningTrials, double stabilizingNoise = 1e-12)
     {
-        _nObjectives = yTrain.GetLength(1);
-        _condGprList = new ConditionalGPRegressor[_nObjectives];
-        for (int o = 0; o < _nObjectives; o++)
-            _condGprList[o] = new ConditionalGPRegressor(
-                gprList[o], normalizedParamsOfRunningTrials, nQmcSamples, qmcSeed + o, stabilizingNoise);
-        _nQmc = _condGprList[0].NQmc;
-        int nRunning = _condGprList[0].NRunning;
-        int nTrain = yTrain.GetLength(0);
-
+        _condGpr = new ListConditionalGPRegressor(
+            gprList, normalizedParamsOfRunningTrials, nQmcSamples, qmcSeed, stabilizingNoise);
         // A per-QMC-draw box decomposition over Y_train ∪ {this draw's fantasies}, one shared ref point.
-        double[] refPoint = LogEHVI.GetReferencePoint(yTrain);
-        var fantasies = new double[_nObjectives][,];   // fantasies[o] = (n_qmc, n_running)
-        for (int o = 0; o < _nObjectives; o++)
-            fantasies[o] = _condGprList[o].GetFantasySamples();
-
-        _lowerBounds = new double[_nQmc][,];
-        _intervals = new double[_nQmc][,];
-        for (int s = 0; s < _nQmc; s++)
-        {
-            var yFantasy = new double[nTrain + nRunning, _nObjectives];
-            for (int t = 0; t < nTrain; t++)
-                for (int o = 0; o < _nObjectives; o++)
-                    yFantasy[t, o] = yTrain[t, o];
-            for (int i = 0; i < nRunning; i++)
-                for (int o = 0; o < _nObjectives; o++)
-                    yFantasy[nTrain + i, o] = fantasies[o][s, i];
-            (double[,] lower, double[,] upper) = LogEHVI.GetNonDominatedBoxBoundsMax(yFantasy, refPoint);
-            int nBoxes = lower.GetLength(0);
-            var interval = new double[nBoxes, _nObjectives];
-            for (int b = 0; b < nBoxes; b++)
-                for (int o = 0; o < _nObjectives; o++)
-                    interval[b, o] = Math.Max(Eps, upper[b, o] - lower[b, o]);
-            _lowerBounds[s] = lower;
-            _intervals[s] = interval;
-        }
+        _baseline = new PerSampleParetoBaseline(yTrain, _condGpr.GetFantasySamples());
 
         SearchSpace = searchSpace;
         LengthScales = LogEHVI.MeanLengthScales(gprList, searchSpace.Dim);
@@ -1247,6 +1494,15 @@ internal sealed class QLogEHVI : IAcquisitionFunc
     public GpSearchSpace SearchSpace { get; }
     /// <summary>The kernel length scale of each coordinate, used to precondition gradient steps.</summary>
     public double[] LengthScales { get; }
+
+    /// <summary>
+    ///     <c>compute_per_sample_log_utility(x)</c> — the candidate's log hypervolume improvement over each
+    ///     QMC draw's baseline, shape <c>(n_qmc,)</c>.
+    /// </summary>
+    /// <param name="x">The candidate point in normalized search-space coordinates.</param>
+    /// <returns>The per-draw log HVI of the candidate.</returns>
+    internal double[] ComputePerSampleLogUtility(double[] x)
+        => _baseline.ComputePerSampleLogHvi(_condGpr.SampleCandidatePosterior(x));
 
     /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
     /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
@@ -1267,114 +1523,31 @@ internal sealed class QLogEHVI : IAcquisitionFunc
     /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
     /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
     /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
-    public double EvalAcqfNoGrad(double[] x)
-    {
-        var samplesByObj = new double[_nObjectives][];
-        for (int o = 0; o < _nObjectives; o++)
-            samplesByObj[o] = _condGprList[o].SampleQuerySamples(x);
-        double[] hvi = PerSampleLogHvi(samplesByObj, out _);
-        return LogMeanExp(hvi);
-    }
+    public double EvalAcqfNoGrad(double[] x) => Acqf.LogMeanExp(ComputePerSampleLogUtility(x));
 
     /// <summary><c>eval_acqf_with_grad</c> — value and the hand-derived nested-softmax gradient.</summary>
     /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
     /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
     public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
     {
+        (double[,] samples, double[][,] dSamples) = _condGpr.SampleCandidatePosteriorWithGrad(x);
+        (double[] hvi, double[,] dHvi) = _baseline.ComputePerSampleLogHviWithGrad(samples, dSamples);
+        double logsumexpS = Acqf.LogSumExp(hvi);
+        double value = logsumexpS - Math.Log(hvi.Length);
+
+        // grad[d] = Σ_s softmax_s(hvi) · ∂hvi_s/∂x_d — the outer (over-draws) softmax of the nested pair;
+        // the inner softmax over each draw's boxes is already inside ∂hvi_s/∂x_d.
         int dim = x.Length;
-        var samplesByObj = new double[_nObjectives][];
-        var dSamplesByObj = new double[_nObjectives][,];
-        for (int o = 0; o < _nObjectives; o++)
-        {
-            (double[] samp, double[,] dsamp) = _condGprList[o].SampleQueryWithGrad(x);
-            samplesByObj[o] = samp;
-            dSamplesByObj[o] = dsamp;
-        }
-
-        double[] hvi = PerSampleLogHvi(samplesByObj, out double[][] termsPerS);
-        double logsumexpS = LogSumExp(hvi);
-        double value = logsumexpS - Math.Log(_nQmc);
-
-        // grad[d] = Σ_{s,b} exp(term[s][b] − logsumexpS) · Σ_o mask[s,b,o]·(1/raw)·∂samples[o][s]/∂x_d.
         var grad = new double[dim];
-        for (int s = 0; s < _nQmc; s++)
+        for (int s = 0; s < hvi.Length; s++)
         {
-            double[,] lower = _lowerBounds[s];
-            double[,] interval = _intervals[s];
-            int nBoxes = lower.GetLength(0);
-            double[] term = termsPerS[s];
-            for (int b = 0; b < nBoxes; b++)
-            {
-                double w = Math.Exp(term[b] - logsumexpS);
-                if (w == 0.0) continue;
-                for (int o = 0; o < _nObjectives; o++)
-                {
-                    double raw = samplesByObj[o][s] - lower[b, o];
-                    if (!(raw > Eps && raw < interval[b, o]))
-                        continue;   // two-sided clamp → gradient only in the open interval
-                    double factor = w / raw;
-                    double[,] ds = dSamplesByObj[o];
-                    for (int d = 0; d < dim; d++)
-                        grad[d] += factor * ds[s, d];
-                }
-            }
+            double w = Math.Exp(hvi[s] - logsumexpS);
+            if (w == 0.0) continue;
+            for (int d = 0; d < dim; d++)
+                grad[d] += w * dHvi[s, d];
         }
         return (value, grad);
     }
-
-    /// <summary>
-    ///     <c>_per_sample_log_hvi</c> — for each QMC draw <c>s</c>, the log HVI
-    ///     <c>logsumexp_b Σ_o log(clamp(samples[o][s] − lower[s,b,o], EPS, interval[s,b,o]))</c>. Also
-    ///     returns the per-draw box terms (for the gradient's box softmax).
-    /// </summary>
-    /// <param name="samplesByObj">Posterior draws grouped by objective, with matching QMC/sample order.</param>
-    /// <param name="termsPerS">The per-QMC-sample log hypervolume contributions to reduce.</param>
-    /// <returns>The log hypervolume improvement for each posterior draw.</returns>
-    private double[] PerSampleLogHvi(double[][] samplesByObj, out double[][] termsPerS)
-    {
-        var hvi = new double[_nQmc];
-        termsPerS = new double[_nQmc][];
-        for (int s = 0; s < _nQmc; s++)
-        {
-            double[,] lower = _lowerBounds[s];
-            double[,] interval = _intervals[s];
-            int nBoxes = lower.GetLength(0);
-            var term = new double[nBoxes];
-            for (int b = 0; b < nBoxes; b++)
-            {
-                double sumLog = 0.0;
-                for (int o = 0; o < _nObjectives; o++)
-                {
-                    double raw = samplesByObj[o][s] - lower[b, o];
-                    double iv = interval[b, o];
-                    double diff = raw < Eps ? Eps : (raw > iv ? iv : raw);
-                    sumLog += Math.Log(diff);
-                }
-                term[b] = sumLog;
-            }
-            hvi[s] = LogSumExp(term);
-            termsPerS[s] = term;
-        }
-        return hvi;
-    }
-
-    /// <summary>Returns the logarithm of the sum of exponentials, computed stably.</summary>
-    /// <param name="vals">The terms to combine with a stable logarithmic reduction.</param>
-    /// <returns>The logarithm of the sum of exponentials, computed stably.</returns>
-    private static double LogSumExp(double[] vals)
-    {
-        double m = double.NegativeInfinity;
-        foreach (double v in vals) if (v > m) m = v;
-        if (double.IsNegativeInfinity(m)) return m;
-        double sum = 0.0;
-        foreach (double v in vals) sum += Math.Exp(v - m);
-        return m + Math.Log(sum);
-    }
-
-    /// <summary>Returns the logarithm of the mean of exponentials, computed stably.</summary>
-    /// <param name="vals">The terms to combine with a stable logarithmic reduction.</param>
-    /// <returns>The logarithm of the mean of exponentials, computed stably.</returns>
-    private static double LogMeanExp(double[] vals) => LogSumExp(vals) - Math.Log(vals.Length);
 }
 
 /// <summary>
@@ -1387,11 +1560,13 @@ internal sealed class QLogEHVI : IAcquisitionFunc
 ///     <see cref="LogEHVI" /> term is dropped and only the constraint terms remain (the optimizer then
 ///     drives toward feasibility).
 ///
-///     <para><b>Running trials (Kriging-Believer):</b> when <c>normalizedParamsOfRunningTrials</c> is
-///     given it is forwarded to both the feasible <see cref="LogEHVI" /> and each constraint
-///     <see cref="LogPI" />, which append the running points as fantasies. Unlike the single-objective
-///     path this is <b>not</b> a q-batch (Monte-Carlo) acqf — the MO-constrained running path stays the
-///     Kriging-Believer <see cref="LogCEHVI" /> (PORTING_PLAN Phase 3.2 part 3e-6).</para>
+///     <para><b>Sequential only (Optuna 5.0.0, #6804):</b> this acqf no longer takes running trials.
+///     Until Optuna 5.0.0 the running points were forwarded here and appended as Kriging-Believer
+///     fantasies; 5.0.0 removed that parameter and <see cref="OptunaSharp.Samplers.GPSampler" /> now
+///     scores the multi-objective constrained running case with the q-batch <see cref="QLogCEHVI" />.
+///     The inner <see cref="LogEHVI" /> and <see cref="LogPI" /> are built without running trials (both
+///     still accept them, exactly like their Python counterparts, but nothing in the sampler passes
+///     them any more).</para>
 /// </summary>
 internal sealed class LogCEHVI : IAcquisitionFunc
 {
@@ -1401,32 +1576,33 @@ internal sealed class LogCEHVI : IAcquisitionFunc
     /// <summary>Configures log constrained expected hypervolume improvement from the fitted model, search space, and supplied thresholds or sampling settings.</summary>
     /// <param name="gprList">One Gaussian-process model per objective, in objective order.</param>
     /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
-    /// <param name="yFeasible">The objective rows of feasible completed observations.</param>
+    /// <param name="yFeasible">The objective rows of feasible completed observations, or <c>null</c> when no completed trial is feasible.</param>
     /// <param name="nQmcSamples">The number of fixed quasi-Monte Carlo draws used to approximate posterior expectations.</param>
     /// <param name="qmcSeed">The seed used to scramble the quasi-Monte Carlo normal samples.</param>
     /// <param name="constraintsGprList">One Gaussian-process model per modeled constraint.</param>
     /// <param name="constraintsThresholdList">The feasibility threshold for each constraint model, in matching order.</param>
-    /// <param name="normalizedParamsOfRunningTrials">The normalized parameter rows of running trials to include as pending candidates.</param>
     /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
     /// <exception cref="System.ArgumentException">The constraint-model and threshold lists are empty or have different lengths.</exception>
     internal LogCEHVI(
         GPRegressor[] gprList, GpSearchSpace searchSpace, double[,]? yFeasible,
         int nQmcSamples, int qmcSeed,
         IReadOnlyList<GPRegressor> constraintsGprList, IReadOnlyList<double> constraintsThresholdList,
-        double[,]? normalizedParamsOfRunningTrials = null, double stabilizingNoise = 1e-12)
+        double stabilizingNoise = 1e-12)
     {
         if (constraintsGprList.Count != constraintsThresholdList.Count || constraintsGprList.Count == 0)
             throw new ArgumentException("constraints_gpr_list and constraints_threshold_list must be non-empty and equal-length.");
 
+        // Optuna 5.0.0 passes None for the running trials to both inner acqfs: no Kriging-Believer
+        // fantasies are appended, so the constraint and objective GPs are left unmutated.
         _acqf = yFeasible != null
             ? new LogEHVI(gprList, searchSpace, yFeasible, nQmcSamples, qmcSeed,
-                normalizedParamsOfRunningTrials, stabilizingNoise)
+                null, stabilizingNoise)
             : null;
         _constraintsAcqfList = new LogPI[constraintsGprList.Count];
         for (int i = 0; i < constraintsGprList.Count; i++)
             _constraintsAcqfList[i] = new LogPI(
                 constraintsGprList[i], searchSpace, constraintsThresholdList[i],
-                normalizedParamsOfRunningTrials, stabilizingNoise);
+                null, stabilizingNoise);
 
         SearchSpace = searchSpace;
         LengthScales = LogEHVI.MeanLengthScales(gprList, searchSpace.Dim);
@@ -1494,6 +1670,248 @@ internal sealed class LogCEHVI : IAcquisitionFunc
                 grad[d] += eg[d];
         }
         return (value, grad);
+    }
+}
+
+/// <summary>
+///     The q-batch constrained log expected-hypervolume-improvement acquisition function — port of
+///     <c>acqf.qLogCEHVI</c> (added in Optuna 5.0.0 by #6804), the acqf
+///     <see cref="OptunaSharp.Samplers.GPSampler" /> maximizes for <b>multi-objective constrained</b>
+///     optimization <b>with running trials</b>. It replaces the Kriging-Believer <see cref="LogCEHVI" />
+///     that handled this case before 5.0.0: rather than appending the running points' posterior means
+///     as if they had been observed, it integrates over QMC fantasies of both the objectives and the
+///     constraints at those points, so a running trial only shapes the baseline in the draws where it is
+///     sampled as feasible.
+///
+///     <para><b>With a feasible baseline</b> (<c>yFeasible</c> is not null), per QMC draw <c>s</c>:
+///     constraint <c>c</c> is a <see cref="QLogPI" /> seeded <c>qmcSeed + nObjectives + c</c>; a running
+///     trial's objective fantasy joins draw <c>s</c>'s Pareto baseline only when every constraint's
+///     fantasy for it is at or above its threshold; the baseline is <c>yFeasible</c> plus those feasible
+///     fantasies (<see cref="PerSampleParetoBaseline" />, objective <c>o</c> seeded <c>qmcSeed + o</c>);
+///     and the candidate scores
+///     <c>L_s(x) = Σ_c logsigmoid((y_c,s(x) − t_c)/τ) + logHVI_s(Y_s(x))</c>. The acqf is
+///     <c>logsumexp_s L_s − log S</c>.</para>
+///
+///     <para><b>With no feasible trial</b> (<c>yFeasible</c> is null): without an HVI term the tower
+///     property reduces the expectation over conditional feasibility (given the running fantasies) to
+///     the marginal feasibility probability, so the acqf is just <c>Σ_c LogPI_c(x)</c> — plain
+///     <see cref="LogPI" /> terms with no running-trial conditioning at all.</para>
+///
+///     <para><b>Gradient</b> (the autograd replacement): the fantasies, the feasibility mask and the
+///     boxes are constants of the candidate, so the gradient is the softmax over draws of
+///     <c>Σ_c sigmoid(−arg_c)/τ · ∂y_c/∂x + ∂logHVI_s/∂x</c>. Tolerance, not bit-exact — the documented
+///     GP boundary (managed triangular solves; QMC samples matched to torch ~1e-15).</para>
+/// </summary>
+internal sealed class QLogCEHVI : IAcquisitionFunc
+{
+    private readonly QLogPI[] _constraintsAcqfList;           // used only with a feasible baseline
+    private readonly LogPI[] _marginalConstraintsAcqfList;    // used only when no trial is feasible
+    private readonly ListConditionalGPRegressor? _condGpr;    // null exactly when _baseline is null
+    private readonly PerSampleParetoBaseline? _baseline;
+
+    /// <summary>Configures the q-batch constrained log EHVI over the running trials, choosing the feasible-baseline or marginal-feasibility form from <paramref name="yFeasible" />.</summary>
+    /// <param name="gprList">One Gaussian-process model per objective, in objective order, fitted on completed trials only.</param>
+    /// <param name="searchSpace">The normalized coordinate layout, bounds, and discrete choices used by the acquisition optimizer.</param>
+    /// <param name="yFeasible">The objective rows of feasible completed observations, or <c>null</c> when no completed trial is feasible.</param>
+    /// <param name="nQmcSamples">The number of fixed quasi-Monte Carlo draws used to approximate posterior expectations.</param>
+    /// <param name="qmcSeed">The base QMC seed: objective <c>o</c> uses <c>qmcSeed + o</c>, constraint <c>c</c> uses <c>qmcSeed + nObjectives + c</c>.</param>
+    /// <param name="constraintsGprList">One Gaussian-process model per modeled constraint.</param>
+    /// <param name="constraintsThresholdList">The feasibility threshold for each constraint model, in matching order.</param>
+    /// <param name="normalizedParamsOfRunningTrials">The normalized parameter rows of the running trials the fantasies are drawn at.</param>
+    /// <param name="stabilizingNoise">A small variance increment used to avoid singular predictive standard deviations.</param>
+    /// <param name="tau">The positive temperature of the smooth feasibility indicator in each constraint <see cref="QLogPI" />.</param>
+    /// <exception cref="System.ArgumentException">The constraint-model and threshold lists are empty or have different lengths.</exception>
+    internal QLogCEHVI(
+        GPRegressor[] gprList, GpSearchSpace searchSpace, double[,]? yFeasible, int nQmcSamples, int qmcSeed,
+        IReadOnlyList<GPRegressor> constraintsGprList, IReadOnlyList<double> constraintsThresholdList,
+        double[,] normalizedParamsOfRunningTrials, double stabilizingNoise = 1e-12, double tau = 1e-2)
+    {
+        if (constraintsGprList.Count != constraintsThresholdList.Count || constraintsGprList.Count == 0)
+            throw new ArgumentException("constraints_gpr_list and constraints_threshold_list must be non-empty and equal-length.");
+
+        int nConstraints = constraintsGprList.Count;
+        if (yFeasible == null)
+        {
+            // Marginal feasibility only: plain LogPI without running trials (see the class remarks).
+            _constraintsAcqfList = Array.Empty<QLogPI>();
+            _marginalConstraintsAcqfList = new LogPI[nConstraints];
+            for (int c = 0; c < nConstraints; c++)
+                _marginalConstraintsAcqfList[c] = new LogPI(
+                    constraintsGprList[c], searchSpace, constraintsThresholdList[c], null, stabilizingNoise);
+        }
+        else
+        {
+            _marginalConstraintsAcqfList = Array.Empty<LogPI>();
+            _constraintsAcqfList = new QLogPI[nConstraints];
+            for (int c = 0; c < nConstraints; c++)
+                _constraintsAcqfList[c] = new QLogPI(
+                    constraintsGprList[c], searchSpace, constraintsThresholdList[c], nQmcSamples,
+                    qmcSeed + gprList.Length + c, normalizedParamsOfRunningTrials, stabilizingNoise, tau);
+
+            // is_fantasy_feasible[s, r] = torch.all(stack(is_fantasy_above_threshold per constraint), -1):
+            // a running trial is feasible in draw s only if EVERY constraint's fantasy clears its threshold.
+            bool[,] isFantasyFeasible = _constraintsAcqfList[0].IsFantasyAboveThreshold();
+            for (int c = 1; c < nConstraints; c++)
+            {
+                bool[,] above = _constraintsAcqfList[c].IsFantasyAboveThreshold();
+                for (int s = 0; s < isFantasyFeasible.GetLength(0); s++)
+                    for (int r = 0; r < isFantasyFeasible.GetLength(1); r++)
+                        isFantasyFeasible[s, r] &= above[s, r];
+            }
+
+            _condGpr = new ListConditionalGPRegressor(
+                gprList, normalizedParamsOfRunningTrials, nQmcSamples, qmcSeed, stabilizingNoise);
+            // Both the constraint masks and the objective fantasies come from the same nQmcSamples, so
+            // draw s of one lines up with draw s of the other (Python zips them).
+            double[][,] fantasies = _condGpr.GetFantasySamples();
+            var feasibleFantasies = new double[fantasies.Length][,];
+            for (int s = 0; s < fantasies.Length; s++)
+                feasibleFantasies[s] = FeasibleRows(fantasies[s], isFantasyFeasible, s);
+            _baseline = new PerSampleParetoBaseline(yFeasible, feasibleFantasies);
+        }
+
+        SearchSpace = searchSpace;
+        LengthScales = LogEHVI.MeanLengthScales(gprList, searchSpace.Dim);
+    }
+
+    /// <summary>The normalized parameter space over which this acquisition function is optimized.</summary>
+    public GpSearchSpace SearchSpace { get; }
+    /// <summary>The kernel length scale of each coordinate (the mean over the objectives), used to precondition gradient steps.</summary>
+    public double[] LengthScales { get; }
+
+    /// <summary><c>eval_acqf_no_grad</c> over a batch <c>(B, dim)</c>.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
+    public double[] EvalAcqfNoGrad(double[,] x)
+    {
+        int b = x.GetLength(0), dim = x.GetLength(1);
+        var result = new double[b];
+        var row = new double[dim];
+        for (int r = 0; r < b; r++)
+        {
+            for (int d = 0; d < dim; d++) row[d] = x[r, d];
+            result[r] = EvalAcqfNoGrad(row);
+        }
+        return result;
+    }
+
+    /// <summary><c>eval_acqf_no_grad</c> at a single point.</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value at the supplied point, or one value per input row for a batch.</returns>
+    public double EvalAcqfNoGrad(double[] x)
+    {
+        if (_baseline == null)
+        {
+            // torch.stack([LogPI_c(x) ...]).sum(dim=0)
+            double v = 0.0;
+            foreach (LogPI c in _marginalConstraintsAcqfList)
+                v += c.EvalAcqfNoGrad(x);
+            return v;
+        }
+
+        // log_feasible_improvement = constraint_log_feasibility + per-draw log HVI (that order, as in Python).
+        double[] logFeasibleImprovement = ConstraintLogFeasibility(x);
+        double[] hvi = _baseline.ComputePerSampleLogHvi(_condGpr!.SampleCandidatePosterior(x));
+        for (int s = 0; s < hvi.Length; s++)
+            logFeasibleImprovement[s] += hvi[s];
+        return Acqf.LogMeanExp(logFeasibleImprovement);
+    }
+
+    /// <summary><c>eval_acqf_with_grad</c> — value and the hand-derived gradient (softmax over draws of the per-draw gradient).</summary>
+    /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
+    /// <returns>The acquisition value and its gradient in normalized parameter coordinates.</returns>
+    public (double Value, double[] Grad) EvalAcqfWithGrad(double[] x)
+    {
+        int dim = x.Length;
+        var grad = new double[dim];
+        if (_baseline == null)
+        {
+            double v = 0.0;
+            foreach (LogPI c in _marginalConstraintsAcqfList)
+            {
+                (double cv, double[] cg) = c.EvalAcqfWithGrad(x);
+                v += cv;
+                for (int d = 0; d < dim; d++)
+                    grad[d] += cg[d];
+            }
+            return (v, grad);
+        }
+
+        // Σ_c candidate log feasibility and its gradient, summed in constraint order.
+        (double[] cons, double[,] dCons) = _constraintsAcqfList[0].ComputeCandidateLogUtilityWithGrad(x);
+        for (int c = 1; c < _constraintsAcqfList.Length; c++)
+        {
+            (double[] lu, double[,] dlu) = _constraintsAcqfList[c].ComputeCandidateLogUtilityWithGrad(x);
+            for (int s = 0; s < lu.Length; s++)
+            {
+                cons[s] += lu[s];
+                for (int d = 0; d < dim; d++)
+                    dCons[s, d] += dlu[s, d];
+            }
+        }
+
+        (double[,] samples, double[][,] dSamples) = _condGpr!.SampleCandidatePosteriorWithGrad(x);
+        (double[] hvi, double[,] dHvi) = _baseline.ComputePerSampleLogHviWithGrad(samples, dSamples);
+
+        var logFeasibleImprovement = new double[hvi.Length];
+        for (int s = 0; s < hvi.Length; s++)
+            logFeasibleImprovement[s] = cons[s] + hvi[s];
+        double lse = Acqf.LogSumExp(logFeasibleImprovement);
+        double value = lse - Math.Log(logFeasibleImprovement.Length);
+
+        // ∂/∂x of logsumexp_s L_s = Σ_s softmax_s(L) · ∂L_s/∂x, with ∂L_s = ∂cons_s + ∂logHVI_s.
+        for (int s = 0; s < hvi.Length; s++)
+        {
+            double w = Math.Exp(logFeasibleImprovement[s] - lse);
+            if (w == 0.0) continue;
+            for (int d = 0; d < dim; d++)
+                grad[d] += w * (dCons[s, d] + dHvi[s, d]);
+        }
+        return (value, grad);
+    }
+
+    /// <summary>
+    ///     <c>sum(acqf.compute_candidate_log_utility(x) for acqf in constraints)</c> — the candidate's
+    ///     summed smooth log feasibility per QMC draw, accumulated in constraint order.
+    /// </summary>
+    /// <param name="x">The candidate point in normalized search-space coordinates.</param>
+    /// <returns>A fresh <c>(n_qmc,)</c> array the caller may modify.</returns>
+    private double[] ConstraintLogFeasibility(double[] x)
+    {
+        double[] cons = _constraintsAcqfList[0].ComputeCandidateLogUtility(x);
+        for (int c = 1; c < _constraintsAcqfList.Length; c++)
+        {
+            double[] lu = _constraintsAcqfList[c].ComputeCandidateLogUtility(x);
+            for (int s = 0; s < lu.Length; s++)
+                cons[s] += lu[s];
+        }
+        return cons;
+    }
+
+    /// <summary>
+    ///     <c>fantasy[is_feasible]</c> for one QMC draw — the running trials' objective fantasies whose
+    ///     constraints were all sampled as feasible in that draw, in running-trial order.
+    /// </summary>
+    /// <param name="fantasy">The draw's <c>(n_running, n_objectives)</c> objective fantasies.</param>
+    /// <param name="isFantasyFeasible">The <c>(n_qmc, n_running)</c> joint feasibility mask.</param>
+    /// <param name="s">The QMC draw whose row of the mask applies.</param>
+    /// <returns>A new <c>(n_feasible, n_objectives)</c> matrix; zero rows when no fantasy is feasible.</returns>
+    private static double[,] FeasibleRows(double[,] fantasy, bool[,] isFantasyFeasible, int s)
+    {
+        int nRunning = fantasy.GetLength(0), nObjectives = fantasy.GetLength(1);
+        int count = 0;
+        for (int r = 0; r < nRunning; r++)
+            if (isFantasyFeasible[s, r]) count++;
+        var rows = new double[count, nObjectives];
+        int k = 0;
+        for (int r = 0; r < nRunning; r++)
+        {
+            if (!isFantasyFeasible[s, r]) continue;
+            for (int o = 0; o < nObjectives; o++)
+                rows[k, o] = fantasy[r, o];
+            k++;
+        }
+        return rows;
     }
 }
 

@@ -183,15 +183,9 @@ public class FrozenTrial : BaseTrial
     public bool TryGetComponentLosses(out double[] components)
         => ComponentLosses.TryRead(UserAttrs, out components);
 
-    /// <param name="key">Attribute name; an existing attribute is overwritten.</param>
-    /// <param name="value">Value retained in this record's local internal-attribute dictionary.</param>
-    /// <summary>Updates the local internal attribute by name.</summary>
-    [Obsolete(DeprecationMessages.SetSystemAttr)]
-    public override void SetSystemAttr(string key, object? value)
-    {
-        OptunaWarnings.Warn(DeprecationMessages.SetSystemAttr, WarningCategory.FutureWarning);
-        SystemAttrsDict[key] = value;
-    }
+    // FrozenTrial.set_system_attr (deprecated 3.1.0) was removed in Optuna 5.0.0 (#6834). The record's
+    // optuna-internal attributes stay readable through SystemAttrs and replaceable through
+    // SystemAttrsDict, mirroring the system_attrs property/setter Optuna keeps on FrozenTrial.
 
     // ------------------------------------------------------------------ validation
 
@@ -353,8 +347,12 @@ public class FrozenTrial : BaseTrial
         set => _userAttrs = value;
     }
 
-    /// <summary>Dictionary that contains the optuna-internal attributes.</summary>
-    public override IReadOnlyDictionary<string, object?> SystemAttrs => SystemAttrsDict;
+    /// <summary>
+    ///     Dictionary that contains the optuna-internal attributes. Still part of Optuna 5.0.0's
+    ///     <c>FrozenTrial</c> (only <c>BaseTrial</c>/<c>Trial</c>/<c>Study</c> lost theirs in #6834), so samplers
+    ///     read system attributes of finished trials through it.
+    /// </summary>
+    public IReadOnlyDictionary<string, object?> SystemAttrs => SystemAttrsDict;
 
     /// <summary>Gets or replaces internal attributes, resolving any deferred storage lookup once.</summary>
     /// <exception cref="System.Exception">The deferred storage loader fails; the loader remains available for a later attempt.</exception>

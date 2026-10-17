@@ -14,14 +14,15 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pip libgomp1 git \
  && rm -rf /var/lib/apt/lists/*
-# Install the VENDORED optuna — the EXACT submodule commit (5.0.0.dev @ f6898da) OptunaSharp's samplers
-# were ported from. PyPI optuna is a different TPE implementation and its trajectory diverges wildly
-# (the SvmSklearn_Tpe oracle went 0.034 -> 4.73). numpy is pinned to 2.4.2 (the port's byte-exact
-# target; the erf-tolerant TPE parity then holds at 1e-9, exactly as the live interop suite does).
+# Install the VENDORED optuna — the EXACT submodule commit (the v5.0.0 release @ 01ddd17) OptunaSharp's
+# samplers track. An older PyPI optuna (4.x) is a different TPE implementation and its trajectory diverges
+# wildly (the SvmSklearn_Tpe oracle went 0.034 -> 4.73), so the commit is pinned rather than left to
+# whatever PyPI resolves. numpy is pinned to 2.4.2 (the port's byte-exact target; the erf-tolerant TPE
+# parity then holds at 1e-9, exactly as the live interop suite does).
 # The container has no access to src/ (isolation), so it fetches the commit from GitHub instead.
 RUN pip3 install --no-cache-dir --break-system-packages "numpy==2.4.2" \
  && pip3 install --no-cache-dir --break-system-packages \
-      "optuna @ git+https://github.com/optuna/optuna.git@f6898dab5bba804dd2bdb6ce7cc06b41b51506e4" \
+      "optuna @ git+https://github.com/optuna/optuna.git@01ddd17ab9f36c3d2817aed9afe376e1cb047d35" \
       xgboost lightgbm scikit-learn \
  && pip3 install --no-cache-dir --break-system-packages "numpy==2.4.2"
 

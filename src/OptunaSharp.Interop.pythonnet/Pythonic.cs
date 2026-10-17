@@ -406,6 +406,22 @@ internal static class Python
                     return evaluate.Invoke(parameters);
                 }
 
+                /// <summary>
+                ///     <c>problem.evaluate_constraints(params)</c> (OptunaHub ≥ 0.5.0) — the problem's constraint
+                ///     values: a <c>dict</c> keyed by constraint name, or, from a benchmark package written for
+                ///     an older OptunaHub, a plain sequence. A trial is feasible when every value is ≤ 0. The
+                ///     base implementation returns an empty <c>dict</c>. Dispose the result.
+                /// </summary>
+                /// <param name="problem">The borrowed Python problem or benchmark instance.</param>
+                /// <param name="parameters">The named parameter values passed to the Python trial or benchmark.</param>
+                /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
+                internal static PyObject evaluate_constraints(PyObject problem, PyObject parameters)
+                {
+                    using var evaluateConstraints = problem.GetAttr("evaluate_constraints");
+                    return evaluateConstraints.Invoke(parameters);
+                }
+
                 /// <summary><c>problem.directions</c>. Dispose the result.</summary>
                 /// <param name="problem">The borrowed Python problem or benchmark instance.</param>
                 /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
@@ -419,5 +435,42 @@ internal static class Python
                 internal static PyObject search_space(PyObject problem) => problem.GetAttr("search_space");
             }
         }
+    }
+
+    /// <summary><c>import warnings</c> — the fixed warning call the bridge makes, reached as <c>Python.warnings.*</c>.</summary>
+    internal static class warnings
+    {
+        /// <summary>
+        ///     <c>warnings.warn(message, category)</c> — raise a genuine Python warning, so a deprecation that
+        ///     OptunaHub's own code would raise reaches Python's warning filters and stderr exactly as it does
+        ///     when the problem runs in Python. Honors any active <c>warnings</c> filter, including one that
+        ///     turns the warning into an exception (which then propagates as a <see cref="PythonException" />).
+        /// </summary>
+        /// <param name="message">The warning text, passed verbatim.</param>
+        /// <param name="category">The borrowed warning class, e.g. <see cref="builtins.FutureWarning" />.</param>
+        /// <exception cref="global::Python.Runtime.PythonException">A warnings filter escalates the warning to an error, or the call itself fails.</exception>
+        internal static void warn(string message, PyObject category)
+        {
+            PyObject module = PythonRuntime.Import("warnings");   // process-scoped cache: never dispose
+            using var warnFn = module.GetAttr("warn");
+            using var text = message.ToPython();
+            using PyObject none = warnFn.Invoke(text, category);
+        }
+    }
+
+    /// <summary><c>builtins</c> — the built-in names the bridge passes into fixed calls, reached as <c>Python.builtins.*</c>.</summary>
+    internal static class builtins
+    {
+        /// <summary>The built-in <c>FutureWarning</c> class. Dispose the result.</summary>
+        /// <exception cref="global::Python.Runtime.PythonException">The attribute lookup fails.</exception>
+        internal static PyObject FutureWarning => PythonRuntime.Builtins.GetAttr("FutureWarning");
+
+        /// <summary>The built-in <c>TypeError</c> class. Dispose the result.</summary>
+        /// <exception cref="global::Python.Runtime.PythonException">The attribute lookup fails.</exception>
+        internal static PyObject TypeError => PythonRuntime.Builtins.GetAttr("TypeError");
+
+        /// <summary>The built-in <c>ValueError</c> class. Dispose the result.</summary>
+        /// <exception cref="global::Python.Runtime.PythonException">The attribute lookup fails.</exception>
+        internal static PyObject ValueError => PythonRuntime.Builtins.GetAttr("ValueError");
     }
 }
