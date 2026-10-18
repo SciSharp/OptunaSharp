@@ -109,12 +109,14 @@ jobs:
     #   - OpenBugs / HighMemory: excluded (known-failing / resource-heavy)
     #   - WindowsOnly: excluded on non-Windows runners
     #   - RequiresPython: excluded here — the live-Optuna suite is its own job below
+    #   - Slow: excluded here — the ~10 s+ paper-claim runs (REMBO/SAASBO) are 12 tests but ~80% of the
+    #     suite's wall time; they run in the "Test (slow)" step below on ubuntu for tags/dispatch.
     # Both TFMs (push/tag) or just net10.0 (PR) run from the single build above, --no-build.
     - name: Test
       shell: bash
       timeout-minutes: 15
       run: |
-        FILTER="TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython"
+        FILTER="TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython&TestCategory!=Slow"
         if [[ "$RUNNER_OS" != "Windows" ]]; then
           FILTER="$FILTER&TestCategory!=WindowsOnly"
         fi
@@ -123,6 +125,22 @@ jobs:
           dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj \
             --configuration Release --no-build --framework "$TFM" \
             --filter "$FILTER" --logger "trx"
+          echo "::endgroup::"
+        done
+
+    # The Slow category (see TestCategory.Slow): deterministic, but ~7 min per TFM locally — release-confidence
+    # coverage, so ubuntu only (1x minutes) and only for v* tags and manual dispatch, both TFMs. Every full
+    # local `dotnet test` run includes them.
+    - name: Test (slow)
+      if: matrix.os == 'ubuntu-latest' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+      shell: bash
+      timeout-minutes: 60
+      run: |
+        for TFM in ${{ needs.setup.outputs.tfms_space }}; do
+          echo "::group::Slow unit tests ($TFM)"
+          dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj \
+            --configuration Release --no-build --framework "$TFM" \
+            --filter "TestCategory=Slow&TestCategory!=OpenBugs&TestCategory!=HighMemory" --logger "trx"
           echo "::endgroup::"
         done
 
@@ -237,10 +255,10 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Install vendored Optuna (5.0.0.dev) + live-oracle deps
+    - name: Install vendored Optuna (v5.0.0) + live-oracle deps
       shell: bash
       run: |
-        # The C# port is validated against the VENDORED optuna (refs/optuna submodule, 5.0.0.dev), NOT
+        # The C# port is validated against the VENDORED optuna (refs/optuna submodule, v5.0.0), NOT
         # PyPI optuna — a version mismatch makes the differential oracle assert against the wrong impl.
         git submodule update --init refs/optuna
         python -m pip install --upgrade pip
@@ -270,7 +288,7 @@ jobs:
         # compared against the exact optuna_integration source it ports. Linux-only: byte-parity is the SAME
         # botorch driven on both sides and is CPU-deterministic / OS-independent, so one OS gates it — macOS
         # (10x runner minutes) and Windows self-skip (RequireBoTorchOrInconclusive → Inconclusive). --no-deps
-        # keeps the vendored optuna (refs/optuna, 5.0.0.dev) from being replaced by a PyPI optuna.
+        # keeps the vendored optuna (refs/optuna, v5.0.0) from being replaced by a PyPI optuna.
         if [ "$RUNNER_OS" = "Linux" ]; then
           git submodule update --init refs/optuna-integration
           python -m pip install botorch
@@ -344,16 +362,33 @@ jobs:
     - name: Build
       run: dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
 
+    # The live suite grew ~3x since 2026-09-12 (≈600 cases): ~9-15 min per TFM on a desktop, so both TFMs
+    # need more than the old 20 min. Slow (the ≥10 s BoTorch qEHVI-family byte-exact cases, ~80 min per TFM
+    # because botorch's fused qLogEHVI kernel falls back to pure Python without a C++ toolchain) is excluded
+    # here and runs in "Test (slow)" below.
     - name: Test
-      timeout-minutes: 20
+      timeout-minutes: 60
       shell: bash
       run: |
         for TFM in ${{ needs.setup.outputs.tfms_space }}; do
           echo "::group::Interop tests ($TFM)"
           dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
-            --configuration Release --no-build --framework "$TFM" --logger "trx"
+            --configuration Release --no-build --framework "$TFM" \
+            --filter "TestCategory!=Slow" --logger "trx"
           echo "::endgroup::"
         done
+
+    # Slow BoTorch parity: botorch is installed on Linux only (see the install step), so this runs on ubuntu,
+    # for v* tags and manual dispatch, and on net10.0 only — both sides of each case drive the same Python
+    # botorch, so a second TFM adds ~80 runner-minutes and no unique coverage.
+    - name: Test (slow)
+      if: matrix.os == 'ubuntu-latest' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+      timeout-minutes: 240
+      shell: bash
+      run: |
+        dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
+          --configuration Release --no-build --framework net10.0 \
+          --filter "TestCategory=Slow" --logger "trx"
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4

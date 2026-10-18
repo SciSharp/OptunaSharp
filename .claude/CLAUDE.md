@@ -189,9 +189,10 @@ the project wins).
 # Build everything
 dotnet build SciSharp.OptunaSharp.sln -c Release
 
-# Unit tests (what CI runs — both TFMs, minus known-failing/heavy/python categories)
+# Unit tests (what per-push CI runs — both TFMs, minus known-failing/heavy/python/slow categories;
+# drop `&TestCategory!=Slow` for the full run: ~10 min per TFM instead of ~2)
 dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj -c Release \
-  --filter "TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython"
+  --filter "TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython&TestCategory!=Slow"
 
 # Live-Optuna interop (needs a discoverable Python with `pip install optuna`)
 dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj -c Release
@@ -211,6 +212,7 @@ Typed attributes in `test/OptunaSharp.Tests/TestCategory.cs` (so CI filter strin
 | `[RequiresPython]` | Needs live Optuna via pythonnet; self-skips (Inconclusive) when absent. | interop job only |
 | `[HighMemory]` | Resource-heavy. | **excluded** |
 | `[WindowsOnly]` | Windows-only API. | excluded off-Windows |
+| `[Slow]` | ~10 s+ each (REMBO/SAASBO claim runs; the BoTorch qEHVI family in the interop suite, `[TestCategory("Slow")]`). Runtime only — never to hide a failure. | **excluded** on push/PR; ubuntu `Test (slow)` step on `v*` tags + dispatch |
 
 MSTest attribute namespaces are supplied globally via `GlobalUsings.cs` in each test project (`global
 using Microsoft.VisualStudio.TestTools.UnitTesting;`), so test files don't repeat the `using`. The
@@ -319,7 +321,10 @@ suppresses noisy XML-doc warnings.
 
 ### `build-and-release.yml`
 - **`test`** — matrix `windows/ubuntu/macos`, .NET 8 + 10; builds `OptunaSharp.Tests` and runs both
-  TFMs with `TestCategory!=OpenBugs&!=HighMemory&!=RequiresPython` (+ `!=WindowsOnly` off-Windows).
+  TFMs with `TestCategory!=OpenBugs&!=HighMemory&!=RequiresPython&!=Slow` (+ `!=WindowsOnly` off-Windows);
+  a `Test (slow)` step runs the `Slow` category on ubuntu for `v*` tags and manual dispatch. The `setup`
+  job decides the matrix per trigger: push = ubuntu+windows × both TFMs, PR = net10.0 only,
+  tags/dispatch = +macOS.
 - **`verify-signing`** — asserts `Open.snk` size+sha256, packs a throwaway `OptunaSharp`, runs
   `verify_strong_name.cs` on it. Runs on **every push and PR** (a release-only gate is how "shipped
   unsigned" hides).
