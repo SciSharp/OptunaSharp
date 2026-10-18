@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.Common;
 using System.Linq;
@@ -165,6 +166,11 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     dsb.UseLoggerFactory(myLoggerFactory);      // …any Npgsql configuration you like
     ///     using var storage = new RDBStorage(dsb.Build(), ownsDataSource: true);
     ///     </code>
+    ///     <para><b>.NET 8 footgun:</b> reuse ONE data source for every storage on the same database. Npgsql's
+    ///     EF Core 8 provider builds a separate EF service provider per data-source instance and EF Core
+    ///     fails every new context in the process once more than twenty exist, so building a fresh data
+    ///     source per storage breaks a long-running .NET 8 process (EF Core 9 / net10.0 is unaffected). The
+    ///     URL and connection-string constructors already share one per connection string.</para>
     /// </summary>
     /// <param name="ownsDataSource">
     ///     When <c>true</c>, <see cref="Dispose" /> disposes the data source; when <c>false</c>
@@ -215,10 +221,11 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         {
             var csb = new NpgsqlConnectionStringBuilder(connString);
             options.ConfigureConnectionString?.Invoke(csb);
-            var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
-            MapOptunaEnums(dsb);
-            _dataSource = dsb.Build();
-            _ownsDataSource = true;
+            // One data source per connection string, shared — NOT one per storage: Npgsql's EF Core 8
+            // provider gives every data-source instance its own EF service provider and EF Core fails the
+            // whole process past ~20 of them (see SharedPostgresDataSource). Shared, so never ours to dispose.
+            _dataSource = SharedPostgresDataSource(csb.ConnectionString);
+            _ownsDataSource = false;
             _ctxOptions = BuildPostgresOptions(_dataSource, options);
         }
         else
@@ -307,6 +314,42 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(RdbModels.Inv));
 
     private static readonly NpgsqlNullNameTranslator _verbatim = new();
+
+    // The process-wide PostgreSQL data sources of the URL / connection-string constructors, one per final
+    // connection string. Lazy so concurrent first opens of the same database build exactly one.
+    private static readonly ConcurrentDictionary<string, Lazy<NpgsqlDataSource>> _sharedDataSources =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     The data source every URL / connection-string PostgreSQL storage on <paramref name="connectionString" />
+    ///     shares for the life of the process — built on first use with Optuna's enum types mapped
+    ///     (<see cref="MapOptunaEnums" />), never disposed, like the per-connection-string pools of classic
+    ///     ADO.NET and of MySqlConnector. Idle physical connections are still closed by Npgsql's idle pruning.
+    /// </summary>
+    /// <remarks>
+    ///     Why shared instead of one per storage: Npgsql's EF Core 8 provider (the net8.0 build) gives every
+    ///     distinct <see cref="NpgsqlDataSource" /> <i>instance</i> its own EF internal service provider
+    ///     (<c>ShouldUseSameServiceProvider</c> compares it by reference), EF caches those providers for the
+    ///     life of the process, and once more than twenty exist EF Core throws
+    ///     <c>ManyServiceProvidersCreatedWarning</c> as an <see cref="InvalidOperationException" /> from every
+    ///     new context — PostgreSQL and MySQL alike. Per-storage data sources therefore capped a .NET 8 process
+    ///     at about twenty PostgreSQL storages over its whole lifetime (disposing them did not help). Sharing
+    ///     bounds providers by the number of distinct databases. EF Core 9's provider (net10.0) no longer keys
+    ///     on the instance, but the sharing applies on both targets so storage lifetime does not depend on the
+    ///     target framework.
+    /// </remarks>
+    /// <param name="connectionString">The final connection string, after <see cref="EFCoreRdbOptions.ConfigureConnectionString" />.</param>
+    /// <returns>The shared data source; callers must not dispose it.</returns>
+    /// <exception cref="System.ArgumentException">The connection string is invalid (the failure is cached for this exact string).</exception>
+    private static NpgsqlDataSource SharedPostgresDataSource(string connectionString)
+        => _sharedDataSources.GetOrAdd(
+            connectionString,
+            cs => new Lazy<NpgsqlDataSource>(() =>
+            {
+                var dsb = new NpgsqlDataSourceBuilder(cs);
+                MapOptunaEnums(dsb);
+                return dsb.Build();
+            })).Value;
 
     /// <summary>
     ///     Map Optuna's four native PostgreSQL enum types (<c>studydirection</c>, <c>trialstate</c>,
@@ -1411,9 +1454,12 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     }
 
     /// <summary>
-    ///     Disposes the PostgreSQL data source (and its pooled connections) — unless it was injected
-    ///     with <c>ownsDataSource: false</c>, in which case the caller retains ownership and it is left
-    ///     open. MySQL keeps no per-storage resource (MySqlConnector pools by connection string).
+    ///     Disposes an injected PostgreSQL data source passed with <c>ownsDataSource: true</c> (and its
+    ///     pooled connections). Everything else is left open: an injected data source with
+    ///     <c>ownsDataSource: false</c> stays the caller's, and the URL / connection-string constructors use a
+    ///     data source shared per connection string for the life of the process (see
+    ///     <see cref="SharedPostgresDataSource" />), so disposing one storage never breaks another on the same
+    ///     database. MySQL keeps no per-storage resource (MySqlConnector pools by connection string).
     /// </summary>
     public void Dispose()
     {

@@ -64,6 +64,46 @@ public abstract class EFCoreRdbStorageTestsBase
     private static OrderedDict<string, BaseDistribution> QuadDist() =>
         new() { ["x"] = new FloatDistribution(-10, 10) };
 
+    // ------------------------------------------------------------------ process-wide lifetime
+
+    /// <summary>
+    ///     Regression: one process can open (and close) far more than twenty storages on a database. With a
+    ///     data source per storage, Npgsql's EF Core 8 provider made a new EF service provider each time and
+    ///     EF Core threw <c>ManyServiceProvidersCreatedWarning</c> from the ~21st on — on net8.0 the whole
+    ///     PostgreSQL/MySQL conformance suite then failed from that point. 40 storages, each used and
+    ///     disposed, must all work, whatever ran before in the process.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void FortyStoragesInOneProcess_AllWork()
+    {
+        EFCoreDbSession.Reset(Provider);
+        for (int i = 0; i < 40; i++)
+        {
+            using var storage = ReopenStorage();
+            int id = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, $"many-{i}");
+            storage.GetStudyNameFromId(id).Should().Be($"many-{i}");
+        }
+    }
+
+    /// <summary>
+    ///     Storages opened from the same URL share their connection pool for the life of the process, so
+    ///     disposing one must leave the others fully usable (the shared pool is never torn down by a storage).
+    /// </summary>
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void DisposingOneStorage_LeavesAnotherOnTheSameDatabaseUsable()
+    {
+        EFCoreDbSession.Reset(Provider);
+        using var survivor = ReopenStorage();
+        using (var first = ReopenStorage())
+            first.CreateNewStudy(new[] { StudyDirection.Minimize }, "first");
+
+        int id = survivor.CreateNewStudy(new[] { StudyDirection.Maximize }, "survivor");
+        survivor.GetStudyNameFromId(id).Should().Be("survivor");
+        survivor.GetAllStudies().Select(s => s.StudyName).Should().BeEquivalentTo(new[] { "first", "survivor" });
+    }
+
     // ------------------------------------------------------------------ schema / version pins
 
     [TestMethod]
