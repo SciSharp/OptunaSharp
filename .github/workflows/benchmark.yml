@@ -18,6 +18,11 @@ on:
 permissions:
   contents: read
 
+# Cancel a superseded in-flight run on the same branch/PR so repeated pushes don't stack full runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Compile gate: the BenchmarkDotNet harness must always build. A full perf run is heavy and — until
   # algorithms are ported — not meaningful, so it is manual-only (workflow_dispatch) below.

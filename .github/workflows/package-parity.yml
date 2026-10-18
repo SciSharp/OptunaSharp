@@ -29,6 +29,11 @@ on:
 permissions:
   contents: read
 
+# Cancel a superseded in-flight run on the same branch/PR so repeated pushes don't stack full runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   DOTNET_NOWARN: CS1591%3BCS1573%3BCS1572%3BCS1570%3BCS1574%3BCS1587%3BCS1711%3BCS1734
 
