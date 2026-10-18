@@ -116,6 +116,11 @@ jobs:
       shell: bash
       timeout-minutes: 15
       run: |
+        # Pin OpenBLAS to its Haswell kernels on x64: DYNAMIC_ARCH otherwise picks the kernel per runner CPU
+        # (SkylakeX/Zen on AVX-512 hosts), whose last bits differ from the committed linalg oracles (generated
+        # on Haswell kernels — AgeMoea2OperatorParityTests' Normalize/Do failed by 1-2 ULP on such a runner)
+        # and could differ between NumPy's and NumSharp's OpenBLAS copies. Every x64 runner has AVX2/FMA.
+        if [[ "$RUNNER_ARCH" == "X64" ]]; then export OPENBLAS_CORETYPE=Haswell; fi
         FILTER="TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython&TestCategory!=Slow"
         if [[ "$RUNNER_OS" != "Windows" ]]; then
           FILTER="$FILTER&TestCategory!=WindowsOnly"
@@ -136,6 +141,11 @@ jobs:
       shell: bash
       timeout-minutes: 60
       run: |
+        # Pin OpenBLAS to its Haswell kernels on x64: DYNAMIC_ARCH otherwise picks the kernel per runner CPU
+        # (SkylakeX/Zen on AVX-512 hosts), whose last bits differ from the committed linalg oracles (generated
+        # on Haswell kernels — AgeMoea2OperatorParityTests' Normalize/Do failed by 1-2 ULP on such a runner)
+        # and could differ between NumPy's and NumSharp's OpenBLAS copies. Every x64 runner has AVX2/FMA.
+        if [[ "$RUNNER_ARCH" == "X64" ]]; then export OPENBLAS_CORETYPE=Haswell; fi
         for TFM in ${{ needs.setup.outputs.tfms_space }}; do
           echo "::group::Slow unit tests ($TFM)"
           dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj \
@@ -282,6 +292,11 @@ jobs:
           python -m pip install torch
         fi
         python -m pip install cmaes "scikit-learn==1.8.0" matplotlib
+        # plotly: the Plotly render/customization parity tests (PlotlyRenderParityTests,
+        # PlotlyCustomizationRenderParityTests) build the SAME figure with live optuna.visualization and
+        # compare the JSON. Without it optuna raises "Tried to import 'plotly' but failed" — 78 failures per
+        # TFM. Pinned to the version the figure JSON was validated against.
+        python -m pip install "plotly==6.6.0"
         # BoTorch parity gate (OptunaSharp.Interop.BoTorch → BoTorchApiParityTests / BoTorchSamplerParityTests):
         # install botorch (pulls gpytorch/linear_operator, reuses the CPU torch above) + the VENDORED
         # optuna_integration (refs/optuna-integration, matching the ported botorch.py) so the bridge is
@@ -370,6 +385,11 @@ jobs:
       timeout-minutes: 60
       shell: bash
       run: |
+        # Pin OpenBLAS to its Haswell kernels on x64: DYNAMIC_ARCH otherwise picks the kernel per runner CPU
+        # (SkylakeX/Zen on AVX-512 hosts), whose last bits differ from the committed linalg oracles (generated
+        # on Haswell kernels — AgeMoea2OperatorParityTests' Normalize/Do failed by 1-2 ULP on such a runner)
+        # and could differ between NumPy's and NumSharp's OpenBLAS copies. Every x64 runner has AVX2/FMA.
+        if [[ "$RUNNER_ARCH" == "X64" ]]; then export OPENBLAS_CORETYPE=Haswell; fi
         for TFM in ${{ needs.setup.outputs.tfms_space }}; do
           echo "::group::Interop tests ($TFM)"
           dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
@@ -386,6 +406,11 @@ jobs:
       timeout-minutes: 240
       shell: bash
       run: |
+        # Pin OpenBLAS to its Haswell kernels on x64: DYNAMIC_ARCH otherwise picks the kernel per runner CPU
+        # (SkylakeX/Zen on AVX-512 hosts), whose last bits differ from the committed linalg oracles (generated
+        # on Haswell kernels — AgeMoea2OperatorParityTests' Normalize/Do failed by 1-2 ULP on such a runner)
+        # and could differ between NumPy's and NumSharp's OpenBLAS copies. Every x64 runner has AVX2/FMA.
+        if [[ "$RUNNER_ARCH" == "X64" ]]; then export OPENBLAS_CORETYPE=Haswell; fi
         dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
           --configuration Release --no-build --framework net10.0 \
           --filter "TestCategory=Slow" --logger "trx"

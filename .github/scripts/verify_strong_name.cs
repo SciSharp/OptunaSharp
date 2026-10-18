@@ -57,17 +57,27 @@ foreach (var pkg in packages)
     Console.WriteLine($"{Path.GetFileName(pkg)}");
     using var zip = ZipFile.OpenRead(pkg);
 
-    // Only lib/ managed assemblies carry an assembly identity to check. A shipping package with no
-    // managed assembly is a packaging failure, not a pass.
+    // A `dotnet tool` package (PackAsTool — OptunaSharp.Cli) ships its assemblies under tools/<tfm>/any/,
+    // marked by DotnetToolSettings.xml, next to its third-party dependencies (System.CommandLine,
+    // Microsoft.Data.Sqlite, …) which are signed with THEIR publishers' keys, not ours. So for a tool,
+    // check exactly the OptunaSharp-owned assemblies under tools/; for a library, every lib/ assembly.
+    bool isTool = zip.Entries.Any(e => e.FullName.StartsWith("tools/", StringComparison.OrdinalIgnoreCase)
+                                       && e.Name.Equals("DotnetToolSettings.xml", StringComparison.OrdinalIgnoreCase));
     var libDlls = zip.Entries
-        .Where(e => e.FullName.StartsWith("lib/", StringComparison.OrdinalIgnoreCase)
-                    && e.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+        .Where(e => e.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                    && (isTool
+                        ? e.FullName.StartsWith("tools/", StringComparison.OrdinalIgnoreCase)
+                          && e.Name.StartsWith("OptunaSharp", StringComparison.OrdinalIgnoreCase)
+                        : e.FullName.StartsWith("lib/", StringComparison.OrdinalIgnoreCase)))
         .OrderBy(e => e.FullName).ToList();
 
+    // Only managed assemblies carry an assembly identity to check. A shipping package with none of its
+    // own is a packaging failure, not a pass (for a tool: no OptunaSharp*.dll under tools/).
     if (libDlls.Count == 0)
     {
-        Console.Error.WriteLine($"  ::error::no lib/**/*.dll inside {Path.GetFileName(pkg)} — a shipping " +
-                                 "package with no managed assembly is a packaging failure, not a pass.");
+        string where = isTool ? "tools/**/OptunaSharp*.dll" : "lib/**/*.dll";
+        Console.Error.WriteLine($"  ::error::no {where} inside {Path.GetFileName(pkg)} — a shipping " +
+                                 "package with no managed assembly of ours is a packaging failure, not a pass.");
         failures++;
         continue;
     }
