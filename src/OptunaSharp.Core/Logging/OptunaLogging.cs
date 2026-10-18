@@ -85,31 +85,111 @@ public interface ILogHandler
 ///     The default handler: writes <c>[I 2021-10-31 05:35:17,232] message</c> lines to stderr,
 ///     mirroring Optuna's <c>create_default_formatter()</c> (sans colors).
 /// </summary>
+/// <remarks>
+///     Like Python's <c>logging.StreamHandler</c>, the parameterless constructor binds to the standard
+///     error stream <i>current at construction</i> (<see cref="Console.Error" />, Python's
+///     <c>sys.stderr</c>), not at each write. Footgun: if the library's default handler is created while
+///     <see cref="Console.Error" /> is temporarily redirected (a test capturing stderr, a host swapping it),
+///     it keeps writing to that redirect afterwards. If the redirect is later disposed, writes fail — and,
+///     exactly as in Python, the failure is reported on the current stderr ("--- Logging error ---")
+///     instead of propagating, so a broken log stream never fails the optimization that was logging.
+/// </remarks>
 public sealed class StreamLogHandler : ILogHandler
 {
     private readonly TextWriter _writer;
 
-    /// <summary>Creates an Optuna-style text handler using stderr or a supplied writer.</summary>
+    /// <summary>
+    ///     Creates the Optuna-style text handler over the standard error stream as it is <i>now</i>
+    ///     (Python's <c>StreamHandler()</c> capturing <c>sys.stderr</c>); a later
+    ///     <see cref="Console.SetError" /> does not move it.
+    /// </summary>
     public StreamLogHandler() : this(Console.Error) { }
 
-    /// <summary>Creates an Optuna-style text handler using stderr or a supplied writer.</summary>
+    /// <summary>Creates an Optuna-style text handler over a supplied writer.</summary>
     /// <param name="writer">Caller-owned text writer; the handler does not dispose it.</param>
     public StreamLogHandler(TextWriter writer)
     {
         _writer = writer;
     }
 
-    /// <summary>Writes the formatted event and optional exception to the configured writer.</summary>
+    /// <summary>
+    ///     Writes the formatted event and optional exception to the configured writer. Never throws:
+    ///     a write failure (a disposed or broken writer) is reported on the current standard error the way
+    ///     Python's <c>logging.Handler.handleError</c> reports it, and the record is dropped.
+    /// </summary>
     /// <param name="record">Log record to deliver to the handler.</param>
-    /// <exception cref="System.IO.IOException">The writer cannot write the record.</exception>
-    /// <exception cref="System.ObjectDisposedException">The configured writer has been disposed.</exception>
     public void Emit(in LogRecord record)
     {
-        // Python asctime default format: "2021-10-31 05:35:17,232" (comma before milliseconds).
-        var ts = record.Timestamp.ToString("yyyy-MM-dd HH:mm:ss,fff", System.Globalization.CultureInfo.InvariantCulture);
-        _writer.WriteLine($"[{record.LevelChar} {ts}] {record.Message}");
-        if (record.Exception is not null)
-            _writer.WriteLine(record.Exception.ToString());
+        try
+        {
+            // Python asctime default format: "2021-10-31 05:35:17,232" (comma before milliseconds).
+            var ts = record.Timestamp.ToString("yyyy-MM-dd HH:mm:ss,fff", System.Globalization.CultureInfo.InvariantCulture);
+            _writer.WriteLine($"[{record.LevelChar} {ts}] {record.Message}");
+            if (record.Exception is not null)
+                _writer.WriteLine(record.Exception.ToString());
+        }
+        catch (Exception error)
+        {
+            // Python's StreamHandler.emit: `except RecursionError: raise; except Exception:
+            // self.handleError(record)`. .NET's stack overflow cannot be caught at all, so every
+            // catchable failure takes the handleError path — the caller (Study.Optimize, Ask, …) keeps
+            // running exactly as it does under Optuna.
+            HandleError(record, error);
+        }
+    }
+
+    /// <summary>
+    ///     Port of <c>logging.Handler.handleError</c> (with <c>logging.raiseExceptions</c> at its default,
+    ///     <c>True</c>): writes <c>--- Logging error ---</c>, the failure, the calling context
+    ///     (<c>Call stack:</c>, logging frames skipped) and <c>Message: …</c> / <c>Arguments: ()</c> to the
+    ///     <i>current</i> standard error, then swallows the failure.
+    /// </summary>
+    /// <remarks>
+    ///     The report is best-effort. Python ignores an <c>OSError</c> while writing it; this port also
+    ///     ignores <see cref="ObjectDisposedException" /> (the .NET form of writing to a closed
+    ///     <c>sys.stderr</c>), so a disposed standard error can never turn a logging hiccup back into an
+    ///     exception for the caller.
+    /// </remarks>
+    /// <param name="record">The record whose emission failed; its message is echoed as Python's <c>%r</c>.</param>
+    /// <param name="error">The exception the write raised.</param>
+    private static void HandleError(in LogRecord record, Exception error)
+    {
+        try
+        {
+            var report = new System.Text.StringBuilder();
+            report.Append("--- Logging error ---\n");
+            report.Append(error).Append('\n');                 // traceback.print_exception(exc)
+            report.Append("Call stack:\n");
+            report.Append(CallingContext()).Append('\n');      // traceback.print_stack(first non-logging frame)
+            report.Append("Message: ").Append(Internal.PythonRepr.StringRepr(record.Message)).Append('\n');
+            // OptunaSharp records carry pre-formatted messages, i.e. Python's record.args == ().
+            report.Append("Arguments: ()\n");
+            Console.Error.Write(report.ToString());
+        }
+        catch (Exception e) when (e is IOException or ObjectDisposedException)
+        {
+            // Python: `except OSError: pass` (issue 5971) — reporting a logging error must not fail.
+        }
+    }
+
+    /// <summary>
+    ///     The stack of the code that logged, with the logging machinery's own frames skipped — Python's
+    ///     <c>handleError</c> walks <c>f_back</c> "until we're out of logging, so as to print the calling
+    ///     context".
+    /// </summary>
+    /// <returns>The calling context in <see cref="System.Diagnostics.StackTrace" /> format, or the full stack when every frame is a logging frame.</returns>
+    private static string CallingContext()
+    {
+        var full = new System.Diagnostics.StackTrace(fNeedFileInfo: true);
+        System.Diagnostics.StackFrame[] frames = full.GetFrames();
+        string loggingNamespace = typeof(StreamLogHandler).Namespace!;
+        // Skip the handler/dispatcher/Logger frames (all in OptunaSharp.Logging) to land on the caller.
+        int skip = 0;
+        while (skip < frames.Length && frames[skip].GetMethod()?.DeclaringType?.Namespace == loggingNamespace)
+            skip++;
+        return skip < frames.Length
+            ? new System.Diagnostics.StackTrace(skip, fNeedFileInfo: true).ToString().TrimEnd()
+            : full.ToString().TrimEnd();
     }
 }
 

@@ -22,8 +22,21 @@ public class ProgressBarTests
         return x * x;
     }
 
+    /// <summary>
+    ///     Runs <paramref name="action" /> with <see cref="Console.Error" /> redirected to a private buffer and
+    ///     returns what it wrote (the progress bar renders to stderr).
+    /// </summary>
+    /// <param name="action">The code whose standard-error output is captured.</param>
+    /// <returns>Everything written to standard error while <paramref name="action" /> ran.</returns>
     private static string CaptureStderr(Action action)
     {
+        // Configure the library logger BEFORE swapping stderr. Its default handler binds to the stderr that
+        // is current when it is created (Python's StreamHandler capturing sys.stderr), so if this capture
+        // were the first thing to log, the process-wide handler would keep the buffer disposed below, and
+        // every later log line of every later test would hit a closed writer. It was: run alone (or first),
+        // this class poisoned logging for the rest of the run.
+        _ = OptunaSharp.Logging.OptunaLogging.GetVerbosity();
+
         var original = Console.Error;
         using var writer = new StringWriter();
         try
