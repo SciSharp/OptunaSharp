@@ -31,6 +31,24 @@ public static class PythonSession
     /// <summary>The <c>optuna.__version__</c> of the discovered install, when available.</summary>
     public static string? OptunaVersion { get; private set; }
 
+    /// <summary>
+    ///     NumPy's AVX-512 dispatch levels (NumPy 2.4 naming), disabled for the live oracle unless the caller
+    ///     already set <c>NPY_DISABLE_CPU_FEATURES</c>. On an AVX-512 x86-64 Linux host, NumPy routes float64
+    ///     <c>power</c>/<c>exp</c>/<c>log</c> through SVML / AVX-512 kernels that differ from the C runtime's
+    ///     libm in the last bit — while .NET's <see cref="Math" /> always uses that libm — so the bit-exact
+    ///     parity tests went red on such CI runners (pymoo SBX/PM, AGE-MOEA-2, CMA-ES, the NSGA crossovers;
+    ///     1-6 ULP) and green everywhere else. Windows NumPy builds never dispatch these levels (they only have
+    ///     <c>X86_V3</c>), so this aligns Linux with what the Windows oracle already computes. A level the
+    ///     installed NumPy does not dispatch only triggers an (ignored-by-default) <c>ImportWarning</c>.
+    /// </summary>
+    internal const string DisabledNumpyCpuFeatures = "X86_V4 AVX512_ICL AVX512_SPR";
+
+    /// <summary>
+    ///     Starts the shared engine once per test run and imports Optuna; on any failure records why and marks
+    ///     the engine unavailable (engine-backed tests then go Inconclusive, or fail under
+    ///     <c>OPTUNASHARP_PYTHONNET_REQUIRE_ENGINE</c>).
+    /// </summary>
+    /// <param name="_">The MSTest assembly context (unused).</param>
     [AssemblyInitialize]
     public static void Start(TestContext _)
     {
@@ -45,6 +63,15 @@ public static class PythonSession
 
             using (Py.GIL())
             {
+                // Must run before ANY `import numpy` (NumPy reads the variable once, at import). It goes
+                // through os.environ, i.e. putenv, because NumPy's C code calls getenv: on Unix, .NET's
+                // Environment.SetEnvironmentVariable only updates a managed copy that getenv never sees.
+                using (PyModule scope = Py.CreateScope())
+                {
+                    scope.Set("_npy_disabled", DisabledNumpyCpuFeatures);
+                    scope.Exec("import os\nos.environ.setdefault('NPY_DISABLE_CPU_FEATURES', _npy_disabled)\n");
+                }
+
                 using PyObject optuna = Py.Import("optuna");
                 OptunaVersion = optuna.GetAttr("__version__").ToString();
             }
