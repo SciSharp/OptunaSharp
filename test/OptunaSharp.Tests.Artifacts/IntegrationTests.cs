@@ -82,13 +82,13 @@ internal static class ArtifactStoreContract
 }
 
 /// <summary>
-///     Integration tests for the S3 backend against a MinIO emulator (docker-compose.yml). Self-skip
-///     when MinIO is not reachable. Category <c>Integration</c> so CI can include/exclude them.
+///     Integration tests for the S3 backend against the S3-compatible emulator (S3Mock, docker-compose.yml).
+///     Self-skip when it is not reachable. Category <c>Integration</c> so CI can include/exclude them.
 /// </summary>
 [TestClass]
 public class S3IntegrationTests
 {
-    private static void Skip() => ArtifactEmulators.EnsureReachable("S3/MinIO", ArtifactEmulators.MinioPort);
+    private static void Skip() => ArtifactEmulators.EnsureReachable("S3", ArtifactEmulators.S3EmulatorPort);
 
     [TestMethod, TestCategory("Integration")]
     public void Contract() { Skip(); ArtifactStoreContract.RunAll(ArtifactEmulators.NewS3Store("s3-it")); }
@@ -106,7 +106,7 @@ public class S3IntegrationTests
     public void AvoidBufCopy_RoundTrip()
     {
         Skip();
-        var store = new Boto3ArtifactStore("s3-it", ArtifactEmulators.NewMinioClient(), avoidBufCopy: true);
+        var store = new Boto3ArtifactStore("s3-it", ArtifactEmulators.NewS3Client(), avoidBufCopy: true);
         ArtifactStoreContract.RoundTrip(store, 4096);
     }
 
@@ -143,13 +143,13 @@ public class S3IntegrationTests
 }
 
 /// <summary>
-///     Integration tests for the Cloudflare R2 backend against a MinIO emulator (R2 is S3-compatible;
+///     Integration tests for the Cloudflare R2 backend against the S3-compatible emulator (R2 speaks the S3 API;
 ///     Cloudflare ships no emulator). Exercises <see cref="R2ArtifactStore" /> end to end.
 /// </summary>
 [TestClass]
 public class R2IntegrationTests
 {
-    private static void Skip() => ArtifactEmulators.EnsureReachable("R2/MinIO", ArtifactEmulators.MinioPort);
+    private static void Skip() => ArtifactEmulators.EnsureReachable("R2 (S3 API)", ArtifactEmulators.S3EmulatorPort);
 
     [TestMethod, TestCategory("Integration")]
     public void Contract() { Skip(); ArtifactStoreContract.RunAll(ArtifactEmulators.NewR2Store("r2-it")); }
@@ -166,7 +166,7 @@ public class R2IntegrationTests
     public void AvoidBufCopy_RoundTrip()
     {
         Skip();
-        var store = new R2ArtifactStore(ArtifactEmulators.NewMinioClient(), "r2-it", avoidBufCopy: true);
+        var store = new R2ArtifactStore(ArtifactEmulators.NewS3Client(), "r2-it", avoidBufCopy: true);
         ArtifactStoreContract.RoundTrip(store, 4096);
     }
 }

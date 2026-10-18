@@ -31,8 +31,18 @@ namespace OptunaSharp.Tests.Interop;
 [TestClass]
 public class PyCmaSamplerParityTests : OptunaInteropTestBase
 {
-    /// <summary>PyCmaSampler's ctor imports pycma (and the Python side needs optuna_integration); probe
-    /// both up front and self-skip if either is missing.</summary>
+    /// <summary>
+    ///     PyCmaSampler's ctor imports pycma (and the Python side needs optuna_integration); probe both up front
+    ///     and self-skip if either is missing — or if the installed pycma cannot run at all under the installed
+    ///     NumPy.
+    /// </summary>
+    /// <remarks>
+    ///     The second probe exists because <c>pip install pymoo</c> pins <c>cma==3.2.2</c>, which predates NumPy 2:
+    ///     its box-constraint handler calls <c>np.array(..., copy=False)</c>, which NumPy 2 rejects, so every
+    ///     bounded strategy dies in pycma's own constructor. That is a broken interpreter, not a bridge defect —
+    ///     the parity tests then failed 13-of-15 on every run. The probe builds one bounded strategy in pure
+    ///     Python (the exact path the bridge drives) and turns that environment into an explained skip.
+    /// </remarks>
     private void RequirePyCmaOrInconclusive()
     {
         PythonSession.EnsureOrInconclusive();
@@ -43,6 +53,22 @@ public class PyCmaSamplerParityTests : OptunaInteropTestBase
         catch (PythonException)
         {
             Assert.Inconclusive("pycma (`cma`) / optuna_integration are not installed in the interop interpreter.");
+        }
+
+        try
+        {
+            PyExec(
+                "_probe = cma.CMAEvolutionStrategy([0.0, 0.0], 0.5,\n" +
+                "    {'bounds': [[-1.0, -1.0], [1.0, 1.0]], 'seed': 1, 'verbose': -9})\n" +
+                "_xs = _probe.ask()\n" +
+                "_probe.tell(_xs, [1.0] * len(_xs))\n");
+        }
+        catch (PythonException ex)
+        {
+            Assert.Inconclusive(
+                $"the installed pycma {PyStr("cma.__version__")} cannot run a bounded strategy under numpy " +
+                $"{PyStr("__import__('numpy').__version__")} ({ex.Message.Split('\n')[0]}). " +
+                "Install a NumPy-2-compatible pycma: pip install \"cma>=4\".");
         }
     }
 

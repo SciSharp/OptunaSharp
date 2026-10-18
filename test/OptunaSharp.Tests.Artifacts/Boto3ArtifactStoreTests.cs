@@ -15,7 +15,7 @@ namespace OptunaSharp.Tests.Artifacts;
 ///     Unit tests for the S3 backend (<see cref="Boto3ArtifactStore" />), driven by a mocked
 ///     <see cref="IAmazonS3" /> — no live bucket. Every public ctor and method plus every branch
 ///     (not-found mapping, error propagation, both <c>avoidBufCopy</c> modes) is exercised. Live
-///     round-trips are in <see cref="S3IntegrationTests" /> (MinIO).
+///     round-trips are in <see cref="S3IntegrationTests" /> (against the S3-compatible emulator).
 /// </summary>
 [TestClass]
 public class Boto3ArtifactStoreTests

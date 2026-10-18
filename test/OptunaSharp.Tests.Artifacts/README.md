@@ -22,8 +22,8 @@ account needed:
 
 | Backend | Store | Emulator | Image |
 |---|---|---|---|
-| S3 | `Boto3ArtifactStore` | MinIO | `minio/minio` |
-| Cloudflare R2 | `R2ArtifactStore` | MinIO (R2 is S3-compatible) | `minio/minio` |
+| S3 | `Boto3ArtifactStore` | Adobe S3Mock | `adobe/s3mock` |
+| Cloudflare R2 | `R2ArtifactStore` | Adobe S3Mock (R2 speaks the S3 API) | `adobe/s3mock` |
 | Azure Blob | `AzureBlobArtifactStore` | Azurite (Microsoft's official emulator) | `mcr.microsoft.com/azure-storage/azurite` |
 | GCS | `GCSArtifactStore` | fake-gcs-server | `fsouza/fake-gcs-server` |
 

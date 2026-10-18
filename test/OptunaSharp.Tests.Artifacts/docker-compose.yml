@@ -5,7 +5,7 @@
 #   Tear down:  docker compose -f test/OptunaSharp.Tests.Artifacts/docker-compose.yml down -v
 #
 # Every backend is exercised against a local, credential-free emulator — no cloud account needed:
-#   - MinIO            -> S3 (Boto3ArtifactStore) AND Cloudflare R2 (R2ArtifactStore; R2 is S3-compatible)
+#   - Adobe S3Mock     -> S3 (Boto3ArtifactStore) AND Cloudflare R2 (R2ArtifactStore; R2 speaks the S3 API)
 #   - Azurite          -> Azure Blob (AzureBlobArtifactStore)   [Microsoft's official emulator]
 #   - fake-gcs-server  -> Google Cloud Storage (GCSArtifactStore)
 #
@@ -13,15 +13,14 @@
 # they are safe to run without Docker. Set OPTUNASHARP_ARTIFACT_EMULATORS_REQUIRED=1 to make an absent
 # emulator a hard failure instead (for CI once wired).
 services:
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+  # S3 API emulator. This used to be MinIO, but Docker Hub stopped serving `minio/minio` to anonymous
+  # pulls ("pull access denied") and `quay.io/minio/minio` answers 401, so `up` failed for every service.
+  # S3Mock accepts any credentials and path-style requests — all 7 S3 + R2 integration tests pass on it.
+  # Pinned (not :latest) so a breaking S3Mock major cannot silently change the emulator under the tests.
+  s3:
+    image: adobe/s3mock:5.2.3
     ports:
-      - "9000:9000"   # S3 API endpoint (used by the S3 + R2 tests)
-      - "9001:9001"   # web console (browsing only)
+      - "9000:9090"   # S3 API endpoint (S3Mock listens on 9090; the tests use localhost:9000)
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest

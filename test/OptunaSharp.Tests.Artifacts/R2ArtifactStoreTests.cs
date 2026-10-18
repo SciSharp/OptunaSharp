@@ -15,7 +15,7 @@ namespace OptunaSharp.Tests.Artifacts;
 ///     Unit tests for the Cloudflare R2 backend (<see cref="R2ArtifactStore" />). R2 delegates to
 ///     <see cref="Boto3ArtifactStore" /> over an S3-compatible endpoint; these pin the R2 endpoint
 ///     configuration and confirm the wrapper forwards to the injected S3 client. Live round-trips are
-///     in <see cref="R2IntegrationTests" /> (MinIO).
+///     in <see cref="R2IntegrationTests" /> (against the S3-compatible emulator).
 /// </summary>
 [TestClass]
 public class R2ArtifactStoreTests

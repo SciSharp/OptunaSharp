@@ -11,8 +11,9 @@ namespace OptunaSharp.Tests.Artifacts;
 
 /// <summary>
 ///     Connection factories and reachability gating for the dockerized artifact-store emulators
-///     defined in <c>docker-compose.yml</c> (this folder): MinIO (S3 + Cloudflare R2), Azurite
-///     (Azure Blob) and fake-gcs-server (GCS).
+///     defined in <c>docker-compose.yml</c> (this folder): Adobe S3Mock (S3 + Cloudflare R2), Azurite
+///     (Azure Blob) and fake-gcs-server (GCS). S3Mock replaced MinIO when Docker Hub stopped serving
+///     <c>minio/minio</c> to anonymous pulls (2026); any S3-compatible server on port 9000 still works.
 ///     <para>
 ///     Mirrors the interop suite's <c>PythonSession.EnsureOrInconclusive</c> pattern — an
 ///     integration test calls <see cref="EnsureReachable" /> first and reports
@@ -23,11 +24,13 @@ namespace OptunaSharp.Tests.Artifacts;
 /// </summary>
 internal static class ArtifactEmulators
 {
-    // MinIO — S3 API endpoint (also serves the R2 tests; R2 is S3-compatible).
-    public const int MinioPort = 9000;
-    public const string MinioEndpoint = "http://localhost:9000";
-    public const string MinioAccessKey = "minioadmin";
-    public const string MinioSecretKey = "minioadmin";
+    // S3-compatible emulator (S3Mock in docker-compose.yml) — the S3 API endpoint, also serving the R2
+    // tests (R2 speaks the S3 API). S3Mock accepts any credentials; these are MinIO's defaults so a local
+    // MinIO on the same port keeps working too.
+    public const int S3EmulatorPort = 9000;
+    public const string S3EmulatorEndpoint = "http://localhost:9000";
+    public const string S3EmulatorAccessKey = "minioadmin";
+    public const string S3EmulatorSecretKey = "minioadmin";
 
     // Azurite — the well-known development connection string (account "devstoreaccount1").
     public const int AzuritePort = 10000;
@@ -73,20 +76,20 @@ internal static class ArtifactEmulators
         }
     }
 
-    public static IAmazonS3 NewMinioClient()
-        => new AmazonS3Client(MinioAccessKey, MinioSecretKey,
-            new AmazonS3Config { ServiceURL = MinioEndpoint, ForcePathStyle = true });
+    public static IAmazonS3 NewS3Client()
+        => new AmazonS3Client(S3EmulatorAccessKey, S3EmulatorSecretKey,
+            new AmazonS3Config { ServiceURL = S3EmulatorEndpoint, ForcePathStyle = true });
 
     public static Boto3ArtifactStore NewS3Store(string bucket)
     {
-        IAmazonS3 client = NewMinioClient();
+        IAmazonS3 client = NewS3Client();
         EnsureBucket(client, bucket);
         return new Boto3ArtifactStore(bucket, client);
     }
 
     public static R2ArtifactStore NewR2Store(string bucket)
     {
-        IAmazonS3 client = NewMinioClient();
+        IAmazonS3 client = NewS3Client();
         EnsureBucket(client, bucket);
         // Exercises the R2ArtifactStore(IAmazonS3, bucket) ctor against an S3-compatible endpoint —
         // exactly how R2 is reached (Cloudflare has no emulator; R2 speaks the S3 API).
