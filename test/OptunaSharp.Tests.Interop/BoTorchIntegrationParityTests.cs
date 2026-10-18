@@ -92,6 +92,7 @@ public class BoTorchIntegrationParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     [DataRow(0)]
     [DataRow(7)]
+    [TestCategory("Slow")]
     public void SingleObjectiveWithRunning_Qei_ByteExact(int seed)
         => AssertReplay(
             seed, new[] { StudyDirection.Minimize }, cfExpr: "None", considerRunning: true, constraintsFunc: null,
@@ -106,6 +107,7 @@ public class BoTorchIntegrationParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void MultiObjectiveWithRunning_Qehvi_ByteExact()
         => AssertReplay(
             0, new[] { StudyDirection.Minimize, StudyDirection.Minimize }, cfExpr: "None",
@@ -123,6 +125,7 @@ public class BoTorchIntegrationParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void ConstraintsFunc_DeprecatedPath_SingleObjective_ByteExact()
     {
         // The sampler's constraintsFunc computes the constraint from the completed trial in AfterTrial
@@ -149,6 +152,7 @@ public class BoTorchIntegrationParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void MixedIntFloatMultiObjective_Qehvi_ByteExact()
         => AssertReplay(
             4, new[] { StudyDirection.Minimize, StudyDirection.Minimize }, cfExpr: "None",

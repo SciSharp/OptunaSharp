@@ -214,6 +214,7 @@ public class RandomEmbeddingClaimsTests
     }
 
     [TestMethod]
+    [Slow]
     public void Theorem6_ConvergesOnNonAxisAlignedEffectiveSubspace()
     {
         // REMBO embeds an arbitrary linear subspace, so — unlike axis-aligned variable-selection methods — it
@@ -277,6 +278,7 @@ public class RandomEmbeddingClaimsTests
     // ================================================================================================
 
     [TestMethod]
+    [Slow]
     public void Section32_HighDimensionalKernelAvoidsBoundaryOverExploration()
     {
         // §3.2 mechanism (geometric, deterministic): much of the box Y projects onto the CLIPPED boundary of

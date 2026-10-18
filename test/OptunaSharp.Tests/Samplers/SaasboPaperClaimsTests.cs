@@ -258,6 +258,7 @@ public class SaasboPaperClaimsTests
     // ---- §5.2: SAAS quickly identifies the relevant dimensions --------------------------------------
 
     [TestMethod]
+    [Slow]
     public void SaasNuts_IdentifiesTwoRelevantDims_OnEmbeddedBranin_Section52()
     {
         // The paper's controlled §5.2 experiment (Branin in D=100), reproduced at a smaller D=12: SAASBO must
@@ -315,6 +316,7 @@ public class SaasboPaperClaimsTests
     // ---- §4.1 / §5.7: the sparsity is adaptive — more data turns on more dimensions -----------------
 
     [TestMethod]
+    [Slow]
     public void SparsityIsAdaptive_MoreDataFindsMoreRelevantDims_Section41And57()
     {
         // §4.1: "as more data is accumulated, more of the ρ_i will escape zero"; §5.7/Fig. 5 shows the

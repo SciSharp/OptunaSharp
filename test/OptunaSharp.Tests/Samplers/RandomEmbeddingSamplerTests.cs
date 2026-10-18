@@ -48,6 +48,7 @@ public class RandomEmbeddingSamplerTests
     }
 
     [TestMethod]
+    [Slow]
     public void Sampler_RecoversEmbeddedOptimum_AndBeatsRandomSearch()
     {
         // 2 effective dimensions buried in 25, optimum off-center: interleaved embeddings (§3.1) reliably
@@ -63,6 +64,7 @@ public class RandomEmbeddingSamplerTests
     }
 
     [TestMethod]
+    [Slow]
     public void Sampler_Maximize_Works()
     {
         var study = Optuna.CreateStudy(
@@ -72,6 +74,7 @@ public class RandomEmbeddingSamplerTests
     }
 
     [TestMethod]
+    [Slow]
     public void Sampler_SameSeed_IsReproducible()
     {
         double Run()
@@ -102,6 +105,7 @@ public class RandomEmbeddingSamplerTests
     }
 
     [TestMethod]
+    [Slow]
     public void Sampler_MixedIntFloatStepLog_Works()
     {
         // Every parameter kind must be produced in range through the embedding's de-normalization: a float
@@ -130,6 +134,7 @@ public class RandomEmbeddingSamplerTests
     }
 
     [TestMethod]
+    [Slow]
     public void Sampler_CategoricalParameter_FallsBackToIndependent()
     {
         // A categorical cannot be recovered from a single projected scalar, so it is sampled independently
@@ -158,6 +163,7 @@ public class RandomEmbeddingSamplerTests
     }
 
     [TestMethod]
+    [Slow]
     public void Sampler_HighDimensionalKernel_Converges()
     {
         // The §3.2 high-dimensional kernel fits the GP in the real parameter space; a single embedding
@@ -169,6 +175,7 @@ public class RandomEmbeddingSamplerTests
     }
 
     [TestMethod]
+    [Slow]
     public void Sampler_HighDimensionalKernel_EmbedsCategorical()
     {
         // Only the high-dimensional kernel embeds categoricals (§3.2, scale-and-round + the GP's categorical
@@ -189,6 +196,7 @@ public class RandomEmbeddingSamplerTests
     }
 
     [TestMethod]
+    [Slow]
     public void Sampler_HighDimensionalKernel_IsReproducible()
     {
         double Run()

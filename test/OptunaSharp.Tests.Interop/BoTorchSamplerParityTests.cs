@@ -70,6 +70,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void SingleFloat_DefaultLogEi_ByteExact()
         => AssertReplayParity(
             objective: t => { double x = t.SuggestFloat("x", -10, 10); return (x - 2.0) * (x - 2.0); },
@@ -79,6 +80,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void ThreeFloats_DefaultLogEi_ByteExact()
         => AssertReplayParity(
             objective: t =>
@@ -96,6 +98,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void ExplicitQei_ByteExact()
         => AssertReplayParity(
             objective: t => { double x = t.SuggestFloat("x", -10, 10); return (x - 2.0) * (x - 2.0); },
@@ -105,6 +108,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void ExplicitQLogEi_ByteExact()
         => AssertReplayParity(
             objective: t => { double x = t.SuggestFloat("x", -10, 10); return (x - 2.0) * (x - 2.0); },
@@ -114,6 +118,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void ExplicitQNei_ByteExact()
         => AssertReplayParity(
             objective: t => { double x = t.SuggestFloat("x", -10, 10); return (x - 2.0) * (x - 2.0); },
@@ -125,6 +130,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void IntParam_ExactGrid()
         => AssertReplayParity(
             objective: t => { long n = t.SuggestInt("n", 0, 50); return (n - 20.0) * (n - 20.0); },
@@ -136,6 +142,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Categorical_ByteExact()
         => AssertReplayParity(
             objective: t =>
@@ -153,6 +160,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Reproducible_SameSeed_Identical()
     {
         RequireBoTorchOrInconclusive();
@@ -171,6 +179,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void TwoObjectives_DefaultQehvi_ByteExact()
         => AssertMoReplayParity(
             objective: t =>
@@ -186,6 +195,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void ExplicitQnehvi_ByteExact()
         => AssertMoReplayParity(
             objective: t =>
@@ -201,6 +211,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void FourObjectives_DefaultEhvi_ByteExact()
         => AssertMoReplayParity(
             objective: t =>
@@ -221,6 +232,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void ExplicitQParEgo_ByteExact()
         => AssertMoReplayParity(
             objective: t =>
@@ -238,6 +250,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void ConstrainedSingleObjective_DefaultLogEi_ByteExact()
         => AssertMoReplayParity(
             objective: t =>
@@ -253,6 +266,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void ConstrainedMultiObjective_DefaultQehvi_ByteExact()
         => AssertMoReplayParity(
             objective: t =>
@@ -271,6 +285,7 @@ public class BoTorchSamplerParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Device_Cuda_Smoke_RunsAndProducesValidCandidates()
     {
         RequireBoTorchOrInconclusive();

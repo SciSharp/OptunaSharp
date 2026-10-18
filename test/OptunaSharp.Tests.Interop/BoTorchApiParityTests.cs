@@ -46,6 +46,7 @@ public class BoTorchApiParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void LogEi_CandidatesFunc_ByteExact()
         => AssertByteExact(BoTorchCandidates.LogEi, "logei_candidates_func", Obj1, con: null, pending: null, seed: 0);
 
@@ -91,6 +92,7 @@ public class BoTorchApiParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void QNei_Constrained_CandidatesFunc_ByteExact()
         => AssertByteExact(BoTorchCandidates.QNei, "qnei_candidates_func", Obj1, con: Con1, pending: null, seed: 13);
 
@@ -98,26 +100,31 @@ public class BoTorchApiParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Qehvi_TwoObjectives_ByteExact()
         => AssertByteExact(BoTorchCandidates.Qehvi, "qehvi_candidates_func", Obj2, con: null, pending: null, seed: 20);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Qehvi_WithPending_ByteExact()
         => AssertByteExact(BoTorchCandidates.Qehvi, "qehvi_candidates_func", Obj2, con: null, pending: Pending, seed: 21);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Qehvi_Constrained_ByteExact()
         => AssertByteExact(BoTorchCandidates.Qehvi, "qehvi_candidates_func", Obj2, con: Con1, pending: null, seed: 22);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Qehvi_ManyObjectives_AlphaBranch_ByteExact()
         => AssertByteExact(BoTorchCandidates.Qehvi, "qehvi_candidates_func", Obj4, con: null, pending: null, seed: 23, trainX: TrainX6);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Ehvi_TwoObjectives_ByteExact()
         => AssertByteExact(BoTorchCandidates.Ehvi, "ehvi_candidates_func", Obj2, con: null, pending: null, seed: 24);
 
@@ -128,36 +135,43 @@ public class BoTorchApiParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Qnehvi_TwoObjectives_ByteExact()
         => AssertByteExact(BoTorchCandidates.Qnehvi, "qnehvi_candidates_func", Obj2, con: null, pending: null, seed: 26);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Qnehvi_Constrained_ByteExact()
         => AssertByteExact(BoTorchCandidates.Qnehvi, "qnehvi_candidates_func", Obj2, con: Con1, pending: null, seed: 27);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void QParEgo_TwoObjectives_ByteExact()
         => AssertByteExact(BoTorchCandidates.QParEgo, "qparego_candidates_func", Obj2, con: null, pending: null, seed: 28);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void QParEgo_ManyObjectives_ByteExact()
         => AssertByteExact(BoTorchCandidates.QParEgo, "qparego_candidates_func", Obj4, con: null, pending: null, seed: 29, trainX: TrainX6);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void QParEgo_Constrained_ByteExact()
         => AssertByteExact(BoTorchCandidates.QParEgo, "qparego_candidates_func", Obj2, con: Con1, pending: null, seed: 30);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void QLogEiParEgo_TwoObjectives_ByteExact()
         => AssertByteExact(BoTorchCandidates.QLogEiParEgo, "qlogei_parego_candidates_func", Obj2, con: null, pending: null, seed: 31);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void QLogEiParEgo_Constrained_ByteExact()
         => AssertByteExact(BoTorchCandidates.QLogEiParEgo, "qlogei_parego_candidates_func", Obj2, con: Con1, pending: null, seed: 32);
 
@@ -165,16 +179,19 @@ public class BoTorchApiParityTests : OptunaInteropTestBase
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Qkg_SingleObjective_ByteExact()
         => AssertByteExact(BoTorchCandidates.Qkg, "qkg_candidates_func", Obj1, con: null, pending: null, seed: 40);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Qhvkg_TwoObjectives_ByteExact()
         => AssertByteExact(BoTorchCandidates.Qhvkg, "qhvkg_candidates_func", Obj2, con: null, pending: null, seed: 42);
 
     [TestMethod]
     [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
     public void Qhvkg_Constrained_ByteExact()
         => AssertByteExact(BoTorchCandidates.Qhvkg, "qhvkg_candidates_func", Obj2, con: Con1, pending: null, seed: 43);
 

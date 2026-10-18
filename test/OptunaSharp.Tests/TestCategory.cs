@@ -26,6 +26,15 @@ public static class TestCategory
 
     /// <summary>Tests requiring Windows-only APIs. Excluded on non-Windows CI runners.</summary>
     public const string WindowsOnly = "WindowsOnly";
+
+    /// <summary>
+    ///     Tests that take roughly ten seconds or more on their own (paper-claim convergence runs, live BoTorch
+    ///     qEHVI-family parity). They pass and are deterministic, but together they are most of the suite's
+    ///     wall time, so the per-push / pull-request CI legs exclude them to stay inside their step timeouts and
+    ///     Actions budget. CI runs them on ubuntu for <c>v*</c> tags and manual dispatch, and every full local
+    ///     run includes them. Mark a test Slow only for its runtime — never to hide a failure.
+    /// </summary>
+    public const string Slow = "Slow";
 }
 
 /// <summary>Shorthand for <c>[TestCategory("OpenBugs")]</c>. See <see cref="TestCategory.OpenBugs" />.</summary>
@@ -64,4 +73,12 @@ public class HighMemoryAttribute : TestCategoryBaseAttribute
 public class WindowsOnlyAttribute : TestCategoryBaseAttribute
 {
     public override IList<string> TestCategories => [TestCategory.WindowsOnly];
+}
+
+/// <summary>Shorthand for <c>[TestCategory("Slow")]</c>. See <see cref="TestCategory.Slow" />.</summary>
+[TestClass]
+public class SlowAttribute : TestCategoryBaseAttribute
+{
+    /// <summary>The single category this attribute contributes: <see cref="TestCategory.Slow" />.</summary>
+    public override IList<string> TestCategories => [TestCategory.Slow];
 }
