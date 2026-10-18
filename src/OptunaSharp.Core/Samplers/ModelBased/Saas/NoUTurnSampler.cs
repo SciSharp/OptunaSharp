@@ -245,14 +245,22 @@ internal sealed class NoUTurnSampler
     /// <summary>The recursive subtree state returned by <see cref="BuildTree" />.</summary>
     private struct Tree
     {
-        public double[] ThetaMinus, RMinus, GradMinus;   // leftmost endpoint
-        public double[] ThetaPlus, RPlus, GradPlus;      // rightmost endpoint
-        public double[] ThetaProp, GradProp;             // uniformly chosen in-slice proposal
-        public double LogpProp;                          // log-density at the proposal
-        public int NPrime;                               // # of in-slice leaves
-        public bool SPrime;                              // no divergence / no U-turn within the subtree
-        public double AlphaSum;                          // Σ min(1, exp(jointLog − jointLog0)) over leaves
-        public int NAlpha;                               // # of leaves
+        /// <summary>The subtree's leftmost (backward) endpoint: position, momentum and log-density gradient.</summary>
+        public double[] ThetaMinus, RMinus, GradMinus;
+        /// <summary>The subtree's rightmost (forward) endpoint: position, momentum and log-density gradient.</summary>
+        public double[] ThetaPlus, RPlus, GradPlus;
+        /// <summary>The uniformly chosen in-slice proposal (position and its gradient) the subtree contributes.</summary>
+        public double[] ThetaProp, GradProp;
+        /// <summary>The log-density at <see cref="ThetaProp" />, kept so the proposal is never re-evaluated.</summary>
+        public double LogpProp;
+        /// <summary>The number of in-slice leaves (<c>n′</c>); weights the uniform merge of two subtrees' proposals.</summary>
+        public int NPrime;
+        /// <summary>The continue flag (<c>s′</c>): <c>false</c> once a leaf diverged or the span made a U-turn.</summary>
+        public bool SPrime;
+        /// <summary><c>Σ min(1, exp(jointLog − jointLog0))</c> over the leaves — the dual-averaging acceptance statistic.</summary>
+        public double AlphaSum;
+        /// <summary>The number of leaves summed into <see cref="AlphaSum" />.</summary>
+        public int NAlpha;
     }
 
     /// <summary>

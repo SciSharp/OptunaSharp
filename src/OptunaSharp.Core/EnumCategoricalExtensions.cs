@@ -8,7 +8,7 @@ namespace OptunaSharp;
 /// <summary>
 ///     Typed read-back for enum-valued categorical parameters — the read side of the
 ///     <c>TEnum</c> lens (see <see cref="EnumCategorical" />). Because a categorical is persisted as a
-///     bare member-name string with no type memory, the caller must name <typeparamref name="TEnum" />
+///     bare member-name string with no type memory, the caller must name <c>TEnum</c>
 ///     at the moment of reading; resolution is therefore deferred to here and can fail if the stored
 ///     string is not a member of the requested enum.
 /// </summary>

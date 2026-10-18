@@ -34,7 +34,7 @@ namespace OptunaSharp.Samplers;
 ///     <para><b>Conditional parameters.</b> To optimize <i>conditional</i> (define-by-run, branch-defined)
 ///     hyperparameters — which otherwise fall out of the intersection search space and are resampled at
 ///     random on every trial — use <see cref="NSGAIIICptSampler" /> (NSGA-III-CPT), the OptunaSharp variant
-///     that carries a <see cref="ConditionalParams" /> rule set. This sampler itself is a bit-exact Optuna
+///     that carries a <see cref="OptunaSharp.Samplers.NsgaiiiCpt.ConditionalParams" /> rule set. This sampler itself is a bit-exact Optuna
 ///     port with no such extension.</para>
 /// </summary>
 /// <seealso cref="NSGAIIICptSampler" />

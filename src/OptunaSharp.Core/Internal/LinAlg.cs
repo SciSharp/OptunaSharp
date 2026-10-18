@@ -167,7 +167,7 @@ internal static class LinAlg
     /// </summary>
     /// <param name="a">The matrix to factor, <c>rows ≥ cols</c>; Q comes back <c>rows × min(rows, cols)</c>.</param>
     /// <returns>The reduced orthonormal factor Q, with LAPACK/NumPy column signs.</returns>
-    /// <exception cref="NumSharp.Interop.OpenBLAS.OpenBlasMissingBackendException">The native OpenBLAS/LAPACK backend is not loaded; gate on <see cref="NumSharp.Interop.OpenBLAS.OpenBlasEngine.LapackAvailable" /> before calling on a no-native (Tier N) build.</exception>
+    /// <exception cref="NumSharp.OpenBlasMissingBackendException">The native OpenBLAS/LAPACK backend is not loaded; gate on <see cref="NumSharp.Interop.OpenBLAS.OpenBlasEngine.LapackAvailable" /> before calling on a no-native (Tier N) build.</exception>
     internal static double[,] QrQ(double[,] a)
     {
         int rows = a.GetLength(0);

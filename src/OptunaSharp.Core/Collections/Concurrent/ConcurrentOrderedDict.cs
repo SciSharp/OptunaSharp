@@ -234,6 +234,7 @@ public sealed class ConcurrentOrderedDict<TKey, TValue> : IReadOnlyList<TValue>
     /// </summary>
     /// <param name="key">The key to read or write.</param>
     /// <value>The value associated with <paramref name="key" />.</value>
+    /// <returns>The value associated with <paramref name="key" /> (get accessor).</returns>
     /// <remarks>When <typeparamref name="TKey" /> is <c>int</c> this indexer is shadowed by <see cref="this[int]" />; use <see cref="GetByKey" />/<see cref="SetByKey" /> instead.</remarks>
     /// <exception cref="ArgumentNullException"><paramref name="key" /> is <see langword="null" />.</exception>
     /// <exception cref="KeyNotFoundException">The get accessor is used and <paramref name="key" /> is absent.</exception>
@@ -520,6 +521,7 @@ public sealed class ConcurrentOrderedDict<TKey, TValue> : IReadOnlyList<TValue>
     /// </summary>
     /// <param name="index">The zero-based position in insertion order.</param>
     /// <value>The value at <paramref name="index" />.</value>
+    /// <returns>The value stored at insertion-order position <paramref name="index" /> (get accessor).</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="index" /> is negative or not less than <see cref="Count" />.</exception>
     public TValue this[int index]
     {

@@ -311,13 +311,6 @@ public sealed class ConditionalParams
             study.Storage.SetTrialSystemAttr(trial.TrialId, DormantAttrKey, dormant);
     }
 
-    /// <summary>
-    ///     The latest latent value of each conditional parameter across <paramref name="parentPopulation" />
-    ///     — a parent's own recorded value where the branch was active, or the value it had parked while
-    ///     dormant — with the most recent parent (by trial number) winning.
-    /// </summary>
-    /// <param name="parentPopulation">The parent trials contributing active and dormant values to a candidate.</param>
-    /// <returns>The dormant parameter values collected from the supplied parent trials.</returns>
     // Single-entry latent cache. The parent population changes once per GENERATION but GatherLatent runs on
     // every ASK, and its cost is |parents| × |rules| dictionary probes (tens of thousands per ask for a real
     // genome) — measured as the single largest sampler cost of a cheap-objective study. Parents are
@@ -327,6 +320,17 @@ public sealed class ConditionalParams
     private int[]? _latentKey;
     private Dictionary<string, object?>? _latentCache;
 
+    /// <summary>
+    ///     The latest latent value of each conditional parameter across <paramref name="parentPopulation" />
+    ///     — a parent's own recorded value where the branch was active, or the value it had parked while
+    ///     dormant — with the most recent parent (by trial number) winning.
+    /// </summary>
+    /// <remarks>
+    ///     Memoized on the exact parent-number set (<c>_latentKey</c>): repeated asks within one generation
+    ///     return the SAME dictionary instance, so callers must treat the result as read-only.
+    /// </remarks>
+    /// <param name="parentPopulation">The parent trials contributing active and dormant values to a candidate.</param>
+    /// <returns>The dormant parameter values collected from the supplied parent trials.</returns>
     private Dictionary<string, object?> GatherLatent(IReadOnlyList<FrozenTrial> parentPopulation)
     {
         int[] key = new int[parentPopulation.Count];

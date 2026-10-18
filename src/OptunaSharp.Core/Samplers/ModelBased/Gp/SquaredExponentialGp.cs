@@ -73,6 +73,17 @@ internal sealed class SquaredExponentialGp
     /// <summary>The categorical Hamming scale <c>λ</c> this model was fit with (unused when there are no categorical coordinates).</summary>
     internal double CategoricalScale { get; }
 
+    /// <summary>
+    ///     Captures an already-factored model; only <see cref="Fit" /> calls it, after the jitter escalation
+    ///     succeeded. Precomputes the two kernel coefficients so every posterior query is a plain dot product.
+    /// </summary>
+    /// <param name="x">Normalized training inputs (<c>n × dim</c>), kept by reference — the caller must not mutate it.</param>
+    /// <param name="isCategorical">Per-coordinate flag selecting the Hamming term over the squared-exponential term.</param>
+    /// <param name="lengthScale">The isotropic continuous length scale <c>ℓ</c> (positive).</param>
+    /// <param name="categoricalScale">The categorical Hamming scale <c>λ</c>.</param>
+    /// <param name="cholL">Lower Cholesky factor of <c>R + jitter·I</c>.</param>
+    /// <param name="alpha">The cached solve <c>(R + jitter·I)⁻¹ y</c> for the posterior mean.</param>
+    /// <param name="signalVar">The profiled amplitude <c>s²</c> scaling the posterior variance.</param>
     private SquaredExponentialGp(
         double[,] x, bool[] isCategorical, double lengthScale, double categoricalScale,
         double[,] cholL, double[] alpha, double signalVar)

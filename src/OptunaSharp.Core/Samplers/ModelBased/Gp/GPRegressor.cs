@@ -272,7 +272,7 @@ internal sealed class GPRegressor
     ///     The <b>joint</b> GP posterior mean and full covariance at the query points <paramref name="x" />
     ///     (<c>(B, dim)</c>) — <c>GPRegressor.posterior(x, joint=True)</c>. With <c>k = kernel(x, X_all)</c>,
     ///     <c>mean = k · C⁻¹y</c>, and the covariance <c>cov = kernel(x, x) − k·C⁻¹·kᵀ</c> whose diagonal is
-    ///     clamped ≥ 0 (the off-diagonal covariances stay signed). Used by <see cref="ConditionalGPRegressor" />
+    ///     clamped ≥ 0 (the off-diagonal covariances stay signed). Used by <see cref="OptunaSharp.Gp.ConditionalGPRegressor" />
     ///     to condition on the running fantasies (Phase 3.2 part 3e-6).
     /// </summary>
     /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>
@@ -587,7 +587,7 @@ internal sealed class GPRegressor
         _nAll = _n + r;
     }
 
-    /// <summary>The cached lower Cholesky factor <c>L</c> of <c>C = K + noise_var·I</c> (<see cref="ConditionalGPRegressor" /> conditions on it).</summary>
+    /// <summary>The cached lower Cholesky factor <c>L</c> of <c>C = K + noise_var·I</c> (<see cref="OptunaSharp.Gp.ConditionalGPRegressor" /> conditions on it).</summary>
     /// <exception cref="System.InvalidOperationException">The training covariance has not been prepared by CacheMatrix.</exception>
     internal double[,] CovYYChol => _covYYChol ?? throw new InvalidOperationException("Call CacheMatrix first.");
 
@@ -599,7 +599,7 @@ internal sealed class GPRegressor
     /// <summary>
     ///     The kernel row <c>k[j] = kernel(x, others[j])</c> at a single query point <paramref name="x" />
     ///     together with its gradient <c>dk[j,d] = ∂k[j]/∂x_d</c> — the cross-kernel building block the
-    ///     <see cref="ConditionalGPRegressor" /> gradient chains through (<c>∂k/∂x_d =
+    ///     <see cref="OptunaSharp.Gp.ConditionalGPRegressor" /> gradient chains through (<c>∂k/∂x_d =
     ///     kernel_scale·M'(S)·w_d·2(x_d − others[j,d])</c>; categorical/Hamming dims have zero derivative).
     /// </summary>
     /// <param name="x">Normalized input coordinates in search-space order; rectangular matrices contain one point per row.</param>

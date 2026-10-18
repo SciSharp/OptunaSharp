@@ -208,7 +208,7 @@ internal sealed class XnesOptimizer : IEvolutionStrategyOptimizer
     /// </summary>
     /// <param name="m">A real symmetric matrix (only its lower triangle is read by <c>eigh</c>).</param>
     /// <returns>The symmetric-positive-definite matrix exponential of <paramref name="m" />.</returns>
-    /// <exception cref="NumSharp.Interop.OpenBLAS.OpenBlasMissingBackendException">The native LAPACK backend is not loaded.</exception>
+    /// <exception cref="NumSharp.OpenBlasMissingBackendException">The native LAPACK backend is not loaded.</exception>
     private static double[,] ExpmSymmetric(double[,] m)
     {
         int n = m.GetLength(0);
