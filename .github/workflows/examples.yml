@@ -1,0 +1,82 @@
+name: Examples
+
+on:
+  push:
+    branches: ["master", "main"]
+    paths:
+      - 'examples/**'
+      - 'src/**'
+      - 'Directory.Build.*'
+      - 'NuGet.Config'
+      - '.github/workflows/examples.yml'
+  pull_request:
+    branches: ["master", "main"]
+    paths:
+      - 'examples/**'
+      - 'src/**'
+      - 'Directory.Build.*'
+      - 'NuGet.Config'
+      - '.github/workflows/examples.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel a superseded in-flight run on the same branch/PR so repeated pushes don't stack full runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Compile gate for examples/: every example is a .NET 10 file-based app that nothing else builds, so an
+  # API change in src/ could break one silently. Each is built with `dotnet build <file>.cs`, which also
+  # builds the projects it references through `#:project` (Core, the Redis and SQLite storages, the
+  # OptunaHub bridge). Building only: several examples need ffmpeg, a Redis server or a Python with
+  # optunahub to run, and the showcases are long-running optimization loops.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Own cache key prefix: sharing build-and-release's key would let this smaller restore claim the
+      # entry first and leave the test job's cache without its test-only packages.
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-examples-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props') }}
+          restore-keys: nuget-examples-${{ runner.os }}-
+
+      # File-based apps need the .NET 10 SDK; 8.0.x matches the other workflows for the net8.0 leg of the
+      # multi-targeted projects the examples reference.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+          dotnet-quality: 'preview'
+
+      # Build every example even after a failure, so one broken example doesn't hide the others; the step
+      # fails at the end and names each example that didn't compile.
+      - name: Build every example
+        shell: bash
+        run: |
+          set -uo pipefail
+          mapfile -t examples < <(find examples -type f -name '*.cs' | sort)
+          failed=()
+          for example in "${examples[@]}"; do
+            echo "::group::dotnet build $example"
+            if dotnet build "$example" --configuration Release; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error file=$example::$example does not compile"
+              failed+=("$example")
+            fi
+          done
+          echo "Built $(( ${#examples[@]} - ${#failed[@]} )) of ${#examples[@]} examples."
+          if (( ${#failed[@]} > 0 )); then
+            printf 'Failed to compile: %s\n' "${failed[@]}"
+            exit 1
+          fi

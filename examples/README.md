@@ -5,6 +5,10 @@ Runnable OptunaSharp programs — [.NET 10 file-based apps](../.claude/CLAUDE.md
 public Optuna usage, harvested with the [`interop-test-porting`](../.claude/skills/interop-test-porting/SKILL.md)
 skill), and **feature showcases** of canonical Optuna capabilities.
 
+CI compiles every example here, including `optunahub/`, whenever `examples/` or `src/` changes
+([`examples.yml`](../.github/workflows/examples.yml)). It builds them but does not run them, because
+several need ffmpeg, Redis or Python.
+
 ## Ported from real-world gists
 
 | Example | Source gist | ★ | What it does |

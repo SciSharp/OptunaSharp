@@ -316,7 +316,7 @@ Output goes to `docs/website/` (gitignored). Verified to build **0 warnings / 0 
 
 ## CI/CD
 
-Three workflows in `.github/workflows/` (modeled on NumSharp's live pipeline). Env `DOTNET_NOWARN`
+The main workflows in `.github/workflows/` (modeled on NumSharp's live pipeline). Env `DOTNET_NOWARN`
 suppresses noisy XML-doc warnings.
 
 ### `build-and-release.yml`
@@ -341,6 +341,13 @@ deploys. Triggers on `src/**`, `docs/website-src/**`, and the workflow file.
 ### `benchmark.yml`
 `build-smoke` compiles the harness on every relevant push/PR; a full **short** run is manual-only
 (`workflow_dispatch`) — a real perf suite isn't meaningful until algorithms exist.
+
+### `examples.yml`
+Compile gate for `examples/`: builds every file-based app there (`dotnet build <file>.cs`, which also
+builds its `#:project` references), including `examples/optunahub/`. It runs on ubuntu for pushes and PRs
+that touch `examples/**`, `src/**`, `Directory.Build.*` or `NuGet.Config`. It keeps going after a
+failure and reports every example that doesn't compile. Examples are built, not run, because several
+need ffmpeg, Redis or Python.
 
 ### Other
 `.github/dependabot.yml` (weekly nuget + github-actions), issue forms
