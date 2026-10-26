@@ -1,7 +1,7 @@
 # OptunaSharp.Visualization.Plotly
 
 The **plotly visualization backend** for [OptunaSharp](https://github.com/SciSharp/OptunaSharp) — a
-raw-C# port of `optuna.visualization` (the 13 `plot_*` functions) built on
+raw-C# port of `optuna.visualization` (the 12 `plot_*` functions) built on
 [Plotly.NET](https://plotly.net/), over OptunaSharp's Phase 3.1 visualization **data** layer.
 
 Figures are plotly.js figures whose spec matches live Optuna's `figure.to_dict()`, so what you see is

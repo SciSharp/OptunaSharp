@@ -19,7 +19,7 @@
          (structurally diff-able against live Optuna's `figure.to_dict()`). See
          docs/VISUALIZATION_PLOTLY_PLAN.md. -->
     <PackageId>OptunaSharp.Visualization.Plotly</PackageId>
-    <Description>The plotly visualization backend for OptunaSharp — a raw-C# port of optuna.visualization (the 13 plot_* functions) built on Plotly.NET, over OptunaSharp's Phase 3.1 visualization data layer. Renders interactive plotly.js figures (optimization history, EDF, intermediate values, hypervolume history, parameter importances, slice, Pareto front, contour, rank, parallel coordinate, timeline, terminator improvement) whose figure spec matches live Optuna's. Pure managed (Plotly.NET only — no native dependency). Part of the SciSharp STACK.</Description>
+    <Description>The plotly visualization backend for OptunaSharp — a raw-C# port of optuna.visualization (the 12 plot_* functions) built on Plotly.NET, over OptunaSharp's Phase 3.1 visualization data layer. Renders interactive plotly.js figures (optimization history, EDF, intermediate values, hypervolume history, parameter importances, slice, Pareto front, contour, rank, parallel coordinate, timeline, terminator improvement) whose figure spec matches live Optuna's. Pure managed (Plotly.NET only — no native dependency). Part of the SciSharp STACK.</Description>
     <PackageTags>Optuna;OptunaSharp;visualization;plotly;Plotly.NET;plot;chart;figure;HyperparameterOptimization;HPO;AutoML;BlackBoxOptimization;SciSharp</PackageTags>
 
     <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on doc-comment nits. -->

@@ -8,7 +8,7 @@
     <!-- NuGet package identity. Shared metadata (Authors/Company/Copyright/RepositoryUrl/
          license/version) is centralized in ../../Directory.Build.props. -->
     <PackageId>OptunaSharp</PackageId>
-    <Description>OptunaSharp is a .NET port of Optuna, the hyperparameter optimization framework. It brings Optuna's define-by-run study/trial API — samplers, pruners, distributions, and storages — to C# and F#, built on top of NumSharp for numerical work. This is early scaffolding: the algorithm surface is not yet ported.</Description>
+    <Description>OptunaSharp is a .NET port of Optuna 5.x, the define-by-run hyperparameter optimization framework, for C# and F#, built on NumSharp. It brings Optuna's study and trial API with its samplers (TPE, CMA-ES, GP, QMC, NSGA-II, NSGA-III, Grid, Random, BruteForce and more), pruners, distributions, in-memory and journal storages, parameter importance, terminators and the visualization data layer. Names, defaults and error messages follow Optuna, and the test suite checks seeded runs against live Python Optuna. Database storages, plotting, ML integrations, the CLI and the Python bridges ship as separate OptunaSharp.* packages. Part of the SciSharp STACK.</Description>
     <PackageTags>Optuna;OptunaSharp;HyperparameterOptimization;HPO;AutoML;MachineLearning;Bayesian;TPE;SciSharp;NumSharp</PackageTags>
 
     <!-- Emit the XML doc file (for IntelliSense) but do not fail the build on missing/malformed
