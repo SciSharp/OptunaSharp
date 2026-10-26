@@ -410,9 +410,9 @@ jobs:
         # macOS wheels are CPU/MPS-only already and are not published on the cpu index, so macOS uses the
         # default index. scikit-learn is PINNED to 1.8.0: the native fANOVA/MDI forests are a byte-for-byte
         # port of that release's RandomForestRegressor, so a newer sklearn (1.9.0) builds slightly different
-        # trees and breaks the 1e-12 value parity. redis-py is deliberately NOT installed here so the
-        # JournalRedis interop test self-skips (no server in this job; Redis is covered by the
-        # docker-compose Storage suite instead).
+        # trees and breaks the 1e-12 value parity. redis-py and a Redis server exist on Linux only (see
+        # the Linux block below and the "Start Redis" step), so the JournalRedis round-trips self-skip on
+        # Windows/macOS.
         if [ "$RUNNER_OS" = "Linux" ] || [ "$RUNNER_OS" = "Windows" ]; then
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
         else
@@ -435,6 +435,35 @@ jobs:
           git submodule update --init refs/optuna-integration
           python -m pip install botorch
           python -m pip install -e refs/optuna-integration --no-deps
+        fi
+        # The other OS-independent parity backends, Linux-only for the same reason as BoTorch. Each test
+        # drives the SAME Python library on both sides, or compares a wire format, so one OS gates it.
+        # The Windows/macOS legs keep covering what IS OS-dependent (libm, OpenBLAS kernels). Without
+        # these, ~60 cases per TFM reported Inconclusive in CI: green, but never exercised (dispatch run
+        # 40360579432).
+        #   cma 4.4.4                  PyCmaSampler bridge + VkD-CMA parity. pymoo pins cma==3.2.2, which
+        #                              breaks under NumPy 2; pymoo is installed --no-deps below, so this is
+        #                              the only cma.
+        #   shap 0.52.0                SHAP importance parity (the release the oracle was generated with).
+        #   lightgbm                   optuna_integration.lightgbm tuner parity (synthetic trainer).
+        #   grpcio + protobuf          gRPC storage-proxy interop, Python server <-> C# client both ways.
+        #   psycopg2-binary, PyMySQL   EF Core PostgreSQL/MySQL cross-language suites (Testcontainers starts
+        #                              the servers; Docker exists only on the Linux runner). [rsa] pulls in
+        #                              cryptography for MySQL 8's caching_sha2_password handshake.
+        #   redis                      Python <-> C# JournalRedis round-trips (server: "Start Redis" below).
+        #   optunahub (vendored)       OptunaHub bridge + constraint parity: refs/optunahub @ v0.5.0, plus
+        #                              refs/optunahub-registry for load_local_module.
+        #   JANUS reference            janus_optuna for the JANUS metric/draw parity: the public
+        #                              hongyuanyu/JANUS repo at the commit the port was verified against,
+        #                              found through JANUS_REF_PATH. Torch-free paths only.
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          git submodule update --init refs/optunahub refs/optunahub-registry
+          python -m pip install "cma==4.4.4" "shap==0.52.0" "lightgbm==4.7.0" "grpcio==1.78.0" "protobuf==6.33.5" \
+            "psycopg2-binary==2.9.12" "PyMySQL[rsa]==1.2.0" "redis==8.1.0"
+          python -m pip install -e refs/optunahub
+          git clone --quiet https://github.com/hongyuanyu/JANUS.git "$RUNNER_TEMP/JANUS"
+          git -C "$RUNNER_TEMP/JANUS" checkout --quiet 53e372f776cf92043bd55ab1707b6c812d405a44
+          echo "JANUS_REF_PATH=$RUNNER_TEMP/JANUS" >> "$GITHUB_ENV"
         fi
         # find_libpython locates the loadable libpython across framework/venv/manylinux builds — the
         # macOS framework build's INSTSONAME is a framework path that a naive LIBDIR join misses.
@@ -504,6 +533,12 @@ jobs:
     - name: Build
       run: dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
 
+    # A real Redis for the Python <-> C# JournalRedis round-trips: the same compose service the Storage
+    # suite uses. Linux only; Windows and macOS runners cannot run Linux containers.
+    - name: Start Redis (Linux)
+      if: runner.os == 'Linux'
+      run: docker compose -p optunasharp-redis -f test/OptunaSharp.Tests.Storage/docker-compose.yml up -d --wait
+
     # The live suite grew ~3x since 2026-09-12 (≈600 cases): ~9-15 min per TFM on a desktop, so both TFMs
     # need more than the old 20 min. Slow (the ≥10 s BoTorch qEHVI-family byte-exact cases, ~80 min per TFM
     # because botorch's fused qLogEHVI kernel falls back to pure Python without a C++ toolchain) is excluded
@@ -541,6 +576,10 @@ jobs:
         dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
           --configuration Release --no-build --framework net10.0 \
           --filter "TestCategory=Slow" --logger "trx"
+
+    - name: Stop Redis (Linux)
+      if: always() && runner.os == 'Linux'
+      run: docker compose -p optunasharp-redis -f test/OptunaSharp.Tests.Storage/docker-compose.yml down -v || true
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v7

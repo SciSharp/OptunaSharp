@@ -367,6 +367,15 @@ Rules every workflow follows:
   and Cli suites read.
 - **`interop-test`** — matrix; installs Python 3.12 + Optuna, resolves `PYTHONNET_PYDLL`, builds and
   tests `OptunaSharp.Tests.Interop` with `OPTUNASHARP_PYTHONNET_REQUIRE_ENGINE=1`.
+  - Like BoTorch, the OS-independent parity backends are gated on Linux only: one OS suffices when the
+    SAME Python library runs on both sides. The pinned backends:
+    - `cma==4.4.4` (pymoo's `cma==3.2.2` breaks under NumPy 2);
+    - `shap==0.52.0`, `lightgbm`, `grpcio` + `protobuf`;
+    - `psycopg2-binary` / `PyMySQL[rsa]` for the EF Core cross-language suites (Testcontainers);
+    - `redis`, plus a compose Redis server;
+    - the vendored `optunahub` + `refs/optunahub-registry`;
+    - the JANUS reference: `hongyuanyu/JANUS` @ `53e372f`, via `JANUS_REF_PATH`.
+  - Before this, ~60 cases per TFM were Inconclusive in CI.
 - **`package`** — runs on **every push, PR and tag** (it replaced `verify-signing`, which packed a
   throwaway Core only). It checks that `Open.snk` is intact, then `pack_all.sh` packs all 20 packages at
   the tag version or `<VersionPrefix>-ci.<run>`. Two gates follow: `verify_strong_name.cs` (every

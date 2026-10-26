@@ -133,7 +133,12 @@ configurable backends compose into the container model (Redis via `OPTUNASHARP_R
   - On ubuntu it brings up the Redis and artifact emulators with docker compose, and Testcontainers
     brings up PostgreSQL and MySQL. The `*_REQUIRED` switches are set there, so a missing service fails.
   - It installs the vendored `optuna` for the live CLI parity cases.
-- `interop-test`: live optuna, `REQUIRE_ENGINE=1`.
+- `interop-test`: live optuna, `REQUIRE_ENGINE=1`. On Linux it also installs the OS-independent parity
+  backends, so those suites run instead of self-skipping:
+  - BoTorch, pycma 4.4.4, shap, lightgbm and grpcio;
+  - the PostgreSQL and MySQL drivers, plus a Redis server;
+  - optunahub, plus the registry submodule;
+  - the JANUS reference.
 - `package`: on every run, `pack_all.sh` packs all 20 packages, then the `verify_strong_name.cs` and
   `verify_packages.cs` gates run.
 - The release pipeline runs on `v*` tags.
