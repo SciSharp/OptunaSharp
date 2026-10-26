@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using AwesomeAssertions;
 using OptunaSharp.Samplers;
@@ -17,11 +18,35 @@ namespace OptunaSharp.Tests.Samplers;
 ///     corpus model. Each case seeds a <see cref="LazyRandomState" /> with the oracle's seed; the
 ///     MT19937 stream is 0-ULP identical to numpy's global (verified separately), so byte-exactness
 ///     hinges on drawing the same shapes in the same order as pymoo.
+///
+///     <para>The cases that pass through <c>np.linalg.solve</c> are host-pinned to x64 and report
+///     Inconclusive elsewhere: normalization, survival scores, <c>_do</c> and the full driver. That solve is
+///     the extreme-point hyperplane in <see cref="AgeMoeaSurvival" />. The committed oracle was generated
+///     on OpenBLAS's x64 Haswell kernels, which CI selects with <c>OPENBLAS_CORETYPE=Haswell</c>, and arm64
+///     OpenBLAS kernels land 1–2 ULP away; the macOS arm64 runner showed it on Normalize and Do. This is
+///     the same host-pin model as the sklearn, SHAP and interop parity suites. The pure-RNG operators
+///     (sampling, SBX, PM, tournament, mating) and the manifold geometry still run, and must hold
+///     bit-for-bit, on every architecture.</para>
 /// </summary>
 [TestClass]
 public class AgeMoea2OperatorParityTests
 {
     private static JsonElement _oracle;
+
+    /// <summary>
+    ///     Skips (Inconclusive) a case whose oracle depends on the LAPACK solve in
+    ///     <see cref="AgeMoeaSurvival" />'s normalization, unless the process runs on x64, the
+    ///     architecture whose OpenBLAS kernels produced the oracle.
+    /// </summary>
+    /// <exception cref="AssertInconclusiveException">The process is not x64.</exception>
+    private static void RequireBitExactLinalgHost()
+    {
+        if (RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            Assert.Inconclusive(
+                "AGE-MOEA-2 normalization solves the extreme-point hyperplane with np.linalg.solve (OpenBLAS); " +
+                "the committed oracle was captured on x64 Haswell kernels, which " +
+                $"ProcessArchitecture={RuntimeInformation.ProcessArchitecture} does not reproduce bit-for-bit.");
+    }
 
     [ClassInitialize]
     public static void Load(TestContext _)
@@ -201,6 +226,7 @@ public class AgeMoea2OperatorParityTests
     [TestMethod]
     public void Normalize_IsBitExact()
     {
+        RequireBitExactLinalgHost();
         int cs = 0;
         foreach (var c in _oracle.GetProperty("normalize").EnumerateArray())
         {
@@ -268,6 +294,8 @@ public class AgeMoea2OperatorParityTests
 
     private static void SurvivalScoreCase(string key, AgeMoeaSurvival survival)
     {
+        // survival_score normalizes the front first, so it inherits the LAPACK host pin.
+        RequireBitExactLinalgHost();
         int cs = 0;
         foreach (var c in _oracle.GetProperty(key).EnumerateArray())
         {
@@ -286,6 +314,7 @@ public class AgeMoea2OperatorParityTests
     [TestMethod]
     public void Do_Age2_IsBitExact()
     {
+        RequireBitExactLinalgHost();
         int cs = 0;
         foreach (var c in _oracle.GetProperty("do_age2").EnumerateArray())
         {
@@ -355,6 +384,8 @@ public class AgeMoea2OperatorParityTests
     [TestMethod]
     public void Driver_IsGenerationByGenerationBitExact()
     {
+        // Every generation's survival normalizes through the LAPACK solve.
+        RequireBitExactLinalgHost();
         foreach (var c in _oracle.GetProperty("driver").EnumerateArray())
         {
             int seed = c.GetProperty("seed").GetInt32();
