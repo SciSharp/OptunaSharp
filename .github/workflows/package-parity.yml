@@ -17,12 +17,22 @@ on:
     paths:
       - "src/**"
       - "test/OptunaSharp.Tests.PackageParity/**"
+      - "Directory.Build.*"
+      - "global.json"
+      - "NuGet.Config"
+      - "Open.snk"
+      - ".github/scripts/verify_strong_name.cs"
       - ".github/workflows/package-parity.yml"
   pull_request:
     branches: [ "master", "main" ]
     paths:
       - "src/**"
       - "test/OptunaSharp.Tests.PackageParity/**"
+      - "Directory.Build.*"
+      - "global.json"
+      - "NuGet.Config"
+      - "Open.snk"
+      - ".github/scripts/verify_strong_name.cs"
       - ".github/workflows/package-parity.yml"
   workflow_dispatch:
 
@@ -40,15 +50,14 @@ env:
 jobs:
   # 1) BUILD — compile the shipping project (isolated: proves it builds).
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.0.x
             10.0.x
-          dotnet-quality: 'preview'
       - name: Build Core
         run: dotnet build src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
 
@@ -56,17 +65,16 @@ jobs:
   #    them as the ONLY thing that flows to the test stage.
   package:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.pack.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.0.x
             10.0.x
-          dotnet-quality: 'preview'
       - name: Pack ALL OptunaSharp packages (their third-party deps come from nuget.org)
         id: pack
         run: |
@@ -89,7 +97,7 @@ jobs:
           ls -1 feed/*.nupkg
       - name: Strong-name gate on every packed assembly
         run: dotnet run .github/scripts/verify_strong_name.cs -- feed
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: optunasharp-feed
           path: feed/*.nupkg
@@ -99,15 +107,15 @@ jobs:
   #    "deploy" boundary: only the .nupkg crosses it (swap for GitHub Packages for a hosted feed).
   deploy:
     needs: package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: optunasharp-feed
           path: feed
       - run: |
           echo "Deploying feed:"; ls -la feed
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: deployed-feed
           path: feed
@@ -121,17 +129,17 @@ jobs:
   #    pip-installed in the container; the packaged OptunaSharp is replayed against their oracles.
   test:
     needs: [ package, deploy ]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout the isolated test project + reused service compose (no src/)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           sparse-checkout: |
             test/OptunaSharp.Tests.PackageParity
             test/OptunaSharp.Tests.Storage/docker-compose.yml
           sparse-checkout-cone-mode: false
       - name: Pull the deployed feed into the project
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: deployed-feed
           path: test/OptunaSharp.Tests.PackageParity/feed

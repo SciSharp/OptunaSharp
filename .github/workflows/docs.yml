@@ -6,50 +6,53 @@ on:
     paths:
       - 'src/**'
       - 'docs/website-src/**'
+      - 'Directory.Build.*'
+      - 'global.json'
       - '.github/workflows/docs.yml'
   pull_request:
     branches: ["master", "main"]
     paths:
       - 'src/**'
       - 'docs/website-src/**'
+      - 'Directory.Build.*'
+      - 'global.json'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
+# Reading is all the build needs; only the `deploy` job asks for the Pages write and OIDC token.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
+# Deploys to Pages are serialized and never cancelled mid-flight, as GitHub recommends. PR builds get
+# a group of their own per PR. In the shared "pages" group, a newer PR build would cancel a waiting one
+# and leave its PR with a cancelled check.
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('docs-pr-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build-and-deploy:
-    # PRs build the docs (a gate that DocFX metadata compiles), but only master deploys to Pages.
-    # Deploy is additionally gated on the `ENABLE_PAGES` repo variable: GitHub Pages requires a paid
-    # plan for PRIVATE repos, so on a private mirror the variable stays unset and this job runs
-    # build-only (the meaningful gate); set ENABLE_PAGES=true on the public repo to deploy.
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+  # PRs build the docs as a gate: DocFX metadata must compile the API and the site must render. The
+  # Pages artifact is uploaded only when the `deploy` job below will consume it.
+  build:
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0   # full history so DocFX git-contribute links resolve
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.0.x
             10.0.x
-          dotnet-quality: 'preview'
 
+      # Pinned: 2.78.4 is the release the site is verified against (0 warnings, 0 errors). An unpinned
+      # global tool install picks up whatever DocFX ships that day, so a template or metadata change
+      # upstream could break the gate without any change here.
       - name: Install DocFX
-        run: dotnet tool install -g docfx
+        run: dotnet tool install -g docfx --version 2.78.4
 
       # DocFX's metadata step compiles OptunaSharp.Core to extract the API surface; it restores
       # NumSharp + NumSharp.Interop.OpenBLAS from NuGet (nuget.org).
@@ -62,17 +65,33 @@ jobs:
           chmod +x scripts/generate-llms-txt.sh
           ./scripts/generate-llms-txt.sh ../website
 
-      - name: Setup Pages
+      - name: Upload Pages artifact
         if: github.event_name != 'pull_request' && vars.ENABLE_PAGES == 'true'
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        if: github.event_name != 'pull_request' && vars.ENABLE_PAGES == 'true'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: 'docs/website'
 
+  # Deploy is gated on the `ENABLE_PAGES` repo variable: GitHub Pages requires a paid plan for PRIVATE
+  # repos, so on a private mirror the variable stays unset and only `build` runs (the meaningful gate).
+  # Set ENABLE_PAGES=true on the public repo to deploy from master.
+  #
+  # The `github-pages` environment is attached HERE, not to the build. Pages restricts that environment
+  # to the default branch, so a pull-request job that names it is rejected by the protection rules,
+  # which would turn every PR's docs check red.
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && vars.ENABLE_PAGES == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+
       - name: Deploy to GitHub Pages
-        if: github.event_name != 'pull_request' && vars.ENABLE_PAGES == 'true'
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

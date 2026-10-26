@@ -8,6 +8,7 @@ on:
       - 'src/**'
       - 'Directory.Build.*'
       - 'NuGet.Config'
+      - 'global.json'
       - '.github/workflows/examples.yml'
   pull_request:
     branches: ["master", "main"]
@@ -16,6 +17,7 @@ on:
       - 'src/**'
       - 'Directory.Build.*'
       - 'NuGet.Config'
+      - 'global.json'
       - '.github/workflows/examples.yml'
   workflow_dispatch:
 
@@ -34,14 +36,14 @@ jobs:
   # OptunaHub bridge). Building only: several examples need ffmpeg, a Redis server or a Python with
   # optunahub to run, and the showcases are long-running optimization loops.
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Own cache key prefix: sharing build-and-release's key would let this smaller restore claim the
       # entry first and leave the test job's cache without its test-only packages.
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-examples-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props') }}
@@ -50,12 +52,11 @@ jobs:
       # File-based apps need the .NET 10 SDK; 8.0.x matches the other workflows for the net8.0 leg of the
       # multi-targeted projects the examples reference.
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.0.x
             10.0.x
-          dotnet-quality: 'preview'
 
       # Build every example even after a failure, so one broken example doesn't hide the others; the step
       # fails at the end and names each example that didn't compile.

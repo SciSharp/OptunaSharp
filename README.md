@@ -56,7 +56,8 @@ In place today:
 Reproducibility under a fixed seed is **bit-identical to Python** wherever the path is deterministic,
 enforced by a live-Optuna parity harness (pythonnet) that asks real Optuna to compute answers
 in-process and asserts OptunaSharp matches. The whole pipeline runs on **net8.0** and **net10.0**
-across Windows / Linux / macOS, behind a strong-naming gate and a tag-driven NuGet release.
+across Windows / Linux / macOS, behind strong-naming and package gates, and a tag-driven NuGet
+release of all 20 packages.
 
 ## Install
 
@@ -101,8 +102,8 @@ OptunaSharp/
 ├── docs/
 │   └── website-src/                 # DocFX site (docfx.json, conceptual docs, generated API ref)
 ├── .github/
-│   ├── workflows/                   # build-and-release · docs · benchmark
-│   ├── scripts/verify_strong_name.cs
+│   ├── workflows/                   # build-and-release · package-parity · docs · documentation · examples · benchmark
+│   ├── scripts/                     # pack_all.sh · verify_strong_name.cs · verify_packages.cs · check_documentation.cs
 │   ├── ISSUE_TEMPLATE/ · PULL_REQUEST_TEMPLATE.md · FUNDING.yml · dependabot.yml
 ├── Directory.Build.props            # strong-naming + shared metadata
 ├── Open.snk                         # Microsoft's published OSS key (shared with the SciSharp STACK)

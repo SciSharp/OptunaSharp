@@ -7,24 +7,31 @@ on:
       - 'src/**'
       - 'Directory.Build.*'
       - '.github/scripts/check_documentation.cs'
+      - 'global.json'
       - '.github/workflows/documentation.yml'
   pull_request:
     paths:
       - 'src/**'
       - 'Directory.Build.*'
       - '.github/scripts/check_documentation.cs'
+      - 'global.json'
       - '.github/workflows/documentation.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Cancel a superseded in-flight run on the same branch/PR so repeated pushes don't stack full runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   documentation:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.0.x

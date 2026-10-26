@@ -116,7 +116,7 @@ Live under `test/OptunaSharp.Tests.Interop/`, reusable across suites:
 ## 6. External services via docker-compose
 
 Each service-backed suite has a `docker-compose.yml` standing up **real, credential-free** services:
-Storage → `redis:7-alpine`; Artifacts → MinIO (S3+R2), Azurite (Azure), fake-gcs-server (GCS);
+Storage → `redis:7-alpine`; Artifacts → Adobe S3Mock (S3+R2; `minio/minio` is no longer pullable), Azurite (Azure), fake-gcs-server (GCS);
 PackageParity → its own test container (+ reused Redis via `include:`). A `Session`/`Emulators` helper
 gates reachability (self-skip, or hard-fail under the `*_REQUIRED` env). **Two execution models:** the
 source suites run `dotnet test` **on the host** reaching `localhost:<port>`; the package-parity gate
@@ -126,13 +126,29 @@ configurable backends compose into the container model (Redis via `OPTUNASHARP_R
 
 ## 7. What CI runs
 
-`.github/workflows/`: **build-and-release** (`test` = unit across windows/ubuntu/macos × net8/net10 with
-the exclusion filter; `verify-signing`; `interop-test` = live optuna, `REQUIRE_ENGINE=1`; release
-pipeline on `v*` tags), **docs** (DocFX compiles Core; PR gates, master deploys), **benchmark**
-(build-smoke always; full run manual), **package-parity** (build→package→deploy→test-in-container).
-Core-building jobs just restore NumSharp + NumSharp.Interop.OpenBLAS from nuget.org — no submodule init
-or native staging. The direction of travel is per-suite `docker-compose` running each suite in its
-container across the 3-OS matrix.
+`.github/workflows/`: **build-and-release**:
+- `test`: unit tests across windows/ubuntu/macos × net8/net10, with the exclusion filter.
+- `satellite-tests`: every other `test/OptunaSharp.Tests.*` suite, on ubuntu and windows only. The macOS
+  arm64 runner has no ML.NET LightGBM native and can't run Linux containers.
+  - On ubuntu it brings up the Redis and artifact emulators with docker compose, and Testcontainers
+    brings up PostgreSQL and MySQL. The `*_REQUIRED` switches are set there, so a missing service fails.
+  - It installs the vendored `optuna` for the live CLI parity cases.
+- `interop-test`: live optuna, `REQUIRE_ENGINE=1`.
+- `package`: on every run, `pack_all.sh` packs all 20 packages, then the `verify_strong_name.cs` and
+  `verify_packages.cs` gates run.
+- The release pipeline runs on `v*` tags.
+
+The other workflows:
+- **docs**: DocFX compiles Core. The build job gates PRs; a separate `deploy` job deploys from master.
+- **benchmark**: build-smoke always; full run manual.
+- **package-parity**: build→package→deploy→test-in-container.
+- **documentation**: the in-code doc gate.
+- **examples**: compiles every example.
+
+Runner images are pinned (`ubuntu-24.04` / `windows-2025` / `macos-26`) because the bit-exact suites
+depend on them. Core-building jobs just restore NumSharp + NumSharp.Interop.OpenBLAS from nuget.org, with
+no submodule init or native staging. The satellite job inits `refs/optuna` for its upgrade-test
+databases.
 
 ## 8. Adding a test — Definition of Done
 

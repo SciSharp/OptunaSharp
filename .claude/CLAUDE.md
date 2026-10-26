@@ -99,8 +99,8 @@ OptunaSharp/
 │   ├── PORTING_PLAN.md              # the governing conversion roadmap
 │   └── website-src/                 # DocFX site (docfx.json, conceptual docs, generated API ref)
 ├── .github/
-│   ├── workflows/                   # build-and-release · docs · benchmark
-│   ├── scripts/verify_strong_name.cs
+│   ├── workflows/                   # build-and-release · package-parity · docs · documentation · examples · benchmark
+│   ├── scripts/                     # pack_all.sh · verify_strong_name.cs · verify_packages.cs · check_documentation.cs
 │   ├── ISSUE_TEMPLATE/ · PULL_REQUEST_TEMPLATE.md · FUNDING.yml · dependabot.yml
 ├── Directory.Build.props            # strong-naming + shared package metadata + version
 ├── Open.snk                         # Microsoft's published OSS key (shared across the SciSharp STACK)
@@ -199,7 +199,16 @@ dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj -c R
 
 # Pack the OptunaSharp package
 dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj -c Release -o packages
+
+# Pack the WHOLE family exactly as CI and the release do (all 20 packages, one version), then gate it
+bash .github/scripts/pack_all.sh artifacts/nuget 0.1.0-local.1
+dotnet run .github/scripts/verify_strong_name.cs -- artifacts/nuget
+dotnet run .github/scripts/verify_packages.cs -- artifacts/nuget --version 0.1.0-local.1 \
+  --commit "$(git rev-parse HEAD)" --source-repository "$(git remote get-url origin)"
 ```
+
+`global.json` pins the SDK to the GA 10.0 line (`rollForward: latestFeature`, `allowPrerelease: false`):
+the newest installed 10.0.x builds everything, and a preview or .NET 11 SDK is never picked up.
 
 ### Test categories
 
@@ -276,15 +285,25 @@ dotnet run --project test/OptunaSharp.Benchmark/OptunaSharp.Benchmark.csproj -c 
 
 ## Packaging
 
+- The release ships **20 packages**: Core (`OptunaSharp`) plus every `src/OptunaSharp.*` satellite
+  (`OptunaSharp.Cli` is a `dotnet tool`). `.github/scripts/pack_all.sh` packs them all with one version;
+  CI runs it on every push, PR and tag.
 - `dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj -c Release -o packages` produces
-  `OptunaSharp.<version>.nupkg` with `lib/net8.0/` + `lib/net10.0/` assemblies (+ embedded `.pdb`),
-  `README.md`, and the **`PackageIcon`** (`docs/website-src/images/optunasharp-icon.png`, packed via
-  Core.csproj), and records the `NumSharp` dependency.
+  `OptunaSharp.<version>.nupkg` with `lib/net8.0/` + `lib/net10.0/` assemblies, each with its `.xml` docs
+  and a separate portable `.pdb` (SourceLinked), plus `README.md` and the **`PackageIcon`**
+  (`docs/website-src/images/optunasharp-icon.png`), and records the `NumSharp` dependency.
 - `GeneratePackageOnBuild` is **not** set on Core, so a plain `dotnet build` doesn't auto-pack; CI
   packs explicitly. Package output path is `packages/` at the repo root (gitignored).
 - Shared metadata (Authors/Company/Copyright/RepositoryUrl/`PackageLicenseExpression=MIT`) and the
   version (`VersionPrefix`/`AssemblyVersion`/`FileVersion`, default `0.1.0`) live in
-  `Directory.Build.props`; CI overrides them from the pushed git tag.
+  `Directory.Build.props`. CI stamps `-p:Version`/`-p:AssemblyVersion` from the pushed `v*` tag, and
+  from `<VersionPrefix>-ci.<run number>` on every other run.
+- `OptunaSharpVersion.Version` is read at run time from the assembly's informational version, minus its
+  `+commit` suffix. It is not a `const`, so it always equals the shipped package version, and so does the
+  `version_info.library_version` row the SQLite and EF Core storages write.
+- **`RepositoryUrl` names the canonical public repo (`SciSharp/OptunaSharp`); SourceLink names the repo
+  the build ran in** (git `origin`). The two agree only for a release built in the canonical repo, which
+  is the one place a publish is allowed (`verify_packages.cs` reports `publishable`).
 
 ---
 
@@ -319,24 +338,65 @@ Output goes to `docs/website/` (gitignored). Verified to build **0 warnings / 0 
 The main workflows in `.github/workflows/` (modeled on NumSharp's live pipeline). Env `DOTNET_NOWARN`
 suppresses noisy XML-doc warnings.
 
+Rules every workflow follows:
+- **Runner images are pinned:** `ubuntu-24.04`, `windows-2025`, `macos-26`, never `-latest`. The
+  bit-exact suites depend on the image's libm and CPU dispatch, and a `-latest` label migrates on
+  GitHub's schedule (ubuntu-latest began moving to 26.04 on 2026-10-19). Bump the labels deliberately,
+  in every workflow at once.
+- **GA SDKs only:** `actions/setup-dotnet` installs `8.0.x` + `10.0.x`, and `global.json` selects the 10.0
+  GA line. Never add `dotnet-quality: 'preview'`: it used to install the 8.0/10.0 **RC** SDKs.
+- **Node-24 action majors:** checkout@v7, setup-dotnet@v6, cache@v6, upload-artifact@v7,
+  download-artifact@v8, setup-python@v7, Pages v5/v6, action-gh-release@v3. Dependabot bumps them as
+  one grouped PR.
+- **Least privilege:** `contents: read` at the top; a job that writes declares only that write.
+
 ### `build-and-release.yml`
 - **`test`** — matrix `windows/ubuntu/macos`, .NET 8 + 10; builds `OptunaSharp.Tests` and runs both
   TFMs with `TestCategory!=OpenBugs&!=HighMemory&!=RequiresPython&!=Slow` (+ `!=WindowsOnly` off-Windows);
-  a `Test (slow)` step runs the `Slow` category on ubuntu for `v*` tags and manual dispatch. The `setup`
+  a `Test (slow)` step runs the `Slow` category on Linux for `v*` tags and manual dispatch. The `setup`
   job decides the matrix per trigger: push = ubuntu+windows × both TFMs, PR = net10.0 only,
   tags/dispatch = +macOS.
-- **`verify-signing`** — asserts `Open.snk` size+sha256, packs a throwaway `OptunaSharp`, runs
-  `verify_strong_name.cs` on it. Runs on **every push and PR** (a release-only gate is how "shipped
-  unsigned" hides).
+- **`satellite-tests`** — ubuntu + windows on every trigger, never macOS: the arm64 runner has no ML.NET
+  LightGBM native and cannot host the Linux service containers. It runs every other `test/OptunaSharp.Tests.*` suite (Storage,
+  Artifacts, Cli, Hosting, Importance.*, Integration.*, Benchmark.VolleyEval); Interop and
+  PackageParity have their own jobs. On Linux it starts Redis and the S3Mock/Azurite/fake-gcs emulators
+  with docker compose, Testcontainers starts PostgreSQL and MySQL, and the `*_REQUIRED` switches make a
+  missing service red. Elsewhere those cases self-skip. The job installs the vendored Optuna for the
+  live `optuna` CLI parity cases and initializes `refs/optuna`, whose upgrade-test databases the Storage
+  and Cli suites read.
 - **`interop-test`** — matrix; installs Python 3.12 + Optuna, resolves `PYTHONNET_PYDLL`, builds and
   tests `OptunaSharp.Tests.Interop` with `OPTUNASHARP_PYTHONNET_REQUIRE_ENGINE=1`.
-- **Release pipeline** (on `v*` tags): `validate-release` (tag must be on `master`) →
-  `build-nuget` (`-t:Rebuild` + pack + strong-name gate) → `create-release` + `publish-nuget` (uses
-  `secrets.NUGETAPIKEY`).
+- **`package`** — runs on **every push, PR and tag** (it replaced `verify-signing`, which packed a
+  throwaway Core only). It checks that `Open.snk` is intact, then `pack_all.sh` packs all 20 packages at
+  the tag version or `<VersionPrefix>-ci.<run>`. Two gates follow: `verify_strong_name.cs` (every
+  assembly really signed) and `verify_packages.cs`. The second requires one package per packable
+  project, every version stamped (nuspec, family dependencies, assembly and informational versions),
+  the license, icon and readme present, no stale "early scaffolding" text, and PDBs SourceLinked to the
+  commit with deterministic `/_/` paths. It outputs `publishable`. The job uploads the `nuget-packages`
+  artifact.
+- **Release pipeline** (on `v*` tags): `validate-release` (needs every test job and `package`; the tag
+  must be SemVer, on `master`, and equal to the packed version) → `create-release` (the only
+  `contents: write` job; GitHub Release with every package plus checksums) and `publish-nuget`.
+  `publish-nuget` runs in the `nuget` environment, where an approval gate can be added. It soft-skips
+  without `secrets.NUGETAPIKEY` and refuses a non-publishable feed (a release from the private mirror).
+  It pushes Core first.
 
 ### `docs.yml`
-DocFX build → GitHub Pages. PRs build the docs as a gate (metadata must compile); only `master`
-deploys. Triggers on `src/**`, `docs/website-src/**`, and the workflow file.
+DocFX (pinned 2.78.4) build → GitHub Pages. The `build` job runs for PRs too, as a gate (metadata must
+compile). A separate `deploy` job holds the `github-pages` environment and the Pages/OIDC permissions,
+and runs only off-PR with `vars.ENABLE_PAGES == 'true'`: Pages restricts that environment to the default
+branch, so a PR job naming it would be rejected. Triggers on `src/**`, `docs/website-src/**`,
+`Directory.Build.*`, `global.json`, and the workflow file.
+
+### `package-parity.yml`
+Build → package (packs every `src/*`, strong-name gate) → deploy → test, each isolated: the test
+container sees only `test/OptunaSharp.Tests.PackageParity` plus the feed, and replays real Optuna,
+xgboost, lightgbm and sklearn oracles against the PACKAGED OptunaSharp. Runs on changes to `src/**`,
+the test project, the build props, `global.json`, `NuGet.Config`, `Open.snk` or the strong-name script.
+
+### `documentation.yml`
+The in-code documentation gate: `check_documentation.cs` over `src/`, then every src project built with
+the doc-comment warnings as errors, on both TFMs.
 
 ### `benchmark.yml`
 `build-smoke` compiles the harness on every relevant push/PR; a full **short** run is manual-only
@@ -345,12 +405,12 @@ deploys. Triggers on `src/**`, `docs/website-src/**`, and the workflow file.
 ### `examples.yml`
 Compile gate for `examples/`: builds every file-based app there (`dotnet build <file>.cs`, which also
 builds its `#:project` references), including `examples/optunahub/`. It runs on ubuntu for pushes and PRs
-that touch `examples/**`, `src/**`, `Directory.Build.*` or `NuGet.Config`. It keeps going after a
+that touch `examples/**`, `src/**`, `Directory.Build.*`, `NuGet.Config` or `global.json`. It keeps going after a
 failure and reports every example that doesn't compile. Examples are built, not run, because several
 need ffmpeg, Redis or Python.
 
 ### Other
-`.github/dependabot.yml` (weekly nuget + github-actions), issue forms
+`.github/dependabot.yml` (weekly nuget + one grouped github-actions PR), issue forms
 (`ISSUE_TEMPLATE/{bug,feature,config}.yml` — the feature form centers "Optuna behavior as source of
 truth"), `PULL_REQUEST_TEMPLATE.md`, `FUNDING.yml`.
 
@@ -380,9 +440,9 @@ and is signed automatically; one run from elsewhere must pass the signing proper
   `test/oracle/gen_optuna_oracle.py`.
 - **NumSharp's `tools/` weaver + leak analyzer** are NOT ported — they are specific to NumSharp's
   unmanaged `NDArray` disposal model, which OptunaSharp has no analog for.
-- **Satellite packages** (`OptunaSharp.Storage.*`, `.Gp`, `.Importance.Forests`, `.Visualization`,
-  `.Cli`, `.Artifacts.*`) do not exist yet — they arrive with their phases (plan §3 package map),
-  each following the `NumSharp.Interop.OpenBLAS` optional-package pattern so Core stays pure-managed.
+- **Satellite packages** — no longer deferred: the 19 `src/OptunaSharp.*` satellites exist, follow the
+  `NumSharp.Interop.OpenBLAS` optional-package pattern so Core stays pure-managed, and ship with Core in
+  every release (see Packaging).
 
 ---
 

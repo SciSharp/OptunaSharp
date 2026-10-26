@@ -12,8 +12,16 @@ updates:
           - "AwesomeAssertions"
           - "pythonnet"
 
+  # One grouped PR per week for every action bump. Each PR re-runs the full CI matrix, and five separate
+  # action PRs (checkout, cache, setup-*, artifacts, Pages) used to burn five matrices for what is one
+  # reviewable change. Runner labels (ubuntu-24.04, windows-2025, macos-26) are pinned in the workflows
+  # on purpose and are not managed here.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"

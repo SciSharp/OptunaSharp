@@ -1,0 +1,24 @@
+{
+  // Pins the .NET SDK that builds this repository — locally and in every CI workflow — to the
+  // GA 10.0 line.
+  //
+  // WHY. Without this file `dotnet` picks the highest SDK installed on the machine. GitHub's runner
+  // images carry several bands (10.0.112 ... 10.0.401 on ubuntu-24.04 in 2026-10), and the workflows
+  // used to install the `preview` quality on top (8.0.100-rc.2 / 10.0.100-rc.2). So the compiler that
+  // produced a release depended on the image of the day. Here:
+  //   - "version" + "rollForward": "latestFeature" select the newest installed 10.0.x feature band and
+  //     patch (>= 10.0.100), and never roll onto another major — a future .NET 11 SDK on the runner
+  //     or a developer machine is ignored instead of silently retargeting the build.
+  //   - "allowPrerelease": false refuses preview/RC SDKs even when they are installed.
+  //
+  // The 10.0 SDK still builds and tests the net8.0 target. The net8.0 test run needs the .NET 8
+  // RUNTIME, which the workflows install with actions/setup-dotnet's `8.0.x`.
+  //
+  // To move to a newer SDK major, bump "version" here and the `dotnet-version` lists in
+  // .github/workflows/*.yml together.
+  "sdk": {
+    "version": "10.0.100",
+    "rollForward": "latestFeature",
+    "allowPrerelease": false
+  }
+}

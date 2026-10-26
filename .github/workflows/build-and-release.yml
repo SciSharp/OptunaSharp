@@ -8,7 +8,11 @@ on:
     branches: [ "master", "main" ]
   workflow_dispatch:
 
-permissions: write-all
+# Least privilege. Every job only reads the repository, except `create-release`, which declares the
+# one write it needs (contents: write, to create the GitHub Release). This replaced `write-all`, which
+# handed a write token to every test job, including those that run pull-request code.
+permissions:
+  contents: read
 
 # Cancel an in-flight run when a newer commit lands on the SAME ref (branch or PR). Pushing three
 # commits to a PR used to launch three full 6-job matrices that all ran to completion; now only the
@@ -22,11 +26,25 @@ env:
   # Suppress noisy XML-doc build warnings that clutter CI annotations. %3B is a URL-encoded
   # semicolon because the MSBuild CLI treats a raw ; as a property separator.
   DOTNET_NOWARN: CS1591%3BCS1573%3BCS1572%3BCS1570%3BCS1574%3BCS1587%3BCS1711%3BCS1734
+  # No telemetry upload and no first-run banner in CI logs.
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+# RUNNER IMAGES ARE PINNED (ubuntu-24.04, windows-2025, macos-26), never `-latest`. The bit-exact parity
+# suites depend on the image: its libm, glibc and CPU dispatch decide the last bits of exp/log/pow. A
+# `-latest` label migrates to a new OS on GitHub's schedule (ubuntu-latest began moving to Ubuntu 26.04
+# on 2026-10-19), and that would change those bits without any commit. To move to a newer image, bump the
+# labels in `setup` and in every `runs-on` below together, then re-verify a full dispatch run.
+#
+# SDK. actions/setup-dotnet installs the newest GA 8.0.x and 10.0.x. The 10.0 SDK builds everything, the
+# 8.0 runtime runs the net8.0 tests, and global.json keeps `dotnet` on the 10.0 GA line. Workflows used
+# to pass `dotnet-quality: 'preview'`, which installed the 8.0.100-rc.2 and 10.0.100-rc.2 SDKs, about
+# 450 MB per job that the build then never used.
 
 jobs:
   # ---------------------------------------------------------------------------------------------
   # Decide how wide to fan the matrix, per trigger — the single biggest lever on Actions minutes.
-  # Emitted as job outputs the `test` / `interop-test` matrices consume:
+  # Emitted as job outputs the `test` / `satellite-tests` / `interop-test` matrices consume:
   #   oses        JSON array of runner OSes
   #   tfms_space  space-separated TFM list, for the `for TFM in ...` test loop
   #
@@ -43,7 +61,7 @@ jobs:
   # ---------------------------------------------------------------------------------------------
   setup:
     name: Decide CI scope
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       oses: ${{ steps.scope.outputs.oses }}
       tfms_space: ${{ steps.scope.outputs.tfms_space }}
@@ -52,13 +70,13 @@ jobs:
         shell: bash
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            echo 'oses=["ubuntu-latest","windows-latest","macos-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'oses=["ubuntu-24.04","windows-2025","macos-26"]'      >> "$GITHUB_OUTPUT"
             echo 'tfms_space=net8.0 net10.0'                             >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-            echo 'oses=["ubuntu-latest","windows-latest"]'              >> "$GITHUB_OUTPUT"
+            echo 'oses=["ubuntu-24.04","windows-2025"]'                 >> "$GITHUB_OUTPUT"
             echo 'tfms_space=net8.0 net10.0'                             >> "$GITHUB_OUTPUT"
           else
-            echo 'oses=["ubuntu-latest","windows-latest"]'              >> "$GITHUB_OUTPUT"
+            echo 'oses=["ubuntu-24.04","windows-2025"]'                 >> "$GITHUB_OUTPUT"
             echo 'tfms_space=net10.0'                                    >> "$GITHUB_OUTPUT"
           fi
           echo "Resolved CI scope:"; cat "$GITHUB_OUTPUT"
@@ -78,25 +96,24 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     # Cache the global NuGet package folder so NumSharp/OpenBLAS/MSTest/etc. are not re-downloaded
     # every run. Key on the project/props files (no lock files in this repo) so it invalidates when a
     # dependency version changes; the OS-scoped restore-key still gives a warm partial cache otherwise.
     - name: Cache NuGet packages
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.nuget/packages
         key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
         restore-keys: nuget-${{ runner.os }}-
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: |
           8.0.x
           10.0.x
-        dotnet-quality: 'preview'
 
     # Build the project as declared (both TFMs). The Test step then runs only the TFM(s) this trigger
     # selected (net10.0 on PRs, both on push/tag). A per-run TargetFrameworks override was tried, but a
@@ -137,7 +154,7 @@ jobs:
     # coverage, so ubuntu only (1x minutes) and only for v* tags and manual dispatch, both TFMs. Every full
     # local `dotnet test` run includes them.
     - name: Test (slow)
-      if: matrix.os == 'ubuntu-latest' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+      if: runner.os == 'Linux' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
       shell: bash
       timeout-minutes: 60
       run: |
@@ -155,7 +172,7 @@ jobs:
         done
 
     - name: Upload Test Results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: test-results-${{ matrix.os }}
@@ -163,52 +180,155 @@ jobs:
         retention-days: 5
 
   # ---------------------------------------------------------------------------------------------
-  # Strong-naming gate on EVERY push and PR. Packs a THROWAWAY OptunaSharp into a scratch directory
-  # and asserts every shipped assembly carries the shared SciSharp key — a release-only gate is how
-  # this class of defect (shipping PublicKeyToken=null) survives unnoticed. Publishes nothing.
+  # The satellite test suites: every test/OptunaSharp.Tests.*/ project except the two that have jobs of
+  # their own (Interop below; PackageParity in package-parity.yml). That covers Storage, Artifacts, Cli,
+  # Hosting, Importance.Booster, Importance.Forests, Integration.LightGbm, Integration.ML.NET and
+  # Benchmark.VolleyEval: about 600 tests over the satellite packages the release ships, which no
+  # workflow ran before.
+  #
+  # Services (Linux only: Windows and macOS runners cannot run Linux containers):
+  #   - Redis (Storage journal backends), from test/OptunaSharp.Tests.Storage/docker-compose.yml;
+  #   - S3Mock / Azurite / fake-gcs-server (artifact stores), from test/OptunaSharp.Tests.Artifacts;
+  #   - PostgreSQL and MySQL (EF Core storage): Testcontainers starts them itself.
+  # On Linux the *_REQUIRED switches turn a missing service into a failure instead of a green self-skip.
+  # Elsewhere the service-backed cases report Inconclusive and the rest of each suite still runs.
+  #
+  # Python: the vendored Optuna is installed so OptunaSharp.Tests.Cli's parity cases compare against the
+  # real `optuna` CLI. refs/optuna also carries the upgrade-test databases the Storage and Cli suites read.
+  #
+  # OSes: the two x64 runners on every trigger, never macOS. The macOS runner is arm64. ML.NET's LightGBM
+  # package ships no osx-arm64 native library, so Integration.LightGbm cannot load there. The runner also
+  # cannot host the Linux service containers, so the leg would fail or self-skip on platform gaps rather
+  # than test OptunaSharp.
   # ---------------------------------------------------------------------------------------------
-  verify-signing:
-    name: Verify strong naming
-    runs-on: ubuntu-latest
+  satellite-tests:
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04, windows-2025 ]
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      OPTUNASHARP_REDIS_REQUIRED: ${{ startsWith(matrix.os, 'ubuntu') && '1' || '' }}
+      OPTUNASHARP_EFCORE_REQUIRED: ${{ startsWith(matrix.os, 'ubuntu') && '1' || '' }}
+      OPTUNASHARP_ARTIFACT_EMULATORS_REQUIRED: ${{ startsWith(matrix.os, 'ubuntu') && '1' || '' }}
+      PIP_CACHE_DIR: ${{ github.workspace }}/.pip-cache
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
+    # Own key prefix: this job restores the satellite packages' third-party graph (AWS, Azure, Google,
+    # ML.NET, EF Core, gRPC, ...), which the unit-test job's cache entry does not hold.
     - name: Cache NuGet packages
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.nuget/packages
-        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
-        restore-keys: nuget-${{ runner.os }}-
+        key: nuget-satellites-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
+        restore-keys: nuget-satellites-${{ runner.os }}-
+
+    - name: Cache pip downloads
+      uses: actions/cache@v6
+      with:
+        path: ${{ github.workspace }}/.pip-cache
+        key: pip-satellites-${{ runner.os }}-${{ hashFiles('.github/workflows/build-and-release.yml') }}
+        restore-keys: pip-satellites-${{ runner.os }}-
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: |
           8.0.x
           10.0.x
-        dotnet-quality: 'preview'
 
-    # The key is committed and marked `binary` in .gitattributes (without which `* text=auto eol=lf`
-    # would rewrite CRLF bytes inside it and corrupt the key). Assert both facts before building.
-    - name: Key is present and intact
-      run: |
-        test -f Open.snk || { echo "::error::Open.snk missing from checkout — signing cannot work."; exit 1; }
-        SIZE=$(stat -c%s Open.snk)
-        SHA=$(sha256sum Open.snk | cut -d' ' -f1)
-        echo "Open.snk: $SIZE bytes, sha256 $SHA"
-        [ "$SIZE" = "596" ] || { echo "::error::Open.snk is $SIZE bytes, expected 596 — likely line-ending corruption; check the '*.snk binary' rule in .gitattributes."; exit 1; }
-        [ "$SHA" = "b897629e0b20090c9219ac80392c037fa4cfcc2bdc21d3c45d9bf74b8df0f671" ] || { echo "::error::Open.snk content changed."; exit 1; }
+    - name: Setup Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
 
-    - name: Pack (throwaway) and verify the shipped assembly is signed
+    # The same vendored Optuna (v5.0.0) the interop job pins, so the CLI parity cases compare against
+    # the exact release the port tracks. numpy 2.4.2 matches the interop job.
+    - name: Install vendored Optuna (CLI parity + upgrade-test assets)
+      shell: bash
       run: |
-        mkdir -p artifacts/signing-check
-        # GeneratePackageOnBuild is not set on OptunaSharp.Core, so a plain `dotnet pack` uses the
-        # normal restore -> build -> pack ordering.
-        dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj --configuration Release \
-          --output artifacts/signing-check \
-          -p:NoWarn=${{ env.DOTNET_NOWARN }}
-        dotnet run .github/scripts/verify_strong_name.cs -- artifacts/signing-check
+        git submodule update --init refs/optuna
+        python -m pip install --upgrade pip
+        python -m pip install "numpy==2.4.2"
+        python -m pip install -e refs/optuna
+        optuna --version
+
+    - name: Start the backing services (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        docker compose -p optunasharp-redis -f test/OptunaSharp.Tests.Storage/docker-compose.yml up -d --wait
+        docker compose -p optunasharp-artifacts -f test/OptunaSharp.Tests.Artifacts/docker-compose.yml up -d
+        # The emulators declare no healthcheck, so `up` returns as soon as the containers start. Wait
+        # for each port to accept connections: with *_REQUIRED set, a slow start would otherwise fail
+        # the first test instead of skipping it.
+        for port in 9000 10000 4443; do
+          for _ in $(seq 1 60); do
+            if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then echo "port $port is up"; continue 2; fi
+            sleep 1
+          done
+          echo "::error::artifact emulator on port $port did not come up"; docker compose -p optunasharp-artifacts -f test/OptunaSharp.Tests.Artifacts/docker-compose.yml logs; exit 1
+        done
+
+    # One `dotnet build` per suite: the src projects they share are compiled by the first and found up to
+    # date by the rest.
+    - name: Build the satellite suites
+      shell: bash
+      run: |
+        set -euo pipefail
+        for proj in test/OptunaSharp.Tests.*/*.csproj; do
+          case "$proj" in */OptunaSharp.Tests.Interop/*|*/OptunaSharp.Tests.PackageParity/*) continue ;; esac
+          echo "::group::build $proj"
+          dotnet build "$proj" --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
+          echo "::endgroup::"
+        done
+
+    # Same category policy as the unit-test job. Every suite runs even after one fails, so a single red
+    # suite cannot hide the state of the others; the step fails at the end and names each red suite.
+    - name: Test the satellite suites
+      shell: bash
+      timeout-minutes: 45
+      run: |
+        set -uo pipefail
+        if [[ "$RUNNER_ARCH" == "X64" ]]; then export OPENBLAS_CORETYPE=Haswell; fi
+        FILTER="TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=Slow"
+        if [[ "$RUNNER_OS" != "Windows" ]]; then FILTER="$FILTER&TestCategory!=WindowsOnly"; fi
+        failed=()
+        for proj in test/OptunaSharp.Tests.*/*.csproj; do
+          case "$proj" in */OptunaSharp.Tests.Interop/*|*/OptunaSharp.Tests.PackageParity/*) continue ;; esac
+          for TFM in ${{ needs.setup.outputs.tfms_space }}; do
+            echo "::group::$proj ($TFM)"
+            if ! dotnet test "$proj" --configuration Release --no-build --framework "$TFM" \
+                   --filter "$FILTER" --logger "trx"; then
+              failed+=("$proj ($TFM)")
+            fi
+            echo "::endgroup::"
+          done
+        done
+        if (( ${#failed[@]} > 0 )); then
+          printf '::error::satellite suite failed: %s\n' "${failed[@]}"
+          exit 1
+        fi
+
+    - name: Stop the backing services (Linux)
+      if: always() && runner.os == 'Linux'
+      shell: bash
+      run: |
+        docker compose -p optunasharp-redis -f test/OptunaSharp.Tests.Storage/docker-compose.yml down -v || true
+        docker compose -p optunasharp-artifacts -f test/OptunaSharp.Tests.Artifacts/docker-compose.yml down -v || true
+
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v7
+      if: always()
+      with:
+        name: satellite-test-results-${{ matrix.os }}
+        path: ${{ github.workspace }}/**/TestResults/**/*.trx
+        retention-days: 5
 
   # ---------------------------------------------------------------------------------------------
   # Python.NET interop against LIVE Optuna. Its own job so the embedded-CPython setup cannot slow
@@ -233,10 +353,10 @@ jobs:
       PIP_CACHE_DIR: ${{ github.workspace }}/.pip-cache
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Cache NuGet packages
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.nuget/packages
         key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
@@ -245,23 +365,22 @@ jobs:
     # Cache pip's wheel downloads (torch alone is ~127 MB; the full stack was re-downloaded every run).
     # Keyed on this workflow file because the pip install list lives here, not in a requirements file.
     - name: Cache pip downloads
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ github.workspace }}/.pip-cache
         key: pip-${{ runner.os }}-${{ hashFiles('.github/workflows/build-and-release.yml') }}
         restore-keys: pip-${{ runner.os }}-
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
         dotnet-version: |
           8.0.x
           10.0.x
-        dotnet-quality: 'preview'
 
     # 3.12 sits inside pythonnet 3.0.5's supported range (3.7-3.13) and has Optuna wheels everywhere.
     - name: Setup Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: '3.12'
 
@@ -402,7 +521,7 @@ jobs:
     # for v* tags and manual dispatch, and on net10.0 only — both sides of each case drive the same Python
     # botorch, so a second TFM adds ~80 runner-minutes and no unique coverage.
     - name: Test (slow)
-      if: matrix.os == 'ubuntu-latest' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+      if: runner.os == 'Linux' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
       timeout-minutes: 240
       shell: bash
       run: |
@@ -416,7 +535,7 @@ jobs:
           --filter "TestCategory=Slow" --logger "trx"
 
     - name: Upload Test Results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: interop-test-results-${{ matrix.os }}
@@ -424,131 +543,161 @@ jobs:
         retention-days: 5
 
   # ---------------------------------------------------------------------------------------------
-  # Release pipeline — only on a v* tag pushed from master.
+  # Pack the WHOLE package family and gate it, on EVERY push, PR and tag. This is the release's packing
+  # step, run continuously, so a packaging regression goes red on the commit that causes it instead of
+  # on release day. It replaces the old `verify-signing` job, which packed a throwaway Core only.
+  #
+  # Version: on a v* tag, the tag (v1.2.3 -> 1.2.3); otherwise <VersionPrefix>-ci.<run number>, a
+  # prerelease version that can never collide with or outrank a real release. Publishes nothing.
+  #
+  # Gates, in order:
+  #   1. Open.snk is the intact published key (size + sha256);
+  #   2. verify_strong_name.cs: every OptunaSharp assembly in the feed is really signed with it;
+  #   3. verify_packages.cs: one package per packable src/ project, every version stamped (nuspec,
+  #      family dependencies, assembly + informational versions), nuget.org metadata present and not
+  #      stale, PDBs SourceLinked to this commit with deterministic paths. It also reports whether the
+  #      feed is PUBLISHABLE (SourceLink and <repository> name the same repository; false on a mirror).
+  # ---------------------------------------------------------------------------------------------
+  package:
+    name: Pack and verify packages
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      publishable: ${{ steps.gate.outputs.publishable }}
+      canonical_repository: ${{ steps.gate.outputs.canonical_repository }}
+
+    steps:
+    - uses: actions/checkout@v7
+
+    # Own key prefix: packing restores every satellite's third-party graph.
+    - name: Cache NuGet packages
+      uses: actions/cache@v6
+      with:
+        path: ~/.nuget/packages
+        key: nuget-package-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
+        restore-keys: nuget-package-${{ runner.os }}-
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: |
+          8.0.x
+          10.0.x
+
+    # The key is committed and marked `binary` in .gitattributes (without which `* text=auto eol=lf`
+    # would rewrite CRLF bytes inside it and corrupt the key). Assert both facts before building.
+    - name: Key is present and intact
+      run: |
+        test -f Open.snk || { echo "::error::Open.snk missing from checkout — signing cannot work."; exit 1; }
+        SIZE=$(stat -c%s Open.snk)
+        SHA=$(sha256sum Open.snk | cut -d' ' -f1)
+        echo "Open.snk: $SIZE bytes, sha256 $SHA"
+        [ "$SIZE" = "596" ] || { echo "::error::Open.snk is $SIZE bytes, expected 596 — likely line-ending corruption; check the '*.snk binary' rule in .gitattributes."; exit 1; }
+        [ "$SHA" = "b897629e0b20090c9219ac80392c037fa4cfcc2bdc21d3c45d9bf74b8df0f671" ] || { echo "::error::Open.snk content changed."; exit 1; }
+
+    - name: Resolve the package version
+      id: version
+      shell: bash
+      run: |
+        if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          # Full SemVer only (1.2.3 or 1.2.3-rc.1). NuGet would normalize a "v1.2" tag to 1.2.0, and the
+          # packages would then not carry the version the tag names.
+          if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag v$VERSION is not a SemVer version (expected v<major>.<minor>.<patch>[-<prerelease>])"; exit 1
+          fi
+        else
+          PREFIX=$(sed -nE 's#.*<VersionPrefix[^>]*>([^<]+)</VersionPrefix>.*#\1#p' Directory.Build.props | head -1)
+          [ -n "$PREFIX" ] || { echo "::error::no <VersionPrefix> in Directory.Build.props"; exit 1; }
+          VERSION="${PREFIX}-ci.${GITHUB_RUN_NUMBER}"
+        fi
+        echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "ASSEMBLY_VERSION=${VERSION%%-*}" >> "$GITHUB_OUTPUT"
+        echo "Packing version $VERSION (assembly ${VERSION%%-*}) from $(git rev-parse HEAD)"
+
+    - name: Pack every package
+      shell: bash
+      run: bash .github/scripts/pack_all.sh artifacts/nuget "${{ steps.version.outputs.VERSION }}" "${{ steps.version.outputs.ASSEMBLY_VERSION }}"
+
+    # Every managed assembly in every package must carry OptunaSharp's public key AND a real signature
+    # (not delay-signed).
+    - name: Verify strong naming of packed assemblies
+      run: dotnet run .github/scripts/verify_strong_name.cs -- artifacts/nuget
+
+    - name: Verify the package family (versions, metadata, SourceLink)
+      id: gate
+      shell: bash
+      run: |
+        dotnet run .github/scripts/verify_packages.cs -- artifacts/nuget \
+          --version "${{ steps.version.outputs.VERSION }}" \
+          --commit "$(git rev-parse HEAD)" \
+          --source-repository "${{ github.server_url }}/${{ github.repository }}"
+
+    - name: Upload NuGet Packages
+      uses: actions/upload-artifact@v7
+      with:
+        name: nuget-packages
+        path: artifacts/nuget/*.nupkg
+        # A release's packages stay downloadable from its run for a quarter; CI packages for 5 days.
+        retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 5 }}
+
+  # ---------------------------------------------------------------------------------------------
+  # Release pipeline — only on a v* tag pushed from master, and only after every test suite and the
+  # package gate passed for the tagged commit.
   # ---------------------------------------------------------------------------------------------
   validate-release:
-    needs: [test, interop-test]
+    needs: [test, satellite-tests, interop-test, package]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       is_valid: ${{ steps.check.outputs.is_valid }}
       version: ${{ steps.check.outputs.version }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
     - name: Verify tag is on master branch
       id: check
+      shell: bash
       run: |
         TAG_COMMIT=$(git rev-parse HEAD)
         VERSION="${GITHUB_REF#refs/tags/v}"
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        # The packages were stamped from the same ref by the `package` job; a mismatch would mean the
+        # artifact about to be published is not the tagged one.
+        if [ "$VERSION" != "${{ needs.package.outputs.version }}" ]; then
+          echo "::error::the package job packed version ${{ needs.package.outputs.version }}, but the tag is v$VERSION"
+          echo "is_valid=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
         if git merge-base --is-ancestor "$TAG_COMMIT" origin/master; then
           echo "Tag v$VERSION is on master branch"
-          echo "is_valid=true" >> $GITHUB_OUTPUT
+          echo "is_valid=true" >> "$GITHUB_OUTPUT"
         else
           echo "::error::Tag v$VERSION is NOT on master branch. Releases must be tagged from master."
-          echo "is_valid=false" >> $GITHUB_OUTPUT
+          echo "is_valid=false" >> "$GITHUB_OUTPUT"
           exit 1
         fi
 
-  build-nuget:
-    needs: validate-release
-    if: needs.validate-release.outputs.is_valid == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Cache NuGet packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.nuget/packages
-        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
-        restore-keys: nuget-${{ runner.os }}-
-
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: |
-          8.0.x
-          10.0.x
-        dotnet-quality: 'preview'
-
-    - name: Get version info
-      id: version
-      shell: bash
-      run: |
-        VERSION="${GITHUB_REF#refs/tags/v}"
-        ASSEMBLY_VERSION="${VERSION%%-*}"
-        COMMIT_SHA="${GITHUB_SHA:0:7}"
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "ASSEMBLY_VERSION=$ASSEMBLY_VERSION" >> $GITHUB_OUTPUT
-        echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_OUTPUT
-        echo "Building version $VERSION (assembly: $ASSEMBLY_VERSION) +$COMMIT_SHA"
-
-    - name: Build
-      run: |
-        # -t:Rebuild (NOT incremental): the shipping project emits XML docs (GenerateDocumentationFile)
-        # and the Pack step runs --no-build. An incremental build can declare a stale TFM up-to-date and
-        # skip CoreCompile, leaving no .xml on disk — pack then fails NU5026 or packs stale output.
-        dotnet build src/OptunaSharp.Core/OptunaSharp.Core.csproj \
-          --configuration Release -t:Rebuild \
-          -p:NoWarn=${{ env.DOTNET_NOWARN }} \
-          -p:Version=${{ steps.version.outputs.VERSION }} \
-          -p:AssemblyVersion=${{ steps.version.outputs.ASSEMBLY_VERSION }} \
-          -p:FileVersion=${{ steps.version.outputs.ASSEMBLY_VERSION }} \
-          -p:PackageVersion=${{ steps.version.outputs.VERSION }} \
-          -p:SourceRevisionId=${{ steps.version.outputs.COMMIT_SHA }}
-
-    - name: Pack
-      run: |
-        mkdir -p artifacts/nuget
-        dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj \
-          --configuration Release --no-build --output artifacts/nuget \
-          -p:NoWarn=${{ env.DOTNET_NOWARN }} \
-          -p:Version=${{ steps.version.outputs.VERSION }} \
-          -p:AssemblyVersion=${{ steps.version.outputs.ASSEMBLY_VERSION }} \
-          -p:FileVersion=${{ steps.version.outputs.ASSEMBLY_VERSION }} \
-          -p:PackageVersion=${{ steps.version.outputs.VERSION }}
-        echo "Packages built:"
-        ls -la artifacts/nuget/
-
-    # Last gate before the artifact leaves the machine: every managed assembly in the .nupkg must
-    # carry OptunaSharp's public key AND a real signature (not delay-signed).
-    - name: Verify strong naming of packed assemblies
-      run: dotnet run .github/scripts/verify_strong_name.cs -- artifacts/nuget
-
-    - name: Upload NuGet Packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: nuget-packages
-        path: artifacts/nuget/*.nupkg
-        retention-days: 5
-
   create-release:
-    needs: [validate-release, build-nuget]
+    needs: [validate-release, package]
     if: needs.validate-release.outputs.is_valid == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # The only job that writes: it creates the GitHub Release and attaches the packages to it.
+    permissions:
+      contents: write
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: Extract version
-      id: version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
     - name: Download NuGet Packages
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: nuget-packages
         path: artifacts
 
     - name: Generate checksums
+      shell: bash
       run: |
         cd artifacts
         for f in *.nupkg; do
@@ -558,17 +707,20 @@ jobs:
 
     - name: Check if prerelease
       id: prerelease
+      shell: bash
       run: |
-        if [[ "${{ steps.version.outputs.VERSION }}" == *"-"* ]]; then
-          echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+        if [[ "${{ needs.validate-release.outputs.version }}" == *"-"* ]]; then
+          echo "IS_PRERELEASE=true" >> "$GITHUB_OUTPUT"
         else
-          echo "IS_PRERELEASE=false" >> $GITHUB_OUTPUT
+          echo "IS_PRERELEASE=false" >> "$GITHUB_OUTPUT"
         fi
 
+    # The package table is generated from the packages actually built, so it lists every package the
+    # release ships and nothing it does not.
     - name: Compose release notes
-      id: notes
+      shell: bash
       run: |
-        VERSION="${{ steps.version.outputs.VERSION }}"
+        VERSION="${{ needs.validate-release.outputs.version }}"
         {
           echo "## OptunaSharp v${VERSION}"
           echo ""
@@ -576,15 +728,20 @@ jobs:
           echo ""
           echo '```'
           echo "dotnet add package OptunaSharp --version ${VERSION}"
+          echo "dotnet tool install --global OptunaSharp.Cli --version ${VERSION}"
           echo '```'
           echo ""
           echo "| Package | NuGet |"
           echo "|---------|-------|"
-          echo "| OptunaSharp | [![NuGet](https://img.shields.io/nuget/v/OptunaSharp.svg)](https://www.nuget.org/packages/OptunaSharp/${VERSION}) |"
+          for f in artifacts/*.nupkg; do
+            ID=$(basename "$f" ".${VERSION}.nupkg")
+            echo "| ${ID} | [![NuGet](https://img.shields.io/nuget/v/${ID}.svg)](https://www.nuget.org/packages/${ID}/${VERSION}) |"
+          done
         } > RELEASE_BODY.md
+        cat RELEASE_BODY.md
 
     - name: Create Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         files: |
           artifacts/*.nupkg
@@ -595,35 +752,52 @@ jobs:
         body_path: RELEASE_BODY.md
 
   publish-nuget:
-    needs: [validate-release, build-nuget]
+    needs: [validate-release, package]
     if: needs.validate-release.outputs.is_valid == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # The `nuget` environment is the place for a manual approval gate before this irreversible push.
+    # Add required reviewers in Settings -> Environments -> nuget, and optionally move NUGETAPIKEY into
+    # it as an environment secret. Until rules exist, the environment only records each deployment.
+    environment: nuget
 
     steps:
     - name: Download NuGet Packages
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: nuget-packages
         path: artifacts
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v6
       with:
-        dotnet-version: '8.0.x'
+        dotnet-version: '10.0.x'
 
-    # Soft-skip when NUGETAPIKEY is not configured: the rest of the release pipeline (validate → pack →
-    # strong-name gate → GitHub Release) still runs and is asserted, but the irreversible nuget.org push
-    # only happens once a key is set. So a v* tag on a mirror without the secret goes green (publish
-    # skipped with a warning) instead of hard-failing on an empty --api-key.
+    # Two refusals before the irreversible push:
+    #   - no NUGETAPIKEY: soft-skip with a warning. The rest of the release (gates, GitHub Release) still
+    #     runs and is asserted, so a v* tag on a repository without the secret goes green.
+    #   - not publishable: hard error. The packages' SourceLink points at the repository this build ran
+    #     in, and their <repository> at the canonical one. When they differ (a private mirror), users of
+    #     the published packages could not step into the sources, so the push is refused even with a key.
+    # Core is pushed first so the satellites' dependency on it resolves as soon as they are indexed.
     - name: Push to NuGet
+      shell: bash
       env:
         NUGET_KEY: ${{ secrets.NUGETAPIKEY }}
+        PUBLISHABLE: ${{ needs.package.outputs.publishable }}
+        CANONICAL: ${{ needs.package.outputs.canonical_repository }}
+        VERSION: ${{ needs.validate-release.outputs.version }}
       run: |
         if [ -z "$NUGET_KEY" ]; then
           echo "::warning::NUGETAPIKEY is not configured — skipping the nuget.org publish (soft skip). Set the repo secret to enable publishing."
           exit 0
         fi
-        for package in artifacts/*.nupkg; do
+        if [ "$PUBLISHABLE" != "true" ]; then
+          echo "::error::refusing to publish from ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}: the packages name ${CANONICAL} as their repository, so their SourceLink would point at sources users cannot reach. Tag the release in ${CANONICAL}."
+          exit 1
+        fi
+        CORE="artifacts/OptunaSharp.${VERSION}.nupkg"
+        [ -f "$CORE" ] || { echo "::error::$CORE is missing from the release artifact"; exit 1; }
+        for package in "$CORE" $(ls artifacts/*.nupkg | grep -vxF "$CORE"); do
           echo "Pushing $package..."
           dotnet nuget push "$package" \
             --api-key "$NUGET_KEY" \
