@@ -25,6 +25,28 @@ public class ScaffoldingTests
         OptunaSharpVersion.OptunaCompatibilityTarget.Should().NotBeNullOrWhiteSpace();
     }
 
+    /// <summary>
+    ///     <see cref="OptunaSharpVersion.Version" /> must be the version the assembly was BUILT with,
+    ///     i.e. the MSBuild <c>Version</c> that CI stamps from the release tag. It must not be a literal
+    ///     that can drift from it. A hand-maintained <c>const "0.1.0"</c> once meant every release would
+    ///     have labelled its SQLite / EF Core databases "OptunaSharp 0.1.0".
+    /// </summary>
+    [TestMethod]
+    public void Version_IsTheBuiltAssemblyVersion_WithoutBuildMetadata()
+    {
+        Assembly assembly = typeof(OptunaSharpVersion).Assembly;
+        string informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
+
+        // The SDK appends "+<commit sha>" as SemVer build metadata; the public value drops exactly that.
+        string expected = informational.Split('+')[0];
+        OptunaSharpVersion.Version.Should().Be(expected);
+        OptunaSharpVersion.Version.Should().NotContain("+");
+
+        // The numeric prefix agrees with the assembly version the same build stamped (1.2.3 vs 1.2.3.0).
+        string numericPrefix = OptunaSharpVersion.Version.Split('-')[0];
+        assembly.GetName().Version!.ToString(3).Should().Be(numericPrefix);
+    }
+
     [TestMethod]
     public void OptunaSharpAssembly_IsStrongNamed_WithSciSharpKey()
     {
