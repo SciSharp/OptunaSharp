@@ -76,10 +76,14 @@ internal static class EFCoreInteropDb
             var c = new PostgreSqlBuilder().WithImage("postgres:16-alpine")
                 .WithUsername("optuna").WithPassword("optuna").WithDatabase("optuna").Build();
             c.StartAsync().GetAwaiter().GetResult();
+            // The driver is spelled out, as for MySQL below, so the URL uses exactly the DBAPI that
+            // EnsurePyDriver probes (psycopg2). A bare "postgresql://" lets SQLAlchemy pick its default,
+            // which changed in SQLAlchemy 2.1 from psycopg2 to psycopg (3). With only psycopg2 installed,
+            // the probe passed and every query then failed with "No module named 'psycopg'".
             return new Endpoint
             {
                 CsConnectionString = c.GetConnectionString(),
-                PySqlUrl = $"postgresql://optuna:optuna@{c.Hostname}:{c.GetMappedPublicPort(5432)}/optuna",
+                PySqlUrl = $"postgresql+psycopg2://optuna:optuna@{c.Hostname}:{c.GetMappedPublicPort(5432)}/optuna",
             };
         }
         catch { return null; }
