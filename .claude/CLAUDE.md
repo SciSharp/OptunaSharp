@@ -353,7 +353,8 @@ Rules every workflow follows:
 ### `build-and-release.yml`
 - **`test`** — matrix `windows/ubuntu/macos`, .NET 8 + 10; builds `OptunaSharp.Tests` and runs both
   TFMs with `TestCategory!=OpenBugs&!=HighMemory&!=RequiresPython&!=Slow` (+ `!=WindowsOnly` off-Windows);
-  a `Test (slow)` step runs the `Slow` category on Linux for `v*` tags and manual dispatch. The `setup`
+  a `Test (slow)` step runs the `Slow` category on Linux for `v*` tags and manual dispatch (dispatch input
+  `run_slow`, default on; off skips ~2 h of BoTorch parity when re-checking an OS leg). The `setup`
   job decides the matrix per trigger: push = ubuntu+windows × both TFMs, PR = net10.0 only,
   tags/dispatch = +macOS.
 - **`satellite-tests`** — ubuntu + windows on every trigger, never macOS: the arm64 runner has no ML.NET

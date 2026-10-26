@@ -6,7 +6,15 @@ on:
     tags: [ "v*" ]
   pull_request:
     branches: [ "master", "main" ]
+  # A manual run reproduces a v* tag's test matrix (all 3 OSes, both TFMs) without the release jobs,
+  # which only a tag triggers. `run_slow` controls the Slow category. It defaults to on, as on a tag;
+  # off gives a ~2 h shorter rehearsal, e.g. to re-check one OS leg. A tag always runs Slow.
   workflow_dispatch:
+    inputs:
+      run_slow:
+        description: Also run the Slow test category (unit claim runs ~6 min; BoTorch interop parity ~80+ min)
+        type: boolean
+        default: true
 
 # Least privilege. Every job only reads the repository, except `create-release`, which declares the
 # one write it needs (contents: write, to create the GitHub Release). This replaced `write-all`, which
@@ -154,7 +162,7 @@ jobs:
     # coverage, so ubuntu only (1x minutes) and only for v* tags and manual dispatch, both TFMs. Every full
     # local `dotnet test` run includes them.
     - name: Test (slow)
-      if: runner.os == 'Linux' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+      if: runner.os == 'Linux' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.run_slow))
       shell: bash
       timeout-minutes: 60
       run: |
@@ -521,7 +529,7 @@ jobs:
     # for v* tags and manual dispatch, and on net10.0 only — both sides of each case drive the same Python
     # botorch, so a second TFM adds ~80 runner-minutes and no unique coverage.
     - name: Test (slow)
-      if: runner.os == 'Linux' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+      if: runner.os == 'Linux' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.run_slow))
       timeout-minutes: 240
       shell: bash
       run: |
