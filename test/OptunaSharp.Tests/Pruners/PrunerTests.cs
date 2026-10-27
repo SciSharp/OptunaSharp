@@ -130,6 +130,94 @@ public class PrunerTests
         PercentilePruner.NanPercentile(new[] { 1.0, 2.0, 3.0, 4.0 }, 25).Should().Be(1.75);
     }
 
+    /// <summary>
+    ///     Pre-release review item H4: <see cref="PercentilePruner.NanPercentile" /> against values printed by
+    ///     <c>numpy.nanpercentile</c> (numpy 2.4.2, <c>method="linear"</c>), compared bit for bit. The rows cover
+    ///     both <c>_lerp</c> branches (<c>t &lt; 0.5</c> and the <c>b - (b - a) * (1 - t)</c> form from 0.5 on,
+    ///     where the textbook formula is one ULP off), an index past the last element, NaN inputs, and the
+    ///     infinite neighbours that make numpy return NaN even when the index lands exactly on a finite element.
+    /// </summary>
+    /// <remarks>
+    ///     Row notes, in order: t = 0.5, where the textbook formula gives 0.019999999999999997; a NaN dropped first;
+    ///     t = 0.25 (the <c>a + (b - a) * t</c> branch); three t ≥ 0.5 rows where the textbook formula gives
+    ///     0.014999999999999902, 0.4760000000000001 and 0.2869999999999999; two ordinary rows; one value, where both
+    ///     neighbours clamp to it; an index past the end, clamped to the last element; then the NaN rows: an index
+    ///     landing on 2.0 whose next neighbour is inf, <c>inf * 0</c> at t = 0, <c>inf - inf</c> for a clamped
+    ///     infinite last element, and single or paired infinities; last, the two branches that keep an infinite
+    ///     neighbour infinite instead (<c>1 - inf * 0.25</c> and <c>1 + inf * 0.25</c>).
+    /// </remarks>
+    /// <param name="values">The completed trials' reports at one step, NaNs included.</param>
+    /// <param name="percentile">The percentile asked for, in [0, 100].</param>
+    /// <param name="expected">numpy's result for the same arguments.</param>
+    [TestMethod]
+    [DataRow(new[] { 0.01, 0.03 }, 50.0, 0.02)]
+    [DataRow(new[] { double.NaN, 0.01, 0.03 }, 50.0, 0.02)]
+    [DataRow(new[] { 0.01, 0.03 }, 25.0, 0.015)]
+    [DataRow(new[] { -0.85, -0.536, 0.566 }, 75.0, 0.015000000000000013)]
+    [DataRow(new[] { 0.82, -0.9 }, 80.0, 0.47600000000000003)]
+    [DataRow(new[] { -0.6, 0.3, 1.0, -0.35 }, 66.0, 0.287)]
+    [DataRow(new[] { 0.1, 0.2, 0.4 }, 75.0, 0.30000000000000004)]
+    [DataRow(new[] { 0.3, 0.7, 0.1 }, 60.0, 0.37999999999999995)]
+    [DataRow(new[] { 5.0 }, 50.0, 5.0)]
+    [DataRow(new[] { double.NegativeInfinity, 1.0 }, 100.0, 1.0)]
+    [DataRow(new[] { 1.0, 2.0, double.PositiveInfinity }, 50.0, double.NaN)]
+    [DataRow(new[] { 1.0, double.PositiveInfinity }, 0.0, double.NaN)]
+    [DataRow(new[] { 1.0, double.PositiveInfinity }, 100.0, double.NaN)]
+    [DataRow(new[] { double.PositiveInfinity }, 50.0, double.NaN)]
+    [DataRow(new[] { double.NegativeInfinity }, 50.0, double.NaN)]
+    [DataRow(new[] { double.NegativeInfinity, 1.0 }, 0.0, double.NaN)]
+    [DataRow(new[] { double.NegativeInfinity, double.PositiveInfinity }, 50.0, double.NaN)]
+    [DataRow(new[] { double.NegativeInfinity, 1.0 }, 75.0, double.NegativeInfinity)]
+    [DataRow(new[] { 1.0, double.PositiveInfinity }, 25.0, double.PositiveInfinity)]
+    public void NanPercentile_IsBitIdenticalToNumpy(double[] values, double percentile, double expected)
+    {
+        double actual = PercentilePruner.NanPercentile(values, percentile);
+
+        if (double.IsNaN(expected))
+            double.IsNaN(actual).Should().BeTrue($"numpy returns nan for {string.Join(", ", values)} at q={percentile}");
+        else
+            BitConverter.DoubleToInt64Bits(actual).Should().Be(BitConverter.DoubleToInt64Bits(expected),
+                $"numpy returns {expected:R} for {string.Join(", ", values)} at q={percentile}, not {actual:R}");
+    }
+
+    /// <summary>
+    ///     Pre-release review item H4 at the pruner level: a trial reporting exactly the interpolated cutoff (or
+    ///     a value between numpy's cutoff and the textbook one) gets Optuna's decision, as printed by live Optuna
+    ///     5.0.0 with numpy 2.4.2. Before the fix every row flipped: the review's repro (0.01 and 0.03 completed, a
+    ///     report of 0.02) was pruned here and kept by Optuna, and an infinite report among the completed trials
+    ///     gave a finite median that pruned a trial Optuna keeps (numpy's median of 1, 2 and inf is NaN).
+    /// </summary>
+    /// <param name="percentile">The pruner's percentile; 50 builds a <see cref="MedianPruner" />.</param>
+    /// <param name="completedReports">The step-0 reports (and final values) of the completed trials, in order.</param>
+    /// <param name="currentReport">The step-0 report of the trial being judged.</param>
+    /// <param name="expected">Optuna's <c>should_prune()</c> for the same history.</param>
+    [TestMethod]
+    [DataRow(50.0, new[] { 0.01, 0.03 }, 0.02, false)]
+    [DataRow(50.0, new[] { 1.0, 2.0, double.PositiveInfinity }, 3.0, false)]
+    [DataRow(75.0, new[] { -0.85, -0.536, 0.566 }, 0.015000000000000013, false)]
+    [DataRow(80.0, new[] { 0.82, -0.9 }, 0.4760000000000001, true)]
+    public void PercentilePruner_AtTheInterpolatedCutoff_DecidesLikeOptuna(
+        double percentile, double[] completedReports, double currentReport, bool expected)
+    {
+        int nStartupTrials = completedReports.Length;
+        BasePruner pruner = percentile == 50.0
+            ? new MedianPruner(nStartupTrials: nStartupTrials)
+            : new PercentilePruner(percentile, nStartupTrials: nStartupTrials);
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(1), pruner: pruner);
+        foreach (double report in completedReports)
+        {
+            var done = study.Ask();
+            done.Report(report, 0);
+            study.Tell(done, report);
+        }
+
+        var trial = study.Ask();
+        trial.Report(currentReport, 0);
+
+        trial.ShouldPrune().Should().Be(expected,
+            $"Optuna's should_prune() for a report of {currentReport:R} after {string.Join(", ", completedReports)}");
+    }
+
     // ------------------------------------------------------------------ Patient
 
     [TestMethod]

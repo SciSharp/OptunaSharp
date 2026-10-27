@@ -90,7 +90,25 @@ public sealed class JanusSampler : BaseSampler
     private readonly double _cmixCandidateFrac;
     private readonly string _cmixCandidateCenter;
 
-    private readonly Dictionary<int, Janus.JanusOptimizer> _optimizers = new();
+    // The optimizers of each study this instance serves, one per worker lane (trial.Number % nJobs, as in the
+    // reference), keyed by storage object and study id: a single lane dictionary kept driving study A's CMA-ES
+    // state in study B when the sampler was reused (pre-release review item H3). Lookups and inserts run under
+    // _optimizersLock; the optimizers themselves are driven outside it, as before.
+    private readonly PerStudyState<StudyLanes> _studyLanes = new();
+    private readonly object _optimizersLock = new();
+
+    /// <summary>The per-lane optimizers of one study.</summary>
+    private sealed class StudyLanes
+    {
+        /// <summary>The optimizer of each worker lane, created on the lane's first relative sample.</summary>
+        public readonly Dictionary<int, Janus.JanusOptimizer> Optimizers = new();
+
+        /// <summary>
+        ///     The lowest-numbered completed trial when the lanes were first used: if the study now stored under
+        ///     this id no longer has it, the study was recreated and these optimizers are stale.
+        /// </summary>
+        public TrialAnchor? Anchor;
+    }
 
     /// <param name="sigma0">Initial CMA-ES step size (accepted for signature parity; the host's initial step is <c>min_range/6</c> in the transformed box, as in the reference).</param>
     /// <param name="seed">Random seed. When <c>null</c>, a random seed is drawn.</param>
@@ -216,25 +234,38 @@ public sealed class JanusSampler : BaseSampler
 
         int threadId = ((trial.Number % _nJobs) + _nJobs) % _nJobs;
 
-        if (!_optimizers.TryGetValue(threadId, out var optimizer))
+        Janus.JanusOptimizer? optimizer;
+        bool created;
+        lock (_optimizersLock)
         {
-            var trans = new SearchSpaceTransform(searchSpace, transformStep: true, transform01: true);
-            // The CMA-ES host owns the proposal (initial mean/step in the transformed box) and its own
-            // MT19937 stream; the driver drives it through the host-agnostic IPopulationHost seam and
-            // keeps a separate CMIX-noise stream seeded from the same value (Plan 03).
-            var host = new Janus.CmaPopulationHost(trans, _sigma0, _popsize, _seed + threadId);
-            optimizer = new Janus.JanusOptimizer(
-                trans, host, completed, study.Direction, _seed + threadId,
-                _fuseEvery, _fuseStart, _kappa, _gnWindow, _gnLambda, _gnRidge,
-                _cmixW, _cmixLambda, _cmixWBase, _cmixWMax,
-                _gnPseudoMode, _cmixPseudoMode, _pseudoTarget, _pcaK,
-                _cmixMode, _cmixCandidateFrac, _cmixCandidateCenter);
-            _optimizers[threadId] = optimizer;
+            // This study's lanes. A completed trial never stops being completed, so lanes whose anchor is gone
+            // were built for a study deleted and recreated under the same id: start this one afresh.
+            StudyLanes lanes = _studyLanes.Resolve(
+                study,
+                static () => new StudyLanes(),
+                state => state.Anchor is not { } anchor || anchor.IsIn(completed));
+            if (lanes.Anchor is null && completed.Count > 0)
+                lanes.Anchor = TrialAnchor.Of(completed[0]);
+
+            created = !lanes.Optimizers.TryGetValue(threadId, out optimizer);
+            if (created)
+            {
+                var trans = new SearchSpaceTransform(searchSpace, transformStep: true, transform01: true);
+                // The CMA-ES host owns the proposal (initial mean/step in the transformed box) and its own
+                // MT19937 stream; the driver drives it through the host-agnostic IPopulationHost seam and
+                // keeps a separate CMIX-noise stream seeded from the same value (Plan 03).
+                var host = new Janus.CmaPopulationHost(trans, _sigma0, _popsize, _seed + threadId);
+                optimizer = new Janus.JanusOptimizer(
+                    trans, host, completed, study.Direction, _seed + threadId,
+                    _fuseEvery, _fuseStart, _kappa, _gnWindow, _gnLambda, _gnRidge,
+                    _cmixW, _cmixLambda, _cmixWBase, _cmixWMax,
+                    _gnPseudoMode, _cmixPseudoMode, _pseudoTarget, _pcaK,
+                    _cmixMode, _cmixCandidateFrac, _cmixCandidateCenter);
+                lanes.Optimizers[threadId] = optimizer;
+            }
         }
-        else
-        {
-            optimizer.SetCompletedTrials(completed);
-        }
+        if (!created)
+            optimizer!.SetCompletedTrials(completed);
 
         if (optimizer.Dim != CountEncodedDims(searchSpace))
         {

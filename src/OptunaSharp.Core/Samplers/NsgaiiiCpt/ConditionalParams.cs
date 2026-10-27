@@ -5,6 +5,7 @@ using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
+using OptunaSharp.Storages;
 
 namespace OptunaSharp.Samplers.NsgaiiiCpt;
 
@@ -282,7 +283,7 @@ public sealed class ConditionalParams
         if (!PreserveDormantValues)
             return;
 
-        var latent = GatherLatent(parentPopulation);
+        var latent = GatherLatent(study, parentPopulation);
         if (latent.Count == 0)
             return;   // nothing learned on any branch yet (e.g. generation 0): nothing to carry.
 
@@ -315,10 +316,31 @@ public sealed class ConditionalParams
     // every ASK, and its cost is |parents| × |rules| dictionary probes (tens of thousands per ask for a real
     // genome) — measured as the single largest sampler cost of a cheap-objective study. Parents are
     // completed trials: their params are immutable and their dormant attr was written before completion, so
-    // the same parent-number multiset ⇒ byte-identical latent map. The key is the exact ascending number
-    // sequence (compared in full — no hashing shortcut), so a hit can never alias a different population.
-    private int[]? _latentKey;
-    private Dictionary<string, object?>? _latentCache;
+    // the same parents ⇒ byte-identical latent map. The key is the study (storage object and id) plus every
+    // parent's number, storage id and start time in ascending number order, compared in full (no hashing
+    // shortcut), so a hit can never alias a different population. Numbers alone did alias: a rule set reused
+    // with its sampler for a second study (every fresh in-memory storage starts at id 0) handed the new
+    // generation-1 parents the latent values of the old study's parents with the same numbers (pre-release
+    // review item H3). One immutable entry, swapped by a single reference write, so concurrent asks never
+    // read a key from one generation with the map of another.
+    private LatentEntry? _latent;
+
+    /// <summary>One parent's identity inside a latent-cache key.</summary>
+    /// <param name="Number">The parent's trial number.</param>
+    /// <param name="TrialId">The parent's storage identifier.</param>
+    /// <param name="DatetimeStart">The parent's start time; set for every completed trial.</param>
+    private readonly record struct ParentKey(int Number, int TrialId, DateTime? DatetimeStart);
+
+    /// <summary>A memoized latent map and the exact study and parents it was gathered from.</summary>
+    /// <param name="Storage">The storage of the study, held weakly so the cache does not keep a finished study alive.</param>
+    /// <param name="StudyId">The study's identifier within <paramref name="Storage" />.</param>
+    /// <param name="Parents">The parents' identities in ascending trial-number order.</param>
+    /// <param name="Latent">The gathered latent map; shared with callers, so never mutated.</param>
+    private sealed record LatentEntry(
+        WeakReference<BaseStorage> Storage,
+        int StudyId,
+        ParentKey[] Parents,
+        Dictionary<string, object?> Latent);
 
     /// <summary>
     ///     The latest latent value of each conditional parameter across <paramref name="parentPopulation" />
@@ -326,19 +348,30 @@ public sealed class ConditionalParams
     ///     dormant — with the most recent parent (by trial number) winning.
     /// </summary>
     /// <remarks>
-    ///     Memoized on the exact parent-number set (<c>_latentKey</c>): repeated asks within one generation
+    ///     Memoized on the study and the exact parent set (<c>_latent</c>): repeated asks within one generation
     ///     return the SAME dictionary instance, so callers must treat the result as read-only.
     /// </remarks>
+    /// <param name="study">The study the parents belong to; part of the memo key, since trial numbers repeat across studies.</param>
     /// <param name="parentPopulation">The parent trials contributing active and dormant values to a candidate.</param>
     /// <returns>The dormant parameter values collected from the supplied parent trials.</returns>
-    private Dictionary<string, object?> GatherLatent(IReadOnlyList<FrozenTrial> parentPopulation)
+    private Dictionary<string, object?> GatherLatent(Study study, IReadOnlyList<FrozenTrial> parentPopulation)
     {
-        int[] key = new int[parentPopulation.Count];
+        var key = new ParentKey[parentPopulation.Count];
         for (int i = 0; i < parentPopulation.Count; i++)
-            key[i] = parentPopulation[i].Number;
-        Array.Sort(key);
-        if (_latentCache is not null && _latentKey is not null && _latentKey.AsSpan().SequenceEqual(key))
-            return _latentCache;
+        {
+            FrozenTrial parent = parentPopulation[i];
+            key[i] = new ParentKey(parent.Number, parent.TrialId, parent.DatetimeStart);
+        }
+        Array.Sort(key, static (a, b) => a.Number.CompareTo(b.Number));
+
+        // Read the entry once: another thread may swap it while this one compares.
+        LatentEntry? entry = _latent;
+        if (entry is not null
+            && entry.StudyId == study.StudyId
+            && entry.Storage.TryGetTarget(out BaseStorage? storage)
+            && ReferenceEquals(storage, study.Storage)
+            && entry.Parents.AsSpan().SequenceEqual(key))
+            return entry.Latent;
 
         var latent = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var trial in parentPopulation.OrderBy(t => t.Number))
@@ -357,8 +390,8 @@ public sealed class ConditionalParams
                 }
             }
         }
-        _latentKey = key;
-        _latentCache = latent;
+        _latent = new LatentEntry(
+            new WeakReference<BaseStorage>(study.Storage), study.StudyId, key, latent);
         return latent;
     }
 

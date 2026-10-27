@@ -109,28 +109,54 @@ public sealed class RandomEmbeddingSampler : BaseSampler
     private readonly RandomEmbeddingProjection _embedding;
     private readonly RandomEmbeddingKernel _kernel;
 
-    // The inner Bayesian optimizer. When null (the default) REMBO uses the paper-faithful `_proposer`
+    // The inner Bayesian optimizer. When null (the default) REMBO uses the paper-faithful proposer
     // (squared-exponential GP + DIRECT/CMA-ES + Algorithm 3); a supplied one is driven over a private shadow
     // study instead — the beyond-paper "bring your own inner BO" override.
     private readonly BaseSampler? _innerSampler;
     private readonly BaseSampler _independentSampler;
     private readonly bool _warnIndependentSampling;
 
-    // The paper-faithful inner optimizer (Wang et al. 2016, §3.2-3.3), non-null exactly when `_innerSampler`
-    // is null. `_searchSpace` supplies the embedded real search space the high-dimensional kernel projects
+    // The paper-faithful inner optimizer (Wang et al. 2016, §3.2-3.3) runs when `_innerSampler` is null; it is
+    // built per study (StudyEmbeddingState.Proposer) because its Algorithm-3 state advances with that study's
+    // history. `_searchSpace` supplies the embedded real search space the high-dimensional kernel projects
     // into; `_baseSeed` anchors both the embedding and the proposer's deterministic streams.
-    private readonly RemboGpProposer? _proposer;
+    private readonly int _nStartupTrials;
     private readonly IntersectionSearchSpace _searchSpace;
     private readonly uint _baseSeed;
 
     // All shadow-study bookkeeping and latent-point derivation happen under this lock: the inner sampler
     // instance is shared across the k shadow studies, and the whole latent sampling is fast relative to a
-    // (typically expensive) objective evaluation, which runs outside the lock.
+    // (typically expensive) objective evaluation, which runs outside the lock. That bookkeeping is kept per
+    // study (storage object and study id): instance-wide maps keyed by trial id and run handed study A's latent
+    // points, shadow studies and GP state to study B when the sampler was reused (pre-release review item H3).
     private readonly object _gate = new();
-    private readonly Dictionary<int, LatentPoint> _latentCache = new();      // by real trial id
-    private readonly Dictionary<int, Study> _shadowStudies = new();          // by embedding (run) index
-    private readonly Dictionary<int, HashSet<int>> _syncedNumbers = new();   // by run: real trial numbers already mirrored
+    private readonly PerStudyState<StudyEmbeddingState> _studies = new();
     private OrderedDict<string, BaseDistribution>? _latentSpace;
+
+    /// <summary>Everything REMBO accumulates for one study: latent points, shadow studies and the GP proposer.</summary>
+    private sealed class StudyEmbeddingState
+    {
+        /// <summary>
+        ///     Each sampled trial's latent point by real trial id, with the trial's identity: a hit only counts when the
+        ///     trial asking is the one that was cached (trial ids repeat when a storage reuses them).
+        /// </summary>
+        public readonly Dictionary<int, (TrialAnchor Trial, LatentPoint Point)> LatentCache = new();
+
+        /// <summary>The shadow study of each embedding (run) index, for an overridden inner sampler.</summary>
+        public readonly Dictionary<int, Study> ShadowStudies = new();
+
+        /// <summary>By run: the real trial numbers already mirrored into its shadow study.</summary>
+        public readonly Dictionary<int, HashSet<int>> SyncedNumbers = new();
+
+        /// <summary>The paper-faithful proposer of this study, created on first use when no inner sampler is set.</summary>
+        public RemboGpProposer? Proposer;
+
+        /// <summary>
+        ///     The first trial this state served: if the study now stored under this id no longer has it, the study
+        ///     was recreated and this state is stale. <c>null</c> until a latent point is computed.
+        /// </summary>
+        public TrialAnchor? Anchor;
+    }
 
     /// <summary>A trial's assignment: which embedding it used and the latent point that produced its parameters.</summary>
     /// <param name="Run">The embedding (run) index in <c>[0, k)</c> this trial belongs to.</param>
@@ -197,12 +223,9 @@ public sealed class RandomEmbeddingSampler : BaseSampler
         _independentSampler = independentSampler ?? new RandomSampler(seed);
         _warnIndependentSampling = warnIndependentSampling;
 
-        // Build the paper-faithful proposer for the default path only. Its high-dimensional kernel makes it
-        // fit the GP in the projected real parameter space (and embed categoricals) rather than over y.
-        _proposer = innerSampler is null
-            ? new RemboGpProposer(
-                _embedding, kernel == RandomEmbeddingKernel.HighDimensional, nStartupTrials, _baseSeed)
-            : null;
+        // The paper-faithful proposer (default path only) is built per study from these settings; see
+        // StudyEmbeddingState.Proposer.
+        _nStartupTrials = nStartupTrials;
     }
 
     /// <inheritdoc />
@@ -272,9 +295,18 @@ public sealed class RandomEmbeddingSampler : BaseSampler
     {
         lock (_gate)
         {
-            // Cached within this process for the trial's whole lifetime (all its parameter suggestions).
-            if (_latentCache.TryGetValue(trial.TrialId, out LatentPoint cached))
-                return cached;
+            StudyEmbeddingState state = _studies.Resolve(study, static () => new StudyEmbeddingState());
+
+            // Cached within this process for the trial's whole lifetime (all its parameter suggestions). The
+            // identity check keeps a reused trial id (a recreated study) from picking up another trial's point.
+            if (state.LatentCache.TryGetValue(trial.TrialId, out var cached) && cached.Trial.Matches(trial))
+                return cached.Point;
+
+            // A miss is the once-per-trial path, where reading the study's trial list is affordable: drop a state
+            // built for a study since deleted and recreated under this id before its GP or shadow studies are used.
+            if (state.Anchor is { } anchor && !anchor.IsIn(study.GetTrialsView()))
+                state = _studies.Resolve(study, static () => new StudyEmbeddingState(), static _ => false);
+            state.Anchor ??= TrialAnchor.Of(trial);
 
             int run = _embedding.RunForTrial(trial.Number);
 
@@ -283,33 +315,34 @@ public sealed class RandomEmbeddingSampler : BaseSampler
             if (TryReadStoredLatent(trial, out double[] storedY))
             {
                 var restored = new LatentPoint(run, storedY);
-                _latentCache[trial.TrialId] = restored;
+                state.LatentCache[trial.TrialId] = (TrialAnchor.Of(trial), restored);
                 return restored;
             }
 
             // Default path → the paper-faithful proposer (both §3.2 kernels + Algorithm 3); an overridden
             // inner sampler → the shadow-study path over the latent y.
             double[] y = _innerSampler is null
-                ? ComputeLatentPaper(study, run)
-                : ComputeLatentLowDim(study, run);
+                ? ComputeLatentPaper(study, state, run)
+                : ComputeLatentLowDim(study, state, run);
 
             // Persist the latent point so future rebuilds (and resumption) can recover this trial.
             study.Storage.SetTrialSystemAttr(trial.TrialId, LatentAttrKey, y.Cast<object?>().ToList());
 
             var result = new LatentPoint(run, y);
-            _latentCache[trial.TrialId] = result;
+            state.LatentCache[trial.TrialId] = (TrialAnchor.Of(trial), result);
             return result;
         }
     }
 
     /// <summary>Proposes a latent point with the low-dimensional kernel: the inner sampler over the shadow study.</summary>
     /// <param name="study">The real study whose finished trials seed the shadow study.</param>
+    /// <param name="state">The real study's REMBO state, holding its shadow studies; caller holds <c>_gate</c>.</param>
     /// <param name="run">The embedding (run) index the shadow study serves.</param>
     /// <returns>The proposed latent coordinates.</returns>
-    private double[] ComputeLatentLowDim(Study study, int run)
+    private double[] ComputeLatentLowDim(Study study, StudyEmbeddingState state, int run)
     {
-        Study shadow = GetOrCreateShadow(study, run);
-        SyncShadow(study, shadow, run);
+        Study shadow = GetOrCreateShadow(study, state, run);
+        SyncShadow(study, state, shadow, run);
 
         _latentSpace ??= _embedding.LatentSearchSpace();
 
@@ -331,9 +364,10 @@ public sealed class RandomEmbeddingSampler : BaseSampler
     ///     high-dimensional one).
     /// </summary>
     /// <param name="study">The real study supplying this embedding's completed trials and their values.</param>
+    /// <param name="state">The real study's REMBO state, holding its proposer; caller holds <c>_gate</c>.</param>
     /// <param name="run">The embedding (run) index whose history trains the GP.</param>
     /// <returns>The proposed latent coordinates.</returns>
-    private double[] ComputeLatentPaper(Study study, int run)
+    private double[] ComputeLatentPaper(Study study, StudyEmbeddingState state, int run)
     {
         OrderedDict<string, BaseDistribution> embeddedSpace = EmbeddedSpace(study);
         double sign = study.Direction == StudyDirection.Minimize ? -1.0 : 1.0;
@@ -353,7 +387,11 @@ public sealed class RandomEmbeddingSampler : BaseSampler
             values.Add(sign * v);
         }
 
-        return _proposer!.Propose(run, latents, values, embeddedSpace);
+        // Built on the study's first GP proposal. Its high-dimensional kernel makes it fit the GP in the projected
+        // real parameter space (and embed categoricals) rather than over y.
+        state.Proposer ??= new RemboGpProposer(
+            _embedding, _kernel == RandomEmbeddingKernel.HighDimensional, _nStartupTrials, _baseSeed);
+        return state.Proposer.Propose(run, latents, values, embeddedSpace);
     }
 
     /// <summary>The embedded real search space (float / integer / categorical) shared by all embeddings.</summary>
@@ -370,18 +408,19 @@ public sealed class RandomEmbeddingSampler : BaseSampler
 
     /// <summary>Returns the shadow study for one embedding, creating an in-memory one (same direction) on first use.</summary>
     /// <param name="study">The real study whose single objective direction the shadow mirrors.</param>
+    /// <param name="state">The real study's REMBO state; its shadow studies serve that study only.</param>
     /// <param name="run">The embedding (run) index the shadow study serves.</param>
     /// <returns>The cached shadow study driving the inner optimizer in the latent box for this run.</returns>
-    private Study GetOrCreateShadow(Study study, int run)
+    private Study GetOrCreateShadow(Study study, StudyEmbeddingState state, int run)
     {
-        if (_shadowStudies.TryGetValue(run, out Study? shadow))
+        if (state.ShadowStudies.TryGetValue(run, out Study? shadow))
             return shadow;
 
         // One in-memory study per embedding, reused across trials (so its creation log fires k times, not
         // once per trial). Direction is safe to read: the caller already rejected multi-objective studies.
         shadow = Optuna.CreateStudy(sampler: _innerSampler, direction: study.Direction);
-        _shadowStudies[run] = shadow;
-        _syncedNumbers[run] = new HashSet<int>();
+        state.ShadowStudies[run] = shadow;
+        state.SyncedNumbers[run] = new HashSet<int>();
         return shadow;
     }
 
@@ -390,11 +429,12 @@ public sealed class RandomEmbeddingSampler : BaseSampler
     ///     observations, so the inner optimizer sees every completed real evaluation exactly once.
     /// </summary>
     /// <param name="realStudy">The real study supplying finished trials and their objective values.</param>
+    /// <param name="state">The real study's REMBO state, recording which trials each shadow study already mirrors.</param>
     /// <param name="shadow">The shadow study receiving the mirrored latent observations.</param>
     /// <param name="run">The embedding (run) index whose trials are mirrored.</param>
-    private void SyncShadow(Study realStudy, Study shadow, int run)
+    private void SyncShadow(Study realStudy, StudyEmbeddingState state, Study shadow, int run)
     {
-        HashSet<int> synced = _syncedNumbers[run];
+        HashSet<int> synced = state.SyncedNumbers[run];
         _latentSpace ??= _embedding.LatentSearchSpace();
 
         // Completed trials only: an observation needs a value, and the latent trials the GP fits must be

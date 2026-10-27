@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -340,6 +341,61 @@ public class GrpcStorageProxyTests
         {
             app.StopAsync().GetAwaiter().GetResult();
             app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
+
+    /// <summary>
+    ///     Pre-release review item H3, the recreated-study case. A gRPC proxy is one storage object shared by every
+    ///     <see cref="Study" /> opened through it (it is not wrapped per study), and a SQLite backend reuses the
+    ///     highest deleted study and trial ids. So after the first study is deleted, a second study arrives under the
+    ///     same storage object and the same study id, and a reused GA sampler still holds the first study's
+    ///     bookkeeping under that key. The second study already has 24 trials (from another sampler) when the GA
+    ///     sampler first sees it, more than the first study had, so only the trial-0 identity check can tell the
+    ///     studies apart: without it the sampler continued the first study's generations (4, 5, 5, 5, 5, 6, …).
+    ///     Optuna's stateless scan starts the GA at generation 0, which is what this asserts.
+    /// </summary>
+    [TestMethod]
+    public void GaSampler_ReusedOnARecreatedStudyUnderTheSameId_StartsAtGenerationZero()
+    {
+        string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"optunasharp-h3-{Guid.NewGuid():N}.db");
+        int port = FreePort();
+        var backend = new RDBStorage($"sqlite:///{path.Replace('\\', '/')}");
+        var app = GrpcProxyServer.MakeServer(backend, "localhost", port);
+        app.StartAsync().GetAwaiter().GetResult();
+        try
+        {
+            using var proxy = new GrpcStorageProxy("localhost", port);
+            proxy.WaitServerReady(TimeSpan.FromSeconds(15));
+            var directions = new[] { StudyDirection.Minimize, StudyDirection.Minimize };
+            IReadOnlyList<double> Objective(Trial t) => new[] { t.SuggestFloat("x", 0, 1), 1 - t.SuggestFloat("y", 0, 1) };
+            var nsga = new NSGAIISampler(populationSize: 4, seed: 0);
+
+            var first = Optuna.CreateStudy(storage: proxy, studyName: "first", sampler: nsga, directions: directions);
+            first.Optimize(Objective, nTrials: 20);
+            int firstStudyId = proxy.GetStudyIdFromName("first");
+            Optuna.DeleteStudy("first", proxy);
+
+            var second = Optuna.CreateStudy(
+                storage: proxy, studyName: "second", sampler: new RandomSampler(seed: 1), directions: directions);
+            proxy.GetStudyIdFromName("second").Should().Be(firstStudyId,
+                "SQLite reuses the deleted study's id, which is the case under test");
+            second.Optimize(Objective, nTrials: 24);
+            var secondWithGa = Optuna.LoadStudy("second", proxy, sampler: nsga);
+            secondWithGa.Optimize(Objective, nTrials: 12);
+
+            var gaTrials = secondWithGa.Trials.Skip(24).ToList();
+            gaTrials.Should().OnlyContain(t => t.State == TrialState.Complete);
+            gaTrials.Select(t => Convert.ToInt32(t.SystemAttrs["NSGAIISampler:generation"], System.Globalization.CultureInfo.InvariantCulture))
+                .Should().Equal(new[] { 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2 },
+                    "the recreated study's GA run starts at generation 0; the random trials carry no generation");
+        }
+        finally
+        {
+            app.StopAsync().GetAwaiter().GetResult();
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            backend.Dispose();
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            System.IO.File.Delete(path);
         }
     }
 }

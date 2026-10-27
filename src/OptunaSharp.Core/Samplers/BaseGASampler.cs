@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers;
 
@@ -23,6 +24,10 @@ namespace OptunaSharp.Samplers;
 ///     trajectories are bit-for-bit unchanged; only the cost drops from O(N) per ask (O(N²) per study) to
 ///     O(new trials). The generation attr each trial receives and the per-generation parent-id study attrs are
 ///     still written, so journals and resumed studies read exactly as before.
+///     <para><b>One sampler, several studies.</b> The bookkeeping is kept per storage object and study id, not per
+///     study id alone (every fresh in-memory storage starts at id 0), and it is dropped when the study stored under
+///     that id is no longer the one it was built from, so a sampler instance reused for a second study starts it at
+///     generation 0 with that study's own populations, exactly as Optuna's stateless scan does.</para>
 /// </remarks>
 public abstract class BaseGASampler : BaseSampler
 {
@@ -34,6 +39,19 @@ public abstract class BaseGASampler : BaseSampler
     /// </summary>
     private sealed class GenerationTracker
     {
+        /// <summary>
+        ///     Trial number 0 of the study when the tracker last caught up: if the study now stored under this id
+        ///     has a different trial 0, it is a recreated study and everything below is stale. <c>null</c> until
+        ///     the tracker has seen a trial.
+        /// </summary>
+        public TrialAnchor? Anchor;
+
+        /// <summary>
+        ///     A subclass's own per-study state (<see cref="GetStudyState{TState}" />), created on first use and
+        ///     dropped together with the rest of this tracker.
+        /// </summary>
+        public object? Extension;
+
         /// <summary>First trial number not yet inspected; everything below it is folded or parked in <see cref="PendingNumbers" />.</summary>
         public int Cursor;
 
@@ -57,7 +75,9 @@ public abstract class BaseGASampler : BaseSampler
     }
 
     private readonly object _trackerLock = new();
-    private readonly Dictionary<int, GenerationTracker> _trackers = new();
+    // Keyed by storage object and study id, not the id alone: every fresh in-memory storage starts at study id 0
+    // (pre-release review item H3).
+    private readonly PerStudyState<GenerationTracker> _trackers = new();
 
     /// <summary>Initializes generation bookkeeping with the requested number of completed individuals per generation.</summary>
     /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
@@ -89,18 +109,25 @@ public abstract class BaseGASampler : BaseSampler
     /// <returns>The selected parent trials for the requested generation.</returns>
     public abstract List<FrozenTrial> SelectParent(Study study, int generation);
 
-    /// <summary>The tracker of <paramref name="study" />, created on first use. Callers hold <see cref="_trackerLock" />.</summary>
-    /// <param name="study">Study whose bookkeeping is requested; keyed by its storage identifier.</param>
-    /// <returns>The study's tracker.</returns>
-    private GenerationTracker Tracker(Study study)
-    {
-        if (!_trackers.TryGetValue(study.StudyId, out GenerationTracker? tracker))
-        {
-            tracker = new GenerationTracker();
-            _trackers[study.StudyId] = tracker;
-        }
-        return tracker;
-    }
+    /// <summary>
+    ///     The tracker of <paramref name="study" />, created on first use and replaced by an empty one when it was
+    ///     built for an earlier study stored under the same id. Callers hold <see cref="_trackerLock" />.
+    /// </summary>
+    /// <remarks>
+    ///     A tracker is stale when the study's trial list is shorter than what the tracker already folded, or when
+    ///     its trial 0 is not the trial the tracker last saw. Both happen only when the study was deleted and
+    ///     another created under the same id on the same storage object (SQLite reuses ids). A live study only
+    ///     grows, so neither check can drop a valid tracker: the returned tracker either continues incrementally or
+    ///     starts from an empty fold, which is what a fresh process would compute from the same storage.
+    /// </remarks>
+    /// <param name="study">Study whose bookkeeping is requested; keyed by its storage object and study id.</param>
+    /// <param name="view">The study's current trial list (<see cref="Study.GetTrialsView" />), used for the staleness check.</param>
+    /// <returns>The study's tracker, valid for <paramref name="view" />.</returns>
+    private GenerationTracker Tracker(Study study, IReadOnlyList<FrozenTrial> view)
+        => _trackers.Resolve(
+            study,
+            static () => new GenerationTracker(),
+            tracker => tracker.Cursor <= view.Count && (tracker.Anchor is not { } anchor || anchor.IsIn(view)));
 
     /// <summary>
     ///     Folds every not-yet-inspected trial into the tracker: completed trials are recorded once (their
@@ -108,11 +135,13 @@ public abstract class BaseGASampler : BaseSampler
     ///     population); waiting/running trials are parked and rechecked until they finish, so out-of-order
     ///     completion (an enqueued trial finishing late) is handled without ever rescanning the folded prefix.
     /// </summary>
-    /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
-    /// <param name="tracker">The study's tracker; caller holds <see cref="_trackerLock" />.</param>
-    private void CatchUp(Study study, GenerationTracker tracker)
+    /// <param name="tracker">The study's tracker, as returned by <see cref="Tracker" /> for <paramref name="view" />; caller holds <see cref="_trackerLock" />.</param>
+    /// <param name="view">The study's current trial list, the one the tracker was validated against.</param>
+    /// <exception cref="System.FormatException">A stored generation string cannot be parsed as an integer.</exception>
+    /// <exception cref="System.InvalidCastException">A stored generation value does not support integer conversion.</exception>
+    /// <exception cref="System.OverflowException">A stored generation value exceeds Int32.</exception>
+    private void CatchUp(GenerationTracker tracker, IReadOnlyList<FrozenTrial> view)
     {
-        IReadOnlyList<FrozenTrial> view = study.GetTrialsView();
         // Parked numbers first: a trial that completed since the last catch-up must fold before anything
         // that might read its generation. Fold order does not affect results (max/count are order-free and
         // population lists are sorted on read), only completeness does.
@@ -136,6 +165,10 @@ public abstract class BaseGASampler : BaseSampler
                 tracker.PendingNumbers.Add(number);
         }
         tracker.Cursor = view.Count;
+        // Re-anchored on every catch-up (the view was just validated), so a trial 0 that was still waiting, with no
+        // start time, is anchored with its start time once it runs.
+        if (view.Count > 0)
+            tracker.Anchor = TrialAnchor.Of(view[0]);
     }
 
     /// <summary>Records one finished trial: only completed ones carry population weight, exactly like the reference scan's Complete filter.</summary>
@@ -183,8 +216,9 @@ public abstract class BaseGASampler : BaseSampler
 
         lock (_trackerLock)
         {
-            GenerationTracker tracker = Tracker(study);
-            CatchUp(study, tracker);
+            IReadOnlyList<FrozenTrial> view = study.GetTrialsView();
+            GenerationTracker tracker = Tracker(study, view);
+            CatchUp(tracker, view);
 
             // The reference reverse-scan's (maxGeneration, count-at-max) over completed trials, from the
             // incremental fold: identical numbers, O(new) instead of O(all).
@@ -209,14 +243,15 @@ public abstract class BaseGASampler : BaseSampler
     {
         lock (_trackerLock)
         {
-            GenerationTracker tracker = Tracker(study);
-            CatchUp(study, tracker);
+            IReadOnlyList<FrozenTrial> view = study.GetTrialsView();
+            GenerationTracker tracker = Tracker(study, view);
+            CatchUp(tracker, view);
             var result = new List<FrozenTrial>();
             if (!tracker.NumbersByGeneration.TryGetValue(generation, out List<int>? numbers))
                 return result;
             // Ascending trial-number order = the reference scan's order (it walked the trial list front to
-            // back). Out-of-order completion can append out of order above, so order is restored here.
-            IReadOnlyList<FrozenTrial> view = study.GetTrialsView();
+            // back). Out-of-order completion can append out of order above, so order is restored here. Every
+            // folded number is below view.Count, so the view the tracker caught up with resolves them all.
             foreach (int number in numbers.OrderBy(n => n))
                 result.Add(view[number]);   // trial numbers equal list positions by construction
             return result;
@@ -241,7 +276,10 @@ public abstract class BaseGASampler : BaseSampler
 
         lock (_trackerLock)
         {
-            GenerationTracker tracker = Tracker(study);
+            // Validated before the parent cache is read: a tracker left from an earlier study under this id would
+            // otherwise hand that study's parents to this one.
+            IReadOnlyList<FrozenTrial> view = study.GetTrialsView();
+            GenerationTracker tracker = Tracker(study, view);
             if (tracker.ParentCache.TryGetValue(generation, out List<FrozenTrial>? held))
                 return new List<FrozenTrial>(held);
 
@@ -255,7 +293,7 @@ public abstract class BaseGASampler : BaseSampler
             {
                 var ids = new HashSet<int>(
                     ((IEnumerable<object?>)cached).Select(x => Convert.ToInt32(x, CultureInfo.InvariantCulture)));
-                List<FrozenTrial> resolved = study.GetTrialsView().Where(t => ids.Contains(t.TrialId)).ToList();
+                List<FrozenTrial> resolved = view.Where(t => ids.Contains(t.TrialId)).ToList();
                 tracker.ParentCache[generation] = resolved;
                 return new List<FrozenTrial>(resolved);
             }
@@ -266,19 +304,53 @@ public abstract class BaseGASampler : BaseSampler
                 ParentCacheKeyPrefix + generation.ToString(CultureInfo.InvariantCulture),
                 parentPopulation.Select(t => (object?)t.TrialId).ToList());
 
+            // A fresh view: SelectParent may have read the study long after the one above was taken. Re-resolving
+            // the tracker under the same lock returns the same instance (a live study only grows).
+            view = study.GetTrialsView();
+            tracker = Tracker(study, view);
+
             // Parity subtlety, load-bearing: the reference returns the elite strategy's OWN order on the ask
             // that ran the selection, but every LATER ask re-resolved the cached ids against the trial list —
             // i.e. ascending trial-number order. Child generation consumes parents by RNG index, so the two
             // orders are observable. The cache must therefore hold the number-ordered resolution (what every
             // later ask must see), while THIS ask returns the strategy's order — bit-for-bit the reference.
-            CatchUp(study, tracker);   // every parent is a completed, folded trial; make NumberById complete
-            IReadOnlyList<FrozenTrial> view = study.GetTrialsView();
+            CatchUp(tracker, view);   // every parent is a completed, folded trial; make NumberById complete
             List<FrozenTrial> numberOrdered = parentPopulation
                 .Select(t => tracker.NumberById.TryGetValue(t.TrialId, out int number) ? view[number] : t)
                 .OrderBy(t => t.Number)
                 .ToList();
             tracker.ParentCache[generation] = numberOrdered;
             return parentPopulation;
+        }
+    }
+
+    /// <summary>
+    ///     A subclass's own state for <paramref name="study" /> (for example RVEA's adaptive reference vectors and
+    ///     running ideal point), created on first use and kept with this class's generation bookkeeping: it is
+    ///     per study, so a reused sampler gives every study a fresh one, and it is dropped whenever that
+    ///     bookkeeping is (a recreated study under a reused id).
+    /// </summary>
+    /// <remarks>
+    ///     Footguns: one sampler instance must always request the same <typeparamref name="TState" />, and the
+    ///     returned object is only guarded by this class's lock while the call runs. Mutate it from
+    ///     <see cref="SelectParent" /> (which this class only calls under that lock) or under a lock of your own.
+    ///     Each call reads the study's trial list once, so call it per generation rather than per ask where the
+    ///     storage is not in memory.
+    /// </remarks>
+    /// <typeparam name="TState">The subclass's per-study state type.</typeparam>
+    /// <param name="study">The study whose state is requested.</param>
+    /// <param name="create">Builds the state the first time this study needs it.</param>
+    /// <returns>The study's state.</returns>
+    /// <exception cref="System.InvalidCastException">This sampler instance stored a different state type for the study earlier.</exception>
+    /// <exception cref="System.Exception"><paramref name="create" /> or the storage fails; its exception propagates.</exception>
+    private protected TState GetStudyState<TState>(Study study, Func<TState> create) where TState : class
+    {
+        lock (_trackerLock)
+        {
+            IReadOnlyList<FrozenTrial> view = study.GetTrialsView();
+            GenerationTracker tracker = Tracker(study, view);
+            tracker.Extension ??= create();
+            return (TState)tracker.Extension;
         }
     }
 }

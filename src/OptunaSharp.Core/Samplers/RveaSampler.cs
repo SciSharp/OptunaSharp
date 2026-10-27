@@ -80,8 +80,17 @@ public class RveaSampler : BaseGASampler
         _childGenerationStrategy;
     private readonly Action<Study, FrozenTrial, TrialState, IReadOnlyList<double>?> _afterTrialStrategy;
 
-    private RveaApdSurvival? _apdSurvival;   // built lazily once the objective count is known
+    // The reference vectors depend only on the objective count and the constructor arguments, so they are built
+    // once per objective count. The APD survival built from them is per study (GetStudyState): it adapts the
+    // vectors and tracks a running ideal point, which must not leak from one study into the next when the
+    // sampler is reused (pre-release review item H3).
+    private ReferenceVectorSet? _referenceVectors;
     private bool _warnedSingleObjective;
+
+    /// <summary>The reference vectors built for one objective count (immutable once built).</summary>
+    /// <param name="ObjectiveCount">The number of objectives the vectors were built for.</param>
+    /// <param name="Vectors">The reference directions, one row of <paramref name="ObjectiveCount" /> components per vector.</param>
+    private sealed record ReferenceVectorSet(int ObjectiveCount, double[][] Vectors);
 
     /// <param name="populationSize">Target number of reference vectors / generation size. When reference
     ///     points are generated (the default), the effective count is the largest Das-Dennis lattice size
@@ -192,10 +201,14 @@ public class RveaSampler : BaseGASampler
     /// <inheritdoc />
     public override List<FrozenTrial> SelectParent(Study study, int generation)
     {
-        EnsureReferenceVectors(study.Directions.Count);
+        double[][] referenceVectors = EnsureReferenceVectors(study.Directions.Count);
+        // This study's own survival operator, built from the shared vectors the first time the study selects
+        // parents (and again for a recreated study under a reused id).
+        RveaApdSurvival survival = GetStudyState(
+            study, () => new RveaApdSurvival(referenceVectors, _alpha, _adaptFreq, _nMaxGenerations));
         var combined = GetPopulation(study, generation - 1);
         combined.AddRange(GetParentPopulation(study, generation - 1));
-        return _apdSurvival!.Select(study, combined, generation);
+        return survival.Select(study, combined, generation);
     }
 
     /// <inheritdoc />
@@ -250,17 +263,27 @@ public class RveaSampler : BaseGASampler
     }
 
     /// <summary>
-    ///     Build the reference vectors and the APD survival operator on first use, then pin the base
-    ///     population size to the reference-vector count (RVEA keeps at most one survivor per reference
-    ///     vector, so the generation size is the vector count). The objective count is available from the
-    ///     study directions before any trial finishes, so this can run for the very first trial.
+    ///     Build the reference vectors on first use for an objective count, then pin the base population size to
+    ///     the reference-vector count (RVEA keeps at most one survivor per reference vector, so the generation
+    ///     size is the vector count). The objective count is available from the study directions before any trial
+    ///     finishes, so this can run for the very first trial. The APD survival operator is built per study from
+    ///     these vectors in <see cref="SelectParent" />.
     /// </summary>
+    /// <remarks>
+    ///     The population size is pinned only when the vectors are (re)built, so a <see cref="BaseGASampler.PopulationSize" />
+    ///     set by hand afterwards stays in force until a study with another objective count arrives. Footgun: the
+    ///     population size belongs to the sampler instance, so two studies with different objective counts must not
+    ///     share one instance concurrently.
+    /// </remarks>
     /// <param name="m">Number of objective or residual components.</param>
+    /// <returns>The reference directions for <paramref name="m" /> objectives; shared, so treat them as read-only.</returns>
     /// <exception cref="NumSharp.ValueError">The supplied reference-point width differs from the study objective count.</exception>
-    private void EnsureReferenceVectors(int m)
+    private double[][] EnsureReferenceVectors(int m)
     {
-        if (_apdSurvival is not null)
-            return;
+        // A single reference read: a concurrent rebuild for another objective count swaps the whole set at once.
+        ReferenceVectorSet? cached = _referenceVectors;
+        if (cached is not null && cached.ObjectiveCount == m)
+            return cached.Vectors;
 
         double[][] referenceVectors;
         if (_referencePoints is not null)
@@ -285,7 +308,9 @@ public class RveaSampler : BaseGASampler
             referenceVectors = ReferenceDirections.DasDennis(partitions, m);
         }
 
-        _apdSurvival = new RveaApdSurvival(referenceVectors, _alpha, _adaptFreq, _nMaxGenerations);
-        PopulationSize = _apdSurvival.RefCount;
+        _referenceVectors = new ReferenceVectorSet(m, referenceVectors);
+        // RveaApdSurvival.RefCount of a survival built from these vectors: one survivor per reference vector.
+        PopulationSize = referenceVectors.Length;
+        return referenceVectors;
     }
 }

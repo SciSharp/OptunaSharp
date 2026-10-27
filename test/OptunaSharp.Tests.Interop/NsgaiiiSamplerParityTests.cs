@@ -27,6 +27,44 @@ public class NsgaiiiSamplerParityTests : OptunaInteropTestBase
         StudySnapshot.AssertParity(pyState, csState, DatetimeComparison.NullnessOnly);
     }
 
+    /// <summary>
+    ///     Pre-release review item H3, live, for NSGA-III: one sampler instance reused for a second in-memory study
+    ///     (both have study id 0). Population 10, 120 trials, then 25. The second study's first parent lookup used to
+    ///     throw <c>ArgumentOutOfRangeException: The view holds 1 trials</c>. Optuna starts the second study at
+    ///     generation 0 with its own parents, while the sampler's random stream (which reference-point niching also
+    ///     draws from) and its intersection search-space cache carry over. Both studies' full state, generations and
+    ///     parent caches included, must be bit-identical to live Optuna's.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void ReusedForASecondStudy_BothStudies_AreBitIdentical()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var sampler = new NSGAIIISampler(populationSize: 10, seed: 1);
+        var directions = new[] { StudyDirection.Minimize, StudyDirection.Minimize };
+        IReadOnlyList<double> Objective(Trial t) => new[] { t.SuggestFloat("x", 0, 1), 1 - t.SuggestFloat("y", 0, 1) };
+        var csFirst = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "nsga3", sampler: sampler, directions: directions);
+        csFirst.Optimize(Objective, nTrials: 120);
+        var csSecond = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "nsga3", sampler: sampler, directions: directions);
+        csSecond.Optimize(Objective, nTrials: 25);
+        var csFirstState = StudySnapshot.Capture(csFirst);
+        var csSecondState = StudySnapshot.Capture(csSecond);
+
+        PyExec(
+            "sampler = optuna.samplers.NSGAIIISampler(population_size=10, seed=1)\n" +
+            "def _obj(t):\n" +
+            "    return (t.suggest_float('x', 0, 1), 1 - t.suggest_float('y', 0, 1))\n" +
+            "study_first = optuna.create_study(study_name='nsga3', directions=['minimize', 'minimize'], sampler=sampler)\n" +
+            "study_first.optimize(_obj, n_trials=120)\n" +
+            "study = optuna.create_study(study_name='nsga3', directions=['minimize', 'minimize'], sampler=sampler)\n" +
+            "study.optimize(_obj, n_trials=25)\n");
+        StudySnapshot.AssertParity(PyStudyState("study_first"), csFirstState, DatetimeComparison.NullnessOnly);
+        StudySnapshot.AssertParity(PyStudyState("study"), csSecondState, DatetimeComparison.NullnessOnly);
+    }
+
     [TestMethod]
     [TestCategory("RequiresPython")]
     [DataRow(0)]

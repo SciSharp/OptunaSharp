@@ -93,13 +93,39 @@ public class MoeaDSampler : BaseSampler
     private readonly IntersectionSearchSpace _searchSpace;
 
     private readonly object _stateLock = new();
-    private double[][]? _weights;         // N × m weight vectors (Das-Dennis), built once m is known
-    private int[][]? _neighbors;          // N × T nearest-weight-vector indices (including self)
-    private int _n;                       // effective population size / number of subproblems
-    private List<int>? _populationIds;    // trial-ids of the current per-subproblem solutions (size N)
-    private double[]? _ideal;             // running ideal point z* (minimization convention, length m)
-    private HashSet<int>? _foldedNumbers; // trial numbers of offspring already folded into the population
+    // The decomposition and population of each study this instance serves, keyed by storage object and study id:
+    // instance fields carried study A's population, ideal point and weight vectors (built for A's objective
+    // count) into study B when the sampler was reused (pre-release review item H3).
+    private readonly PerStudyState<StudyDecomposition> _studies = new();
     private bool _warnedSingleObjective;
+
+    /// <summary>The weight vectors, neighborhoods and per-subproblem population of one study.</summary>
+    private sealed class StudyDecomposition
+    {
+        /// <summary>N × m weight vectors (Das-Dennis), built once the study's objective count m is known.</summary>
+        public double[][]? Weights;
+
+        /// <summary>N × T nearest-weight-vector indices (including self).</summary>
+        public int[][]? Neighbors;
+
+        /// <summary>Effective population size / number of subproblems.</summary>
+        public int N;
+
+        /// <summary>Trial ids of the current per-subproblem solutions (size N); <c>null</c> until the initial population is complete.</summary>
+        public List<int>? PopulationIds;
+
+        /// <summary>Running ideal point z* (minimization convention, length m).</summary>
+        public double[]? Ideal;
+
+        /// <summary>Trial numbers of offspring already folded into the population.</summary>
+        public HashSet<int>? FoldedNumbers;
+
+        /// <summary>
+        ///     The first member of the initial population: if the study now stored under this id no longer has
+        ///     it, the study was recreated and this decomposition is stale. <c>null</c> while the population is empty.
+        /// </summary>
+        public TrialAnchor? Anchor;
+    }
 
     /// <param name="populationSize">Target number of subproblems / weight vectors. The effective N is the
     ///     largest Das-Dennis lattice size not exceeding this (see the class remarks).</param>
@@ -218,12 +244,18 @@ public class MoeaDSampler : BaseSampler
         int n;
         lock (_stateLock)
         {
-            EnsureWeights(m);
-            n = _n;
+            // This study's own decomposition. A completed trial never stops being completed, so a decomposition
+            // whose anchor is gone belongs to a study deleted and recreated under the same id: start afresh.
+            StudyDecomposition decomposition = _studies.Resolve(
+                study,
+                static () => new StudyDecomposition(),
+                state => state.Anchor is not { } anchor || anchor.IsIn(completed));
+            EnsureWeights(decomposition, m);
+            n = decomposition.N;
             if (completed.Count < n)
                 return new OrderedDict<string, object?>();   // still filling the random initial population
 
-            population = ReconstructPopulation(study, completed, signs);
+            population = ReconstructPopulation(decomposition, study, completed, signs);
             if (population.Count < n)
                 return new OrderedDict<string, object?>();
 
@@ -231,7 +263,7 @@ public class MoeaDSampler : BaseSampler
             // execution c equals the number of completed offspring at generation time.
             int offspringCompleted = completed.Count(t => t.SystemAttrs.ContainsKey(AttrKeySubproblem));
             subproblem = offspringCompleted % n;
-            neighbors = _neighbors![subproblem];
+            neighbors = decomposition.Neighbors![subproblem];
         }
 
         // Mating pool: the subproblem's neighborhood with probability δ, else the whole population.
@@ -264,18 +296,19 @@ public class MoeaDSampler : BaseSampler
 
     /// <summary>Build the Das-Dennis weight vectors and their neighborhoods on first use, deriving the
     ///     effective population size N from the target and the objective count.</summary>
+    /// <param name="decomposition">The study's decomposition; its weights are built once, from that study's objective count.</param>
     /// <param name="m">Number of objective or residual components.</param>
-    private void EnsureWeights(int m)
+    private void EnsureWeights(StudyDecomposition decomposition, int m)
     {
-        if (_weights is not null)
+        if (decomposition.Weights is not null)
             return;
 
         int partitions = ReferenceDirections.PartitionClosestToPoints(_populationSizeTarget, m);
-        _weights = ReferenceDirections.DasDennis(partitions, m);
-        _n = _weights.Length;
+        decomposition.Weights = ReferenceDirections.DasDennis(partitions, m);
+        decomposition.N = decomposition.Weights.Length;
 
-        int t = Math.Min(Math.Max(1, _nNeighbors), _n);
-        _neighbors = ComputeNeighbors(_weights, t);
+        int t = Math.Min(Math.Max(1, _nNeighbors), decomposition.N);
+        decomposition.Neighbors = ComputeNeighbors(decomposition.Weights, t);
     }
 
     /// <summary>For each weight vector, the indices of its <paramref name="t" /> nearest weight vectors by
@@ -324,11 +357,16 @@ public class MoeaDSampler : BaseSampler
     ///     folded once, in trial-number order: it updates the ideal point and replaces up to
     ///     <see cref="_nReplacements" /> neighbors whose scalarized fitness it improves.
     /// </summary>
+    /// <param name="decomposition">The study's decomposition (weights built), advanced in place; caller holds the state lock.</param>
     /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
     /// <param name="completed">Completed trial snapshots available for harvesting.</param>
     /// <param name="signs">One multiplier per objective: +1 for minimization and -1 for maximization.</param>
     /// <returns>The incumbent trial population reconstructed from persisted replacement history.</returns>
-    private List<FrozenTrial> ReconstructPopulation(Study study, List<FrozenTrial> completed, double[] signs)
+    /// <exception cref="System.FormatException">A stored subproblem stamp cannot be parsed as an integer.</exception>
+    /// <exception cref="System.InvalidCastException">A stored subproblem stamp does not support integer conversion.</exception>
+    /// <exception cref="System.OverflowException">A stored subproblem stamp exceeds Int32.</exception>
+    private List<FrozenTrial> ReconstructPopulation(
+        StudyDecomposition decomposition, Study study, List<FrozenTrial> completed, double[] signs)
     {
         var byId = new Dictionary<int, FrozenTrial>(completed.Count);
         foreach (var t in completed)
@@ -336,64 +374,65 @@ public class MoeaDSampler : BaseSampler
 
         int m = signs.Length;
 
-        if (_populationIds is null)
+        if (decomposition.PopulationIds is null)
         {
             var initTrials = completed
                 .Where(t => !t.SystemAttrs.ContainsKey(AttrKeySubproblem))
                 .OrderBy(t => t.Number)
                 .ToList();
-            if (initTrials.Count < _n)
+            if (initTrials.Count < decomposition.N)
                 return new List<FrozenTrial>();   // initial population not complete yet
 
-            _populationIds = initTrials.Take(_n).Select(t => t.TrialId).ToList();
-            _ideal = new double[m];
-            for (int j = 0; j < m; j++) _ideal[j] = double.PositiveInfinity;
-            foreach (int id in _populationIds)
+            decomposition.PopulationIds = initTrials.Take(decomposition.N).Select(t => t.TrialId).ToList();
+            decomposition.Anchor = TrialAnchor.Of(initTrials[0]);
+            decomposition.Ideal = new double[m];
+            for (int j = 0; j < m; j++) decomposition.Ideal[j] = double.PositiveInfinity;
+            foreach (int id in decomposition.PopulationIds)
             {
                 double[] loss = Loss(byId[id], signs);
                 for (int j = 0; j < m; j++)
-                    if (loss[j] < _ideal[j]) _ideal[j] = loss[j];
+                    if (loss[j] < decomposition.Ideal[j]) decomposition.Ideal[j] = loss[j];
             }
-            _foldedNumbers = new HashSet<int>();
+            decomposition.FoldedNumbers = new HashSet<int>();
         }
 
         // Fold every offspring not yet folded, in ascending trial-number order (steady-state: each fold
         // sees the population and ideal point left by the previous folds).
         var newOffspring = completed
-            .Where(t => t.SystemAttrs.ContainsKey(AttrKeySubproblem) && !_foldedNumbers!.Contains(t.Number))
+            .Where(t => t.SystemAttrs.ContainsKey(AttrKeySubproblem) && !decomposition.FoldedNumbers!.Contains(t.Number))
             .OrderBy(t => t.Number)
             .ToList();
 
         foreach (var off in newOffspring)
         {
             int sc = Convert.ToInt32(off.SystemAttrs[AttrKeySubproblem]);
-            if (sc < 0 || sc >= _n)   // guard against a stale/foreign stamp (e.g., a changed population size)
+            if (sc < 0 || sc >= decomposition.N)   // guard against a stale/foreign stamp (e.g., a changed population size)
             {
-                _foldedNumbers!.Add(off.Number);
+                decomposition.FoldedNumbers!.Add(off.Number);
                 continue;
             }
 
             double[] offLoss = Loss(off, signs);
             for (int j = 0; j < m; j++)
-                if (offLoss[j] < _ideal![j]) _ideal[j] = offLoss[j];
+                if (offLoss[j] < decomposition.Ideal![j]) decomposition.Ideal[j] = offLoss[j];
 
             int replaced = 0;
-            foreach (int j in _neighbors![sc])
+            foreach (int j in decomposition.Neighbors![sc])
             {
-                var current = byId[_populationIds[j]];
-                double gOff = MoeadDecomposition.Scalarize(_scalarization, offLoss, _weights![j], _ideal!);
-                double gCur = MoeadDecomposition.Scalarize(_scalarization, Loss(current, signs), _weights[j], _ideal!);
+                var current = byId[decomposition.PopulationIds[j]];
+                double gOff = MoeadDecomposition.Scalarize(_scalarization, offLoss, decomposition.Weights![j], decomposition.Ideal!);
+                double gCur = MoeadDecomposition.Scalarize(_scalarization, Loss(current, signs), decomposition.Weights[j], decomposition.Ideal!);
                 if (gOff < gCur)
                 {
-                    _populationIds[j] = off.TrialId;
+                    decomposition.PopulationIds[j] = off.TrialId;
                     replaced++;
                     if (replaced >= _nReplacements) break;
                 }
             }
-            _foldedNumbers!.Add(off.Number);
+            decomposition.FoldedNumbers!.Add(off.Number);
         }
 
-        return _populationIds.Select(id => byId[id]).ToList();
+        return decomposition.PopulationIds.Select(id => byId[id]).ToList();
     }
 
     /// <summary>Per-objective sign so every objective becomes a minimization (Optuna internal convention).</summary>

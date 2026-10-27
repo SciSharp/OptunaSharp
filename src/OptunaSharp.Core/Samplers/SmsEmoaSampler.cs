@@ -71,8 +71,26 @@ public class SmsEmoaSampler : BaseSampler
     private readonly NSGAIIChildGenerationStrategy _childGeneration;
 
     private readonly object _stateLock = new();
-    private List<int>? _survivorIds;   // trial-ids of the current μ survivors (null until the initial population is full)
-    private int _nextNumber;           // next trial number to fold into the population
+    // The μ-survivor population of each study this instance serves, keyed by storage object and study id: a
+    // single pair of fields carried study A's survivors into study B when the sampler was reused (pre-release
+    // review item H3).
+    private readonly PerStudyState<StudyPopulation> _populations = new();
+
+    /// <summary>The steady-state population of one study, advanced one completed offspring at a time.</summary>
+    private sealed class StudyPopulation
+    {
+        /// <summary>Trial ids of the current μ survivors; <c>null</c> until the initial population is complete.</summary>
+        public List<int>? SurvivorIds;
+
+        /// <summary>The next trial number to fold into the population.</summary>
+        public int NextNumber;
+
+        /// <summary>
+        ///     Trial 0 of the study when the initial population was formed: if the study now stored under this id
+        ///     no longer has it, the study was recreated and this population is stale. <c>null</c> while empty.
+        /// </summary>
+        public TrialAnchor? Anchor;
+    }
 
     /// <param name="populationSize">Number of individuals μ kept in the population.</param>
     /// <param name="mutation">Mutation applied to child individuals; defaults to <see cref="PolynomialMutation" />. If a parameter selected for mutation has no mutation object it is instead resampled independently.</param>
@@ -177,15 +195,23 @@ public class SmsEmoaSampler : BaseSampler
     // ---- steady-state population reconstruction --------------------------------------------------
 
     /// <summary>
-    ///     Advance the in-memory μ-survivor set to cover every completed offspring trial, then return
-    ///     it. Trials are folded in ascending trial-number order (one (μ+1)→μ survival step each); a gap
-    ///     in that order stalls the advance until it fills (matching the single-writer assumption).
+    ///     Advance the in-memory μ-survivor set of <paramref name="study" /> to cover every completed offspring
+    ///     trial, then return it. Trials are folded in ascending trial-number order (one (μ+1)→μ survival step
+    ///     each); a gap in that order stalls the advance until it fills (matching the single-writer assumption).
+    ///     Each study has its own survivor set; one left by an earlier study under a reused id is discarded.
     /// </summary>
     /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
-    /// <param name="completed">Completed trial snapshots available for harvesting.</param>
+    /// <param name="completed">Completed trial snapshots available for harvesting, in ascending trial-number order.</param>
     /// <returns>The incumbent trial population reconstructed from persisted replacement history.</returns>
     private List<FrozenTrial> ReconstructPopulation(Study study, List<FrozenTrial> completed)
     {
+        // A completed trial never stops being completed, so a population whose anchor is gone belongs to a study
+        // that was deleted and recreated under the same id: start this one from its own initial population.
+        StudyPopulation population = _populations.Resolve(
+            study,
+            static () => new StudyPopulation(),
+            state => state.Anchor is not { } anchor || anchor.IsIn(completed));
+
         var byNumber = new Dictionary<int, FrozenTrial>(completed.Count);
         var byId = new Dictionary<int, FrozenTrial>(completed.Count);
         foreach (var t in completed)
@@ -194,7 +220,7 @@ public class SmsEmoaSampler : BaseSampler
             byId[t.TrialId] = t;
         }
 
-        if (_survivorIds is null)
+        if (population.SurvivorIds is null)
         {
             var initial = new List<int>(_populationSize);
             for (int number = 0; number < _populationSize; number++)
@@ -203,24 +229,25 @@ public class SmsEmoaSampler : BaseSampler
                     return new List<FrozenTrial>();   // initial population not contiguously complete yet
                 initial.Add(t.TrialId);
             }
-            _survivorIds = initial;
-            _nextNumber = _populationSize;
+            population.SurvivorIds = initial;
+            population.NextNumber = _populationSize;
+            population.Anchor = TrialAnchor.Of(byNumber[0]);
         }
 
         double[] signs = DirectionSigns(study);
-        while (byNumber.TryGetValue(_nextNumber, out var offspring))
+        while (byNumber.TryGetValue(population.NextNumber, out var offspring))
         {
-            var survivorTrials = ResolveIds(_survivorIds, byId);
+            var survivorTrials = ResolveIds(population.SurvivorIds, byId);
             var merged = new List<FrozenTrial>(survivorTrials) { offspring };   // μ + 1
             var mergedLoss = merged.Select(t => Loss(t, signs)).ToArray();
             var (ideal, nadir) = IdealNadir(survivorTrials, signs);
 
             int[] keep = SmsEmoaSurvival.Select(mergedLoss, _populationSize, ideal, nadir, _hvReferenceEps);
-            _survivorIds = keep.Select(i => merged[i].TrialId).ToList();
-            _nextNumber++;
+            population.SurvivorIds = keep.Select(i => merged[i].TrialId).ToList();
+            population.NextNumber++;
         }
 
-        return ResolveIds(_survivorIds, byId);
+        return ResolveIds(population.SurvivorIds, byId);
     }
 
     /// <summary>Resolves stored trial identifiers against available history in the requested order.</summary>
