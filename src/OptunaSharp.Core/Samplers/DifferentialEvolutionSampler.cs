@@ -15,7 +15,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -291,17 +290,22 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
     }
 
     /// <summary>Encodes the optimizer type and serializable state for storage on a trial.</summary>
+    /// <remarks>
+    ///     The state holds every population member's fitness, so an infinite objective value reaches it;
+    ///     <see cref="OptimizerStateJson" /> keeps ±inf and NaN as named JSON literals instead of failing.
+    /// </remarks>
     /// <param name="optimizer">Optimizer whose proposal and adaptation state are persisted.</param>
     /// <returns>A tagged JSON representation of the optimizer state.</returns>
     private static string SerializeOptimizer(De optimizer)
-        => "de\n" + JsonSerializer.Serialize(optimizer.ToState());
+        => "de\n" + OptimizerStateJson.Serialize(optimizer.ToState());
 
     /// <summary>Decodes a persisted optimizer tag and reconstructs its matching state type.</summary>
     /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
     /// <returns>The optimizer reconstructed from the tagged state.</returns>
     /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
-    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type, or is the literal null.</exception>
     /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException">The stored text has no <c>&lt;tag&gt;\n</c> line.</exception>
     private static De DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
@@ -309,7 +313,7 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         string json = optimizerStr[(nl + 1)..];
         if (tag != "de")
             throw new NotSupportedException($"Unknown optimizer state tag '{tag}'.");
-        return De.FromState(JsonSerializer.Deserialize<DeState>(json)!);
+        return De.FromState(OptimizerStateJson.Deserialize<DeState>(json));
     }
 
     /// <summary>Finds the newest stored optimizer snapshot in completed trial history.</summary>

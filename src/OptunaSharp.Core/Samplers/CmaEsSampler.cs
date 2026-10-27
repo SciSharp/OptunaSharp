@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -284,18 +283,20 @@ public class CmaEsSampler : BaseSampler
     // Our optimizer-state JSON is self-describing (like Optuna's pickle): a `<tag>\n` prefix names
     // the concrete optimizer so restore reconstructs the right type regardless of the sampler's
     // current config — e.g. a single-dimensional `use_separable_cma=True` study stores a fallback
-    // `Cma` under the `sepcma:` prefix and must restore it as `Cma`, not `SepCma`. System.Text.Json
-    // emits no newlines, so the `\n` split is unambiguous.
+    // `Cma` under the `sepcma:` prefix and must restore it as `Cma`, not `SepCma`. The JSON is written
+    // by OptimizerStateJson, which emits no newlines, so the `\n` split is unambiguous. It also encodes
+    // ±inf/NaN as named literals: the funhist records each generation's best and worst value, so one
+    // infinite objective value lands in the state, and pickle-based Optuna keeps going in that case too.
 
     /// <summary>Serialize the optimizer's evolving state to our own JSON (the pickle analogue).</summary>
     /// <param name="optimizer">Optimizer whose proposal and adaptation state are persisted.</param>
-    /// <returns>A tagged JSON representation of the optimizer state.</returns>
+    /// <returns>A tagged JSON representation of the optimizer state; non-finite values are kept as named literals.</returns>
     /// <exception cref="System.NotSupportedException">The optimizer implementation has no supported serialization tag.</exception>
     private static string SerializeOptimizer(ICmaOptimizer optimizer) => optimizer switch
     {
-        Cma c => "cma\n" + JsonSerializer.Serialize(c.ToState()),
-        SepCma s => "sepcma\n" + JsonSerializer.Serialize(s.ToState()),
-        CmaWm w => "cmawm\n" + JsonSerializer.Serialize(w.ToState()),
+        Cma c => "cma\n" + OptimizerStateJson.Serialize(c.ToState()),
+        SepCma s => "sepcma\n" + OptimizerStateJson.Serialize(s.ToState()),
+        CmaWm w => "cmawm\n" + OptimizerStateJson.Serialize(w.ToState()),
         _ => throw new NotSupportedException($"Cannot serialize optimizer of type {optimizer.GetType().Name}."),
     };
 
@@ -303,8 +304,9 @@ public class CmaEsSampler : BaseSampler
     /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
     /// <returns>The optimizer reconstructed from the tagged state.</returns>
     /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
-    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type, or is the literal null.</exception>
     /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException">The stored text has no <c>&lt;tag&gt;\n</c> line, as a state pickled by Python Optuna does (review item M3).</exception>
     private static ICmaOptimizer DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
@@ -312,9 +314,9 @@ public class CmaEsSampler : BaseSampler
         string json = optimizerStr[(nl + 1)..];
         return tag switch
         {
-            "cma" => Cma.FromState(JsonSerializer.Deserialize<CmaState>(json)!),
-            "sepcma" => SepCma.FromState(JsonSerializer.Deserialize<SepCmaState>(json)!),
-            "cmawm" => CmaWm.FromState(JsonSerializer.Deserialize<CmaWmState>(json)!),
+            "cma" => Cma.FromState(OptimizerStateJson.Deserialize<CmaState>(json)),
+            "sepcma" => SepCma.FromState(OptimizerStateJson.Deserialize<SepCmaState>(json)),
+            "cmawm" => CmaWm.FromState(OptimizerStateJson.Deserialize<CmaWmState>(json)),
             _ => throw new NotSupportedException($"Unknown optimizer state tag '{tag}'."),
         };
     }

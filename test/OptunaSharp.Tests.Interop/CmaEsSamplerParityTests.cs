@@ -150,6 +150,54 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
             "study.optimize(_obj, n_trials=32)\n");
     }
 
+    /// <summary>
+    ///     Review item H1 (2026-10-26): infinite objective values. Optuna pickles the optimizer, so the ±inf that
+    ///     cmaes records in its <c>funhist</c> is harmless there; OptunaSharp's JSON state used to throw on it and
+    ///     fail every later ask. Trial 4 reports +inf and trial 9 −inf, inside the first two generations, and the
+    ///     whole trajectory through and after them must stay bit-identical to live Optuna, in both directions
+    ///     (maximize negates the values, so the infinities swap sign inside the optimizer).
+    /// </summary>
+    /// <param name="separable">Whether the separable (diagonal) CMA-ES variant is used.</param>
+    /// <param name="maximize">Whether the study maximizes instead of minimizing.</param>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(false, false)]
+    [DataRow(false, true)]
+    [DataRow(true, false)]
+    public void InfiniteObjectiveValues_FullState_IsBitIdentical(bool separable, bool maximize)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var sphere = SphereCs(3);
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "cma",
+            sampler: new CmaEsSampler(seed: 3, useSeparableCma: separable),
+            direction: maximize ? StudyDirection.Maximize : StudyDirection.Minimize);
+        csStudy.Optimize(t =>
+        {
+            // Suggest first, so the infinite trials carry the same parameters as Python's.
+            double v = sphere(t);
+            return t.Number switch
+            {
+                4 => double.PositiveInfinity,
+                9 => double.NegativeInfinity,
+                _ => v,
+            };
+        }, nTrials: 36);
+
+        AssertParityExceptOptimizerBlob(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            $"study = optuna.create_study(study_name='cma', direction='{(maximize ? "maximize" : "minimize")}', " +
+            $"sampler=optuna.samplers.CmaEsSampler(seed=3, use_separable_cma={(separable ? "True" : "False")}))\n" +
+            SpherePy(3) +
+            "def _obj_inf(t):\n" +
+            "    v = _obj(t)\n" +
+            "    if t.number == 4: return float('inf')\n" +
+            "    if t.number == 9: return float('-inf')\n" +
+            "    return v\n" +
+            "study.optimize(_obj_inf, n_trials=36)\n");
+    }
+
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void MixedSpace_FullState_IsBitIdentical()

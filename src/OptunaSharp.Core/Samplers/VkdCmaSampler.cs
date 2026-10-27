@@ -13,7 +13,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -254,17 +253,22 @@ public sealed class VkdCmaSampler : BaseSampler
     }
 
     /// <summary>Encodes the optimizer type and serializable state for storage on a trial.</summary>
+    /// <remarks>
+    ///     Written through <see cref="OptimizerStateJson" />, so a state that picks up a non-finite value (an
+    ///     overflowing log-scale tracker, for example) is stored as named literals instead of failing the ask.
+    /// </remarks>
     /// <param name="optimizer">Optimizer whose proposal and adaptation state are persisted.</param>
     /// <returns>A tagged JSON representation of the optimizer state.</returns>
     private static string SerializeOptimizer(VkdCma optimizer)
-        => "vkdcma\n" + JsonSerializer.Serialize(optimizer.ToState());
+        => "vkdcma\n" + OptimizerStateJson.Serialize(optimizer.ToState());
 
     /// <summary>Decodes a persisted optimizer tag and reconstructs its matching state type.</summary>
     /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
     /// <returns>The optimizer reconstructed from the tagged state.</returns>
     /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
-    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type, or is the literal null.</exception>
     /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException">The stored text has no <c>&lt;tag&gt;\n</c> line.</exception>
     private static VkdCma DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
@@ -272,7 +276,7 @@ public sealed class VkdCmaSampler : BaseSampler
         string json = optimizerStr[(nl + 1)..];
         if (tag != "vkdcma")
             throw new NotSupportedException($"Unknown optimizer state tag '{tag}'.");
-        return VkdCma.FromState(JsonSerializer.Deserialize<VkdCmaState>(json)!);
+        return VkdCma.FromState(OptimizerStateJson.Deserialize<VkdCmaState>(json));
     }
 
     /// <summary>Finds the newest stored optimizer snapshot in completed trial history.</summary>

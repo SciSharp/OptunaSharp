@@ -5,7 +5,7 @@
 // on NumSharp's NumPy-exact MT19937 (never System.Random) and OpenBLAS-backed linear algebra.
 
 using System;
-using System.Text.Json;
+using OptunaSharp.Internal;
 using OptunaSharp.Logging;
 using OptunaSharp.Samplers.EvolutionStrategy;
 
@@ -97,17 +97,23 @@ public sealed class XnesSampler : EvolutionStrategySampler
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    ///     Written through <see cref="OptimizerStateJson" />: should a diverging run push the mean, step size or
+    ///     shape matrix to ±inf or NaN, the state is stored as named literals instead of failing the ask.
+    /// </remarks>
     private protected override string SerializeOptimizer(IEvolutionStrategyOptimizer optimizer)
-        => Tag + "\n" + JsonSerializer.Serialize(((XnesOptimizer)optimizer).ToState());
+        => Tag + "\n" + OptimizerStateJson.Serialize(((XnesOptimizer)optimizer).ToState());
 
     /// <inheritdoc />
     /// <exception cref="System.NotSupportedException">The serialized optimizer tag is not this sampler's tag.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The persisted payload is not valid JSON for the state type, or is the literal null.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException">The stored text has no <c>&lt;tag&gt;\n</c> line.</exception>
     private protected override IEvolutionStrategyOptimizer DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
         string tag = optimizerStr[..nl];
         if (tag != Tag)
             throw new NotSupportedException($"Unexpected optimizer state tag '{tag}' for XnesSampler.");
-        return XnesOptimizer.FromState(JsonSerializer.Deserialize<XnesState>(optimizerStr[(nl + 1)..])!);
+        return XnesOptimizer.FromState(OptimizerStateJson.Deserialize<XnesState>(optimizerStr[(nl + 1)..]));
     }
 }

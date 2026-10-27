@@ -17,7 +17,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -300,17 +299,22 @@ public sealed class PsoSampler : BaseSampler
     }
 
     /// <summary>Encodes the optimizer type and serializable state for storage on a trial.</summary>
+    /// <remarks>
+    ///     The state holds the personal-best and global-best fitness, which start at +inf and take on any
+    ///     infinite objective value; <see cref="OptimizerStateJson" /> keeps ±inf and NaN as named JSON literals.
+    /// </remarks>
     /// <param name="optimizer">Optimizer whose proposal and adaptation state are persisted.</param>
     /// <returns>A tagged JSON representation of the optimizer state.</returns>
     private static string SerializeOptimizer(Pso optimizer)
-        => "pso\n" + JsonSerializer.Serialize(optimizer.ToState());
+        => "pso\n" + OptimizerStateJson.Serialize(optimizer.ToState());
 
     /// <summary>Decodes a persisted optimizer tag and reconstructs its matching state type.</summary>
     /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
     /// <returns>The optimizer reconstructed from the tagged state.</returns>
     /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
-    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type, or is the literal null.</exception>
     /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException">The stored text has no <c>&lt;tag&gt;\n</c> line.</exception>
     private static Pso DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
@@ -318,7 +322,7 @@ public sealed class PsoSampler : BaseSampler
         string json = optimizerStr[(nl + 1)..];
         if (tag != "pso")
             throw new NotSupportedException($"Unknown optimizer state tag '{tag}'.");
-        return Pso.FromState(JsonSerializer.Deserialize<PsoState>(json)!);
+        return Pso.FromState(OptimizerStateJson.Deserialize<PsoState>(json));
     }
 
     /// <summary>Finds the newest stored optimizer snapshot in completed trial history.</summary>

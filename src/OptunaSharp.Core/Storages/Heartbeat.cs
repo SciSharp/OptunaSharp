@@ -82,6 +82,18 @@ public sealed class NullHeartbeatThread : BaseHeartbeatThread
 }
 
 /// <summary>Background thread that records liveness until the owning optimization scope ends.</summary>
+/// <remarks>
+///     <para><b>A failed heartbeat write ends only this thread.</b> Python's <c>_record_heartbeat</c> runs on a
+///     <c>threading.Thread</c>; when <c>record_heartbeat</c> raises (a dropped database connection, a busy
+///     SQLite file), the thread dies, <c>threading.excepthook</c> prints the error to stderr, and the trial keeps
+///     running without heartbeats. .NET instead terminates the whole process on an unhandled thread exception,
+///     so this port catches every exception the loop raises, reports it in the excepthook layout
+///     (<c>Exception in thread &lt;name&gt;:</c> followed by the exception) on the current standard error, and
+///     lets the thread end.</para>
+///     <para>Consequence, as in Optuna: once the heartbeat stops, the trial's heartbeat ages, and any worker's
+///     <see cref="HeartbeatHelpers.FailStaleTrials" /> may fail it as stale while its objective is still running.
+///     The thread does not retry, because Optuna does not.</para>
+/// </remarks>
 public sealed class HeartbeatThread : BaseHeartbeatThread
 {
     private readonly int _trialId;
@@ -89,8 +101,8 @@ public sealed class HeartbeatThread : BaseHeartbeatThread
     private Thread? _thread;
     private ManualResetEventSlim? _stopEvent;
 
+    /// <summary>Binds a heartbeat worker to an existing trial; nothing runs until <see cref="Start" />.</summary>
     /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
-    /// <summary>Binds a heartbeat worker to an existing trial.</summary>
     /// <param name="heartbeat">Shared heartbeat backend with a non-null interval; this worker does not own the backend.</param>
     public HeartbeatThread(int trialId, IBaseHeartbeat heartbeat)
     {
@@ -98,12 +110,22 @@ public sealed class HeartbeatThread : BaseHeartbeatThread
         _heartbeat = heartbeat;
     }
 
-    /// <summary>Starts the periodic heartbeat worker; the null implementation performs no work.</summary>
+    /// <summary>
+    ///     Starts a background thread that beats immediately and then once per interval until
+    ///     <see cref="Join" />. It is a background thread, so it never keeps the process alive on its own.
+    /// </summary>
+    /// <exception cref="System.OutOfMemoryException">There is not enough memory to start the thread.</exception>
     public override void Start()
     {
         _stopEvent = new ManualResetEventSlim(false);
         var stopEvent = _stopEvent;
-        _thread = new Thread(() => RecordHeartbeat(_trialId, _heartbeat, stopEvent)) { IsBackground = true };
+        // The name is what a failure report and a debugger show; it identifies the trial the thread served.
+        string name = $"OptunaSharp heartbeat (trial_id={_trialId})";
+        _thread = new Thread(() => RecordHeartbeat(_trialId, _heartbeat, stopEvent, name))
+        {
+            IsBackground = true,
+            Name = name,
+        };
         _thread.Start();
     }
 
@@ -118,20 +140,59 @@ public sealed class HeartbeatThread : BaseHeartbeatThread
         _thread!.Join();
     }
 
+    /// <summary>
+    ///     Records liveness repeatedly, using an interruptible wait so shutdown need not wait a full interval.
+    ///     Never throws: this is the heartbeat thread's entry point, and an exception escaping it would
+    ///     terminate the process.
+    /// </summary>
     /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
-    /// <summary>Records liveness repeatedly, using an interruptible wait so shutdown need not wait a full interval.</summary>
     /// <param name="heartbeat">Backend used to persist each heartbeat.</param>
     /// <param name="stopEvent">Signal owned by this worker; setting it ends the recording loop.</param>
-    /// <exception cref="System.Exception">The backend rejects a heartbeat or the configured interval is invalid; this executes on the heartbeat thread.</exception>
-    private static void RecordHeartbeat(int trialId, IBaseHeartbeat heartbeat, ManualResetEventSlim stopEvent)
+    /// <param name="threadName">The thread's name, quoted in the failure report.</param>
+    private static void RecordHeartbeat(
+        int trialId, IBaseHeartbeat heartbeat, ManualResetEventSlim stopEvent, string threadName)
     {
-        int? heartbeatInterval = heartbeat.GetHeartbeatInterval();
-        System.Diagnostics.Debug.Assert(heartbeatInterval is not null);
-        while (true)
+        try
         {
-            heartbeat.RecordHeartbeat(trialId);
-            if (stopEvent.Wait(TimeSpan.FromSeconds(heartbeatInterval!.Value)))
-                return;
+            int? heartbeatInterval = heartbeat.GetHeartbeatInterval();
+            System.Diagnostics.Debug.Assert(heartbeatInterval is not null);
+            while (true)
+            {
+                heartbeat.RecordHeartbeat(trialId);
+                if (stopEvent.Wait(TimeSpan.FromSeconds(heartbeatInterval!.Value)))
+                    return;
+            }
+        }
+        catch (Exception e)
+        {
+            // Python: the exception ends the heartbeat thread and threading.excepthook reports it; the trial
+            // and the process keep running. Catching here is what keeps .NET from killing the process.
+            ReportUnhandledException(threadName, e);
+        }
+    }
+
+    /// <summary>
+    ///     Port of Python's default <c>threading.excepthook</c>: writes <c>Exception in thread &lt;name&gt;:</c>
+    ///     and the exception (its type, message and stack trace) to the <i>current</i> standard error.
+    /// </summary>
+    /// <remarks>
+    ///     The report is best-effort and never throws. Python's hook does nothing when <c>sys.stderr</c> is
+    ///     <c>None</c>, and a failure inside the hook still ends only the thread. Here every failure of the
+    ///     write (a disposed <see cref="Console.Error" />, or any exception a host's replacement writer throws)
+    ///     is swallowed: this runs in the heartbeat thread's last catch block, where an escaping exception would
+    ///     turn the lost heartbeat back into a process crash.
+    /// </remarks>
+    /// <param name="threadName">The name of the thread whose loop failed.</param>
+    /// <param name="error">The exception that ended the loop.</param>
+    private static void ReportUnhandledException(string threadName, Exception error)
+    {
+        try
+        {
+            Console.Error.Write($"Exception in thread {threadName}:\n{error}\n");
+        }
+        catch (Exception)
+        {
+            // Nothing else can be done for a report that has nowhere to go.
         }
     }
 }

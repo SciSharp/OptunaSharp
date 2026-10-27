@@ -202,6 +202,139 @@ public class HeartbeatTests
         hb.Count.Should().Be(afterStop, "no beats occur after Join/Dispose");
     }
 
+    // ------------------------------------------------------------------ heartbeat failures (review H2)
+
+    /// <summary>
+    ///     An <see cref="IBaseHeartbeat" /> whose every heartbeat write fails, the way a dropped database
+    ///     connection or a busy SQLite file does. It counts the attempts and signals the first one.
+    /// </summary>
+    private sealed class FailingHeartbeat : IBaseHeartbeat
+    {
+        private int _attempts;
+        private readonly ManualResetEventSlim _firstAttempt = new(false);
+
+        /// <summary>How many heartbeat writes were attempted.</summary>
+        public int Attempts => Volatile.Read(ref _attempts);
+
+        /// <summary>Waits until the heartbeat thread has attempted its first write.</summary>
+        /// <param name="timeout">How long to wait before giving up.</param>
+        /// <returns>True once an attempt has been made within <paramref name="timeout" />.</returns>
+        public bool WaitForFirstAttempt(TimeSpan timeout) => _firstAttempt.Wait(timeout);
+
+        /// <summary>Counts the attempt, then fails it.</summary>
+        /// <param name="trialId">Unused; the write fails regardless of the trial.</param>
+        /// <exception cref="TimeoutException">Always, standing in for a transient storage failure.</exception>
+        public void RecordHeartbeat(int trialId)
+        {
+            Interlocked.Increment(ref _attempts);
+            _firstAttempt.Set();
+            throw new TimeoutException("database is locked");
+        }
+
+        /// <summary>No trial is ever stale here; the tests only exercise the writing thread.</summary>
+        /// <param name="studyId">Unused.</param>
+        /// <returns>An empty list.</returns>
+        public List<int> GetStaleTrialIds(int studyId) => new();
+
+        /// <summary>A one-second interval, so heartbeats are enabled and the thread is created.</summary>
+        /// <returns>Always 1.</returns>
+        public int? GetHeartbeatInterval() => 1;
+
+        /// <summary>No stale-trial callback is configured.</summary>
+        /// <returns>Always null.</returns>
+        public Action<Study, FrozenTrial>? GetHeartbeatStaleTrialCallback() => null;
+    }
+
+    /// <summary>An <see cref="InMemoryStorage" /> with heartbeats enabled whose every heartbeat write fails.</summary>
+    private sealed class FailingHeartbeatStorage : InMemoryStorage, IBaseHeartbeat
+    {
+        /// <summary>Fails every heartbeat write, standing in for a storage that lost its connection.</summary>
+        /// <param name="trialId">Unused; the write fails regardless of the trial.</param>
+        /// <exception cref="TimeoutException">Always.</exception>
+        public void RecordHeartbeat(int trialId) => throw new TimeoutException("database is locked");
+
+        /// <summary>No trial is ever stale, so the optimize loop's stale-trial sweep fails nothing.</summary>
+        /// <param name="studyId">Unused.</param>
+        /// <returns>An empty list.</returns>
+        public List<int> GetStaleTrialIds(int studyId) => new();
+
+        /// <summary>A one-second interval, so every trial starts a real heartbeat thread.</summary>
+        /// <returns>Always 1.</returns>
+        public int? GetHeartbeatInterval() => 1;
+
+        /// <summary>No stale-trial callback is configured.</summary>
+        /// <returns>Always null.</returns>
+        public Action<Study, FrozenTrial>? GetHeartbeatStaleTrialCallback() => null;
+    }
+
+    /// <summary>
+    ///     Review item H2: an exception from <see cref="IBaseHeartbeat.RecordHeartbeat" /> used to escape the
+    ///     heartbeat thread, and .NET terminates the whole process on an unhandled thread exception. Python
+    ///     only loses the heartbeat thread (<c>threading.excepthook</c> prints the error to stderr). The
+    ///     thread must now end after reporting the failure in that layout, and <see cref="HeartbeatThread.Join" />
+    ///     must return normally.
+    /// </summary>
+    [TestMethod]
+    public void HeartbeatThread_FailedWrite_EndsOnlyTheThread_AndReportsLikePythonExcepthook()
+    {
+        var hb = new FailingHeartbeat();
+        var thread = new HeartbeatThread(7, hb);
+
+        string report = CaptureStderr(() =>
+        {
+            thread.Start();
+            hb.WaitForFirstAttempt(TimeSpan.FromSeconds(5)).Should().BeTrue("the thread beats immediately");
+            // Join returns once the thread has exited, so the report is complete before stderr is restored.
+            Action join = thread.Join;
+            join.Should().NotThrow();
+        });
+
+        hb.Attempts.Should().Be(1, "like Python, the heartbeat thread stops at its first failed write");
+        report.Should().StartWith("Exception in thread OptunaSharp heartbeat (trial_id=7):\n");
+        report.Should().Contain(nameof(TimeoutException)).And.Contain("database is locked");
+    }
+
+    /// <summary>
+    ///     End to end: a storage whose heartbeat writes all fail no longer kills the process. Each trial keeps
+    ///     running without a heartbeat and completes, exactly as under Python Optuna.
+    /// </summary>
+    [TestMethod]
+    public void Optimize_CompletesTrials_WhenEveryHeartbeatWriteFails()
+    {
+        var storage = new FailingHeartbeatStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+
+        string report = CaptureStderr(() => study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 3));
+
+        study.Trials.Should().HaveCount(3).And.OnlyContain(t => t.State == TrialState.Complete);
+        report.Should().Contain("Exception in thread OptunaSharp heartbeat (trial_id=")
+            .And.Contain("database is locked");
+    }
+
+    /// <summary>
+    ///     Runs <paramref name="action" /> with <see cref="Console.Error" /> redirected and returns what it wrote.
+    ///     The library logger is configured first, so the redirect never becomes its default stream (the
+    ///     project runs tests sequentially, which makes the process-wide redirect safe).
+    /// </summary>
+    /// <param name="action">The code whose standard-error output is captured.</param>
+    /// <returns>Everything written to standard error while <paramref name="action" /> ran.</returns>
+    private static string CaptureStderr(Action action)
+    {
+        _ = OptunaSharp.Logging.OptunaLogging.GetVerbosity();
+        System.IO.TextWriter original = Console.Error;
+        using var buffer = new System.IO.StringWriter();
+        try
+        {
+            Console.SetError(buffer);
+            action();
+        }
+        finally
+        {
+            Console.SetError(original);
+        }
+        return buffer.ToString();
+    }
+
     // ------------------------------------------------------------------ fail_stale_trials edge cases
 
     [TestMethod]

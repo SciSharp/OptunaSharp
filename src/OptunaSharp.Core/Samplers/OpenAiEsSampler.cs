@@ -4,7 +4,7 @@
 // package), so — like DifferentialEvolutionSampler / LmCmaSampler — this is a native implementation
 // validated by convergence, on NumSharp's NumPy-exact MT19937 (never System.Random).
 
-using System.Text.Json;
+using OptunaSharp.Internal;
 using OptunaSharp.Logging;
 using OptunaSharp.Samplers.EvolutionStrategy;
 
@@ -136,17 +136,23 @@ public sealed class OpenAiEsSampler : EvolutionStrategySampler
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    ///     Written through <see cref="OptimizerStateJson" />: should a diverging run push the mean, step size or
+    ///     Adam moments to ±inf or NaN, the state is stored as named literals instead of failing the ask.
+    /// </remarks>
     private protected override string SerializeOptimizer(IEvolutionStrategyOptimizer optimizer)
-        => Tag + "\n" + JsonSerializer.Serialize(((OpenEsOptimizer)optimizer).ToState());
+        => Tag + "\n" + OptimizerStateJson.Serialize(((OpenEsOptimizer)optimizer).ToState());
 
     /// <inheritdoc />
     /// <exception cref="System.NotSupportedException">The serialized optimizer tag is not this sampler's tag.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The persisted payload is not valid JSON for the state type, or is the literal null.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException">The stored text has no <c>&lt;tag&gt;\n</c> line.</exception>
     private protected override IEvolutionStrategyOptimizer DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
         string tag = optimizerStr[..nl];
         if (tag != Tag)
             throw new System.NotSupportedException($"Unexpected optimizer state tag '{tag}' for OpenAiEsSampler.");
-        return OpenEsOptimizer.FromState(JsonSerializer.Deserialize<OpenEsState>(optimizerStr[(nl + 1)..])!);
+        return OpenEsOptimizer.FromState(OptimizerStateJson.Deserialize<OpenEsState>(optimizerStr[(nl + 1)..]));
     }
 }
