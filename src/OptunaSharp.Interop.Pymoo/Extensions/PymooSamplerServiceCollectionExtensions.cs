@@ -12,6 +12,10 @@ namespace OptunaSharp.Interop.Pymoo.Extensions;
 ///     <b>Lazy by design:</b> the convenience overload registers a <b>factory</b>, so the sampler (which
 ///     initializes embedded CPython and imports <c>pymoo</c> in its constructor) is built on first
 ///     resolution, not when <c>AddPymooSampler</c> is called.
+///     <b>One sampler per study:</b> a <c>PymooSampler</c> keeps per-study state (its search-space cache
+///     and its seed), so the convenience and factory overloads default to
+///     <see cref="ServiceLifetime.Transient" /> and the study factory builds a sampler per study. The
+///     instance overload registers a singleton shared by every study.
 ///     </para>
 /// </summary>
 public static class PymooSamplerServiceCollectionExtensions
@@ -25,7 +29,11 @@ public static class PymooSamplerServiceCollectionExtensions
     /// <param name="populationSize">The evolutionary population size (≥ 2); defaults to 50.</param>
     /// <param name="seed">RNG seed, or <c>null</c> for a non-reproducible seed.</param>
     /// <param name="options">Algorithm-specific options (SBX/PM, reference directions, RVEA/R-NSGA knobs), or <c>null</c> for defaults.</param>
-    /// <param name="lifetime">The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />.</param>
+    /// <param name="lifetime">
+    ///     The registration lifetime; defaults to <see cref="ServiceLifetime.Transient" />, so every study the
+    ///     study factory builds gets its own sampler. <see cref="ServiceLifetime.Singleton" /> shares one
+    ///     sampler, and its per-study state, across all studies.
+    /// </param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services" /> is <c>null</c>.</exception>
     public static IServiceCollection AddPymooSampler(
@@ -34,7 +42,7 @@ public static class PymooSamplerServiceCollectionExtensions
         int populationSize = 50,
         int? seed = null,
         PymooAlgorithmOptions? options = null,
-        ServiceLifetime lifetime = ServiceLifetime.Singleton)
+        ServiceLifetime lifetime = ServiceLifetime.Transient)
     {
         ArgumentNullException.ThrowIfNull(services);
         return Add(
@@ -60,13 +68,17 @@ public static class PymooSamplerServiceCollectionExtensions
     /// <summary>Register a <see cref="PymooSampler" /> produced by a factory (full control over constraints and the independent sampler).</summary>
     /// <param name="services">The service collection to add to.</param>
     /// <param name="factory">Builds the sampler from the resolved <see cref="IServiceProvider" />.</param>
-    /// <param name="lifetime">The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />.</param>
+    /// <param name="lifetime">
+    ///     The registration lifetime; defaults to <see cref="ServiceLifetime.Transient" />, so every study the
+    ///     study factory builds gets its own sampler. <see cref="ServiceLifetime.Singleton" /> shares one
+    ///     sampler, and its per-study state, across all studies.
+    /// </param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services" /> or <paramref name="factory" /> is <c>null</c>.</exception>
     public static IServiceCollection AddPymooSampler(
         this IServiceCollection services,
         Func<IServiceProvider, PymooSampler> factory,
-        ServiceLifetime lifetime = ServiceLifetime.Singleton)
+        ServiceLifetime lifetime = ServiceLifetime.Transient)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(factory);

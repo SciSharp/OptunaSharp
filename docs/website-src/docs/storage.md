@@ -72,9 +72,14 @@ Run this twice, or from several processes at once, and the trials accumulate in 
 
 Concurrent writers coordinate through a lock file. Two implementations are provided, matching Optuna:
 
-- `JournalFileSymlinkLock` — the default; uses a symlink and may require extra privileges on Windows.
+- `JournalFileSymlinkLock` — Optuna's default; uses a symlink, which on Windows needs Developer Mode
+  or the symbolic-link privilege.
 - `JournalFileOpenLock` — uses exclusive file creation; useful on Windows when symlink privileges
   are unavailable, provided the filesystem supports the required exclusive-create semantics.
+
+When no lock is passed, the backend uses the symlink protocol and switches to the open-file protocol by
+itself if this process cannot create a symlink next to the journal. Python Optuna raises in that case.
+Both protocols take the same lock path, so mixed C# and Python workers still exclude each other.
 
 ```csharp
 var backend = new JournalFileBackend("study.log", new JournalFileOpenLock("study.log"));

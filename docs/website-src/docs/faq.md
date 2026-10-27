@@ -547,8 +547,9 @@ var study = Optuna.CreateStudy(storage: storage);
 ```
 
 The journal file is byte-compatible with Optuna's `JournalFileBackend`, so a shared log can be resumed
-from either runtime. On Windows, switch to `JournalFileOpenLock` if the default symlink lock reports a
-privilege error — see the [journal-file recipe](recipes/journal-storage.md).
+from either runtime. On Windows without symlink privileges, the default lock switches to the
+`JournalFileOpenLock` protocol by itself; pass a lock explicitly to choose one — see the
+[journal-file recipe](recipes/journal-storage.md).
 
 ## Can I monitor trials and fail them automatically when they are killed unexpectedly?
 

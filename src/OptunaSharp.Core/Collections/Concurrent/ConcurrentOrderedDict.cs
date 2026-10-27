@@ -67,10 +67,17 @@ namespace OptunaSharp.Collections;
 ///         one path before the other — snapshot semantics, in the spirit of the plain concurrent dictionary. An
 ///         enumerator captures the value array as it was when enumeration began.
 ///     </para>
+///     <para>
+///         <b>Internal, not public API.</b> No public OptunaSharp member takes or returns this type, and it is
+///         built on the vendored, equally internal <see cref="Concurrent.ConcurrentDictionary{TKey,TValue}" />.
+///         Exporting it would have frozen about 3,200 lines of collection code into the first release's
+///         public API. Its contract stays pinned by <c>ConcurrentOrderedDictTests</c> through
+///         <c>InternalsVisibleTo</c>.
+///     </para>
 /// </remarks>
 /// <typeparam name="TKey">The non-null key type; uniqueness and lookups use the configured comparer.</typeparam>
 /// <typeparam name="TValue">The value type stored per key and yielded, in index order, by enumeration.</typeparam>
-public sealed class ConcurrentOrderedDict<TKey, TValue> : IReadOnlyList<TValue>
+internal sealed class ConcurrentOrderedDict<TKey, TValue> : IReadOnlyList<TValue>
     where TKey : notnull
 {
     /// <summary>The initial ordered-array capacity, and the size the arrays first grow to from empty.</summary>

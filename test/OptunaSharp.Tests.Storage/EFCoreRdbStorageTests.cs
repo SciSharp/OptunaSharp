@@ -458,6 +458,61 @@ public abstract class EFCoreRdbStorageTestsBase
         storage.GetBestTrial(maxStudy).Value.Should().Be(5.0);
     }
 
+    /// <summary>
+    ///     Regression for the in-memory best-trial scan: the best trial comes from one query whose ordering
+    ///     and row limit run in the database, as Python's <c>find_min_value_trial_id</c> /
+    ///     <c>find_max_value_trial_id</c> do. The old code loaded every completed value per call, and the call
+    ///     runs once per completed trial.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void GetBestTrialId_OrdersAndLimitsInTheDatabase()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        foreach (var direction in new[] { StudyDirection.Minimize, StudyDirection.Maximize })
+        {
+            string sql = storage.BestTrialIdQueryString(studyId, direction);
+            sql.Should().Contain("ORDER BY").And.Contain("LIMIT");
+        }
+    }
+
+    /// <summary>
+    ///     The value-type rank (-inf &lt; finite &lt; +inf) orders before the stored value, and among equal
+    ///     values, including equal infinities, the earliest trial wins on both providers.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void GetBestTrial_Ties_KeepTheEarliestTrial_AndInfinitiesRankByType()
+    {
+        using var storage = NewStorage();
+        int Complete(int studyId, double value)
+        {
+            int t = storage.CreateNewTrial(studyId);
+            storage.SetTrialStateValues(t, TrialState.Complete, new[] { value });
+            return t;
+        }
+
+        int minStudy = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "min");
+        Complete(minStudy, 2.0);
+        int firstOne = Complete(minStudy, 1.0);
+        Complete(minStudy, 1.0);
+        storage.GetBestTrialId(minStudy, StudyDirection.Minimize).Should().Be(firstOne);
+        int firstNegInf = Complete(minStudy, double.NegativeInfinity);
+        Complete(minStudy, double.NegativeInfinity);
+        storage.GetBestTrialId(minStudy, StudyDirection.Minimize).Should().Be(firstNegInf);
+
+        int maxStudy = storage.CreateNewStudy(new[] { StudyDirection.Maximize }, "max");
+        Complete(maxStudy, double.NegativeInfinity);
+        int firstFive = Complete(maxStudy, 5.0);
+        Complete(maxStudy, 5.0);
+        storage.GetBestTrialId(maxStudy, StudyDirection.Maximize).Should().Be(firstFive);
+        int firstPosInf = Complete(maxStudy, double.PositiveInfinity);
+        Complete(maxStudy, double.PositiveInfinity);
+        storage.GetBestTrialId(maxStudy, StudyDirection.Maximize).Should().Be(firstPosInf);
+        storage.GetBestTrial(maxStudy).Value.Should().Be(double.PositiveInfinity);
+    }
+
     [TestMethod]
     [TestCategory("Integration")]
     public void CreateTrial_FromTemplate_PersistsEverything()

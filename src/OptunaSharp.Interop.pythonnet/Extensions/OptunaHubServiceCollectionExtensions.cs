@@ -13,12 +13,22 @@ namespace OptunaSharp.Interop.PythonNet.Extensions;
 ///     <c>AddOptunaStudyFactory()</c>.
 ///     <para>
 ///     <b>Why this fits DI:</b> a hub sampler/pruner is an <see cref="IDisposable" /> that owns a live
-///     Python object — registered as a container singleton, its <b>disposal is managed for you</b> on
-///     shutdown. <b>Lazy by design:</b> the convenience overloads register a <b>factory</b>, so the hub
-///     package is downloaded / imported and the object constructed on first resolution, not when the
-///     <c>Add…</c> method is called. <b>Single-worker:</b> hub sampler/pruner wrappers drive a
-///     synchronized shadow study and are intended for a single-worker study, so keep the singleton to one
-///     study at a time.
+///     Python object, and the container that resolves it <b>disposes it for you</b>. <b>Lazy by design:</b>
+///     the convenience overloads register a <b>factory</b>, so the hub package is downloaded / imported and
+///     the object constructed on first resolution, not when the <c>Add…</c> method is called.
+///     </para>
+///     <para>
+///     <b>One wrapper per study:</b> a hub sampler/pruner wrapper drives a synchronized shadow study, so it
+///     serves exactly one single-worker study. The convenience and factory overloads therefore default to
+///     <see cref="ServiceLifetime.Transient" />, and the study factory builds a wrapper per study (the hub
+///     module itself is loaded once and cached). A singleton would feed every study's trials into one
+///     shadow study.
+///     </para>
+///     <para>
+///     <b>Disposal follows the resolving container:</b> a transient wrapper resolved inside a request scope
+///     is disposed when that scope ends, and one resolved from the root provider at application shutdown.
+///     A study that keeps optimizing after its scope ends needs the <see cref="ServiceLifetime.Singleton" />
+///     lifetime (with one study at a time) or a study factory resolved from a longer-lived scope.
 ///     </para>
 /// </summary>
 public static class OptunaHubServiceCollectionExtensions
@@ -38,7 +48,11 @@ public static class OptunaHubServiceCollectionExtensions
     /// <param name="gitRef">The git reference (branch/tag/SHA); defaults to <c>"main"</c>.</param>
     /// <param name="forceReload">Whether to re-download instead of using the local cache.</param>
     /// <param name="baseUrl">Optional base URL for a third-party registry.</param>
-    /// <param name="lifetime">The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />.</param>
+    /// <param name="lifetime">
+    ///     The registration lifetime; defaults to <see cref="ServiceLifetime.Transient" />, so every study the
+    ///     study factory builds gets its own wrapper and shadow study. <see cref="ServiceLifetime.Singleton" />
+    ///     shares one wrapper, and one shadow study, across all studies.
+    /// </param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services" />, <paramref name="package" /> or <paramref name="className" /> is <c>null</c>.</exception>
     public static IServiceCollection AddOptunaHubSampler(
@@ -51,7 +65,7 @@ public static class OptunaHubServiceCollectionExtensions
         string gitRef = "main",
         bool forceReload = false,
         string? baseUrl = null,
-        ServiceLifetime lifetime = ServiceLifetime.Singleton)
+        ServiceLifetime lifetime = ServiceLifetime.Transient)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(package);
@@ -69,13 +83,17 @@ public static class OptunaHubServiceCollectionExtensions
     /// <summary>Register an <see cref="OptunaHubSampler" /> produced by a factory (full control over module loading).</summary>
     /// <param name="services">The service collection to add to.</param>
     /// <param name="factory">Builds the hub sampler from the resolved <see cref="IServiceProvider" />.</param>
-    /// <param name="lifetime">The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />.</param>
+    /// <param name="lifetime">
+    ///     The registration lifetime; defaults to <see cref="ServiceLifetime.Transient" />, so every study the
+    ///     study factory builds gets its own wrapper and shadow study. <see cref="ServiceLifetime.Singleton" />
+    ///     shares one wrapper, and one shadow study, across all studies.
+    /// </param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services" /> or <paramref name="factory" /> is <c>null</c>.</exception>
     public static IServiceCollection AddOptunaHubSampler(
         this IServiceCollection services,
         Func<IServiceProvider, OptunaHubSampler> factory,
-        ServiceLifetime lifetime = ServiceLifetime.Singleton)
+        ServiceLifetime lifetime = ServiceLifetime.Transient)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(factory);
@@ -95,7 +113,11 @@ public static class OptunaHubServiceCollectionExtensions
     /// <param name="gitRef">The git reference (branch/tag/SHA); defaults to <c>"main"</c>.</param>
     /// <param name="forceReload">Whether to re-download instead of using the local cache.</param>
     /// <param name="baseUrl">Optional base URL for a third-party registry.</param>
-    /// <param name="lifetime">The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />.</param>
+    /// <param name="lifetime">
+    ///     The registration lifetime; defaults to <see cref="ServiceLifetime.Transient" />, so every study the
+    ///     study factory builds gets its own wrapper and shadow study. <see cref="ServiceLifetime.Singleton" />
+    ///     shares one wrapper, and one shadow study, across all studies.
+    /// </param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services" />, <paramref name="package" /> or <paramref name="className" /> is <c>null</c>.</exception>
     public static IServiceCollection AddOptunaHubPruner(
@@ -108,7 +130,7 @@ public static class OptunaHubServiceCollectionExtensions
         string gitRef = "main",
         bool forceReload = false,
         string? baseUrl = null,
-        ServiceLifetime lifetime = ServiceLifetime.Singleton)
+        ServiceLifetime lifetime = ServiceLifetime.Transient)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(package);
@@ -123,13 +145,17 @@ public static class OptunaHubServiceCollectionExtensions
     /// <summary>Register an <see cref="OptunaHubPruner" /> produced by a factory (full control over module loading).</summary>
     /// <param name="services">The service collection to add to.</param>
     /// <param name="factory">Builds the hub pruner from the resolved <see cref="IServiceProvider" />.</param>
-    /// <param name="lifetime">The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />.</param>
+    /// <param name="lifetime">
+    ///     The registration lifetime; defaults to <see cref="ServiceLifetime.Transient" />, so every study the
+    ///     study factory builds gets its own wrapper and shadow study. <see cref="ServiceLifetime.Singleton" />
+    ///     shares one wrapper, and one shadow study, across all studies.
+    /// </param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services" /> or <paramref name="factory" /> is <c>null</c>.</exception>
     public static IServiceCollection AddOptunaHubPruner(
         this IServiceCollection services,
         Func<IServiceProvider, OptunaHubPruner> factory,
-        ServiceLifetime lifetime = ServiceLifetime.Singleton)
+        ServiceLifetime lifetime = ServiceLifetime.Transient)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(factory);

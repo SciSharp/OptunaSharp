@@ -46,7 +46,14 @@ container**, and **the finalized to-do for the remaining gaps**.
   abstraction (`BaseStorage` / `IArtifactStore` / `BaseSampler` / `BaseImportanceEvaluator` / …) to it, so a
   consumer can inject either.
 - **Overloads.** A convenience overload (mirrors the primary constructor), an instance overload, and a
-  `Func<IServiceProvider,T>` factory overload, each taking `ServiceLifetime lifetime = Singleton`.
+  `Func<IServiceProvider,T>` factory overload. The convenience and factory overloads take a
+  `ServiceLifetime lifetime`. It defaults to `Singleton` for shared infrastructure (storages, artifact
+  stores, clients). For samplers and pruners it defaults to `Transient`: they hold per-study state
+  (generation trackers, RNG streams, search-space caches, OptunaHub shadow studies), so the study factory
+  gives every study its own instance. An instance overload is always a singleton.
+- **The study factory is transient.** `AddOptunaStudyFactory` registers `IOptunaStudyFactory` as transient,
+  so it resolves the sampler/pruner/storage from the provider that resolved it. A request scope then honors
+  scoped registrations instead of the root capturing them, and a hosted service gets the root provider.
 - **Lazy for foreign runtimes.** The Interop-sampler convenience overloads register a *factory*, so embedded
   CPython is initialized on first resolution, not at registration.
 - **gRPC uses the framework.** `OptunaSharp.Storage.Grpc` takes DI from the ASP.NET Core shared framework it

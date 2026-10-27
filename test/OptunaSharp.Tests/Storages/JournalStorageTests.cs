@@ -185,4 +185,141 @@ public class JournalStorageTests
         act.Should().Throw<ValueError>()
             .WithMessage("The value of `grace_period` should be a positive integer.");
     }
+
+    // ------------------------------------------------------------------ default lock
+
+    /// <summary>
+    ///     Stands in for <see cref="JournalFileSymlinkLock" /> in a process that cannot create symbolic links.
+    ///     By default it throws exactly what <c>File.CreateSymbolicLink</c> throws on Windows without Developer
+    ///     Mode (ERROR_PRIVILEGE_NOT_HELD, HRESULT 0x80070522), which the real lock rethrows.
+    /// </summary>
+    /// <param name="failure">
+    ///     The exception to throw instead, e.g. the <see cref="UnauthorizedAccessException" /> .NET raises for
+    ///     EPERM on a Unix filesystem without symbolic links; <c>null</c> keeps the Windows failure.
+    /// </param>
+    private sealed class NoSymlinkLock(Exception? failure = null) : BaseJournalFileLock
+    {
+        /// <summary>How many times the default lock tried this protocol.</summary>
+        public int AcquireCalls;
+
+        /// <summary>Fails like a symbolic-link creation the process or filesystem does not allow.</summary>
+        /// <returns>Never returns.</returns>
+        /// <exception cref="IOException">Always, unless another failure was configured.</exception>
+        public override bool Acquire()
+        {
+            AcquireCalls++;
+            throw failure ?? new IOException(
+                "A required privilege is not held by the client.", unchecked((int)0x80070522));
+        }
+
+        /// <summary>Never reached: this protocol never acquires.</summary>
+        /// <exception cref="InvalidOperationException">Always.</exception>
+        public override void Release() => throw new InvalidOperationException("The symlink protocol never acquired.");
+    }
+
+    // [Misaligned] Python's JournalFileBackend keeps the symlink lock and raises where symbolic links
+    // cannot be created. OptunaSharp's default lock switches to the open-file protocol there instead. Both
+    // protocols use the same lock path, so C# and Python workers still exclude each other. Where symlinks
+    // work, the behavior is Optuna's.
+
+    /// <summary>
+    ///     Regression for the Windows default: without the symlink privilege, the first journal write threw
+    ///     "A required privilege is not held by the client". The default lock must switch to the open-file
+    ///     protocol, lock with a regular file at the same path, and never retry symbolic links.
+    /// </summary>
+    [TestMethod]
+    [Misaligned]
+    public void DefaultLock_SwitchesToOpenLock_WhenSymlinksCannotBeCreated()
+    {
+        var symlinkLock = new NoSymlinkLock();
+        int openLocksBuilt = 0;
+        var lockObj = new JournalFileDefaultLock(symlinkLock, () =>
+        {
+            openLocksBuilt++;
+            return new JournalFileOpenLock(_path);
+        });
+
+        lockObj.Acquire().Should().BeTrue();
+        lockObj.UsesOpenLock.Should().BeTrue();
+        File.Exists(_path + ".lock").Should().BeTrue();
+        new FileInfo(_path + ".lock").LinkTarget.Should().BeNull("the open-file protocol locks with a regular file");
+        lockObj.Release();
+        File.Exists(_path + ".lock").Should().BeFalse();
+
+        lockObj.Acquire().Should().BeTrue();
+        lockObj.Release();
+        symlinkLock.AcquireCalls.Should().Be(1, "the switch is permanent for the instance");
+        openLocksBuilt.Should().Be(1);
+    }
+
+    /// <summary>
+    ///     The Unix shape of the same problem: symlink(2) returns EPERM on a filesystem without symbolic links
+    ///     (FAT/exFAT), which .NET raises as <see cref="UnauthorizedAccessException" /> straight through the
+    ///     symlink lock. The default lock switches for it too.
+    /// </summary>
+    [TestMethod]
+    [Misaligned]
+    public void DefaultLock_SwitchesToOpenLock_WhenTheFilesystemRejectsSymlinks()
+    {
+        var symlinkLock = new NoSymlinkLock(new UnauthorizedAccessException("Operation not permitted"));
+        var lockObj = new JournalFileDefaultLock(symlinkLock, () => new JournalFileOpenLock(_path));
+
+        lockObj.Acquire().Should().BeTrue();
+        lockObj.UsesOpenLock.Should().BeTrue();
+        lockObj.Release();
+        File.Exists(_path + ".lock").Should().BeFalse();
+    }
+
+    /// <summary>
+    ///     A journal that cannot be locked at all must still fail loudly: when the open-file protocol cannot
+    ///     create its file either, its exception propagates instead of being swallowed by the switch.
+    /// </summary>
+    [TestMethod]
+    public void DefaultLock_Propagates_WhenTheOpenLockCannotCreateItsFileEither()
+    {
+        string unreachable = Path.Combine(Path.GetTempPath(), $"optunasharp-missing-{Guid.NewGuid():N}", "journal.log");
+        var lockObj = new JournalFileDefaultLock(new NoSymlinkLock(), () => new JournalFileOpenLock(unreachable));
+
+        var act = () => lockObj.Acquire();
+        act.Should().Throw<DirectoryNotFoundException>();
+    }
+
+    /// <summary>
+    ///     Contention is not a reason to switch: while another process holds the lock (here as a regular
+    ///     file, as an open-file or Python worker would), the default lock waits, and takes the lock once it
+    ///     is released. Holds whichever protocol this machine supports.
+    /// </summary>
+    [TestMethod]
+    public void DefaultLock_WaitsWhileAnotherProcessHoldsTheLock()
+    {
+        File.WriteAllText(_path + ".lock", "");
+        var lockObj = new JournalFileDefaultLock(_path);
+
+        var acquiring = System.Threading.Tasks.Task.Run(() => lockObj.Acquire());
+        acquiring.Wait(TimeSpan.FromMilliseconds(300)).Should().BeFalse("a held lock must block the acquire");
+
+        File.Delete(_path + ".lock");
+        acquiring.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue();
+        acquiring.Result.Should().BeTrue();
+        lockObj.Release();
+        File.Exists(_path + ".lock").Should().BeFalse();
+    }
+
+    /// <summary>
+    ///     A backend built without a lock uses the default lock, an explicit lock is used as given, and a
+    ///     journal on the default lock works end to end on this machine, with no lock left behind.
+    /// </summary>
+    [TestMethod]
+    public void Backend_WithoutLock_UsesTheDefaultLock_AndAnExplicitLockAsGiven()
+    {
+        new JournalFileBackend(_path).LockObj.Should().BeOfType<JournalFileDefaultLock>();
+        var explicitLock = new JournalFileOpenLock(_path);
+        new JournalFileBackend(_path, explicitLock).LockObj.Should().BeSameAs(explicitLock);
+
+        var study = Optuna.CreateStudy(
+            storage: new JournalStorage(new JournalFileBackend(_path)), sampler: new RandomSampler(seed: 3));
+        study.Optimize(t => t.SuggestFloat("x", -1, 1), nTrials: 3);
+        study.Trials.Should().HaveCount(3);
+        File.Exists(_path + ".lock").Should().BeFalse();
+    }
 }

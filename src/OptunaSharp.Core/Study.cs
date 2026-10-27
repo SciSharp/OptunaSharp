@@ -65,12 +65,25 @@ public class Study
     /// <summary>The pruner in use.</summary>
     public BasePruner Pruner { get; set; }
 
-    /// <param name="studyName">Name identifying the study in the selected storage.</param>
-    /// <param name="storage">Storage backend holding study and trial records.</param>
     /// <summary>Opens an existing named study using a shared storage backend.</summary>
+    /// <param name="studyName">Name identifying the study in the selected storage.</param>
+    /// <param name="storage">
+    ///     Storage backend holding study and trial records. An RDB backend (any
+    ///     <see cref="ICachedStorageBackend" />, such as the SQLite or EF Core <c>RDBStorage</c>) is wrapped in
+    ///     a new <see cref="CachedStorage" />; every other storage, including one that is already a
+    ///     <see cref="CachedStorage" />, is used as given.
+    /// </param>
     /// <param name="sampler">Sampler for parameter suggestions; null selects TPE.</param>
     /// <param name="pruner">Pruning strategy; null selects the median pruner.</param>
     /// <exception cref="NumSharp.KeyError">The named study does not exist in storage.</exception>
+    /// <remarks>
+    ///     Python's <c>Study.__init__</c> passes its storage through <c>storages.get_storage</c>, and so does
+    ///     this constructor. Without the wrap, a study opened by <see cref="Optuna.LoadStudy" />, by the CLI
+    ///     or by calling this constructor directly would read the whole study from the database each time a
+    ///     sampler asks for the trial history. <see cref="Optuna.CreateStudy" /> has already wrapped its
+    ///     storage, which then passes through unchanged. Each constructed study wraps separately, as each
+    ///     Python <c>load_study</c> call does: two studies opened over one <c>RDBStorage</c> have two caches.
+    /// </remarks>
     public Study(
         string studyName,
         BaseStorage storage,
@@ -78,6 +91,9 @@ public class Study
         BasePruner? pruner = null)
     {
         StudyName = studyName;
+        // Python's Study.__init__ runs get_storage here, so a raw RDB backend gets the trial cache no matter
+        // which entry point built the study (see remarks).
+        storage = StorageFunctions.GetStorage(storage);
         int studyId = storage.GetStudyIdFromName(studyName);
         StudyId = studyId;
         Storage = storage;

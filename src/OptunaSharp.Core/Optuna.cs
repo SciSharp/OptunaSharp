@@ -131,7 +131,11 @@ public static class Optuna
     ///     Study's name. Each study has a unique name as an identifier. If <c>null</c>, checks
     ///     whether the storage contains a single study, and if so loads that study.
     /// </param>
-    /// <param name="storage">Storage object (or use the OptunaSharp.Storage.* packages for URLs).</param>
+    /// <param name="storage">
+    ///     Storage object (or use the OptunaSharp.Storage.* packages for URLs). The <see cref="Study" />
+    ///     constructor wraps an RDB backend in a <see cref="CachedStorage" />, as Python's <c>load_study</c>
+    ///     does, so distributed workers that load a shared study read finished trials from the cache.
+    /// </param>
     /// <param name="sampler">Sampler, defaulting to <see cref="TPESampler" />.</param>
     /// <param name="pruner">Pruner, defaulting to <see cref="MedianPruner" />.</param>
     /// <returns>The existing study with this invocation's sampler and pruner.</returns>

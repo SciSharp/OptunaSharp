@@ -8,6 +8,9 @@
 // ordered type layers an insertion-ordered value snapshot on top for the index/list path.
 //
 // Deviations from the upstream source, all mechanical:
+//   * the type is internal, not public: it is an implementation detail of ConcurrentOrderedDict, and as
+//     a public type it shipped a second System.Collections.Concurrent.ConcurrentDictionary in OptunaSharp's
+//     API, so consumers importing both namespaces got CS0104 ambiguity errors;
 //   * namespace System.Collections.Concurrent -> OptunaSharp.Collections.Concurrent;
 //   * SR / ThrowHelper / HashHelpers resolve to the vendored companions in ConcurrentDictionaryInternals.cs;
 //   * the string-key NonRandomizedStringEqualityComparer hash-flooding hardening is dropped (it relies on
@@ -37,7 +40,7 @@ namespace OptunaSharp.Collections.Concurrent
     /// concurrently from multiple threads.
     /// </remarks>
     [DebuggerDisplay("Count = {Count}")]
-    public class ConcurrentDictionary<TKey, TValue> : IDictionary<TKey, TValue>, IDictionary, IReadOnlyDictionary<TKey, TValue> where TKey : notnull
+    internal class ConcurrentDictionary<TKey, TValue> : IDictionary<TKey, TValue>, IDictionary, IReadOnlyDictionary<TKey, TValue> where TKey : notnull
     {
         /// <summary>Internal tables of the dictionary.</summary>
         /// <remarks>

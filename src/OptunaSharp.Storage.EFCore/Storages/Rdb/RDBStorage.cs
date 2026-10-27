@@ -1273,44 +1273,77 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     /// <param name="direction">The objective direction used for ordering or representation conversion.</param>
     /// <returns>The storage-wide identifier of the best completed trial.</returns>
     /// <exception cref="NumSharp.ValueError">No completed trial has an objective value to compare.</exception>
+    /// <remarks>
+    ///     The database does the work: one <c>ORDER BY … LIMIT 1</c> query returns a single id, as Python's
+    ///     <c>TrialModel.find_min_value_trial_id</c> / <c>find_max_value_trial_id</c> and the SQLite package
+    ///     do. This runs once per completed trial (the INFO completion log asks for the best trial) and on
+    ///     every <c>Study.BestTrial</c> read, so loading every completed value to compare them in memory
+    ///     would make a long study O(n²) in rows transferred.
+    /// </remarks>
     public int GetBestTrialId(int studyId, StudyDirection direction)
     {
         using var ctx = NewContext();
+        int? trialId = BestTrialIdQuery(ctx, studyId, direction).FirstOrDefault();
+        if (trialId is null)
+            throw new ValueError(RdbModels.NotFoundMsg);
+        return trialId.Value;
+    }
+
+    /// <summary>
+    ///     Renders the SQL that <see cref="GetBestTrialId" /> sends, so tests can check that the ordering
+    ///     and the row limit run in the database instead of in this process.
+    /// </summary>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="direction">The objective direction that selects ascending or descending order.</param>
+    /// <returns>The provider-specific SQL text, with parameters declared by EF Core's query renderer.</returns>
+    internal string BestTrialIdQueryString(int studyId, StudyDirection direction)
+    {
+        using var ctx = NewContext();
+        return BestTrialIdQuery(ctx, studyId, direction).ToQueryString();
+    }
+
+    /// <summary>
+    ///     Builds the best-trial query: completed trials of the study joined to their objective-0 value,
+    ///     ordered by the value-type rank and then the stored value, limited to one row.
+    /// </summary>
+    /// <param name="ctx">The context that owns the query; it must stay open until the query executes.</param>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="direction">Maximize sorts descending, anything else ascending.</param>
+    /// <returns>A one-row query of the best trial id, or no row when no completed trial has a value.</returns>
+    /// <remarks>
+    ///     <para>
+    ///         Infinities are stored as a <c>value_type</c> tag with a NULL <c>value</c>, so the tag is ranked
+    ///         first (<c>CASE value_type WHEN 'INF_NEG' THEN -1 WHEN 'FINITE' THEN 0 WHEN 'INF_POS' THEN 1</c>,
+    ///         Python's ordering) and the value second. NULL values only occur inside an infinity rank, where
+    ///         every value is NULL, so the providers' different NULL orderings cannot change the result.
+    ///     </para>
+    ///     <para>
+    ///         Python's query stops there and lets the database pick among equal values. The trailing
+    ///         ascending <c>trial_id</c> key keeps the earliest of tied trials on every provider and plan,
+    ///         the first-best rule of the in-memory scan this query replaces, now independent of the order
+    ///         in which the database happens to return rows.
+    ///     </para>
+    /// </remarks>
+    private static IQueryable<int?> BestTrialIdQuery(OptunaRdbContext ctx, int studyId, StudyDirection direction)
+    {
         var complete = RdbModels.StateToDb(TrialState.Complete);
-        var candidates = (
+        var rows =
             from t in ctx.Trials.AsNoTracking()
             join v in ctx.TrialValues.AsNoTracking() on t.TrialId equals v.TrialId
             where t.StudyId == studyId && t.State == complete && v.Objective == 0
-            select new { t.TrialId, v.Value, v.ValueType })
-            .AsEnumerable()
-            .Select(r => new { r.TrialId, Eff = EffectiveValue(r.Value, r.ValueType) })
-            .ToList();
-
-        if (candidates.Count == 0)
-            throw new ValueError(RdbModels.NotFoundMsg);
-
-        // -inf < finite < +inf via the value_type tag folded into ±inf, then by the stored value
-        // (Python find_max_value_trial_id / find_min_value_trial_id). LIMIT 1 keeps the first best.
-        var best = candidates[0];
-        foreach (var c in candidates.Skip(1))
-        {
-            bool better = direction == StudyDirection.Maximize ? c.Eff > best.Eff : c.Eff < best.Eff;
-            if (better)
-                best = c;
-        }
-        return best.TrialId;
+            select new
+            {
+                t.TrialId,
+                Rank = v.ValueType == DbTrialValueType.INF_NEG ? -1
+                    : v.ValueType == DbTrialValueType.FINITE ? 0
+                    : 1,
+                v.Value,
+            };
+        var ordered = direction == StudyDirection.Maximize
+            ? rows.OrderByDescending(r => r.Rank).ThenByDescending(r => r.Value)
+            : rows.OrderBy(r => r.Rank).ThenBy(r => r.Value);
+        return ordered.ThenBy(r => r.TrialId).Select(r => (int?)r.TrialId).Take(1);
     }
-
-    /// <summary>Recovers the objective value represented by its database column and nonfinite-value tag.</summary>
-    /// <param name="value">The value to serialize, persist, or convert to the requested representation.</param>
-    /// <param name="type">The database tag distinguishing finite values, infinities, and, for intermediate reports, NaN.</param>
-    /// <returns>The finite or infinite objective value used for comparison.</returns>
-    private static double EffectiveValue(double? value, DbTrialValueType type) => type switch
-    {
-        DbTrialValueType.INF_POS => double.PositiveInfinity,
-        DbTrialValueType.INF_NEG => double.NegativeInfinity,
-        _ => value!.Value,
-    };
 
     // ------------------------------------------------------------------ heartbeat
 

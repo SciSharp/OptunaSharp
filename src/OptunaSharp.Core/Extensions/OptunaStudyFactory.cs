@@ -15,11 +15,27 @@ namespace OptunaSharp.Extensions;
 ///     when composing a container by hand.
 /// </summary>
 /// <remarks>
-///     Services are resolved with <see cref="ServiceProviderServiceExtensions.GetService{T}(IServiceProvider)" />
-///     (not required-service resolution) precisely so that an unregistered sampler/pruner/storage yields
-///     <c>null</c> and Optuna's built-in default is used — matching a plain <c>optuna.create_study()</c>.
-///     Resolution happens per <see cref="CreateStudy" /> call, so a scoped or transient storage
-///     registration is honored.
+///     <para>
+///         Services are resolved with <see cref="ServiceProviderServiceExtensions.GetService{T}(IServiceProvider)" />
+///         (not required-service resolution) precisely so that an unregistered sampler/pruner/storage yields
+///         <c>null</c> and Optuna's built-in default is used — matching a plain <c>optuna.create_study()</c>.
+///     </para>
+///     <para>
+///         Resolution happens per <see cref="CreateStudy" /> call, against the provider passed to the
+///         constructor. <see cref="OptunaServiceCollectionExtensions.AddOptunaStudyFactory" /> registers this
+///         type as transient, so that provider is the one that resolved the factory: a request scope, whose
+///         scoped registrations are then honored instead of being captured by the root, or the root
+///         provider for a singleton consumer. A transient sampler or pruner (the default of the factory
+///         registrations) is therefore a new instance per study, as a fresh <c>TPESampler()</c> is per
+///         Python <c>create_study()</c> call. Sharing one stateful sampler across studies mixes their state.
+///     </para>
+///     <para>
+///         <b>Disposal follows the resolving provider.</b> A sampler, pruner or storage that implements
+///         <see cref="IDisposable" /> and is not a singleton is disposed when that provider is: at the end
+///         of the request scope, or at application shutdown for the root. A study that keeps optimizing
+///         after its request scope ends needs a singleton registration, or a factory resolved from a scope
+///         that lives as long as the study.
+///     </para>
 /// </remarks>
 public sealed class OptunaStudyFactory : IOptunaStudyFactory
 {

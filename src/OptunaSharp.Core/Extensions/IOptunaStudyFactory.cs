@@ -12,8 +12,15 @@ namespace OptunaSharp.Extensions;
 ///     <para>
 ///     <b>Why an interface (and why a factory, not a singleton <see cref="Study" />):</b> a study is a
 ///     per-run object — its name and direction vary, and a persistent storage may already hold one — so
-///     it cannot be a container singleton. The factory is the singleton; each call mints (or re-attaches
-///     to) a study. The interface makes the seam mockable in tests.
+///     it cannot be a container singleton. Each call mints (or re-attaches to) a study. The interface
+///     makes the seam mockable in tests.
+///     </para>
+///     <para>
+///     <b>Lifetime:</b> <c>AddOptunaStudyFactory</c> registers the factory as transient, so it resolves its
+///     sampler, pruner and storage from the provider that resolved it: a request scope resolves scoped
+///     registrations from that scope, and the root provider (a singleton or hosted service) resolves
+///     singletons and transients. The sampler and pruner factory registrations default to transient, so
+///     each study gets its own sampler and pruner unless one instance was registered on purpose.
 ///     </para>
 /// </summary>
 public interface IOptunaStudyFactory

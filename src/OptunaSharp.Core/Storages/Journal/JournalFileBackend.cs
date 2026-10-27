@@ -30,20 +30,36 @@ public class JournalFileBackend : BaseJournalBackend
     private readonly BaseJournalFileLock _lock;
     private readonly Dictionary<int, long> _logNumberOffset = new() { [0] = 0 };
 
+    /// <summary>
+    ///     The lock this backend acquires around every append: the caller's, or the
+    ///     <see cref="JournalFileDefaultLock" />. Exposed so tests can check which one a constructor chose.
+    /// </summary>
+    internal BaseJournalFileLock LockObj => _lock;
+
+    /// <summary>Opens or creates a UTF-8 JSON-lines journal using the supplied interprocess lock.</summary>
     /// <param name="filePath">Path of file to persist the log to.</param>
     /// <param name="lockObj">
     ///     Lock object for process exclusivity. An instance of
     ///     <see cref="JournalFileSymlinkLock" /> or <see cref="JournalFileOpenLock" /> can be
-    ///     passed. In a Windows environment symlink creation may need privileges — prefer
-    ///     <see cref="JournalFileOpenLock" /> there (same guidance as Optuna's docs).
+    ///     passed. When <c>null</c>, the backend uses Optuna's default, the symbolic-link protocol, and
+    ///     switches to the <see cref="JournalFileOpenLock" /> protocol by itself if this process cannot
+    ///     create symbolic links (see the remarks).
     /// </param>
-    /// <summary>Opens or creates a UTF-8 JSON-lines journal using the supplied interprocess lock.</summary>
     /// <exception cref="System.IO.IOException">The journal file cannot be opened or created.</exception>
     /// <exception cref="System.UnauthorizedAccessException">The process lacks access to the journal path.</exception>
+    /// <remarks>
+    ///     Python's backend defaults to <see cref="JournalFileSymlinkLock" />, which needs Developer Mode or
+    ///     the symbolic-link privilege on Windows and a filesystem with symbolic links everywhere. Without
+    ///     them, Python's first write fails with "A required privilege is not held by the client". The
+    ///     default lock here keeps the symlink protocol wherever it works and moves to the open-file
+    ///     protocol instead of failing; both take the same <c>&lt;filePath&gt;.lock</c> path, so this process
+    ///     still excludes Python workers on the same journal. A lock passed explicitly is used as is: an
+    ///     explicit <see cref="JournalFileSymlinkLock" /> still fails where Python's does.
+    /// </remarks>
     public JournalFileBackend(string filePath, BaseJournalFileLock? lockObj = null)
     {
         _filePath = filePath;
-        _lock = lockObj ?? new JournalFileSymlinkLock(_filePath);
+        _lock = lockObj ?? new JournalFileDefaultLock(_filePath);
         if (!File.Exists(_filePath))
         {
             // Create a file if it does not exist.
@@ -212,7 +228,8 @@ internal readonly struct JournalFileLockScope : IDisposable
 ///     On acquiring the lock, a symbolic link is created for an exclusive file. The file is
 ///     deleted when the lock is released. In NFS environments prior to NFSv3, use this instead
 ///     of <see cref="JournalFileOpenLock" />. On Windows without symlink privileges, use
-///     <see cref="JournalFileOpenLock" />.
+///     <see cref="JournalFileOpenLock" />. Passed explicitly, this lock fails there, as Python's does; a
+///     <see cref="JournalFileBackend" /> built without a lock switches to the open-file protocol by itself.
 /// </summary>
 public class JournalFileSymlinkLock : BaseJournalFileLock
 {
@@ -476,6 +493,121 @@ public class JournalFileOpenLock : BaseJournalFileLock
 }
 
 /// <summary>
+///     The lock a <see cref="JournalFileBackend" /> uses when the caller passes none: Optuna's
+///     <see cref="JournalFileSymlinkLock" /> protocol, until this process fails to create a symbolic link
+///     beside the journal; from then on it uses the <see cref="JournalFileOpenLock" /> protocol.
+/// </summary>
+/// <remarks>
+///     <para>
+///         <b>Why.</b> Python's <c>JournalFileBackend</c> always defaults to the symlink lock. Creating a
+///         symbolic link on Windows needs Developer Mode or <c>SeCreateSymbolicLinkPrivilege</c>, and FAT/exFAT
+///         volumes and some network shares have no symbolic links. There the first journal write fails, in
+///         Python as well as here before this class existed. This lock keeps Optuna's protocol wherever it
+///         works and replaces that failure with the open-file protocol.
+///     </para>
+///     <para>
+///         <b>Exclusion still holds across the switch.</b> Both protocols take the same
+///         <c>&lt;journal&gt;.lock</c> path, and both creation calls fail while that path exists. A process
+///         holding the lock as a symbolic link and one holding it as a regular file therefore exclude each
+///         other, including Python workers. Both protocols release the same way, by renaming the lock path
+///         and deleting the renamed file.
+///     </para>
+///     <para>
+///         <b>When it switches.</b> <see cref="JournalFileSymlinkLock.Acquire" /> waits while the lock path
+///         exists and throws only when creating the link failed with no lock path present. Contention never
+///         causes a switch, and a switch is permanent for this instance. If the open-file protocol cannot
+///         create its file either (a missing directory, a denied path), its exception propagates, so a
+///         journal that cannot be locked at all still fails loudly.
+///     </para>
+/// </remarks>
+internal sealed class JournalFileDefaultLock : BaseJournalFileLock
+{
+    private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.storages.journal._file");
+
+    private readonly BaseJournalFileLock _symlinkLock;
+    private readonly Func<BaseJournalFileLock> _openLockFactory;
+
+    // Null until the first failed symbolic-link creation, then the open-file lock for good. Published
+    // with Volatile so a thread that starts acquiring after the switch never retries the symlink.
+    private BaseJournalFileLock? _openLock;
+
+    /// <summary>Creates the default lock for one journal file.</summary>
+    /// <param name="filepath">The journal path; the lock lives at <c>filepath + ".lock"</c>.</param>
+    internal JournalFileDefaultLock(string filepath)
+        : this(new JournalFileSymlinkLock(filepath), () => new JournalFileOpenLock(filepath))
+    {
+    }
+
+    /// <summary>
+    ///     Creates the default lock from its two protocols. Tests use it to simulate a process that cannot
+    ///     create symbolic links; production code uses the path constructor.
+    /// </summary>
+    /// <param name="symlinkLock">The protocol tried first, normally a <see cref="JournalFileSymlinkLock" />.</param>
+    /// <param name="openLockFactory">
+    ///     Builds the fallback protocol, normally a <see cref="JournalFileOpenLock" /> on the same path. It is
+    ///     called at most once, on the first failed symbolic-link creation.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="symlinkLock" /> or <paramref name="openLockFactory" /> is <c>null</c>.</exception>
+    internal JournalFileDefaultLock(BaseJournalFileLock symlinkLock, Func<BaseJournalFileLock> openLockFactory)
+    {
+        _symlinkLock = symlinkLock ?? throw new ArgumentNullException(nameof(symlinkLock));
+        _openLockFactory = openLockFactory ?? throw new ArgumentNullException(nameof(openLockFactory));
+    }
+
+    /// <summary>Whether this lock has switched to the open-file protocol.</summary>
+    internal bool UsesOpenLock => Volatile.Read(ref _openLock) is not null;
+
+    /// <summary>
+    ///     Acquires the lock with the symbolic-link protocol, or with the open-file protocol once symbolic
+    ///     links have failed here. Blocks while another process or thread holds the lock.
+    /// </summary>
+    /// <returns>True after acquiring exclusive ownership.</returns>
+    /// <exception cref="System.IO.IOException">The open-file protocol cannot create the lock file for a reason other than an existing lock.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">The open-file protocol is denied access to the lock path.</exception>
+    public override bool Acquire()
+    {
+        var openLock = Volatile.Read(ref _openLock);
+        if (openLock is null)
+        {
+            try
+            {
+                return _symlinkLock.Acquire();
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // The symlink protocol throws only when the link could not be created while no lock path
+                // existed: this process cannot make symbolic links here. Contention waits inside Acquire
+                // and never reaches this catch.
+                openLock = SwitchToOpenLock(e);
+            }
+        }
+        return openLock.Acquire();
+    }
+
+    /// <summary>Releases the lock through the protocol currently in use.</summary>
+    /// <exception cref="NumSharp.RuntimeError">The lock cannot be renamed and deleted, including when ownership was lost.</exception>
+    /// <remarks>
+    ///     The switch only happens inside <see cref="Acquire" /> while this instance holds nothing, so the
+    ///     protocol in use is the one that acquired. Both protocols release identically anyway.
+    /// </remarks>
+    public override void Release() => (Volatile.Read(ref _openLock) ?? _symlinkLock).Release();
+
+    /// <summary>Installs the open-file protocol once, keeping the instance another thread may have installed first.</summary>
+    /// <param name="cause">The symbolic-link failure, recorded in the debug log.</param>
+    /// <returns>The open-file lock every later acquisition uses.</returns>
+    private BaseJournalFileLock SwitchToOpenLock(Exception cause)
+    {
+        var created = _openLockFactory();
+        var installed = Interlocked.CompareExchange(ref _openLock, created, null) ?? created;
+        if (ReferenceEquals(installed, created))
+            _logger.Debug(
+                "Cannot create a symbolic link for the journal lock (" + cause.Message + "). " +
+                "Using JournalFileOpenLock for this journal instead.");
+        return installed;
+    }
+}
+
+/// <summary>
 ///     Deprecated alias of <see cref="JournalFileBackend" />.
 /// </summary>
 [Obsolete("Deprecated in v4.0.0. This feature will be removed in v6.0.0. Use JournalFileBackend instead.")]
@@ -483,7 +615,10 @@ public class JournalFileStorage : JournalFileBackend
 {
     /// <summary>Opens or creates a UTF-8 JSON-lines journal using the supplied interprocess lock.</summary>
     /// <param name="filePath">Journal file path; its parent directory must already exist.</param>
-    /// <param name="lockObj">Lock implementation; null selects a symbolic-link lock.</param>
+    /// <param name="lockObj">
+    ///     Lock implementation; null selects the backend's default lock, the symbolic-link protocol with a
+    ///     switch to the open-file protocol where symbolic links cannot be created.
+    /// </param>
     /// <exception cref="System.IO.IOException">The journal file cannot be opened or created.</exception>
     /// <exception cref="System.UnauthorizedAccessException">The process lacks access to the journal path.</exception>
     public JournalFileStorage(string filePath, BaseJournalFileLock? lockObj = null)

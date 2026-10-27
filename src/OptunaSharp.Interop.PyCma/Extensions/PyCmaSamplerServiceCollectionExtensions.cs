@@ -12,6 +12,10 @@ namespace OptunaSharp.Interop.PyCma.Extensions;
 ///     <b>Lazy by design:</b> the convenience overload registers a <b>factory</b>, so the sampler (which
 ///     initializes embedded CPython and imports <c>cma</c> in its constructor, and emits a deprecation
 ///     <c>FutureWarning</c>) is built on first resolution, not when <c>AddPyCmaSampler</c> is called.
+///     <b>One sampler per study:</b> a <c>PyCmaSampler</c> keeps per-study state (its search-space cache
+///     and the seed it advances on every relative sample), so the convenience and factory overloads default to
+///     <see cref="ServiceLifetime.Transient" /> and the study factory builds a sampler per study. The
+///     instance overload registers a singleton shared by every study.
 ///     </para>
 /// </summary>
 public static class PyCmaSamplerServiceCollectionExtensions
@@ -25,7 +29,11 @@ public static class PyCmaSamplerServiceCollectionExtensions
     /// <param name="sigma0">Initial standard deviation of CMA-ES, or <c>null</c> for the pycma default.</param>
     /// <param name="seed">RNG seed, or <c>null</c> for a pycma-random (non-reproducible) seed.</param>
     /// <param name="nStartupTrials">Independent trials before CMA-ES takes over; defaults to 1.</param>
-    /// <param name="lifetime">The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />.</param>
+    /// <param name="lifetime">
+    ///     The registration lifetime; defaults to <see cref="ServiceLifetime.Transient" />, so every study the
+    ///     study factory builds gets its own sampler. <see cref="ServiceLifetime.Singleton" /> shares one
+    ///     sampler, and its per-study state, across all studies.
+    /// </param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services" /> is <c>null</c>.</exception>
     public static IServiceCollection AddPyCmaSampler(
@@ -33,7 +41,7 @@ public static class PyCmaSamplerServiceCollectionExtensions
         double? sigma0 = null,
         int? seed = null,
         int nStartupTrials = 1,
-        ServiceLifetime lifetime = ServiceLifetime.Singleton)
+        ServiceLifetime lifetime = ServiceLifetime.Transient)
     {
         ArgumentNullException.ThrowIfNull(services);
         return Add(services, _ => new PyCmaSampler(sigma0: sigma0, seed: seed, nStartupTrials: nStartupTrials), lifetime);
@@ -56,13 +64,17 @@ public static class PyCmaSamplerServiceCollectionExtensions
     /// <summary>Register a <see cref="PyCmaSampler" /> produced by a factory (full control over all pycma options and the independent sampler).</summary>
     /// <param name="services">The service collection to add to.</param>
     /// <param name="factory">Builds the sampler from the resolved <see cref="IServiceProvider" />.</param>
-    /// <param name="lifetime">The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />.</param>
+    /// <param name="lifetime">
+    ///     The registration lifetime; defaults to <see cref="ServiceLifetime.Transient" />, so every study the
+    ///     study factory builds gets its own sampler. <see cref="ServiceLifetime.Singleton" /> shares one
+    ///     sampler, and its per-study state, across all studies.
+    /// </param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services" /> or <paramref name="factory" /> is <c>null</c>.</exception>
     public static IServiceCollection AddPyCmaSampler(
         this IServiceCollection services,
         Func<IServiceProvider, PyCmaSampler> factory,
-        ServiceLifetime lifetime = ServiceLifetime.Singleton)
+        ServiceLifetime lifetime = ServiceLifetime.Transient)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(factory);

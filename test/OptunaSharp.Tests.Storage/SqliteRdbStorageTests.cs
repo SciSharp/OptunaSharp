@@ -440,6 +440,35 @@ public class SqliteRdbStorageTests
         ((CachedStorage)resolved).Backend.Should().BeSameAs(rdb);
     }
 
+    /// <summary>
+    ///     Regression: <see cref="Optuna.LoadStudy" /> and the <see cref="Study" /> constructor wrap an RDB
+    ///     backend in <see cref="CachedStorage" />, as Python's <c>Study.__init__</c> does through
+    ///     <c>get_storage</c>. Before, only <see cref="Optuna.CreateStudy" /> wrapped, so a distributed worker
+    ///     that loaded the shared study re-read every trial from the database on each sampler call.
+    /// </summary>
+    [TestMethod]
+    public void LoadStudy_And_StudyConstructor_WrapRdbStorage_InCachedStorage()
+    {
+        using var rdb = NewMemoryStorage();
+        Optuna.CreateStudy(storage: rdb, studyName: "s");
+
+        var loaded = Optuna.LoadStudy("s", rdb, sampler: new RandomSampler(seed: 0));
+        loaded.Storage.Should().BeOfType<CachedStorage>();
+        ((CachedStorage)loaded.Storage).Backend.Should().BeSameAs(rdb);
+
+        var constructed = new Study("s", rdb);
+        constructed.Storage.Should().BeOfType<CachedStorage>();
+        ((CachedStorage)constructed.Storage).Backend.Should().BeSameAs(rdb);
+
+        // An already-wrapped storage passes through unchanged, which is why CreateStudy never double-wraps.
+        var cached = new CachedStorage(rdb);
+        new Study("s", cached).Storage.Should().BeSameAs(cached);
+
+        // A loaded study optimizes through its cache, and its trials reach the database.
+        loaded.Optimize(t => t.SuggestFloat("x", -1, 1), nTrials: 3);
+        rdb.GetAllTrials(rdb.GetStudyIdFromName("s")).Should().HaveCount(3);
+    }
+
     [TestMethod]
     public void EndToEnd_Optimize_ThroughCachedStorage_Wrapping()
     {

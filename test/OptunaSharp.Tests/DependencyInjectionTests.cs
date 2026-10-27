@@ -1,7 +1,9 @@
 using System;
+using System.Linq;
 using AwesomeAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using OptunaSharp.Extensions;
+using OptunaSharp.Pruners;
 using OptunaSharp.Samplers;
 using OptunaSharp.Storages;
 using OptunaSharp.Visualization.Plotly;
@@ -89,6 +91,62 @@ public class DependencyInjectionTests
         var first = provider.GetRequiredService<BaseSampler>();
         var second = provider.GetRequiredService<BaseSampler>();
         first.Should().NotBeSameAs(second);
+    }
+
+    /// <summary>
+    ///     Regression for the shared-sampler default: the sampler and pruner factory registrations default to
+    ///     transient, so two studies built by the study factory never share a sampler or a pruner. Both hold
+    ///     per-study state, and a Python <c>create_study()</c> builds its own default sampler per call.
+    /// </summary>
+    [TestMethod]
+    public void StudyFactory_DefaultFactoryRegistrations_GiveEachStudyItsOwnSamplerAndPruner()
+    {
+        var services = new ServiceCollection()
+            .AddOptunaSampler(_ => new RandomSampler(seed: 1))
+            .AddOptunaPruner(_ => new MedianPruner())
+            .AddOptunaStudyFactory();
+
+        services.Single(d => d.ServiceType == typeof(BaseSampler)).Lifetime.Should().Be(ServiceLifetime.Transient);
+        services.Single(d => d.ServiceType == typeof(BasePruner)).Lifetime.Should().Be(ServiceLifetime.Transient);
+
+        using var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
+        var factory = provider.GetRequiredService<IOptunaStudyFactory>();
+        Study first = factory.CreateStudy();
+        Study second = factory.CreateStudy();
+
+        first.Sampler.Should().NotBeSameAs(second.Sampler);
+        first.Pruner.Should().NotBeSameAs(second.Pruner);
+    }
+
+    /// <summary>
+    ///     Regression for the root-provider factory: resolved inside a scope, the study factory takes a scoped
+    ///     sampler and storage from that scope. The singleton factory resolved them from the root, which
+    ///     scope validation rejects ("Cannot resolve scoped service … from root provider") and which, without
+    ///     validation, turned the scoped registrations into application-wide singletons.
+    /// </summary>
+    [TestMethod]
+    public void StudyFactory_ResolvedInScope_UsesThatScopesRegistrations()
+    {
+        var services = new ServiceCollection()
+            .AddOptunaSampler(_ => new RandomSampler(seed: 2), ServiceLifetime.Scoped)
+            .AddOptunaStorage(_ => new InMemoryStorage(), ServiceLifetime.Scoped)
+            .AddOptunaStudyFactory();
+        services.Single(d => d.ServiceType == typeof(IOptunaStudyFactory)).Lifetime
+            .Should().Be(ServiceLifetime.Transient);
+
+        using var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
+        using var scope = provider.CreateScope();
+        Study study = scope.ServiceProvider.GetRequiredService<IOptunaStudyFactory>().CreateStudy(studyName: "scoped");
+
+        study.Sampler.Should().BeSameAs(scope.ServiceProvider.GetRequiredService<BaseSampler>());
+        scope.ServiceProvider.GetRequiredService<BaseStorage>().GetAllStudies()
+            .Should().ContainSingle(s => s.StudyName == "scoped");
+
+        // Another scope has its own storage, which the first scope's study never touched.
+        using var otherScope = provider.CreateScope();
+        otherScope.ServiceProvider.GetRequiredService<BaseStorage>().GetAllStudies().Should().BeEmpty();
     }
 
     [TestMethod]

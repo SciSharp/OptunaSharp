@@ -29,9 +29,15 @@ on a shared mount and started from several processes — collaborates on one stu
 
 ## File locking on Windows
 
-Concurrent writers coordinate through a lock file. The default `JournalFileSymlinkLock` uses a symlink
-and may report *"A required privilege is not held by the client"* on Windows, where creating symlinks
-needs elevated rights. Switch to `JournalFileOpenLock`, which uses exclusive file creation instead:
+Concurrent writers coordinate through a lock file. By default the backend uses Optuna's
+`JournalFileSymlinkLock` protocol, which creates a symlink. On Windows that needs Developer Mode or the
+symbolic-link privilege, and FAT/exFAT volumes have no symlinks at all. There, Python Optuna reports
+*"A required privilege is not held by the client"*, while OptunaSharp's default lock switches to the
+`JournalFileOpenLock` protocol, which uses exclusive file creation. Both protocols take the same
+`<log>.lock` path, so C# and Python workers on one journal still exclude each other.
+
+To choose a lock yourself, pass it explicitly. An explicit `JournalFileSymlinkLock` keeps Optuna's
+behavior and fails where symlinks cannot be created:
 
 ```csharp
 var backend = new JournalFileBackend(
