@@ -102,9 +102,9 @@ public class FixedTrial : BaseTrial
         => CategoricalChoice.From(Suggest(name, new CategoricalDistribution(choices)));
 
     /// <param name="value">Intermediate objective value; ignored by replay trials.</param>
-    /// <param name="step">Zero-based reporting step; ignored by replay trials.</param>
+    /// <param name="step">Zero-based reporting step (64-bit, like every trial's); ignored by replay trials.</param>
     /// <summary>Accepts an intermediate observation without recording it; replay trials do not prune.</summary>
-    public override void Report(double value, int step)
+    public override void Report(double value, long step)
     {
     }
 

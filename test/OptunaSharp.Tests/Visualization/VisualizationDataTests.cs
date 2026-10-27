@@ -22,7 +22,7 @@ namespace OptunaSharp.Tests.Visualization;
 public class VisualizationDataTests
 {
     private static FrozenTrial Complete(double value, OrderedDict<string, double>? constraints = null,
-        OrderedDict<int, double>? intermediateValues = null)
+        OrderedDict<long, double>? intermediateValues = null)
         => FrozenTrial.CreateTrial(
             state: TrialState.Complete, value: value, constraints: constraints,
             intermediateValues: intermediateValues);
@@ -36,10 +36,10 @@ public class VisualizationDataTests
         study.AddTrials(new[]
         {
             // Out-of-order steps: must be sorted ascending by step.
-            Complete(1.0, intermediateValues: new OrderedDict<int, double> { { 2, 30.0 }, { 0, 10.0 }, { 1, 20.0 } }),
+            Complete(1.0, intermediateValues: new OrderedDict<long, double> { { 2, 30.0 }, { 0, 10.0 }, { 1, 20.0 } }),
             // Infeasible (constraint > 0), with intermediate values.
             Complete(2.0, constraints: new OrderedDict<string, double> { { "c", 5.0 } },
-                intermediateValues: new OrderedDict<int, double> { { 0, 1.0 } }),
+                intermediateValues: new OrderedDict<long, double> { { 0, 1.0 } }),
             // No intermediate values → excluded from trial_infos entirely.
             Complete(3.0),
         });

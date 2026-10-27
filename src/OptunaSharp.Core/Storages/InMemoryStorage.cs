@@ -232,7 +232,7 @@ public class InMemoryStorage : BaseStorage
         userAttrs: new OrderedDict<string, object?>(),
         systemAttrs: new OrderedDict<string, object?>(),
         value: null,
-        intermediateValues: new OrderedDict<int, double>(),
+        intermediateValues: new OrderedDict<long, double>(),
         datetimeStart: DateTime.Now,
         datetimeComplete: null);
 
@@ -423,7 +423,7 @@ public class InMemoryStorage : BaseStorage
     /// <param name="step">Reporting step whose intermediate objective observation is stored.</param>
     /// <inheritdoc />
     /// <param name="intermediateValue">Intermediate objective observation to store at the reporting step.</param>
-    public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
+    public override void SetTrialIntermediateValue(int trialId, long step, double intermediateValue)
     {
         lock (_lock)
         {

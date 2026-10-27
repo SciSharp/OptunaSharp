@@ -146,7 +146,7 @@ public abstract class StorageConformanceTests
             @params: new OrderedDict<string, object?> { ["x"] = 2.0 },
             distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(0, 10) },
             userAttrs: new OrderedDict<string, object?> { ["memo"] = "hello" },
-            intermediateValues: new OrderedDict<int, double> { [0] = 1.5, [2] = double.NaN });
+            intermediateValues: new OrderedDict<long, double> { [0] = 1.5, [2] = double.NaN });
 
         int trialId = _storage.CreateNewTrial(studyId, template);
         var stored = _storage.GetTrial(trialId);

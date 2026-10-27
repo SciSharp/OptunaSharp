@@ -116,7 +116,7 @@ public class FrozenTrialTests
     {
         var trial = FrozenTrial.CreateTrial(
             value: 1.0,
-            intermediateValues: new OrderedDict<int, double> { [3] = 1.0, [1] = 2.0 });
+            intermediateValues: new OrderedDict<long, double> { [3] = 1.0, [1] = 2.0 });
         trial.LastStep.Should().Be(3);
         trial.Duration.Should().Be(TimeSpan.Zero);
 
@@ -136,7 +136,7 @@ public class FrozenTrialTests
             distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(0, 10) },
             userAttrs: new OrderedDict<string, object?> { ["u"] = new List<object?> { 1L } },
             systemAttrs: new OrderedDict<string, object?>(),
-            intermediateValues: new OrderedDict<int, double> { [0] = 1.0 },
+            intermediateValues: new OrderedDict<long, double> { [0] = 1.0 },
             trialId: 7);
 
         Make().Should().Be(Make());

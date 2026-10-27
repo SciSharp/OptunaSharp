@@ -215,9 +215,12 @@ public abstract class BaseTrial
     }
 
     /// <param name="value">Intermediate objective value; ignored by replay trials.</param>
-    /// <param name="step">Nonnegative reporting step; duplicate reports retain the first observation.</param>
+    /// <param name="step">
+    ///     Nonnegative reporting step; duplicate reports retain the first observation. 64-bit because Python's
+    ///     <c>step</c> is an unbounded <c>int</c>: a study Python wrote with a step past 2^31 must stay readable.
+    /// </param>
     /// <summary>Records the first intermediate objective value for a nonnegative step.</summary>
-    public abstract void Report(double value, int step);
+    public abstract void Report(double value, long step);
 
     /// <summary>Asks the study pruner whether the current trial should stop early.</summary>
     /// <returns>True if the configured pruner recommends stopping the trial.</returns>

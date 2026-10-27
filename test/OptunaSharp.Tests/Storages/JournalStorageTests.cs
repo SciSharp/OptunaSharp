@@ -136,6 +136,27 @@ public class JournalStorageTests
         trial.DatetimeStart.Should().Be(new DateTime(2026, 8, 30, 8, 29, 50, 875, 841));
     }
 
+    /// <summary>
+    ///     Review item P2-2 (confirmed end to end in pass 2B): a journal record nested 5,000 levels deep (an 11 KB
+    ///     line) used to overflow the stack of every C# process that loaded the study, which .NET cannot catch. Now
+    ///     the load fails with a catchable error carrying CPython's <c>RecursionError</c> message, which is also what
+    ///     Python's journal replay raises on this file (its <c>json.loads</c> stops at 2,998 levels).
+    /// </summary>
+    [TestMethod]
+    public void HostilelyNestedRecord_FailsTheLoadCatchably()
+    {
+        File.WriteAllText(
+            _path,
+            "{\"op_code\":0,\"worker_id\":\"w\",\"study_name\":\"deep\",\"directions\":[1]}\n" +
+            "{\"op_code\":2,\"worker_id\":\"w\",\"study_id\":0,\"user_attr\":{\"k\":" +
+            new string('[', 5_000) + new string(']', 5_000) + "}}\n");
+
+        var load = () => NewStorage().GetAllStudies();
+
+        load.Should().Throw<RuntimeError>()
+            .WithMessage("maximum recursion depth exceeded while decoding a JSON array from a unicode string");
+    }
+
     [TestMethod]
     public void Rustuna_DiscardTrials_Op_Is_Skipped()
     {

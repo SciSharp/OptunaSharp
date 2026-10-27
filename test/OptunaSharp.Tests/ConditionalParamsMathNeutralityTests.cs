@@ -148,7 +148,7 @@ public class ConditionalParamsMathNeutralityTests
         }
         return new FrozenTrial(
             number, TrialState.Complete, value: number, DateTime.UtcNow, DateTime.UtcNow, @params, distributions,
-            new OrderedDict<string, object?>(), new OrderedDict<string, object?>(), new OrderedDict<int, double>(), trialId: number);
+            new OrderedDict<string, object?>(), new OrderedDict<string, object?>(), new OrderedDict<long, double>(), trialId: number);
     }
 
     private static List<FrozenTrial> FullWorld() => new()

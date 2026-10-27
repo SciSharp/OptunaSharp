@@ -143,9 +143,10 @@ internal static class GrpcProto
         foreach (var (key, value) in trial.SystemAttributes)
             systemAttrs[key] = PyJson.Loads(value);
 
-        var intermediateValues = new OrderedDict<int, double>(trial.IntermediateValues.Count);
+        // map<int64, double> on the wire; an (int) cast here used to wrap steps past Int32.
+        var intermediateValues = new OrderedDict<long, double>(trial.IntermediateValues.Count);
         foreach (var (step, value) in trial.IntermediateValues)
-            intermediateValues[(int)step] = value;
+            intermediateValues[step] = value;
 
         return new FrozenTrial(
             number: (int)trial.Number,

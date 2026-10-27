@@ -176,9 +176,13 @@ public abstract class BaseStorage
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
     /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
     /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
-    /// <param name="step">Reporting step whose intermediate objective observation is stored.</param>
+    /// <param name="step">
+    ///     Reporting step whose intermediate objective observation is stored. 64-bit, like Python's unbounded
+    ///     <c>int</c>; a backend whose schema column is narrower (Optuna's PostgreSQL/MySQL <c>INTEGER</c>) refuses
+    ///     a step it cannot hold instead of truncating it.
+    /// </param>
     /// <param name="intermediateValue">Intermediate objective observation to store at the reporting step.</param>
-    public abstract void SetTrialIntermediateValue(int trialId, int step, double intermediateValue);
+    public abstract void SetTrialIntermediateValue(int trialId, long step, double intermediateValue);
 
     /// <summary>Set a user-defined attribute to a trial, overwriting any existing value.</summary>
     /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>

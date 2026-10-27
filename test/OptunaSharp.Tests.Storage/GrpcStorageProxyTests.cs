@@ -101,6 +101,51 @@ public class GrpcStorageProxyTests
         study.UserAttrs["owner"].Should().Be("eli");
     }
 
+    /// <summary>
+    ///     Review item P2-2, end to end (pass 2B's repro): one <c>SetStudyUserAttribute</c> request whose value is
+    ///     100 KB of nested brackets used to overflow the server's stack while it parsed the value, and a stack
+    ///     overflow ends the process: here that was the test host itself, and in production every client got
+    ///     <c>UNAVAILABLE</c>. Now only that request fails, with <c>UNKNOWN</c> as from a Python server (whose
+    ///     <c>json.loads</c> raises an uncaught <c>RecursionError</c>), nothing is stored, and the server keeps
+    ///     serving. The request goes through a raw generated client because <see cref="GrpcStorageProxy" /> itself
+    ///     refuses to encode such a value.
+    /// </summary>
+    [TestMethod]
+    public void Server_DeeplyNestedAttributeValue_FailsOnlyThatRequest()
+    {
+        int studyId = _proxy.CreateNewStudy(new[] { StudyDirection.Minimize }, "deep");
+        using var channel = GrpcChannel.ForAddress($"http://localhost:{_port}");
+        var client = new OptunaSharp.Storages.Grpc.Protobuf.StorageService.StorageServiceClient(channel);
+        OptunaSharp.Storages.Grpc.Protobuf.SetStudyUserAttributeRequest Request(string value) =>
+            new() { StudyId = studyId, Key = "k", Value = value };
+
+        var hostile = () => client.SetStudyUserAttribute(Request(new string('[', 50_000) + new string(']', 50_000)));
+
+        hostile.Should().Throw<RpcException>().Which.StatusCode.Should().Be(StatusCode.Unknown);
+        _backend.GetStudyUserAttrs(studyId).Should().BeEmpty("the failed request stored nothing");
+        client.SetStudyUserAttribute(Request("[[1]]"));
+        _backend.GetStudyUserAttrs(studyId)["k"].Should().BeEquivalentTo(
+            new List<object?> { new List<object?> { 1L } }, "the server still serves requests");
+    }
+
+    /// <summary>
+    ///     Review item B-2 over the wire: <c>api.proto</c> carries steps as <c>int64</c>, but the server and the client
+    ///     both cast them to 32 bits, so a step past Int32 wrapped on its way to the backend and again on its way back.
+    ///     Now the full step reaches the backend and returns through the proxy's <c>GetTrial</c>.
+    /// </summary>
+    [TestMethod]
+    public void IntermediateSteps_PastInt32_CrossTheWireBothWays()
+    {
+        const long pastInt32 = 3_000_000_000L;
+        int studyId = _proxy.CreateNewStudy(new[] { StudyDirection.Minimize }, "steps");
+        int trialId = _proxy.CreateNewTrial(studyId);
+
+        _proxy.SetTrialIntermediateValue(trialId, pastInt32, 0.5);
+
+        _backend.GetTrial(trialId).IntermediateValues.Should().Equal(new Dictionary<long, double> { [pastInt32] = 0.5 });
+        _proxy.GetTrial(trialId).IntermediateValues.Should().Equal(new Dictionary<long, double> { [pastInt32] = 0.5 });
+    }
+
     [TestMethod]
     public void ProtoConvert_TrialRoundTrip_Exact()
     {
@@ -122,7 +167,7 @@ public class GrpcStorageProxyTests
             },
             userAttrs: new OrderedDict<string, object?> { ["u"] = 7L },
             systemAttrs: new OrderedDict<string, object?> { ["s"] = "hi" },
-            intermediateValues: new OrderedDict<int, double> { [0] = 0.1, [1] = double.PositiveInfinity },
+            intermediateValues: new OrderedDict<long, double> { [0] = 0.1, [1] = double.PositiveInfinity },
             trialId: 11,
             values: new[] { 1.5 });
 
@@ -145,7 +190,7 @@ public class GrpcStorageProxyTests
             distributions: new OrderedDict<string, BaseDistribution>(),
             userAttrs: new OrderedDict<string, object?>(),
             systemAttrs: new OrderedDict<string, object?>(),
-            intermediateValues: new OrderedDict<int, double>(),
+            intermediateValues: new OrderedDict<long, double>(),
             trialId: 1,
             values: null);
 

@@ -39,7 +39,7 @@ public class RecipeUserDefinedParityTests : OptunaInteropTestBase
         /// <inheritdoc />
         public override bool Prune(Study study, FrozenTrial trial)
         {
-            int? step = trial.LastStep;
+            long? step = trial.LastStep;
             if (step is null)
                 return false;
 

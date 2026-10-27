@@ -467,10 +467,10 @@ public class JournalStorage : BaseStorage
     }
 
     /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
-    /// <param name="step">Reporting step whose intermediate objective observation is stored.</param>
+    /// <param name="step">Reporting step whose intermediate objective observation is stored; written as a JSON integer, 64-bit like Python's.</param>
     /// <inheritdoc />
     /// <param name="intermediateValue">Intermediate objective observation to store at the reporting step.</param>
-    public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
+    public override void SetTrialIntermediateValue(int trialId, long step, double intermediateValue)
     {
         var log = new OrderedDict<string, object?>
         {
@@ -872,11 +872,12 @@ internal sealed class JournalStorageReplayResult
             ? JournalDatetime.FromIsoToLocalNaive(completeIso)
             : null;
 
-        var intermediateValues = new OrderedDict<int, double>();
+        // JSON object keys are strings; Python writes the steps with str(int), which can exceed Int32.
+        var intermediateValues = new OrderedDict<long, double>();
         if (log.GetValueOrDefault("intermediate_values") is OrderedDict<string, object?> intermediates)
         {
             foreach (var (k, v) in intermediates)
-                intermediateValues[int.Parse(k, CultureInfo.InvariantCulture)] = ToDouble(v);
+                intermediateValues[long.Parse(k, CultureInfo.InvariantCulture)] = ToDouble(v);
         }
 
         var userAttrs = log.GetValueOrDefault("user_attrs") as OrderedDict<string, object?>
@@ -1005,6 +1006,8 @@ internal sealed class JournalStorageReplayResult
     /// <exception cref="NumSharp.KeyError">A referenced record is absent and this worker issued the operation.</exception>
     /// <exception cref="System.InvalidCastException">A journal field has an incompatible decoded type.</exception>
     /// <exception cref="System.Collections.Generic.KeyNotFoundException">A required journal field is absent.</exception>
+    /// <exception cref="System.OverflowException">The trial id exceeds Int32 or the step exceeds Int64.</exception>
+    /// <exception cref="System.FormatException">A numeric field holds non-numeric text.</exception>
     private void ApplySetTrialIntermediateValue(OrderedDict<string, object?> log)
     {
         int trialId = ToInt(log["trial_id"]);
@@ -1013,7 +1016,8 @@ internal sealed class JournalStorageReplayResult
         {
             var trial = _trials[trialId].ShallowCopy();
             trial.IntermediateValues = trial.IntermediateValues.ShallowClone();
-            trial.IntermediateValues[ToInt(log["step"])] = ToDouble(log["intermediate_value"]);
+            // 64-bit: Python accepts any int step, and one past Int32 used to make every C# load of the study throw.
+            trial.IntermediateValues[ToLong(log["step"])] = ToDouble(log["intermediate_value"]);
             _trials[trialId] = trial;
         }
     }
@@ -1091,6 +1095,14 @@ internal sealed class JournalStorageReplayResult
     /// <exception cref="System.OverflowException">The scalar exceeds the conversion range.</exception>
     /// <exception cref="System.InvalidCastException">The scalar does not support numeric conversion.</exception>
     private static int ToInt(object? value) => Convert.ToInt32(value, CultureInfo.InvariantCulture);
+
+    /// <param name="value">Decoded integer field from a journal record, such as a reporting step.</param>
+    /// <summary>Converts a decoded journal integer to 64 bits using invariant numeric conventions.</summary>
+    /// <returns>The converted integer.</returns>
+    /// <exception cref="System.FormatException">The scalar text is not numeric.</exception>
+    /// <exception cref="System.OverflowException">The scalar exceeds Int64 (Python ints are unbounded).</exception>
+    /// <exception cref="System.InvalidCastException">The scalar does not support numeric conversion.</exception>
+    private static long ToLong(object? value) => Convert.ToInt64(value, CultureInfo.InvariantCulture);
 
     /// <param name="value">Decoded numeric field from a journal record.</param>
     /// <summary>Converts a decoded journal scalar using invariant numeric conventions.</summary>
@@ -1217,9 +1229,9 @@ internal sealed class JournalStorageReplayResult
                 var @params = new OrderedDict<string, object?>();
                 foreach (var (k, p) in (OrderedDict<string, object?>)trialDict["params"]!)
                     @params[k] = distributions[k].ToExternalRepr(ToDouble(p));
-                var intermediateValues = new OrderedDict<int, double>();
+                var intermediateValues = new OrderedDict<long, double>();
                 foreach (var (k, v) in (OrderedDict<string, object?>)trialDict["intermediate_values"]!)
-                    intermediateValues[int.Parse(k, CultureInfo.InvariantCulture)] = ToDouble(v);
+                    intermediateValues[long.Parse(k, CultureInfo.InvariantCulture)] = ToDouble(v);
 
                 result._trials[trialId] = new FrozenTrial(
                     trialId: trialId,

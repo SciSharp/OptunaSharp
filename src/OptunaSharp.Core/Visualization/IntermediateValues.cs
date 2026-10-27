@@ -9,11 +9,11 @@ namespace OptunaSharp.Visualization;
 ///     <c>optuna/visualization/_intermediate_values.py</c>.
 /// </summary>
 /// <param name="TrialNumber">The study-local trial number identifying this intermediate-value curve.</param>
-/// <param name="SortedIntermediateValues">The reported (step, value) pairs sorted by ascending step.</param>
+/// <param name="SortedIntermediateValues">The reported (step, value) pairs sorted by ascending step; steps are 64-bit, like every trial step.</param>
 /// <param name="Feasible">Whether every recorded constraint of this trial is satisfied.</param>
 public sealed record TrialInfo(
     int TrialNumber,
-    IReadOnlyList<(int Step, double Value)> SortedIntermediateValues,
+    IReadOnlyList<(long Step, double Value)> SortedIntermediateValues,
     bool Feasible);
 
 /// <summary>

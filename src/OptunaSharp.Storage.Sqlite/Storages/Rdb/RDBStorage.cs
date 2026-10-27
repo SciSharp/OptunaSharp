@@ -711,7 +711,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
                 distributions: new OrderedDict<string, BaseDistribution>(),
                 userAttrs: new OrderedDict<string, object?>(),
                 systemAttrs: new OrderedDict<string, object?>(),
-                intermediateValues: new OrderedDict<int, double>(),
+                intermediateValues: new OrderedDict<long, double>(),
                 trialId: (int)trialId);
         }
     }
@@ -867,7 +867,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     }
 
     /// <inheritdoc />
-    public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
+    public override void SetTrialIntermediateValue(int trialId, long step, double intermediateValue)
     {
         lock (_lock)
         {
@@ -880,9 +880,9 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     /// <summary>Upserts a tagged intermediate report inside the caller-owned transaction.</summary>
     /// <param name="tx">The current SQLite transaction, or null to execute outside an explicit transaction.</param>
     /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
-    /// <param name="step">The nonnegative intermediate-report step.</param>
+    /// <param name="step">The nonnegative intermediate-report step; SQLite's INTEGER column stores all 64 bits, as for Python.</param>
     /// <param name="intermediateValue">The reported value, including nonfinite values represented by separate database tags.</param>
-    private void SetTrialIntermediateValueNoCommit(SqliteTransaction tx, int trialId, int step, double intermediateValue)
+    private void SetTrialIntermediateValueNoCommit(SqliteTransaction tx, int trialId, long step, double intermediateValue)
     {
         var trial = FindTrialOrRaise(trialId, tx);
         CheckTrialIsUpdatableOrRaise(trial);
@@ -1122,7 +1122,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         string? datetimeComplete,
         List<(long ParamId, string Name, double Value, string DistJson)>? paramRows,
         List<(int Objective, double? Value, string Type)>? valueRows,
-        List<(int Step, double? Value, string Type)>? intermediateRows,
+        List<(long Step, double? Value, string Type)>? intermediateRows,
         List<(string Key, string Json)>? userRows,
         List<(string Key, string Json)>? systemRows)
     {
@@ -1156,7 +1156,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
             foreach (var (key, json) in systemRows)
                 systemAttrs[key] = PyJson.Loads(json);
 
-        var intermediateValues = new OrderedDict<int, double>();
+        var intermediateValues = new OrderedDict<long, double>();
         if (intermediateRows is not null)
             foreach (var (step, value, type) in intermediateRows)
                 intermediateValues[step] = RdbModels.StoredReprToIntermediateValue(value, type);
@@ -1217,18 +1217,20 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     /// <summary>Loads intermediate reports and their nonfinite-value tags grouped by trial identifier.</summary>
     /// <param name="trialIds">The storage-wide identifiers whose child records are read.</param>
     /// <returns>Intermediate-report rows grouped by storage-wide trial identifier.</returns>
-    private Dictionary<int, List<(int Step, double? Value, string Type)>> LoadTrialIntermediateValues(
+    private Dictionary<int, List<(long Step, double? Value, string Type)>> LoadTrialIntermediateValues(
         IReadOnlyList<int> trialIds)
     {
-        var byTrial = new Dictionary<int, List<(int, double?, string)>>();
+        var byTrial = new Dictionary<int, List<(long, double?, string)>>();
         ReadChildrenInChunks(
             "trial_id, step, intermediate_value, intermediate_value_type", "trial_intermediate_values", trialIds,
             r =>
             {
                 int tid = (int)r.GetInt64(0);
                 if (!byTrial.TryGetValue(tid, out var list))
-                    byTrial[tid] = list = new List<(int, double?, string)>();
-                list.Add(((int)r.GetInt64(1), r.IsDBNull(2) ? null : r.GetDouble(2), r.GetString(3)));
+                    byTrial[tid] = list = new List<(long, double?, string)>();
+                // The full 64-bit step: an (int) cast silently wrapped a Python-written step past Int32 (to
+                // -1,294,967,296 for 3,000,000,000), and a C# process copying the trial persisted the corruption.
+                list.Add((r.GetInt64(1), r.IsDBNull(2) ? null : r.GetDouble(2), r.GetString(3)));
             });
         return byTrial;
     }

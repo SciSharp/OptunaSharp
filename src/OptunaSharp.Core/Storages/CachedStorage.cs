@@ -307,7 +307,7 @@ public class CachedStorage : BaseStorage, IBaseHeartbeat
     /// <param name="step">Reporting step whose intermediate objective observation is stored.</param>
     /// <inheritdoc />
     /// <param name="intermediateValue">Intermediate objective observation to store at the reporting step.</param>
-    public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
+    public override void SetTrialIntermediateValue(int trialId, long step, double intermediateValue)
         => _backendStorage.SetTrialIntermediateValue(trialId, step, intermediateValue);
 
     /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>

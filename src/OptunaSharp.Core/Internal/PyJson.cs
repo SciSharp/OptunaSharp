@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Globalization;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 using NumSharp;
 using OptunaSharp.Collections;
@@ -23,9 +24,60 @@ namespace OptunaSharp.Internal;
 ///     <see cref="double" />, <see cref="string" />, <see cref="List{T}" /> of <c>object?</c>,
 ///     and <see cref="OrderedDict{TKey,TValue}" /> of <c>string → object?</c> — the exact image
 ///     of Python's <c>json.loads</c> output.
+///
+///     <para><b>Nesting depth is bounded</b> (<see cref="MaxDepth" />): every reader, writer, copy and comparison
+///     here recurses once per nested container, and a stack overflow is the one exception .NET cannot catch, so
+///     unbounded input would let one hostile document end the process.</para>
 /// </summary>
 internal static class PyJson
 {
+    /// <summary>
+    ///     The deepest container nesting (arrays and objects together; a bare <c>[]</c> is depth 1) that this class
+    ///     reads, writes, copies or compares. Deeper values fail with a <see cref="RuntimeError" /> worded like
+    ///     CPython's <c>RecursionError</c>, which is a <c>RuntimeError</c> too.
+    /// </summary>
+    /// <remarks>
+    ///     <para><b>Why a limit at all.</b> The recursion here used to be unbounded. A JSON document nested a few
+    ///     thousand levels deep (about 11 KB of brackets) overflowed the stack, and .NET terminates the process on a
+    ///     stack overflow instead of throwing. Every storage read goes through <see cref="Loads" />, and so does the
+    ///     gRPC proxy server for each client's attribute value: one unauthenticated request killed the server and
+    ///     every ASP.NET app hosting it (review items P2-2 and pass-2B).</para>
+    ///     <para><b>Why 1,000.</b> Python fails on deep JSON too, at a depth that depends on the interpreter: its
+    ///     default recursion limit is 1,000, which bounds <c>json.dumps(indent=…)</c> (994 levels) and
+    ///     <c>copy.deepcopy</c> (499 levels), while the C scanner and encoder of CPython 3.12 on Windows stop at
+    ///     2,998. Optuna copies trials with <c>copy.deepcopy</c>, so Python cannot use a study whose attributes
+    ///     nest anywhere near 1,000 levels either. A depth of 1,000 needs about 400 KB of the 1 MB stack a .NET
+    ///     thread gets on Windows, leaving the caller room; the recursive parser itself overflowed such a stack
+    ///     between 2,000 and 3,000 levels.</para>
+    ///     <para>Footgun: values Python's C encoder writes between 1,001 and 2,997 levels deep are refused here.
+    ///     Independently of the limit, a container is also refused when the current thread's stack runs low
+    ///     (<see cref="RuntimeHelpers.TryEnsureSufficientExecutionStack" />), so a thread created with a small stack
+    ///     gets the same catchable error earlier instead of a crash.</para>
+    /// </remarks>
+    internal const int MaxDepth = 1000;
+
+    /// <summary>
+    ///     Admits one more level of container nesting, or raises the error CPython raises when its recursion limit is
+    ///     hit: the guard behind every recursive walk in this class.
+    /// </summary>
+    /// <param name="depth">The nesting depth of the container about to be processed; the outermost container is 1.</param>
+    /// <param name="activity">
+    ///     The suffix CPython appends for the same operation, for example <c>" while decoding a JSON array from a
+    ///     unicode string"</c>; empty where Python's message has none.
+    /// </param>
+    /// <exception cref="NumSharp.RuntimeError"><paramref name="depth" /> exceeds <see cref="MaxDepth" />, or the current thread's stack is nearly exhausted.</exception>
+    private static void EnterContainer(int depth, string activity)
+    {
+        if (depth > MaxDepth || !RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            throw new RuntimeError("maximum recursion depth exceeded" + activity);
+    }
+
+    // CPython's RecursionError suffixes for each recursive operation (json's C scanner and encoder, object comparison).
+    private const string DecodingArray = " while decoding a JSON array from a unicode string";
+    private const string DecodingObject = " while decoding a JSON object from a unicode string";
+    private const string Encoding = " while encoding a JSON object";
+    private const string Comparing = " in comparison";
+
     // ------------------------------------------------------------------ writing
 
     /// <summary>
@@ -34,6 +86,7 @@ internal static class PyJson
     /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
     /// <returns>The Python-compatible JSON representation of the value.</returns>
     /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
+    /// <exception cref="NumSharp.RuntimeError">Containers nest deeper than <see cref="MaxDepth" />.</exception>
     internal static string Dumps(object? value) => Dumps(value, compact: false);
 
     /// <summary>
@@ -42,6 +95,7 @@ internal static class PyJson
     /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
     /// <returns>The JSON representation with compact separators.</returns>
     /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
+    /// <exception cref="NumSharp.RuntimeError">Containers nest deeper than <see cref="MaxDepth" />.</exception>
     internal static string DumpsCompact(object? value) => Dumps(value, compact: true);
 
     /// <summary>Returns the Python-compatible JSON representation of the value.</summary>
@@ -49,10 +103,11 @@ internal static class PyJson
     /// <param name="compact">Whether separators omit the spaces used by Python's default JSON formatting.</param>
     /// <returns>The Python-compatible JSON representation of the value.</returns>
     /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
+    /// <exception cref="NumSharp.RuntimeError">Containers nest deeper than <see cref="MaxDepth" />.</exception>
     private static string Dumps(object? value, bool compact)
     {
         var sb = new StringBuilder();
-        WriteValue(sb, value, compact);
+        WriteValue(sb, value, compact, depth: 0);
         return sb.ToString();
     }
 
@@ -65,6 +120,7 @@ internal static class PyJson
     /// <param name="indent">The number of spaces per JSON nesting level.</param>
     /// <returns>The JSON representation with the requested indentation width.</returns>
     /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
+    /// <exception cref="NumSharp.RuntimeError">Containers nest deeper than <see cref="MaxDepth" />.</exception>
     internal static string DumpsIndented(object? value, int indent)
     {
         var sb = new StringBuilder();
@@ -76,8 +132,9 @@ internal static class PyJson
     /// <param name="sb">The text buffer to append serialized output to.</param>
     /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
     /// <param name="indent">The number of spaces per JSON nesting level.</param>
-    /// <param name="level">The current JSON nesting depth.</param>
+    /// <param name="level">The current JSON nesting depth: the number of containers enclosing <paramref name="value" />.</param>
     /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
+    /// <exception cref="NumSharp.RuntimeError">Containers nest deeper than <see cref="MaxDepth" />.</exception>
     private static void WriteValueIndented(StringBuilder sb, object? value, int indent, int level)
     {
         switch (value)
@@ -86,13 +143,13 @@ internal static class PyJson
                 WriteObjectIndented(sb, dict, indent, level);
                 break;
             case string:
-                WriteValue(sb, value, compact: false);
+                WriteValue(sb, value, compact: false, depth: level);
                 break;
             case IEnumerable seq:
                 WriteArrayIndented(sb, seq, indent, level);
                 break;
             default:
-                WriteValue(sb, value, compact: false);  // leaf (null/bool/number/enum/CategoricalChoice).
+                WriteValue(sb, value, compact: false, depth: level);  // leaf (null/bool/number/enum/CategoricalChoice).
                 break;
         }
     }
@@ -101,10 +158,13 @@ internal static class PyJson
     /// <param name="sb">The text buffer to append serialized output to.</param>
     /// <param name="dict">The dictionary whose insertion-ordered keys and values are processed.</param>
     /// <param name="indent">The number of spaces per JSON nesting level.</param>
-    /// <param name="level">The current JSON nesting depth.</param>
+    /// <param name="level">The current JSON nesting depth: the number of containers enclosing <paramref name="dict" />.</param>
     /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
+    /// <exception cref="NumSharp.RuntimeError">Containers nest deeper than <see cref="MaxDepth" />.</exception>
     private static void WriteObjectIndented(StringBuilder sb, IDictionary dict, int indent, int level)
     {
+        // Python's indenting encoder is pure Python, so its RecursionError carries no suffix.
+        EnterContainer(level + 1, string.Empty);
         if (dict.Count == 0)
         {
             sb.Append("{}");
@@ -130,10 +190,12 @@ internal static class PyJson
     /// <param name="sb">The text buffer to append serialized output to.</param>
     /// <param name="seq">The sequence whose elements are serialized in enumeration order.</param>
     /// <param name="indent">The number of spaces per JSON nesting level.</param>
-    /// <param name="level">The current JSON nesting depth.</param>
+    /// <param name="level">The current JSON nesting depth: the number of containers enclosing <paramref name="seq" />.</param>
     /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
+    /// <exception cref="NumSharp.RuntimeError">Containers nest deeper than <see cref="MaxDepth" />.</exception>
     private static void WriteArrayIndented(StringBuilder sb, IEnumerable seq, int indent, int level)
     {
+        EnterContainer(level + 1, string.Empty);
         var e = seq.GetEnumerator();
         if (!e.MoveNext())
         {
@@ -158,8 +220,10 @@ internal static class PyJson
     /// <param name="sb">The text buffer to append serialized output to.</param>
     /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
     /// <param name="compact">Whether separators omit the spaces used by Python's default JSON formatting.</param>
+    /// <param name="depth">The number of containers enclosing <paramref name="value" />.</param>
     /// <exception cref="NumSharp.TypeError">A supplied value has no supported JSON representation.</exception>
-    private static void WriteValue(StringBuilder sb, object? value, bool compact)
+    /// <exception cref="NumSharp.RuntimeError">Containers nest deeper than <see cref="MaxDepth" />.</exception>
+    private static void WriteValue(StringBuilder sb, object? value, bool compact, int depth)
     {
         switch (value)
         {
@@ -193,13 +257,13 @@ internal static class PyJson
                 sb.Append(Convert.ToInt64(e, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture));
                 break;
             case CategoricalChoice choice:
-                WriteValue(sb, choice.Value, compact);
+                WriteValue(sb, choice.Value, compact, depth);
                 break;
             case IDictionary dict:
-                WriteObject(sb, dict, compact);
+                WriteObject(sb, dict, compact, depth + 1);
                 break;
             case IEnumerable seq:
-                WriteArray(sb, seq, compact);
+                WriteArray(sb, seq, compact, depth + 1);
                 break;
             default:
                 throw new TypeError($"Object of type {value.GetType().Name} is not JSON serializable");
@@ -269,9 +333,12 @@ internal static class PyJson
     /// <param name="sb">The text buffer to append serialized output to.</param>
     /// <param name="dict">The dictionary whose insertion-ordered keys and values are processed.</param>
     /// <param name="compact">Whether separators omit the spaces used by Python's default JSON formatting.</param>
+    /// <param name="depth">The nesting depth of <paramref name="dict" /> itself; the outermost container is 1.</param>
     /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
-    private static void WriteObject(StringBuilder sb, IDictionary dict, bool compact)
+    /// <exception cref="NumSharp.RuntimeError">Containers nest deeper than <see cref="MaxDepth" />.</exception>
+    private static void WriteObject(StringBuilder sb, IDictionary dict, bool compact, int depth)
     {
+        EnterContainer(depth, Encoding);
         sb.Append('{');
         bool first = true;
         foreach (DictionaryEntry entry in dict)
@@ -280,7 +347,7 @@ internal static class PyJson
                 sb.Append(compact ? "," : ", ");
             WriteString(sb, KeyToString(entry.Key));
             sb.Append(compact ? ":" : ": ");
-            WriteValue(sb, entry.Value, compact);
+            WriteValue(sb, entry.Value, compact, depth);
             first = false;
         }
         sb.Append('}');
@@ -290,16 +357,20 @@ internal static class PyJson
     /// <param name="sb">The text buffer to append serialized output to.</param>
     /// <param name="seq">The sequence whose elements are serialized in enumeration order.</param>
     /// <param name="compact">Whether separators omit the spaces used by Python's default JSON formatting.</param>
+    /// <param name="depth">The nesting depth of <paramref name="seq" /> itself; the outermost container is 1.</param>
     /// <exception cref="NumSharp.TypeError">The value or one of its nested values has no supported JSON representation.</exception>
-    private static void WriteArray(StringBuilder sb, IEnumerable seq, bool compact)
+    /// <exception cref="NumSharp.RuntimeError">Containers nest deeper than <see cref="MaxDepth" />.</exception>
+    private static void WriteArray(StringBuilder sb, IEnumerable seq, bool compact, int depth)
     {
+        // CPython's C encoder reports lists with the same "while encoding a JSON object" suffix as dicts.
+        EnterContainer(depth, Encoding);
         sb.Append('[');
         bool first = true;
         foreach (var item in seq)
         {
             if (!first)
                 sb.Append(compact ? "," : ", ");
-            WriteValue(sb, item, compact);
+            WriteValue(sb, item, compact, depth);
             first = false;
         }
         sb.Append(']');
@@ -324,13 +395,19 @@ internal static class PyJson
     // ------------------------------------------------------------------ reading
 
     /// <summary>Python <c>json.loads(text)</c>.</summary>
+    /// <remarks>
+    ///     Safe on untrusted text: a document nested deeper than <see cref="MaxDepth" /> fails with a catchable
+    ///     <see cref="RuntimeError" /> (Python raises <c>RecursionError</c>), never with a stack overflow. Storage
+    ///     reads and the gRPC proxy server parse remote input through here.
+    /// </remarks>
     /// <param name="text">The Python-compatible JSON document to parse.</param>
     /// <returns>The parsed scalar, list, or insertion-ordered dictionary; JSON null becomes null.</returns>
     /// <exception cref="NumSharp.ValueError">The document is malformed or contains trailing data after its first value.</exception>
+    /// <exception cref="NumSharp.RuntimeError">Arrays and objects nest deeper than <see cref="MaxDepth" />.</exception>
     internal static object? Loads(string text)
     {
         int pos = 0;
-        var value = ParseValue(text, ref pos);
+        var value = ParseValue(text, ref pos, depth: 0);
         SkipWhitespace(text, ref pos);
         if (pos != text.Length)
             throw new ValueError($"Extra data: line 1 column {pos + 1} (char {pos})");
@@ -349,9 +426,11 @@ internal static class PyJson
     /// <summary>Returns the parsed value, with the cursor advanced past its token.</summary>
     /// <param name="s">The JSON source text containing the value at the current cursor.</param>
     /// <param name="pos">The current character position; parsing advances it past consumed input.</param>
+    /// <param name="depth">The number of arrays and objects enclosing the value.</param>
     /// <returns>The parsed value, with the cursor advanced past its token.</returns>
     /// <exception cref="NumSharp.ValueError">The cursor does not begin a valid JSON value or the nested value is malformed.</exception>
-    private static object? ParseValue(string s, ref int pos)
+    /// <exception cref="NumSharp.RuntimeError">Arrays and objects nest deeper than <see cref="MaxDepth" />.</exception>
+    private static object? ParseValue(string s, ref int pos, int depth)
     {
         SkipWhitespace(s, ref pos);
         if (pos >= s.Length)
@@ -361,9 +440,9 @@ internal static class PyJson
         switch (c)
         {
             case '{':
-                return ParseObject(s, ref pos);
+                return ParseObject(s, ref pos, depth + 1);
             case '[':
-                return ParseArray(s, ref pos);
+                return ParseArray(s, ref pos, depth + 1);
             case '"':
                 return ParseString(s, ref pos);
             case 't':
@@ -407,10 +486,14 @@ internal static class PyJson
     /// <summary>Returns the parsed insertion-ordered mapping, with the cursor advanced past the closing brace.</summary>
     /// <param name="s">The JSON source text containing the object at the current cursor.</param>
     /// <param name="pos">The current character position; parsing advances it past consumed input.</param>
+    /// <param name="depth">The nesting depth of this object; the outermost container is 1.</param>
     /// <returns>The parsed insertion-ordered mapping, with the cursor advanced past the closing brace.</returns>
     /// <exception cref="NumSharp.ValueError">An object key, delimiter, or nested value is malformed.</exception>
-    private static OrderedDict<string, object?> ParseObject(string s, ref int pos)
+    /// <exception cref="NumSharp.RuntimeError">Arrays and objects nest deeper than <see cref="MaxDepth" />.</exception>
+    private static OrderedDict<string, object?> ParseObject(string s, ref int pos, int depth)
     {
+        // Checked on entry, before anything is consumed, as CPython's scanner does on '{'.
+        EnterContainer(depth, DecodingObject);
         var result = new OrderedDict<string, object?>();
         pos++;  // '{'
         SkipWhitespace(s, ref pos);
@@ -429,7 +512,7 @@ internal static class PyJson
             if (pos >= s.Length || s[pos] != ':')
                 throw new ValueError($"Expecting ':' delimiter: line 1 column {pos + 1} (char {pos})");
             pos++;
-            result[key] = ParseValue(s, ref pos);  // Python keeps the LAST duplicate key.
+            result[key] = ParseValue(s, ref pos, depth);  // Python keeps the LAST duplicate key.
             SkipWhitespace(s, ref pos);
             if (pos >= s.Length)
                 throw new ValueError($"Expecting ',' delimiter: line 1 column {pos + 1} (char {pos})");
@@ -450,10 +533,14 @@ internal static class PyJson
     /// <summary>Returns the parsed list, with the cursor advanced past the closing bracket.</summary>
     /// <param name="s">The JSON source text containing the array at the current cursor.</param>
     /// <param name="pos">The current character position; parsing advances it past consumed input.</param>
+    /// <param name="depth">The nesting depth of this array; the outermost container is 1.</param>
     /// <returns>The parsed list, with the cursor advanced past the closing bracket.</returns>
     /// <exception cref="NumSharp.ValueError">An array delimiter or nested value is malformed.</exception>
-    private static List<object?> ParseArray(string s, ref int pos)
+    /// <exception cref="NumSharp.RuntimeError">Arrays and objects nest deeper than <see cref="MaxDepth" />.</exception>
+    private static List<object?> ParseArray(string s, ref int pos, int depth)
     {
+        // Checked on entry, before anything is consumed, as CPython's scanner does on '['.
+        EnterContainer(depth, DecodingArray);
         var result = new List<object?>();
         pos++;  // '['
         SkipWhitespace(s, ref pos);
@@ -464,7 +551,7 @@ internal static class PyJson
         }
         while (true)
         {
-            result.Add(ParseValue(s, ref pos));
+            result.Add(ParseValue(s, ref pos, depth));
             SkipWhitespace(s, ref pos);
             if (pos >= s.Length)
                 throw new ValueError($"Expecting ',' delimiter: line 1 column {pos + 1} (char {pos})");
@@ -579,32 +666,47 @@ internal static class PyJson
     /// </summary>
     /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
     /// <returns>A recursively copied JSON-compatible value; immutable scalar values are reused.</returns>
-    internal static object? DeepCopy(object? value) => value switch
+    /// <exception cref="NumSharp.RuntimeError">Lists and dictionaries nest deeper than <see cref="MaxDepth" />.</exception>
+    internal static object? DeepCopy(object? value) => DeepCopy(value, depth: 0);
+
+    /// <summary>Deep-copies <paramref name="value" />, which <paramref name="depth" /> containers enclose.</summary>
+    /// <param name="value">The value to copy.</param>
+    /// <param name="depth">The number of lists and dictionaries enclosing <paramref name="value" />.</param>
+    /// <returns>A recursively copied JSON-compatible value; immutable scalar values are reused.</returns>
+    /// <exception cref="NumSharp.RuntimeError">Lists and dictionaries nest deeper than <see cref="MaxDepth" />.</exception>
+    private static object? DeepCopy(object? value, int depth) => value switch
     {
-        List<object?> list => DeepCopyList(list),
-        OrderedDict<string, object?> dict => DeepCopyDict(dict),
+        List<object?> list => DeepCopyList(list, depth + 1),
+        OrderedDict<string, object?> dict => DeepCopyDict(dict, depth + 1),
         _ => value,  // null / bool / long / double / string / immutable values copy by reference.
     };
 
     /// <summary>Returns a new list containing recursively copied element values.</summary>
     /// <param name="list">The list whose nested values are copied recursively.</param>
+    /// <param name="depth">The nesting depth of <paramref name="list" /> itself; the outermost container is 1.</param>
     /// <returns>A new list containing recursively copied element values.</returns>
-    private static List<object?> DeepCopyList(List<object?> list)
+    /// <exception cref="NumSharp.RuntimeError">Lists and dictionaries nest deeper than <see cref="MaxDepth" />.</exception>
+    private static List<object?> DeepCopyList(List<object?> list, int depth)
     {
+        // copy.deepcopy's RecursionError carries no suffix.
+        EnterContainer(depth, string.Empty);
         var copy = new List<object?>(list.Count);
         foreach (var item in list)
-            copy.Add(DeepCopy(item));
+            copy.Add(DeepCopy(item, depth));
         return copy;
     }
 
     /// <summary>Returns a new insertion-ordered dictionary containing recursively copied values.</summary>
     /// <param name="dict">The dictionary whose insertion-ordered keys and values are processed.</param>
+    /// <param name="depth">The nesting depth of <paramref name="dict" /> itself; the outermost container is 1.</param>
     /// <returns>A new insertion-ordered dictionary containing recursively copied values.</returns>
-    private static OrderedDict<string, object?> DeepCopyDict(OrderedDict<string, object?> dict)
+    /// <exception cref="NumSharp.RuntimeError">Lists and dictionaries nest deeper than <see cref="MaxDepth" />.</exception>
+    private static OrderedDict<string, object?> DeepCopyDict(OrderedDict<string, object?> dict, int depth)
     {
+        EnterContainer(depth, string.Empty);
         var copy = new OrderedDict<string, object?>(dict.Count);
         foreach (var kv in dict)
-            copy[kv.Key] = DeepCopy(kv.Value);
+            copy[kv.Key] = DeepCopy(kv.Value, depth);
         return copy;
     }
 
@@ -615,7 +717,16 @@ internal static class PyJson
     /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
     /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
     /// <returns>True when the JSON-compatible values are structurally equal under Python-compatible numeric comparison.</returns>
-    internal static bool ValueEquals(object? a, object? b)
+    /// <exception cref="NumSharp.RuntimeError">Both values nest lists or dictionaries deeper than <see cref="MaxDepth" /> along an equal prefix.</exception>
+    internal static bool ValueEquals(object? a, object? b) => ValueEquals(a, b, depth: 0);
+
+    /// <summary>Python <c>==</c> over the JSON object model for values that <paramref name="depth" /> containers enclose.</summary>
+    /// <param name="a">The first value.</param>
+    /// <param name="b">The second value.</param>
+    /// <param name="depth">The number of lists and dictionaries enclosing both values.</param>
+    /// <returns>True when the JSON-compatible values are structurally equal under Python-compatible numeric comparison.</returns>
+    /// <exception cref="NumSharp.RuntimeError">Both values nest lists or dictionaries deeper than <see cref="MaxDepth" /> along an equal prefix.</exception>
+    private static bool ValueEquals(object? a, object? b, int depth)
     {
         if (a is null || b is null)
             return a is null && b is null;
@@ -624,7 +735,7 @@ internal static class PyJson
                 : b is long lb2 ? (ba ? 1 : 0) == lb2
                 : b is double db2 && (ba ? 1.0 : 0.0) == db2;
         if (b is bool)
-            return ValueEquals(b, a);
+            return ValueEquals(b, a, depth);
         if (a is long la)
             return b is long lb ? la == lb : b is double db && la == db;
         if (a is double da)
@@ -635,8 +746,10 @@ internal static class PyJson
         {
             if (b is not List<object?> listB || listA.Count != listB.Count)
                 return false;
+            // Python's list comparison recurses per element; its RecursionError says "in comparison".
+            EnterContainer(depth + 1, Comparing);
             for (int i = 0; i < listA.Count; i++)
-                if (!ValueEquals(listA[i], listB[i]))
+                if (!ValueEquals(listA[i], listB[i], depth + 1))
                     return false;
             return true;
         }
@@ -644,9 +757,10 @@ internal static class PyJson
         {
             if (b is not OrderedDict<string, object?> dictB || dictA.Count != dictB.Count)
                 return false;
+            EnterContainer(depth + 1, Comparing);
             foreach (var kv in dictA)
             {
-                if (!dictB.TryGetValue(kv.Key, out var other) || !ValueEquals(kv.Value, other))
+                if (!dictB.TryGetValue(kv.Key, out var other) || !ValueEquals(kv.Value, other, depth + 1))
                     return false;
             }
             return true;

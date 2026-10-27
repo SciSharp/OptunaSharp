@@ -40,7 +40,7 @@ public sealed class LastPlacePruner : BasePruner
 
     public override bool Prune(Study study, FrozenTrial trial)
     {
-        int? step = trial.LastStep;      // null until this trial has reported a value
+        long? step = trial.LastStep;     // null until this trial has reported a value
         if (step is null)
             return false;
 

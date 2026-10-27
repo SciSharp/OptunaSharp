@@ -357,7 +357,8 @@ public sealed class OptunaStorageProxyService : ProtoApi.StorageService.StorageS
     {
         try
         {
-            _backend.SetTrialIntermediateValue((int)request.TrialId, (int)request.Step, request.IntermediateValue);
+            // The int64 step reaches the backend unchanged (an (int) cast here used to wrap steps past Int32).
+            _backend.SetTrialIntermediateValue((int)request.TrialId, request.Step, request.IntermediateValue);
             return Task.FromResult(new ProtoApi.SetTrialIntermediateValueReply());
         }
         catch (KeyError e)

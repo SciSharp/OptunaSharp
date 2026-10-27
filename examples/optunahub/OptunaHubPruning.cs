@@ -66,7 +66,7 @@ try
     {
         if (t.State == TrialState.Pruned)
         {
-            int lastEpoch = t.IntermediateValues.Count > 0 ? t.IntermediateValues.Keys.Max() + 1 : 0;
+            long lastEpoch = t.IntermediateValues.Count > 0 ? t.IntermediateValues.Keys.Max() + 1 : 0;
             Console.WriteLine($"  {C($"#{t.Number,3}", "90")}  {C("✂ pruned", "33")}  @ epoch {lastEpoch,2}/{epochs}");
         }
         else
@@ -78,7 +78,7 @@ try
 
     int completed = study.Trials.Count(t => t.State == TrialState.Complete);
     int prunedN = study.Trials.Count(t => t.State == TrialState.Pruned);
-    int savedEpochs = study.Trials.Where(t => t.State == TrialState.Pruned)
+    long savedEpochs = study.Trials.Where(t => t.State == TrialState.Pruned)
                                   .Sum(t => epochs - (t.IntermediateValues.Count > 0 ? t.IntermediateValues.Keys.Max() + 1 : 0));
     Console.WriteLine();
     Console.WriteLine(C($"  {study.Trials.Count} trials  ·  {completed} completed  ·  {prunedN} pruned early", "1;37")

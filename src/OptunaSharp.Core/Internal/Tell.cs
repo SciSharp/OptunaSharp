@@ -145,7 +145,7 @@ internal static class TellHelpers
             // TODO(hvy): Whether a pruned trials should have an actual value can be discussed.
             System.Diagnostics.Debug.Assert(values is null);
 
-            int? lastStep = frozenTrial.LastStep;
+            long? lastStep = frozenTrial.LastStep;
             if (lastStep is not null)
             {
                 double lastIntermediateValue = frozenTrial.IntermediateValues[lastStep.Value];

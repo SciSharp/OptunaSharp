@@ -26,8 +26,8 @@ public class HyperbandPruner : BasePruner
 {
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.pruners._hyperband");
 
-    private readonly int _minResource;
-    private int? _maxResource;
+    private readonly long _minResource;
+    private long? _maxResource;
     private readonly bool _maxResourceIsAuto;
     private readonly int _reductionFactor;
     private readonly List<SuccessiveHalvingPruner> _pruners = new();
@@ -53,8 +53,8 @@ public class HyperbandPruner : BasePruner
     /// <summary>Configures resource brackets whose successive-halving competitions have separate trial histories.</summary>
     /// <exception cref="NumSharp.ValueError">Positive bootstrap is combined with automatic maximum resource.</exception>
     public HyperbandPruner(
-        int minResource = 1,
-        int? maxResource = null,
+        long minResource = 1,
+        long? maxResource = null,
         int reductionFactor = 3,
         int bootstrapCount = 0)
     {

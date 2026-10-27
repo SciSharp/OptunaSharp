@@ -95,7 +95,7 @@ try
     {
         if (t.State == TrialState.Pruned)
         {
-            int lastEpoch = t.IntermediateValues.Count > 0 ? t.IntermediateValues.Keys.Max() + 1 : 0;
+            long lastEpoch = t.IntermediateValues.Count > 0 ? t.IntermediateValues.Keys.Max() + 1 : 0;
             Console.WriteLine($"  {C($"#{t.Number,3}", "90")}  {C("✂ pruned", "33")}  @ epoch {lastEpoch,2}/{epochs}");
         }
         else

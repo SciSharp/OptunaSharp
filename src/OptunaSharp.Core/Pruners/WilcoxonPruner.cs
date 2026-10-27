@@ -157,28 +157,28 @@ public class WilcoxonPruner : BasePruner
     }
 
     /// <summary>Pairs equal instance identifiers in sorted order, using their first occurrence in each input.</summary>
-    /// <param name="a">First numerical array operand.</param>
-    /// <param name="b">Second numerical array operand.</param>
+    /// <param name="a">The current trial's steps (64-bit, like every trial step).</param>
+    /// <param name="b">The best trial's steps.</param>
     /// <returns>Paired source indices ordered by their shared instance identifier.</returns>
-    private static (List<int> Idx1, List<int> Idx2) Intersect1d(int[] a, int[] b)
+    private static (List<int> Idx1, List<int> Idx2) Intersect1d(long[] a, long[] b)
     {
-        var bIndex = new Dictionary<int, int>();
+        var bIndex = new Dictionary<long, int>();
         for (int i = 0; i < b.Length; i++)
         {
             if (!bIndex.ContainsKey(b[i]))
                 bIndex[b[i]] = i;
         }
 
-        var common = new SortedSet<int>(a.Where(bIndex.ContainsKey));
+        var common = new SortedSet<long>(a.Where(bIndex.ContainsKey));
         var idx1 = new List<int>(common.Count);
         var idx2 = new List<int>(common.Count);
-        var aIndex = new Dictionary<int, int>();
+        var aIndex = new Dictionary<long, int>();
         for (int i = 0; i < a.Length; i++)
         {
             if (!aIndex.ContainsKey(a[i]))
                 aIndex[a[i]] = i;
         }
-        foreach (int value in common)
+        foreach (long value in common)
         {
             idx1.Add(aIndex[value]);
             idx2.Add(bIndex[value]);

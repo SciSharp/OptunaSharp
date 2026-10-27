@@ -25,7 +25,7 @@ public class PrunerTests
             sampler: new RandomSampler(1), pruner: pruner, direction: direction);
         foreach (var history in histories)
         {
-            var intermediate = new OrderedDict<int, double>();
+            var intermediate = new OrderedDict<long, double>();
             for (int i = 0; i < history.Length; i++)
                 intermediate[i] = history[i];
             study.AddTrial(FrozenTrial.CreateTrial(
@@ -55,7 +55,7 @@ public class PrunerTests
         var study = StudyWithHistories(new NopPruner(), StudyDirection.Minimize, new[] { 1.0 });
         var trial = FrozenTrial.CreateTrial(
             state: TrialState.Running,
-            intermediateValues: new OrderedDict<int, double> { [0] = double.NaN });
+            intermediateValues: new OrderedDict<long, double> { [0] = double.NaN });
         trial.SetDatetimeStart(DateTime.Now);
         new NopPruner().Prune(study, trial).Should().BeFalse();
     }
@@ -66,7 +66,7 @@ public class PrunerTests
         var study = Optuna.CreateStudy(sampler: new RandomSampler(1), pruner: new NopPruner());
         FrozenTrial Reporting(params (int, double)[] values)
         {
-            var iv = new OrderedDict<int, double>();
+            var iv = new OrderedDict<long, double>();
             foreach (var (s, v) in values)
                 iv[s] = v;
             var t = FrozenTrial.CreateTrial(state: TrialState.Running, intermediateValues: iv);
@@ -103,7 +103,7 @@ public class PrunerTests
         var pruner = (MedianPruner)study.Pruner;
         FrozenTrial Probe(double v) => FrozenTrial.CreateTrial(
             state: TrialState.Running,
-            intermediateValues: new OrderedDict<int, double> { [0] = v });
+            intermediateValues: new OrderedDict<long, double> { [0] = v });
 
         pruner.Prune(study, Probe(1.5)).Should().BeFalse("1.5 <= median 2");
         pruner.Prune(study, Probe(2.0)).Should().BeFalse("equal to the median survives");
@@ -228,7 +228,7 @@ public class PrunerTests
 
         FrozenTrial Probe(params double[] values)
         {
-            var iv = new OrderedDict<int, double>();
+            var iv = new OrderedDict<long, double>();
             for (int i = 0; i < values.Length; i++)
                 iv[i] = values[i];
             return FrozenTrial.CreateTrial(state: TrialState.Running, intermediateValues: iv);
@@ -249,7 +249,7 @@ public class PrunerTests
 
         var trials = new List<FrozenTrial>
         {
-            FrozenTrial.CreateTrial(value: 1.0, intermediateValues: new OrderedDict<int, double> { [250] = 1.0 }),
+            FrozenTrial.CreateTrial(value: 1.0, intermediateValues: new OrderedDict<long, double> { [250] = 1.0 }),
         };
         SuccessiveHalvingPruner.EstimateMinResource(trials).Should().Be(2, "250 // 100 = 2");
         SuccessiveHalvingPruner.EstimateMinResource(new List<FrozenTrial>()).Should().BeNull();

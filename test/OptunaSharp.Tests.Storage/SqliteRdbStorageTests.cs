@@ -394,7 +394,7 @@ public class SqliteRdbStorageTests
             @params: new OrderedDict<string, object?> { ["x"] = 1.5 },
             distributions: QuadDist(),
             userAttrs: new OrderedDict<string, object?> { ["note"] = "hi" },
-            intermediateValues: new OrderedDict<int, double> { [0] = 0.5 });
+            intermediateValues: new OrderedDict<long, double> { [0] = 0.5 });
 
         int trialId = storage.CreateNewTrial(studyId, template);
         var trial = storage.GetTrial(trialId);
@@ -404,6 +404,45 @@ public class SqliteRdbStorageTests
         trial.UserAttrs["note"].Should().Be("hi");
         trial.IntermediateValues[0].Should().Be(0.5);
         trial.Number.Should().Be(0);
+    }
+
+    /// <summary>
+    ///     Review item B-2 (pass 2B): SQLite's <c>INTEGER</c> step column holds 64 bits, and Python stores any int
+    ///     step that fits. A row written as Python writes it (step 3,000,000,000, inserted with plain SQL here) used
+    ///     to come back wrapped to -1,294,967,296 through an unchecked cast, and a C# process copying the trial would
+    ///     have persisted the corruption. It must read back exactly, and C#'s own 64-bit steps must round-trip.
+    /// </summary>
+    [TestMethod]
+    public void IntermediateSteps_PastInt32_ReadAndWriteExactly()
+    {
+        const long pastInt32 = 3_000_000_000L;
+        string path = TempDbPath();
+        int studyId, trialId;
+        using (var storage = new RDBStorage($"sqlite:///{path.Replace('\\', '/')}"))
+        {
+            studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+            trialId = storage.CreateNewTrial(studyId);
+            storage.SetTrialIntermediateValue(trialId, long.MaxValue, 0.75);
+        }
+
+        using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString()))
+        {
+            conn.Open();
+            using var insert = conn.CreateCommand();
+            insert.CommandText =
+                "INSERT INTO trial_intermediate_values (trial_id, step, intermediate_value, intermediate_value_type) " +
+                "VALUES ($trial, $step, 0.5, 'FINITE')";
+            insert.Parameters.AddWithValue("$trial", trialId);
+            insert.Parameters.AddWithValue("$step", pastInt32);
+            insert.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        using var reopened = new RDBStorage($"sqlite:///{path.Replace('\\', '/')}");
+        var trial = reopened.GetTrial(trialId);
+
+        trial.IntermediateValues.Should().Equal(new Dictionary<long, double> { [long.MaxValue] = 0.75, [pastInt32] = 0.5 });
+        trial.LastStep.Should().Be(long.MaxValue);
     }
 
     // ------------------------------------------------------------------ persistence / integration

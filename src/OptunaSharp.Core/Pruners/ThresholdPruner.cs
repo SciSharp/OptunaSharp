@@ -64,10 +64,10 @@ public class ThresholdPruner : BasePruner
     /// <inheritdoc />
     public override bool Prune(Study study, FrozenTrial trial)
     {
-        int? stepNullable = trial.LastStep;
+        long? stepNullable = trial.LastStep;
         if (stepNullable is null)
             return false;
-        int step = stepNullable.Value;
+        long step = stepNullable.Value;
 
         int nWarmupSteps = _nWarmupSteps;
         if (step < nWarmupSteps)

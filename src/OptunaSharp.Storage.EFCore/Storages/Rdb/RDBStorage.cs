@@ -834,7 +834,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             distributions: new OrderedDict<string, BaseDistribution>(),
             userAttrs: new OrderedDict<string, object?>(),
             systemAttrs: new OrderedDict<string, object?>(),
-            intermediateValues: new OrderedDict<int, double>(),
+            intermediateValues: new OrderedDict<long, double>(),
             trialId: trialId);
     });
 
@@ -987,18 +987,23 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     }
 
     /// <inheritdoc />
-    public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue) => Mutate(ctx =>
+    /// <exception cref="System.OverflowException">
+    ///     The step does not fit the 32-bit <c>trial_intermediate_values.step</c> column of Optuna's schema, which
+    ///     PostgreSQL and MySQL also refuse for Python (a <c>DataError</c>); nothing is written.
+    /// </exception>
+    public override void SetTrialIntermediateValue(int trialId, long step, double intermediateValue) => Mutate(ctx =>
     {
+        int storedStep = StepColumnValue(step);
         using var tx = ctx.Database.BeginTransaction();
         var trial = FindTrialForUpdate(ctx, trialId);
         CheckTrialIsUpdatableOrRaise(trial);
 
         var (stored, type) = RdbModels.IntermediateValueToStoredRepr(intermediateValue);
-        var row = ctx.TrialIntermediateValues.FirstOrDefault(v => v.TrialId == trialId && v.Step == step);
+        var row = ctx.TrialIntermediateValues.FirstOrDefault(v => v.TrialId == trialId && v.Step == storedStep);
         if (row is null)
             ctx.TrialIntermediateValues.Add(new TrialIntermediateValueEntity
             {
-                TrialId = trialId, Step = step, IntermediateValue = stored, IntermediateValueType = type,
+                TrialId = trialId, Step = storedStep, IntermediateValue = stored, IntermediateValueType = type,
             });
         else
         {
@@ -1014,14 +1019,32 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
     /// <param name="step">The nonnegative intermediate-report step.</param>
     /// <param name="intermediateValue">The reported value, including nonfinite values represented by separate database tags.</param>
-    private static void AddTrialIntermediateValue(OptunaRdbContext ctx, int trialId, int step, double intermediateValue)
+    /// <exception cref="System.OverflowException">The step does not fit the 32-bit <c>step</c> column.</exception>
+    private static void AddTrialIntermediateValue(OptunaRdbContext ctx, int trialId, long step, double intermediateValue)
     {
         var (stored, type) = RdbModels.IntermediateValueToStoredRepr(intermediateValue);
         ctx.TrialIntermediateValues.Add(new TrialIntermediateValueEntity
         {
-            TrialId = trialId, Step = step, IntermediateValue = stored, IntermediateValueType = type,
+            TrialId = trialId, Step = StepColumnValue(step), IntermediateValue = stored, IntermediateValueType = type,
         });
     }
+
+    /// <summary>
+    ///     A reporting step as the 32-bit <c>trial_intermediate_values.step</c> column holds it. Optuna's schema
+    ///     declares the column <c>INTEGER</c>, which is 32-bit on PostgreSQL and MySQL, so Python's writes of a larger
+    ///     step fail there too; checking here turns that into one clear error before anything is written, instead of a
+    ///     provider error mid-transaction or, worse, a silently truncated step.
+    /// </summary>
+    /// <param name="step">The reporting step, 64-bit like every trial step.</param>
+    /// <returns>The step as the column stores it.</returns>
+    /// <exception cref="System.OverflowException">The step lies outside the column's 32-bit range.</exception>
+    private static int StepColumnValue(long step)
+        => step is >= int.MinValue and <= int.MaxValue
+            ? (int)step
+            : throw new OverflowException(
+                $"The step {step.ToString(System.Globalization.CultureInfo.InvariantCulture)} does not fit the 32-bit " +
+                "`trial_intermediate_values.step` column of this storage " +
+                "(Optuna's RDB schema); journal and SQLite storages accept 64-bit steps.");
 
     /// <inheritdoc />
     public override void SetTrialUserAttr(int trialId, string key, object? value)
@@ -1230,7 +1253,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
                 foreach (var a in systemRows)
                     systemAttrs[a.Key!] = PyJson.Loads(a.ValueJson!);
 
-            var intermediateValues = new OrderedDict<int, double>();
+            var intermediateValues = new OrderedDict<long, double>();
             if (intermediateByTrial.TryGetValue(row.TrialId, out var intermediateRows))
                 foreach (var v in intermediateRows)
                     intermediateValues[v.Step] = RdbModels.StoredReprToIntermediateValue(v.IntermediateValue, v.IntermediateValueType);

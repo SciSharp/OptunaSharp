@@ -164,7 +164,7 @@ internal static class TpeTrialSplit
     {
         if (trial.IntermediateValues.Count > 0)
         {
-            int step = trial.IntermediateValues.Keys.Max();  // max(dict.items()) compares by key (step).
+            long step = trial.IntermediateValues.Keys.Max();  // max(dict.items()) compares by key (step).
             double intermediateValue = trial.IntermediateValues[step];
             if (double.IsNaN(intermediateValue))
                 return (-step, double.PositiveInfinity);

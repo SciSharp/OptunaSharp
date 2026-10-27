@@ -242,7 +242,7 @@ public class SamplerReuseAcrossStudiesTests
         FrozenTrial Trial(int number, int trialId, DateTime? datetimeStart) => new(
             number, datetimeStart is null ? TrialState.Waiting : TrialState.Complete, datetimeStart is null ? null : 1.0,
             datetimeStart, datetimeStart, new OrderedDict<string, object?>(), new OrderedDict<string, BaseDistribution>(),
-            new OrderedDict<string, object?>(), new OrderedDict<string, object?>(), new OrderedDict<int, double>(), trialId);
+            new OrderedDict<string, object?>(), new OrderedDict<string, object?>(), new OrderedDict<long, double>(), trialId);
 
         var anchor = TrialAnchor.Of(Trial(0, 7, start));
         anchor.IsIn(new[] { Trial(0, 7, start), Trial(1, 8, start) }).Should().BeTrue("same trial, full list");

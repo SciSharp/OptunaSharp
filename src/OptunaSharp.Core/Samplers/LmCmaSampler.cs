@@ -351,7 +351,7 @@ public sealed class LmCmaSampler : BaseSampler
                      && t.IntermediateValues.Count > 0
                      && _considerPrunedTrials)
             {
-                int maxStep = t.IntermediateValues.Keys.Max();
+                long maxStep = t.IntermediateValues.Keys.Max();
                 double value = t.IntermediateValues[maxStep];
                 var copied = t.DeepCopy();
                 copied.Value = value;

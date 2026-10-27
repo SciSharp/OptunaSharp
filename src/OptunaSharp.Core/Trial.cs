@@ -186,14 +186,16 @@ public class Trial : BaseTrial
     /// <param name="value">A value returned from the objective function.</param>
     /// <param name="step">
     ///     Step of the trial (e.g., Epoch of neural network training). Note that pruners assume
-    ///     that <c>step</c> starts at zero. <c>step</c> must be a non-negative integer.
+    ///     that <c>step</c> starts at zero. <c>step</c> must be a non-negative integer. It is 64-bit, as
+    ///     Python's unbounded <c>int</c> is in journal, SQLite and in-memory storages; the PostgreSQL and
+    ///     MySQL schemas keep Optuna's 32-bit column, which refuses a larger step.
     /// </param>
     /// <exception cref="OptunaSharp.UpdateFinishedTrialError">The storage record is already finished.</exception>
     /// <exception cref="NumSharp.KeyError">The trial was removed from storage.</exception>
     /// <exception cref="System.Exception">A configured storage or sampler implementation fails; its exception propagates.</exception>
     /// <exception cref="System.NotImplementedException">Reporting intermediate values is unsupported for multi-objective studies.</exception>
     /// <exception cref="NumSharp.ValueError">The reporting step is negative.</exception>
-    public override void Report(double value, int step)
+    public override void Report(double value, long step)
     {
         if (Study.Directions.Count > 1)
             throw new NotImplementedException(

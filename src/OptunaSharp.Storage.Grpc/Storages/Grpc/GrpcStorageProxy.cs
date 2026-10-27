@@ -417,8 +417,9 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
 
     /// <inheritdoc />
     /// <exception cref="global::Grpc.Core.RpcException">The remote call fails with a status that is not translated into an Optuna storage exception.</exception>
-    public override void SetTrialIntermediateValue(int trialId, int step, double intermediateValue)
+    public override void SetTrialIntermediateValue(int trialId, long step, double intermediateValue)
     {
+        // The wire field is int64 in Optuna's api.proto, so the full 64-bit step travels as is.
         var request = new ProtoApi.SetTrialIntermediateValueRequest
         {
             TrialId = trialId,

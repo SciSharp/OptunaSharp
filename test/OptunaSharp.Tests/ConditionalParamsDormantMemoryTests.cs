@@ -251,7 +251,7 @@ public class ConditionalParamsDormantMemoryTests
                 systemAttrs[ConditionalParams.DormantAttrKey] = value;
         return new FrozenTrial(
             number, TrialState.Complete, value: 0.0, DateTime.UtcNow, DateTime.UtcNow, @params, distributions,
-            new OrderedDict<string, object?>(), systemAttrs, new OrderedDict<int, double>(), trialId: number);
+            new OrderedDict<string, object?>(), systemAttrs, new OrderedDict<long, double>(), trialId: number);
     }
 
     private static Study RunTwoBranch(string samplerName, int seed, bool preserve)

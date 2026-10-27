@@ -550,7 +550,7 @@ public class CmaEsSampler : BaseSampler
                      && _considerPrunedTrials)
             {
                 // max(t.intermediate_values.items()) — the value at the largest step key.
-                int maxStep = t.IntermediateValues.Keys.Max();
+                long maxStep = t.IntermediateValues.Keys.Max();
                 double value = t.IntermediateValues[maxStep];
                 // We rewrite the value of the trial `t` for sampling, so we need a copy.
                 var copied = t.DeepCopy();

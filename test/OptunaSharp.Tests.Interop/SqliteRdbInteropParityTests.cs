@@ -126,7 +126,7 @@ public class SqliteRdbInteropParityTests : OptunaInteropTestBase
             value: double.PositiveInfinity,
             @params: new OrderedDict<string, object?> { ["x"] = 1.0 },
             distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(-10, 10) },
-            intermediateValues: new OrderedDict<int, double>
+            intermediateValues: new OrderedDict<long, double>
             {
                 [0] = 0.5, [1] = double.PositiveInfinity, [2] = double.NaN, [3] = double.NegativeInfinity,
             }));
@@ -278,7 +278,7 @@ public class SqliteRdbInteropParityTests : OptunaInteropTestBase
             distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(-10, 10) },
             userAttrs: new OrderedDict<string, object?> { ["owner"] = "eli" },
             systemAttrs: new OrderedDict<string, object?> { ["custom"] = 42L },
-            intermediateValues: new OrderedDict<int, double> { [0] = 0.5 }));
+            intermediateValues: new OrderedDict<long, double> { [0] = 0.5 }));
         var failed = study.GetTrials(deepcopy: false).Single();
         new RetryHeartbeatStaleTrialCallback(maxRetry: 3, inheritIntermediateValues: true).Invoke(study, failed);
         var wait = study.GetTrials(deepcopy: false).Single(t => t.State == TrialState.Waiting);

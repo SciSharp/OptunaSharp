@@ -60,7 +60,7 @@ public class FrozenTrial : BaseTrial
         OrderedDict<string, BaseDistribution> distributions,
         OrderedDict<string, object?> userAttrs,
         OrderedDict<string, object?> systemAttrs,
-        OrderedDict<int, double> intermediateValues,
+        OrderedDict<long, double> intermediateValues,
         int trialId,
         IEnumerable<double>? values = null)
     {
@@ -91,8 +91,11 @@ public class FrozenTrial : BaseTrial
     /// <summary>Datetime where the trial finished.</summary>
     public DateTime? DatetimeComplete { get; set; }
 
-    /// <summary>Intermediate objective values set with <see cref="Trial.Report" />.</summary>
-    public OrderedDict<int, double> IntermediateValues { get; set; }
+    /// <summary>
+    ///     Intermediate objective values set with <see cref="Trial.Report" />, keyed by step. Steps are 64-bit, like
+    ///     Python's unbounded <c>int</c> steps in journal, SQLite and in-memory storages.
+    /// </summary>
+    public OrderedDict<long, double> IntermediateValues { get; set; }
 
     // ------------------------------------------------------------------ suggest API
 
@@ -153,8 +156,8 @@ public class FrozenTrial : BaseTrial
     ///     Since <see cref="FrozenTrial" /> is not pruned, this report function does nothing.
     /// </summary>
     /// <param name="value">Intermediate objective value; ignored by replay trials.</param>
-    /// <param name="step">Zero-based reporting step; ignored by replay trials.</param>
-    public override void Report(double value, int step)
+    /// <param name="step">Zero-based reporting step (64-bit, like every trial's); ignored by replay trials.</param>
+    public override void Report(double value, long step)
     {
     }
 
@@ -380,8 +383,8 @@ public class FrozenTrial : BaseTrial
     /// <param name="loader">Deferred storage read invoked on first SystemAttrsDict access; failures are not swallowed.</param>
     internal void SetLazySystemAttrs(Func<OrderedDict<string, object?>> loader) => _systemAttrsLoader = loader;
 
-    /// <summary>Return the maximum step of <see cref="IntermediateValues" /> in the trial.</summary>
-    public int? LastStep
+    /// <summary>Return the maximum step of <see cref="IntermediateValues" /> in the trial (64-bit, like the steps).</summary>
+    public long? LastStep
     {
         get
         {
@@ -535,7 +538,7 @@ public class FrozenTrial : BaseTrial
     /// <param name="a">First collection to compare.</param>
     /// <param name="b">Second collection to compare.</param>
     /// <returns>True when both collections contain equal corresponding values.</returns>
-    private static bool IntermediateValuesEqual(OrderedDict<int, double> a, OrderedDict<int, double> b)
+    private static bool IntermediateValuesEqual(OrderedDict<long, double> a, OrderedDict<long, double> b)
     {
         if (a.Count != b.Count)
             return false;
@@ -652,7 +655,7 @@ public class FrozenTrial : BaseTrial
         OrderedDict<string, BaseDistribution>? distributions = null,
         OrderedDict<string, object?>? userAttrs = null,
         OrderedDict<string, object?>? systemAttrs = null,
-        OrderedDict<int, double>? intermediateValues = null,
+        OrderedDict<long, double>? intermediateValues = null,
         OrderedDict<string, double>? constraints = null)
     {
         @params ??= new OrderedDict<string, object?>();
@@ -662,7 +665,7 @@ public class FrozenTrial : BaseTrial
             convertedDistributions[key] = Distribution.ConvertOldDistributionToNewDistribution(dist);
         userAttrs ??= new OrderedDict<string, object?>();
         systemAttrs ??= new OrderedDict<string, object?>();
-        intermediateValues ??= new OrderedDict<int, double>();
+        intermediateValues ??= new OrderedDict<long, double>();
 
         DateTime? datetimeStart = state == TrialState.Waiting ? null : DateTime.Now;
         DateTime? datetimeComplete = state.IsFinished() ? datetimeStart : null;

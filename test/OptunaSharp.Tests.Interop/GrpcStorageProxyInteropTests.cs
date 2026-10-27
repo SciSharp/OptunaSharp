@@ -2,6 +2,7 @@ using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using AwesomeAssertions;
 using Microsoft.Extensions.Hosting;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -103,6 +104,64 @@ public class GrpcStorageProxyInteropTests : OptunaInteropTestBase
         }
     }
 
+    /// <summary>
+    ///     Review item P2-2, live, as pass 2B ran it: a raw Python gRPC stub sends <c>SetStudyUserAttribute</c> with
+    ///     100 KB of nested brackets. Against the OptunaSharp server this used to end the server process with a stack
+    ///     overflow ("Stack overflow.", every later call <c>UNAVAILABLE</c>; here the server runs in the test host).
+    ///     The same stub script runs against an OptunaSharp server and a Python <c>run_grpc_proxy_server</c>, and both
+    ///     must answer the same: <c>UNKNOWN</c> for the hostile request (Python's <c>json.loads</c> raises an uncaught
+    ///     <c>RecursionError</c>), then normal service, with only the later, valid attribute stored.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void DeeplyNestedAttributeFromARawStub_FailsOnlyThatRequest_LikeOnAPythonServer()
+    {
+        EnsureGrpcOrInconclusive();
+
+        int csPort = FreePort();
+        var app = GrpcProxyServer.MakeServer(new InMemoryStorage(), "localhost", csPort);
+        app.StartAsync().GetAwaiter().GetResult();
+        int pyPort = FreePort();
+        PyExec(
+            "import threading\n" +
+            "def _run_deep_server():\n" +
+            $"    optuna.storages.run_grpc_proxy_server(optuna.storages.InMemoryStorage(), host='localhost', port={pyPort})\n" +
+            "threading.Thread(target=_run_deep_server, daemon=True).start()\n");
+        try
+        {
+            PyExec(
+                "import grpc\n" +
+                "from optuna.storages._grpc.auto_generated import api_pb2, api_pb2_grpc\n" +
+                "def _oss_deep_attr(port):\n" +
+                "    channel = grpc.insecure_channel(f'localhost:{port}')\n" +
+                "    grpc.channel_ready_future(channel).result(timeout=20)\n" +
+                "    stub = api_pb2_grpc.StorageServiceStub(channel)\n" +
+                "    sid = stub.CreateNewStudy(api_pb2.CreateNewStudyRequest(\n" +
+                "        directions=[api_pb2.MINIMIZE], study_name='deep')).study_id\n" +
+                "    try:\n" +
+                "        stub.SetStudyUserAttribute(api_pb2.SetStudyUserAttributeRequest(\n" +
+                "            study_id=sid, key='k', value='[' * 50000 + ']' * 50000))\n" +
+                "        hostile = 'OK'\n" +
+                "    except grpc.RpcError as e:\n" +
+                "        hostile = e.code().name\n" +
+                "    stub.SetStudyUserAttribute(api_pb2.SetStudyUserAttributeRequest(study_id=sid, key='k2', value='[[1]]'))\n" +
+                "    attrs = stub.GetStudyUserAttributes(api_pb2.GetStudyUserAttributesRequest(study_id=sid)).user_attributes\n" +
+                "    channel.close()\n" +
+                "    return hostile + '|' + repr(sorted(attrs.items()))\n");
+
+            string csharpServer = PyStr($"_oss_deep_attr({csPort})");
+            string pythonServer = PyStr($"_oss_deep_attr({pyPort})");
+
+            csharpServer.Should().Be(pythonServer, "both servers answer the hostile request and the valid one alike");
+            csharpServer.Should().Be("UNKNOWN|[('k2', '[[1]]')]");
+        }
+        finally
+        {
+            app.StopAsync().GetAwaiter().GetResult();
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
+
     [TestMethod]
     [TestCategory("RequiresPython")]
     [DataRow(0)]
@@ -199,7 +258,7 @@ public class GrpcStorageProxyInteropTests : OptunaInteropTestBase
             value: double.PositiveInfinity,
             @params: new OrderedDict<string, object?> { ["x"] = 1.0 },
             distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(-10, 10) },
-            intermediateValues: new OrderedDict<int, double>
+            intermediateValues: new OrderedDict<long, double>
             {
                 [0] = 0.5, [1] = double.PositiveInfinity, [2] = double.NaN, [3] = double.NegativeInfinity,
             }));

@@ -104,7 +104,7 @@ public class HeartbeatTests
             {
                 ["x"] = new OptunaSharp.Distributions.FloatDistribution(0, 10),
             },
-            intermediateValues: new OrderedDict<int, double> { [0] = 0.5 });
+            intermediateValues: new OrderedDict<long, double> { [0] = 0.5 });
         // Materialize as a real failed trial in the study.
         study.AddTrial(failed);
         var storedFailed = study.Trials.Single();
@@ -401,7 +401,7 @@ public class HeartbeatTests
             state: TrialState.Fail,
             @params: new OrderedDict<string, object?> { ["x"] = 1.0 },
             distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(0, 10) },
-            intermediateValues: new OrderedDict<int, double> { [0] = 0.5 }));
+            intermediateValues: new OrderedDict<long, double> { [0] = 0.5 }));
         var stored = study.Trials.Single();
 
         callback.Invoke(study, stored);
@@ -478,7 +478,7 @@ public class HeartbeatTests
             state: TrialState.Fail,
             @params: new OrderedDict<string, object?> { ["x"] = 1.0 },
             distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(0, 10) },
-            intermediateValues: new OrderedDict<int, double> { [0] = 0.5 }));
+            intermediateValues: new OrderedDict<long, double> { [0] = 0.5 }));
         var stored = study.Trials.Single();
 
         callback.Invoke(study, stored);

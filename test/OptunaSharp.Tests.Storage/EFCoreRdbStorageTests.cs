@@ -526,7 +526,7 @@ public abstract class EFCoreRdbStorageTestsBase
             @params: new OrderedDict<string, object?> { ["x"] = 1.5 },
             distributions: QuadDist(),
             userAttrs: new OrderedDict<string, object?> { ["note"] = "hi" },
-            intermediateValues: new OrderedDict<int, double> { [0] = 0.5 });
+            intermediateValues: new OrderedDict<long, double> { [0] = 0.5 });
 
         int trialId = storage.CreateNewTrial(studyId, template);
         var trial = storage.GetTrial(trialId);
@@ -536,6 +536,27 @@ public abstract class EFCoreRdbStorageTestsBase
         trial.UserAttrs["note"].Should().Be("hi");
         trial.IntermediateValues[0].Should().Be(0.5);
         trial.Number.Should().Be(0);
+    }
+
+    /// <summary>
+    ///     Review item B-2 on PostgreSQL and MySQL: steps are 64-bit in the API, but Optuna's schema keeps the
+    ///     <c>trial_intermediate_values.step</c> column 32-bit on these databases, where Python's report of a larger
+    ///     step fails with a database <c>DataError</c>. Here it fails with a clear <see cref="OverflowException" />
+    ///     before anything is written, and the largest step the column holds still round-trips.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void IntermediateStep_PastTheInt32Column_IsRefusedClearly_AndNothingIsWritten()
+    {
+        using var storage = NewStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "steps");
+        int trialId = storage.CreateNewTrial(studyId);
+
+        storage.SetTrialIntermediateValue(trialId, int.MaxValue, 0.25);
+        var tooLarge = () => storage.SetTrialIntermediateValue(trialId, 3_000_000_000L, 0.5);
+
+        tooLarge.Should().Throw<OverflowException>().WithMessage("The step 3000000000 does not fit the 32-bit*");
+        storage.GetTrial(trialId).IntermediateValues.Should().Equal(new Dictionary<long, double> { [int.MaxValue] = 0.25 });
     }
 
     // ------------------------------------------------------------------ persistence / integration

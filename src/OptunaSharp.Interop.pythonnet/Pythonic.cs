@@ -82,7 +82,7 @@ internal static class Python
                 IReadOnlyList<double>? values,
                 IReadOnlyDictionary<string, object?> parameters,
                 IReadOnlyDictionary<string, BaseDistribution> distributions,
-                IReadOnlyDictionary<int, double>? intermediateValues = null)
+                IReadOnlyDictionary<long, double>? intermediateValues = null)
             {
                 using var trialModule = OptunaHubRuntime.Optuna.GetAttr("trial");
                 using var createTrial = trialModule.GetAttr("create_trial");
@@ -116,7 +116,12 @@ internal static class Python
 
                     using var pyInter = new PyDict();
                     foreach (var (step, value) in intermediateValues)
-                        pyInter.SetItem(step, value.ToPython()); // int step key -> float value
+                    {
+                        // Python int keys: a 64-bit step stays exact (an int step key -> float value).
+                        using var pyStep = new PyInt(step);
+                        using var pyValue = value.ToPython();
+                        pyInter.SetItem(pyStep, pyValue);
+                    }
                     kwargs["intermediate_values"] = pyInter;
                     return createTrial.Invoke(Array.Empty<PyObject>(), kwargs);
                 }
@@ -255,7 +260,7 @@ internal static class Python
             /// <param name="value">The parameter value or borrowed Python scalar to convert.</param>
             /// <param name="step">The discretization interval, or the reported trial step for report operations.</param>
             /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
-            internal static void report(PyObject trial, double value, int step)
+            internal static void report(PyObject trial, double value, long step)
             {
                 using var report = trial.GetAttr("report");
                 using var v = value.ToPython();

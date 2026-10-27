@@ -88,10 +88,10 @@ public class PercentilePruner : BasePruner
         if (nTrials < _nStartupTrials)
             return false;
 
-        int? stepNullable = trial.LastStep;
+        long? stepNullable = trial.LastStep;
         if (stepNullable is null)
             return false;
-        int step = stepNullable.Value;
+        long step = stepNullable.Value;
 
         int nWarmupSteps = _nWarmupSteps;
         if (step < nWarmupSteps)
@@ -139,7 +139,7 @@ public class PercentilePruner : BasePruner
     /// <summary>Python <c>_get_percentile_intermediate_result_over_trials</c>.</summary>
     /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
     /// <param name="direction">Whether objective values are minimized or maximized.</param>
-    /// <param name="step">Positive spacing between adjacent quantized numerical values.</param>
+    /// <param name="step">The reporting step whose completed-trial reports form the reference set.</param>
     /// <param name="percentile">Percentage defining the retained reference cutoff, in [0, 100].</param>
     /// <param name="nMinTrials">Minimum reference report count required before computing a cutoff.</param>
     /// <returns>The oriented percentile cutoff, or NaN when reference reports are insufficient.</returns>
@@ -147,7 +147,7 @@ public class PercentilePruner : BasePruner
     internal static double GetPercentileIntermediateResultOverTrials(
         IReadOnlyList<FrozenTrial> completedTrials,
         StudyDirection direction,
-        int step,
+        long step,
         double percentile,
         int nMinTrials)
     {
@@ -252,21 +252,21 @@ public class PercentilePruner : BasePruner
     }
 
     /// <summary>Python <c>_is_first_in_interval_step</c>.</summary>
-    /// <param name="step">Positive spacing between adjacent quantized numerical values.</param>
+    /// <param name="step">The step just reported: the trial's last (largest) step.</param>
     /// <param name="intermediateSteps">Previously reported steps, which need not be sorted.</param>
     /// <param name="nWarmupSteps">Resource-step offset before pruning checks begin.</param>
     /// <param name="intervalSteps">Positive number of steps between scheduled pruning checks.</param>
     /// <returns>True if no earlier report has already triggered the current scheduled interval.</returns>
     internal static bool IsFirstInIntervalStep(
-        int step, IEnumerable<int> intermediateSteps, int nWarmupSteps, int intervalSteps)
+        long step, IEnumerable<long> intermediateSteps, int nWarmupSteps, int intervalSteps)
     {
-        int nearestLowerPruningStep =
+        long nearestLowerPruningStep =
             (step - nWarmupSteps) / intervalSteps * intervalSteps + nWarmupSteps;
         System.Diagnostics.Debug.Assert(nearestLowerPruningStep >= 0);
 
         // `intermediateSteps` may not be sorted so we must go through all elements.
-        int secondLastStep = -1;
-        foreach (int s in intermediateSteps)
+        long secondLastStep = -1;
+        foreach (long s in intermediateSteps)
         {
             if (s > secondLastStep && s != step)
                 secondLastStep = s;

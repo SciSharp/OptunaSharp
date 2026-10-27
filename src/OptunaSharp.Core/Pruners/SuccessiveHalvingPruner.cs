@@ -20,7 +20,7 @@ namespace OptunaSharp.Pruners;
 /// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.pruners.SuccessiveHalvingPruner.html">Official Optuna SuccessiveHalvingPruner reference.</seealso>
 public class SuccessiveHalvingPruner : BasePruner
 {
-    private int? _minResource;
+    private long? _minResource;
     private readonly int _reductionFactor;
     private readonly int _minEarlyStoppingRate;
     private readonly int _bootstrapCount;
@@ -42,7 +42,7 @@ public class SuccessiveHalvingPruner : BasePruner
     /// <summary>Configures asynchronous rung promotion and its minimum resource budget.</summary>
     /// <exception cref="NumSharp.ValueError">The minimum resource is below one, the reduction factor is below two, an early-stopping/bootstrap count is negative, or positive bootstrap is combined with automatic minimum resource.</exception>
     public SuccessiveHalvingPruner(
-        int? minResource = null,
+        long? minResource = null,
         int reductionFactor = 4,
         int minEarlyStoppingRate = 0,
         int bootstrapCount = 0)
@@ -84,10 +84,10 @@ public class SuccessiveHalvingPruner : BasePruner
     /// <exception cref="NumSharp.RuntimeError">The study has multiple objectives and the pruning rule requests its scalar direction.</exception>
     public override bool Prune(Study study, FrozenTrial trial)
     {
-        int? stepNullable = trial.LastStep;
+        long? stepNullable = trial.LastStep;
         if (stepNullable is null)
             return false;
-        int step = stepNullable.Value;
+        long step = stepNullable.Value;
 
         int rung = GetCurrentRung(trial);
         double value = trial.IntermediateValues[step];
@@ -136,7 +136,7 @@ public class SuccessiveHalvingPruner : BasePruner
     /// <summary>Python <c>_estimate_min_resource</c>.</summary>
     /// <param name="trials">Trial history available to the operation, in its existing order.</param>
     /// <returns>The heuristic minimum budget, or null until a completed trial supplies a last step.</returns>
-    internal static int? EstimateMinResource(IReadOnlyList<FrozenTrial> trials)
+    internal static long? EstimateMinResource(IReadOnlyList<FrozenTrial> trials)
     {
         var nSteps = trials
             .Where(t => t.State == TrialState.Complete && t.LastStep is not null)
@@ -147,8 +147,8 @@ public class SuccessiveHalvingPruner : BasePruner
             return null;
 
         // Get the maximum number of steps and divide it by 100.
-        int lastStep = nSteps.Max();
-        return Math.Max(lastStep / 100, 1);
+        long lastStep = nSteps.Max();
+        return Math.Max(lastStep / 100, 1L);
     }
 
     /// <summary>Python <c>_get_current_rung</c> (takes O(log step) iterations).</summary>

@@ -218,7 +218,7 @@ public abstract class EFCoreRdbInteropParityTestsBase : OptunaInteropTestBase
             value: double.PositiveInfinity,
             @params: new OrderedDict<string, object?> { ["x"] = 1.0 },
             distributions: new OrderedDict<string, BaseDistribution> { ["x"] = new FloatDistribution(-10, 10) },
-            intermediateValues: new OrderedDict<int, double>
+            intermediateValues: new OrderedDict<long, double>
             {
                 [0] = 0.5, [1] = double.PositiveInfinity, [2] = double.NaN, [3] = double.NegativeInfinity,
             }));

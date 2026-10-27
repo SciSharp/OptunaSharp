@@ -83,7 +83,7 @@ not expose a managed per-boosting-iteration hook. Its
 
 `OptunaSearchCV` does not implement Python's `partial_fit`-based `enable_pruning` / `max_iter` path.
 Use this helper inside an estimator you control, or implement the estimator's training contract
-explicitly. A subclass can read the protected `Trial` and override `FormatPrunedMessage(int step)`
+explicitly. A subclass can read the protected `Trial` and override `FormatPrunedMessage(long step)`
 to use framework terminology such as “epoch.”
 
 ## Implementation and verification

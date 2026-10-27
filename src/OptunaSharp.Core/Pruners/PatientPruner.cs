@@ -56,7 +56,7 @@ public class PatientPruner : BasePruner
     /// <exception cref="System.Exception">The wrapped pruner fails; its exception propagates once the patience rule permits pruning.</exception>
     public override bool Prune(Study study, FrozenTrial trial)
     {
-        int? stepNullable = trial.LastStep;
+        long? stepNullable = trial.LastStep;
         if (stepNullable is null)
             return false;
 

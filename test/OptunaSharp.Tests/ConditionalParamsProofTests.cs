@@ -339,7 +339,7 @@ public class ConditionalParamsProofTests
         }
         return new FrozenTrial(
             number, TrialState.Complete, value, DateTime.UtcNow, DateTime.UtcNow, @params, distributions,
-            new OrderedDict<string, object?>(), new OrderedDict<string, object?>(), new OrderedDict<int, double>(),
+            new OrderedDict<string, object?>(), new OrderedDict<string, object?>(), new OrderedDict<long, double>(),
             trialId: number);
     }
 
@@ -349,7 +349,7 @@ public class ConditionalParamsProofTests
         var distributions = new OrderedDict<string, BaseDistribution>(trial.DistributionsDict.Where(kv => kv.Key != name));
         return new FrozenTrial(
             trial.Number, trial.State, trial.Value, trial.DatetimeStart, trial.DatetimeComplete, @params, distributions,
-            new OrderedDict<string, object?>(), new OrderedDict<string, object?>(), new OrderedDict<int, double>(),
+            new OrderedDict<string, object?>(), new OrderedDict<string, object?>(), new OrderedDict<long, double>(),
             trialId: trial.TrialId);
     }
 
