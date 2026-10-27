@@ -5,12 +5,14 @@ using System.Globalization;
 using System.Linq;
 using AwesomeAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using MySqlConnector;
 using Npgsql;
 using NumSharp;
 using OptunaSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
+using OptunaSharp.Extensions;
 using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
 using OptunaSharp.Storages;
@@ -102,6 +104,43 @@ public abstract class EFCoreRdbStorageTestsBase
         int id = survivor.CreateNewStudy(new[] { StudyDirection.Maximize }, "survivor");
         survivor.GetStudyNameFromId(id).Should().Be("survivor");
         survivor.GetAllStudies().Select(s => s.StudyName).Should().BeEquivalentTo(new[] { "first", "survivor" });
+    }
+
+    // ------------------------------------------------------------------ storage URLs through Core (review H7)
+
+    /// <summary>
+    ///     Review item H7 on a live server: Core's <see cref="StorageFunctions.GetStorage(string)" /> opens this
+    ///     package for a <c>postgresql://</c> or <c>mysql://</c> URL and returns a <see cref="CachedStorage" /> over
+    ///     it, as Python returns <c>_CachedStorage(RDBStorage)</c>. Core's <c>AddOptunaStorage(url)</c> registers
+    ///     this package's storage under both its concrete type and <see cref="BaseStorage" />, and the registered
+    ///     storage reads the study the first one wrote.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("Integration")]
+    public void StorageUrl_OpensThisPackage_ThroughCoresGetStorageAndAddOptunaStorage()
+    {
+        EFCoreDbSession.Reset(Provider);
+        string url = EFCoreDbSession.SqlUrl(Provider);
+
+        BaseStorage cached = StorageFunctions.GetStorage(url);
+        RDBStorage backend = cached.Should().BeOfType<CachedStorage>()
+            .Which.Backend.Should().BeOfType<RDBStorage>().Which;
+        try
+        {
+            backend.Provider.Should().Be(Provider);
+            Optuna.CreateStudy(storage: cached, studyName: "url", sampler: new RandomSampler(0))
+                .Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 2);
+        }
+        finally
+        {
+            // The cache does not own the storage, as in Python: the caller disposes it.
+            backend.Dispose();
+        }
+
+        using ServiceProvider provider = new ServiceCollection().AddOptunaStorage(url).BuildServiceProvider();
+        BaseStorage registered = provider.GetRequiredService<BaseStorage>();
+        registered.Should().BeSameAs(provider.GetRequiredService<RDBStorage>());
+        Optuna.LoadStudy("url", registered).Trials.Should().HaveCount(2);
     }
 
     // ------------------------------------------------------------------ schema / version pins

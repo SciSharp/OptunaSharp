@@ -1,0 +1,144 @@
+using System;
+using System.IO;
+using System.Linq;
+using AwesomeAssertions;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
+using OptunaSharp;
+using OptunaSharp.Extensions;
+using OptunaSharp.Samplers;
+using OptunaSharp.Storages;
+
+namespace OptunaSharp.Tests.Storage;
+
+/// <summary>
+///     Review item H7 with the storage packages referenced: Core's <see cref="StorageFunctions.GetStorage(string)" />
+///     and <c>AddOptunaStorage(string)</c> open the package that serves a URL's dialect. Before the fix the first
+///     threw for every URL and the second registered a factory that threw on every resolution. The SQLite cases
+///     run everywhere; the PostgreSQL and MySQL cases are in the EF Core suite, against live servers.
+/// </summary>
+[TestClass]
+public class StorageUrlTests
+{
+    private string _path = null!;
+
+    /// <summary>The test's SQLite URL, with forward slashes as SQLAlchemy writes Windows paths.</summary>
+    private string Url => "sqlite:///" + _path.Replace('\\', '/');
+
+    /// <summary>A fresh database path per test.</summary>
+    [TestInitialize]
+    public void SetUp() => _path = Path.Combine(Path.GetTempPath(), $"optunasharp-url-{Guid.NewGuid():N}.db");
+
+    /// <summary>Deletes the test's database and its journal files.</summary>
+    [TestCleanup]
+    public void TearDown()
+    {
+        // A disposed storage's connection goes back to Microsoft.Data.Sqlite's pool, which keeps the file
+        // open on Windows until the pool is cleared.
+        SqliteConnection.ClearAllPools();
+        foreach (string file in Directory.GetFiles(Path.GetTempPath(), Path.GetFileName(_path) + "*"))
+            File.Delete(file);
+    }
+
+    /// <summary>A one-parameter objective.</summary>
+    /// <param name="trial">The trial to sample.</param>
+    /// <returns>The sampled value.</returns>
+    private static double Objective(Trial trial) => trial.SuggestFloat("x", 0, 1);
+
+    /// <summary>
+    ///     Python's <c>get_storage("sqlite:///…")</c> returns <c>_CachedStorage(RDBStorage)</c>; the port returns a
+    ///     <see cref="CachedStorage" /> over the SQLite package's <see cref="RDBStorage" />, and a study written
+    ///     through it is in the file afterwards.
+    /// </summary>
+    [TestMethod]
+    public void GetStorage_SqliteUrl_IsACacheOverTheSqlitePackagesStorage_LikePython()
+    {
+        BaseStorage storage = StorageFunctions.GetStorage(Url);
+        RDBStorage backend = storage.Should().BeOfType<CachedStorage>()
+            .Which.Backend.Should().BeOfType<RDBStorage>().Which;
+        try
+        {
+            Optuna.CreateStudy(storage: storage, studyName: "url", sampler: new RandomSampler(0))
+                .Optimize(Objective, nTrials: 3);
+        }
+        finally
+        {
+            // The cache does not own the storage, as in Python: the caller disposes it.
+            backend.Dispose();
+        }
+
+        using var reopened = new RDBStorage(Url);
+        Optuna.LoadStudy("url", reopened).Trials.Should().HaveCount(3);
+    }
+
+    /// <summary>
+    ///     SQLAlchemy accepts a driver after the dialect, and Python opens <c>sqlite+pysqlite:///study.db</c> like
+    ///     <c>sqlite:///study.db</c>. The SQLite package used to treat the whole URL as a file name; it now drops
+    ///     the driver and opens the same file.
+    /// </summary>
+    [TestMethod]
+    public void GetStorage_SqliteUrlWithADriver_OpensTheSameFile()
+    {
+        using (var plain = new RDBStorage(Url))
+            Optuna.CreateStudy(storage: plain, studyName: "driver", sampler: new RandomSampler(0))
+                .Optimize(Objective, nTrials: 2);
+
+        BaseStorage storage = StorageFunctions.GetStorage("sqlite+pysqlite:///" + _path.Replace('\\', '/'));
+        try
+        {
+            Optuna.LoadStudy("driver", storage).Trials.Should().HaveCount(2);
+        }
+        finally
+        {
+            ((IDisposable)((CachedStorage)storage).Backend).Dispose();
+        }
+    }
+
+    /// <summary>
+    ///     The H7 repro, fixed: resolving after <c>AddOptunaStorage("sqlite:///…")</c> threw NotSupportedException.
+    ///     The registration is now the one <c>AddSqliteStorage(url)</c> makes: the concrete storage and
+    ///     <see cref="BaseStorage" /> resolve to one instance, studies built by the factory persist to the file, and
+    ///     disposing the container disposes the storage and closes its connection.
+    /// </summary>
+    [TestMethod]
+    public void AddOptunaStorage_SqliteUrl_RegistersWhatAddSqliteStorageRegisters()
+    {
+        RDBStorage registered;
+        using (ServiceProvider provider = new ServiceCollection()
+                   .AddOptunaStorage(Url)
+                   .AddOptunaStudyFactory()
+                   .BuildServiceProvider())
+        {
+            BaseStorage storage = provider.GetRequiredService<BaseStorage>();
+            registered = provider.GetRequiredService<RDBStorage>();
+            storage.Should().BeSameAs(registered);
+
+            provider.GetRequiredService<IOptunaStudyFactory>().CreateStudy("di").Optimize(Objective, nTrials: 3);
+        }
+
+        // The container owned the storage, so disposing the container closed the storage's connection.
+        FluentActions.Invoking(() => registered.GetAllStudies()).Should().Throw<InvalidOperationException>();
+        using var reopened = new RDBStorage(Url);
+        Optuna.LoadStudy("di", reopened).Trials.Should().HaveCount(3);
+    }
+
+    /// <summary>
+    ///     A server URL is checked when it is registered, but nothing connects until the storage is resolved: the
+    ///     registration finds the EF Core package by name and adds the concrete type plus the
+    ///     <see cref="BaseStorage" /> forward, and only resolution reaches the (closed) server port.
+    /// </summary>
+    [TestMethod]
+    public void AddOptunaStorage_ServerUrl_ChecksAtRegistration_AndConnectsOnResolution()
+    {
+        // Port 1 on the loopback refuses connections, so the resolution fails without waiting for a timeout.
+        var services = new ServiceCollection().AddOptunaStorage("postgresql://user:pw@127.0.0.1:1/optuna");
+
+        services.Select(d => d.ServiceType.FullName).Should().Equal(
+            "OptunaSharp.Storages.EFCore.RDBStorage", typeof(BaseStorage).FullName);
+        using ServiceProvider provider = services.BuildServiceProvider();
+        Exception failure = FluentActions.Invoking(() => provider.GetRequiredService<BaseStorage>())
+            .Should().Throw<Exception>().Which;
+        failure.Should().NotBeAssignableTo<NotSupportedException>()
+            .And.NotBeAssignableTo<ArgumentException>("the URL is valid and its package is referenced");
+    }
+}

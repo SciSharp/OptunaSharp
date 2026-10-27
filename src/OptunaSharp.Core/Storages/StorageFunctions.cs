@@ -26,19 +26,46 @@ public static class StorageFunctions
         return storage;
     }
 
-    /// <summary>URL-based overload mirroring Python's signature; RDB storages are Tier X packages.</summary>
-    /// <param name="storageUrl">Storage URL; Core rejects URL dispatch and requires a satellite backend instance.</param>
-    /// <returns>This overload always throws; use a backend instance from a storage satellite package.</returns>
-    /// <exception cref="NumSharp.ValueError">The URL overload is given a removed RedisStorage URL.</exception>
-    /// <exception cref="System.NotSupportedException">The URL overload is used; construct a backend from a satellite storage package.</exception>
+    /// <summary>
+    ///     Python <c>optuna.storages.get_storage</c> for a storage URL: opens the RDB storage the URL names
+    ///     and wraps it in a <see cref="CachedStorage" />, exactly as Python returns
+    ///     <c>_CachedStorage(RDBStorage(url))</c>. <c>sqlite:///…</c> URLs open through the
+    ///     <c>OptunaSharp.Storage.Sqlite</c> package, and <c>postgresql://…</c>, <c>mysql://…</c> and
+    ///     <c>mariadb://…</c> URLs through <c>OptunaSharp.Storage.EFCore</c>. The application must reference the
+    ///     package that serves the URL's dialect; Core finds it by name.
+    /// </summary>
+    /// <param name="storageUrl">
+    ///     A SQLAlchemy-style storage URL such as <c>sqlite:///study.db</c> or
+    ///     <c>postgresql://user:password@host:5432/optuna</c>. <c>null</c> gives a fresh
+    ///     <see cref="InMemoryStorage" />, as Python's <c>None</c> does, so a storage URL read from an unset
+    ///     environment variable behaves as in Python.
+    /// </param>
+    /// <returns>A <see cref="CachedStorage" /> over the newly opened RDB storage, or an in-memory storage for <c>null</c>.</returns>
+    /// <exception cref="ValueError">The URL starts with <c>redis</c>: Optuna removed RedisStorage in v3.1.0 (use a Redis journal backend).</exception>
+    /// <exception cref="System.ArgumentException">
+    ///     The URL does not start with <c>name://</c> (for example a bare file path), or it names a dialect
+    ///     SQLAlchemy does not know (for example <c>postgres</c>). The messages are SQLAlchemy's.
+    /// </exception>
+    /// <exception cref="System.NotSupportedException">
+    ///     No OptunaSharp package serves the URL's dialect (<c>oracle</c>, <c>mssql</c>), or the application does
+    ///     not reference the package that does. The message starts with Optuna's <c>ImportError</c> text.
+    /// </exception>
+    /// <remarks>
+    ///     <para>The storage package's constructor runs with its defaults, so anything it throws for this URL
+    ///     (an unreachable server, an incompatible schema version) propagates unchanged.</para>
+    ///     <para>Footgun: like Python's, the returned cache does not own the storage it wraps, so nothing ever
+    ///     disposes the database connection. A long-running process that calls this repeatedly keeps every
+    ///     connection open; dispose <c>((CachedStorage)storage).Backend</c> when done, or construct the
+    ///     package's <c>RDBStorage</c> in a <c>using</c> and pass that instead. Python marks this function
+    ///     "only for internal usage".</para>
+    /// </remarks>
     public static BaseStorage GetStorage(string storageUrl)
     {
-        if (storageUrl.StartsWith("redis", System.StringComparison.Ordinal))
-            throw new ValueError(
-                "RedisStorage is removed at Optuna v3.1.0. Please use JournalRedisBackend instead.");
-        throw new System.NotSupportedException(
-            "URL-based storages (RDB) are provided by the OptunaSharp.Storage.* packages " +
-            "(PORTING_PLAN Phase 4). Pass a BaseStorage instance instead, e.g. new JournalStorage(" +
-            "new JournalFileBackend(path)).");
+        // Python's single get_storage maps None to an in-memory storage before it looks at strings.
+        if (storageUrl is null)
+            return GetStorage((BaseStorage?)null);
+
+        System.Type backendType = StorageUrlResolver.ResolveBackendType(storageUrl);
+        return GetStorage(StorageUrlResolver.CreateBackend(backendType, storageUrl));
     }
 }

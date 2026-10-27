@@ -65,7 +65,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     /// </summary>
     /// <param name="url">
     ///     A SQLite URL: <c>sqlite:///relative.db</c>, <c>sqlite:////absolute.db</c>,
-    ///     <c>sqlite:///C:/path.db</c> or <c>sqlite:///:memory:</c>.
+    ///     <c>sqlite:///C:/path.db</c> or <c>sqlite:///:memory:</c>. A driver suffix such as
+    ///     <c>sqlite+pysqlite:///relative.db</c> is accepted and ignored.
     /// </param>
     /// <param name="skipCompatibilityCheck">Skip the alembic schema-compatibility check.</param>
     /// <param name="skipTableCreation">Skip creating the tables (assume they already exist).</param>
@@ -230,11 +231,24 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     private static string FillStorageUrlTemplate(string template)
         => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(CultureInfo.InvariantCulture));
 
-    /// <summary>Extracts the SQLite file or in-memory target from an Optuna-style URL.</summary>
+    /// <summary>
+    ///     Extracts the SQLite file or in-memory target from an Optuna-style URL. A driver after the dialect
+    ///     (<c>sqlite+pysqlite:///study.db</c>, which SQLAlchemy accepts) names a Python module and is dropped,
+    ///     so it opens the same file as <c>sqlite:///study.db</c>.
+    /// </summary>
     /// <param name="url">The database connection URL to resolve.</param>
     /// <returns>The SQLite data-source name used to open the connection.</returns>
     private static string ResolveDataSource(string url)
     {
+        if (url.StartsWith("sqlite+", StringComparison.Ordinal))
+        {
+            // Without this the whole URL fell through to the bare-path case below and SQLite tried to open a
+            // file literally named "sqlite+pysqlite:///study.db". The driver is not validated, so any name works.
+            int schemeEnd = url.IndexOf("://", StringComparison.Ordinal);
+            if (schemeEnd >= 0)
+                url = "sqlite" + url.Substring(schemeEnd);
+        }
+
         const string prefix = "sqlite:///";
         if (url.StartsWith(prefix, StringComparison.Ordinal))
             return url.Substring(prefix.Length);

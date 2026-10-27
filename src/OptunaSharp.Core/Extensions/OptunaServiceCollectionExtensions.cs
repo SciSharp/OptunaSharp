@@ -141,16 +141,47 @@ public static class OptunaServiceCollectionExtensions
     }
 
     /// <summary>
-    ///     Register a storage resolved from an Optuna storage URL (the string form of
-    ///     <c>optuna.create_study(storage=...)</c>). The satellite storage packages that own a URL scheme
-    ///     (<c>sqlite:///…</c>, <c>redis://…</c>, …) must be referenced for their scheme to resolve; the
-    ///     in-repo default handles the journal-file / in-memory forms.
+    ///     Register the RDB storage an Optuna storage URL names (the string form of
+    ///     <c>optuna.create_study(storage=...)</c>): <c>sqlite:///…</c> through the
+    ///     <c>OptunaSharp.Storage.Sqlite</c> package, and <c>postgresql://…</c>, <c>mysql://…</c> and
+    ///     <c>mariadb://…</c> through <c>OptunaSharp.Storage.EFCore</c>. The application must reference the
+    ///     package that serves the URL's dialect; Core finds it by name.
     /// </summary>
     /// <param name="services">The service collection to add to.</param>
-    /// <param name="storageUrl">The storage URL passed to <see cref="StorageFunctions.GetStorage(string)" />.</param>
-    /// <param name="lifetime">The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />.</param>
+    /// <param name="storageUrl">
+    ///     A SQLAlchemy-style storage URL, resolved like <see cref="StorageFunctions.GetStorage(string)" />
+    ///     resolves it, for example <c>sqlite:///study.db</c> or <c>postgresql://user:password@host:5432/optuna</c>.
+    /// </param>
+    /// <param name="lifetime">
+    ///     The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />, so every study shares
+    ///     one connection that the container disposes at shutdown. <see cref="ServiceLifetime.Scoped" /> opens a
+    ///     connection per scope and <see cref="ServiceLifetime.Transient" /> one per resolution; the container
+    ///     disposes each when its scope ends.
+    /// </param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services" /> or <paramref name="storageUrl" /> is <c>null</c>.</exception>
+    /// <exception cref="NumSharp.ValueError">The URL starts with <c>redis</c>: Optuna removed RedisStorage in v3.1.0.</exception>
+    /// <exception cref="ArgumentException">
+    ///     The URL does not start with <c>name://</c> (for example a bare file path), or it names a dialect
+    ///     SQLAlchemy does not know (for example <c>postgres</c>). The messages are SQLAlchemy's.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    ///     No OptunaSharp package serves the URL's dialect (<c>oracle</c>, <c>mssql</c>), or the application does
+    ///     not reference the package that does. The message starts with Optuna's <c>ImportError</c> text.
+    /// </exception>
+    /// <remarks>
+    ///     <para>The registration is the one the serving package's own <c>AddSqliteStorage(url)</c> or
+    ///     <c>AddEFCoreStorage(url)</c> makes: the storage is registered as its concrete <c>RDBStorage</c> type and
+    ///     forwarded as <see cref="BaseStorage" />, the container owns and disposes it, and every study the
+    ///     factory builds wraps it in its own <see cref="CachedStorage" />. That differs from
+    ///     <see cref="StorageFunctions.GetStorage(string)" />, whose cache never disposes the connection.</para>
+    ///     <para>The URL is checked when this method runs, so a malformed URL, an unknown dialect or a missing
+    ///     package fails at startup. The database is opened on first resolution, so an unreachable server
+    ///     fails then.</para>
+    ///     <para>Journal and Redis journal storages have no URL form in Optuna. Register them with
+    ///     <see cref="AddOptunaStorage(IServiceCollection, BaseStorage)" /> or their package's
+    ///     <c>Add…JournalStorage</c> method.</para>
+    /// </remarks>
     public static IServiceCollection AddOptunaStorage(
         this IServiceCollection services,
         string storageUrl,
@@ -158,7 +189,15 @@ public static class OptunaServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(storageUrl);
-        services.Add(new ServiceDescriptor(typeof(BaseStorage), _ => StorageFunctions.GetStorage(storageUrl), lifetime));
+        // Validate before registering anything, so a refused URL leaves the collection untouched.
+        Type backendType = StorageUrlResolver.ResolveBackendType(storageUrl);
+        services.Add(new ServiceDescriptor(
+            backendType, _ => StorageUrlResolver.CreateBackend(backendType, storageUrl), lifetime));
+        // Forward the abstraction to the concrete registration rather than registering a second factory: for
+        // the singleton and scoped lifetimes, resolving either one then yields the same instance, which the
+        // container disposes once. A transient registration builds a new storage per resolution either way.
+        services.Add(new ServiceDescriptor(
+            typeof(BaseStorage), sp => sp.GetRequiredService(backendType), lifetime));
         return services;
     }
 
