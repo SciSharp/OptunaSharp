@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -110,6 +111,79 @@ public class JournalConcurrencyTests
         errors.Should().BeEmpty();
         File.ReadAllLines(_path).Should().HaveCount(16 * 40);
         locks.Should().HaveCount(16).And.OnlyContain(l => !l.UsesOpenLock, "contention is not a reason to switch protocols");
+    }
+
+    /// <summary>
+    ///     How a failed acquire is classified, the port of Python's <c>err.errno == errno.EEXIST</c>: the two Windows
+    ///     "already exists" codes count as contention on every OS (the symlink lock's fast path throws one of them
+    ///     itself), and EEXIST counts off Windows. Anything else, such as a missing directory, a denied path or a
+    ///     generic I/O error, is a real failure and must propagate.
+    /// </summary>
+    [TestMethod]
+    public void LockProtocol_ClassifiesOnlyAlreadyExistsAsContention()
+    {
+        static IOException Io(int hResult) => new("probe", hResult);
+
+        JournalFileLockProtocol.IsAlreadyExists(Io(unchecked((int)0x80070050))).Should().BeTrue("ERROR_FILE_EXISTS");
+        JournalFileLockProtocol.IsAlreadyExists(Io(unchecked((int)0x800700B7))).Should().BeTrue("ERROR_ALREADY_EXISTS");
+        JournalFileLockProtocol.IsAlreadyExists(Io(17)).Should().Be(!OperatingSystem.IsWindows(),
+            ".NET puts the raw errno in HResult only off Windows");
+        JournalFileLockProtocol.IsAlreadyExists(new DirectoryNotFoundException("probe")).Should().BeFalse("a missing directory");
+        JournalFileLockProtocol.IsAlreadyExists(Io(unchecked((int)0x80070005))).Should().BeFalse("access denied");
+        JournalFileLockProtocol.IsAlreadyExists(new IOException("probe")).Should().BeFalse("a generic I/O error");
+    }
+
+    /// <summary>
+    ///     A lock whose directory does not exist fails at once instead of waiting forever. The failure is not "already
+    ///     exists", so the error-code classification must let it through, on both protocols. A watchdog turns a
+    ///     regression into a failure rather than a hung run.
+    /// </summary>
+    [TestMethod]
+    public void Locks_InAMissingDirectory_RaiseInsteadOfWaiting()
+    {
+        string missing = Path.Combine(Path.GetTempPath(), $"optunasharp-missing-{Guid.NewGuid():N}", "journal.log");
+        foreach (var lockObj in new BaseJournalFileLock[] { new JournalFileOpenLock(missing), new JournalFileSymlinkLock(missing) })
+        {
+            var acquire = System.Threading.Tasks.Task.Run(() => lockObj.Acquire());
+
+            ((IAsyncResult)acquire).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(10)).Should().BeTrue(
+                $"{lockObj.GetType().Name} must raise, not wait, when its directory is missing");
+            acquire.IsFaulted.Should().BeTrue();
+            Exception? thrown = acquire.Exception!.InnerException;
+            thrown.Should().NotBeNull();
+            (thrown is IOException io && JournalFileLockProtocol.IsAlreadyExists(io)).Should().BeFalse(
+                "the failure is a real one, never contention");
+        }
+    }
+
+    /// <summary>
+    ///     A waiter takes the lock within milliseconds of its release, however long it waited: the retry sleep stops
+    ///     doubling at 16 ms. With Python's 1 s cap, a waiter that had already waited a second slept up to another
+    ///     second past the release, and the journal sat idle (16 contending writers managed about 43 appends a
+    ///     second). After a 1.2 s hold, that waiter would take the lock about 0.8 s late.
+    /// </summary>
+    [TestMethod]
+    public void Lock_ReleasedAfterALongHold_IsTakenWithinMilliseconds()
+    {
+        var holder = new JournalFileOpenLock(_path);
+        holder.Acquire().Should().BeTrue();
+        var waiter = new JournalFileOpenLock(_path);
+        long acquiredAt = 0;
+        var waiting = new Thread(() =>
+        {
+            waiter.Acquire();
+            acquiredAt = Stopwatch.GetTimestamp();
+        });
+        waiting.Start();
+
+        Thread.Sleep(1200);   // longer than the 1023 ms the doubling sleeps take to reach Python's 1 s cap
+        long releasedAt = Stopwatch.GetTimestamp();
+        holder.Release();
+
+        waiting.Join(TimeSpan.FromSeconds(10)).Should().BeTrue();
+        waiter.Release();
+        double lagMs = (acquiredAt - releasedAt) * 1000.0 / Stopwatch.Frequency;
+        lagMs.Should().BeLessThan(400, "a waiter retries at least every 16 ms");
     }
 
     // ------------------------------------------------------------------ several storages, one study
@@ -296,6 +370,67 @@ public class JournalConcurrencyTests
         errors.Should().BeEmpty();
         values.Distinct().Should().ContainSingle();
         File.ReadLines(_path).Count(l => l.StartsWith("{\"op_code\":5,", StringComparison.Ordinal)).Should().Be(1);
+    }
+
+    /// <summary>
+    ///     Eight threads setting one constraint key of one trial: it is written once, with the value of the call that
+    ///     got there first, and the others are ignored with a warning, as Optuna documents. The "already set?" check
+    ///     and the write used to interleave, so several calls could each write it.
+    /// </summary>
+    [TestMethod]
+    public void OneTrial_ConcurrentConstraintsOfOneKey_WriteItOnce()
+    {
+        var study = Optuna.CreateStudy(storage: NewStorage(), studyName: "s");
+        var trial = study.Ask();
+
+        var errors = RunConcurrently(8, w => trial.SetConstraint("c", w));
+
+        errors.Should().BeEmpty();
+        var writes = File.ReadLines(_path)
+            .Where(l => l.StartsWith("{\"op_code\":9,", StringComparison.Ordinal))
+            .Select(l => (OrderedDict<string, object?>)OptunaSharp.Internal.PyJson.Loads(l)!)
+            .Where(r => ((OrderedDict<string, object?>)r["system_attr"]!).ContainsKey("constraints:c"))
+            .ToList();
+        writes.Should().ContainSingle("the first call sets the constraint; later ones are ignored");
+        double written = Convert.ToDouble(((OrderedDict<string, object?>)writes[0]["system_attr"]!)["constraints:c"]);
+        Convert.ToDouble(NewStorage().GetTrial(trial.TrialId).SystemAttrs["constraints:c"]).Should().Be(written);
+    }
+
+    // ------------------------------------------------------------------ creating one study at once
+
+    /// <summary>
+    ///     Sixteen separate storages create one study name at once. With <c>loadIfExists</c>, every caller gets the one
+    ///     study; without it, exactly one call creates it and the other fifteen get <see cref="DuplicatedStudyError" />.
+    ///     The journal holds each study once. Creation is decided by journal order.
+    /// </summary>
+    [TestMethod]
+    public void CreateStudy_RacingOnOneName_CreatesItOnce()
+    {
+        var ids = new ConcurrentBag<int>();
+        var loadErrors = RunConcurrently(16, _ =>
+            ids.Add(Optuna.CreateStudy(storage: NewStorage(), studyName: "shared", loadIfExists: true).StudyId));
+
+        loadErrors.Should().BeEmpty();
+        ids.Should().HaveCount(16).And.Subject.Distinct().Should().ContainSingle("every caller loads the one study");
+
+        int created = 0, duplicates = 0;
+        var createErrors = RunConcurrently(16, _ =>
+        {
+            try
+            {
+                Optuna.CreateStudy(storage: NewStorage(), studyName: "exclusive");
+                Interlocked.Increment(ref created);
+            }
+            catch (DuplicatedStudyError)
+            {
+                Interlocked.Increment(ref duplicates);
+            }
+        });
+
+        createErrors.Should().BeEmpty();
+        created.Should().Be(1);
+        duplicates.Should().Be(15);
+        NewStorage().GetAllStudies().Select(s => s.StudyName).Should().BeEquivalentTo(new[] { "shared", "exclusive" });
     }
 
     // ------------------------------------------------------------------ helpers

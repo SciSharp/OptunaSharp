@@ -79,6 +79,50 @@ public class OptunaHubBridgeParityTests
         Assert.IsTrue(best is >= -10 and <= 10, $"x out of range: {best}");
     }
 
+    /// <summary>
+    ///     A hub sampler shared by eight <c>nJobs</c> workers completes every trial. The bridge took its shadow-study
+    ///     lock while holding the GIL, and the interpreter could hand the GIL to another worker that then waited for
+    ///     that lock, so <c>nJobs</c> above 1 deadlocked (CatCMA hung 7 of 7 runs on 2026-10-19). Every sampler call now
+    ///     runs under the sampler's monitor, so two workers are never inside the bridge at once. The shadow study is
+    ///     rebuilt from the whole history on each call, so later calls hold the GIL longest; 120 trials reach well
+    ///     past the point where the old runs hung. A watchdog turns a regression into a failure instead of a hung run.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void SamplerBridge_SharedByNJobsWorkers_DoesNotDeadlock()
+    {
+        RequireOptunaHubOrInconclusive();
+        string registry = SubmoduleRegistryOrInconclusive();
+
+        using var module = OptunaHub.LoadLocalModule("samplers/random_search", registry);
+        using var sampler = module.CreateSampler("RandomSampler", new() { ["seed"] = 0 });
+        var study = Optuna.CreateStudy(sampler: sampler);
+
+        Exception? failure = null;
+        var worker = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                study.Optimize(t =>
+                {
+                    double x = t.SuggestFloat("x", -10, 10);
+                    double y = t.SuggestFloat("y", -10, 10);
+                    return x * x + y * y;
+                }, nTrials: 120, nJobs: 8);
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+        }) { IsBackground = true };
+        worker.Start();
+
+        Assert.IsTrue(worker.Join(TimeSpan.FromSeconds(180)), "Optimize(nJobs: 8) over a hub sampler deadlocked");
+        Assert.IsNull(failure, failure?.ToString());
+        Assert.AreEqual(120, study.Trials.Count);
+        Assert.IsTrue(study.Trials.All(t => t.State == TrialState.Complete), "every trial must complete");
+    }
+
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void PrunerBridge_HubMedianPruner_PrunesLaggards()

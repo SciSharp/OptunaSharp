@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
@@ -244,6 +245,112 @@ public class OptimizeConcurrencyTests
         }, nTrials: 32, nJobs: 4);
 
         onPool.Should().HaveCount(32).And.OnlyContain(p => !p, "a worker must not occupy a thread-pool thread");
+    }
+
+    /// <summary>
+    ///     When several workers fail in one completion batch, Optimize raises the first failure, as Python's
+    ///     <c>for f in completed: f.result()</c> does, and observes the others, so none resurfaces later through
+    ///     <see cref="TaskScheduler.UnobservedTaskException" /> when the garbage collector finalizes their tasks. Every
+    ///     objective here fails at once, so the first batch holds several failed workers.
+    /// </summary>
+    [TestMethod]
+    public void NJobs_SeveralFailuresInOneBatch_LeaveNoUnobservedTaskException()
+    {
+        int unobserved = 0;
+        void Handler(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            // Only this test's failures count: another test's leaked task may be finalized during the same collection.
+            if (e.Exception.Flatten().InnerExceptions.Any(x => x.Message == "batch failure"))
+                Interlocked.Increment(ref unobserved);
+        }
+
+        TaskScheduler.UnobservedTaskException += Handler;
+        try
+        {
+            RunAnAllFailingNJobsStudy();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Handler;
+        }
+
+        unobserved.Should().Be(0, "every failed worker's exception is observed before Optimize returns");
+    }
+
+    /// <summary>
+    ///     Runs a study whose every trial fails, at <c>nJobs: 4</c>, and checks that Optimize raised the failure. Kept in
+    ///     its own non-inlined method so its tasks are unreachable by the time the caller collects garbage.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown by every objective; Optimize rethrows the first.</exception>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void RunAnAllFailingNJobsStudy()
+    {
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(12));
+        var act = () => study.Optimize(
+            (Func<Trial, double>)(_ => throw new InvalidOperationException("batch failure")), nTrials: 40, nJobs: 4);
+        act.Should().Throw<InvalidOperationException>().WithMessage("batch failure");
+    }
+
+    /// <summary>
+    ///     A trial's own writes never show up in a snapshot someone else took before them. The trial used to cache the
+    ///     storage's live trial object and mutate it after its first write, so a reader holding that object from
+    ///     <c>GetAllTrials(deepcopy: false)</c>, as TPE's constant liar does, saw its dictionaries change underneath it:
+    ///     a data race when the reader is another thread. The trial now caches a detached copy.
+    /// </summary>
+    [TestMethod]
+    public void Trial_Writes_DoNotChangeASnapshotTakenBeforeThem()
+    {
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(13));
+        var trial = study.Ask();
+        FrozenTrial snapshot = study.Storage.GetAllTrials(study.StudyId, deepcopy: false).Single();
+
+        trial.SuggestFloat("x", 0, 1);
+        trial.Report(0.5, 0);
+        trial.SetUserAttr("a", 1);
+
+        snapshot.Params.Should().BeEmpty("the snapshot was taken before the suggestion");
+        snapshot.Distributions.Should().BeEmpty();
+        snapshot.IntermediateValues.Should().BeEmpty();
+        snapshot.UserAttrs.Should().BeEmpty();
+        var stored = study.Storage.GetTrial(trial.TrialId);
+        stored.Params.Should().ContainKey("x", "the storage itself holds every write");
+        stored.UserAttrs.Should().ContainKey("a");
+    }
+
+    /// <summary>
+    ///     Eight threads setting different user attributes of one trial over the fast in-memory storage: every attribute
+    ///     is stored, in the storage and in the trial's own view. A guard: the trial's cache dictionary is not
+    ///     thread-safe and is now written under the trial's monitor. Before that, the storage's own lock happened to
+    ///     space the unsynchronized cache writes apart, so this case did not fail on the old code (unlike the constraint
+    ///     and report races, whose check-then-write spans two storage calls).
+    /// </summary>
+    [TestMethod]
+    public void OneTrial_ConcurrentUserAttrs_AreAllStored()
+    {
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(14));
+        var trial = study.Ask();
+        var errors = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+
+        Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, w =>
+        {
+            try
+            {
+                for (int i = 0; i < 250; i++)
+                    trial.SetUserAttr($"w{w}-{i}", i);
+            }
+            catch (Exception e)
+            {
+                errors.Enqueue(e);
+            }
+        });
+
+        errors.Should().BeEmpty();
+        trial.UserAttrs.Should().HaveCount(2000, "the trial's own view keeps every attribute");
+        study.Storage.GetTrial(trial.TrialId).UserAttrs.Should().HaveCount(2000);
     }
 
     /// <summary>
