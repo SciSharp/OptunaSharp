@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using OptunaSharp.Collections;
@@ -209,5 +210,129 @@ public class RedisJournalConcurrencyTests
 
         prebuilt.Invoking(b => b.ReadLogs(0).ToList()).Should().NotThrow("a container never disposes an instance it was handed");
         ((IDisposable)prebuilt).Dispose();
+    }
+
+    /// <summary>
+    ///     <c>DisposeAsync</c> closes the connection a StackExchange-based backend opened, so later journal calls fail
+    ///     with <see cref="ObjectDisposedException" />, and an <c>await using</c> leaves an injected multiplexer open:
+    ///     the asynchronous twin of <see cref="Dispose_ClosesAnOwnedConnection_ButNotAnInjectedOne" />.
+    /// </summary>
+    /// <param name="backendName"><c>StackExchange</c> or <c>NRedisStack</c>; both own a <c>ConnectionMultiplexer</c>.</param>
+    /// <returns>The asynchronous test.</returns>
+    [TestMethod]
+    [DataRow("StackExchange")]
+    [DataRow("NRedisStack")]
+    public async Task DisposeAsync_ClosesAnOwnedConnection_ButNotAnInjectedOne(string backendName)
+    {
+        RedisSession.EnsureReachable();
+        var owned = RedisSession.Backends.Single(b => b.Name == backendName).Create(RedisSession.UniquePrefix(), false);
+        owned.AppendLogs(new[] { new OrderedDict<string, object?> { ["op"] = 0L } });
+
+        await ((IAsyncDisposable)owned).DisposeAsync();
+
+        owned.Invoking(b => b.ReadLogs(0).ToList()).Should().Throw<ObjectDisposedException>();
+
+        using var mux = RedisSession.RawConnection();
+        IAsyncDisposable injected = backendName == "StackExchange"
+            ? new StackExchangeJournalRedisBackend(mux, prefix: RedisSession.UniquePrefix())
+            : new NRedisStackJournalRedisBackend(mux, prefix: RedisSession.UniquePrefix());
+        await injected.DisposeAsync();
+        mux.IsConnected.Should().BeTrue("a backend never closes a client it was given");
+        mux.GetDatabase().Ping();
+    }
+
+    /// <summary>
+    ///     <c>Dispose</c> and <c>DisposeAsync</c> share one once-only flag: whichever runs first closes, and the other,
+    ///     in either order, does nothing. A container can reach one backend through two registrations, and a caller
+    ///     can mix <c>using</c> and <c>await using</c>.
+    /// </summary>
+    /// <param name="backendName">One of <see cref="RedisSession.Backends" />.</param>
+    /// <returns>The asynchronous test.</returns>
+    [TestMethod]
+    [DataRow("StackExchange")]
+    [DataRow("NRedisStack")]
+    [DataRow("ServiceStack")]
+    public async Task DisposeAndDisposeAsync_CloseOnce_InEitherOrder(string backendName)
+    {
+        RedisSession.EnsureReachable();
+        var create = RedisSession.Backends.Single(b => b.Name == backendName).Create;
+
+        var syncFirst = create(RedisSession.UniquePrefix(), false);
+        ((IDisposable)syncFirst).Dispose();
+        await syncFirst.Awaiting(b => ((IAsyncDisposable)b).DisposeAsync().AsTask()).Should().NotThrowAsync();
+
+        var asyncFirst = create(RedisSession.UniquePrefix(), false);
+        await ((IAsyncDisposable)asyncFirst).DisposeAsync();
+        asyncFirst.Invoking(b => ((IDisposable)b).Dispose()).Should().NotThrow();
+        await asyncFirst.Awaiting(b => ((IAsyncDisposable)b).DisposeAsync().AsTask()).Should().NotThrowAsync();
+    }
+
+    /// <summary>A ServiceStack backend leaves an injected client manager open when disposed asynchronously.</summary>
+    /// <returns>The asynchronous test.</returns>
+    [TestMethod]
+    public async Task ServiceStack_DisposeAsync_LeavesAnInjectedManagerOpen()
+    {
+        RedisSession.EnsureReachable();
+        using IRedisClientsManager manager = ServiceStackJournalRedisBackend.CreateManager(RedisUrl.Parse(RedisSession.Url));
+        var backend = new ServiceStackJournalRedisBackend(manager, prefix: RedisSession.UniquePrefix());
+
+        await backend.DisposeAsync();
+
+        using IRedisClient client = manager.GetClient();
+        client.Ping().Should().BeTrue("a backend never closes a client manager it was given");
+    }
+
+    /// <summary>
+    ///     An asynchronously disposed DI scope (as ASP.NET Core disposes its request scopes) closes the backend it
+    ///     built, and so does an asynchronously disposed container for a singleton. Implementing
+    ///     <see cref="IAsyncDisposable" /> must not cost the synchronous path: a synchronously disposed scope still
+    ///     disposes it (<see cref="DiScope_DisposesTheBackendItBuilt_ButNotAPrebuiltOne" />), where a type with only
+    ///     <c>DisposeAsync</c> would make that scope throw.
+    /// </summary>
+    /// <param name="backendName"><c>StackExchange</c> or <c>NRedisStack</c>.</param>
+    /// <returns>The asynchronous test.</returns>
+    [TestMethod]
+    [DataRow("StackExchange")]
+    [DataRow("NRedisStack")]
+    public async Task AsyncDiScope_ClosesTheBackendItBuilt(string backendName)
+    {
+        RedisSession.EnsureReachable();
+        bool se = backendName == "StackExchange";
+
+        // A container whose backend comes from the URL overload, so the container built it and owns its connection.
+        ServiceProvider Build(ServiceLifetime lifetime)
+        {
+            var services = new ServiceCollection();
+            string prefix = RedisSession.UniquePrefix();
+            if (se)
+                services.AddStackExchangeRedisJournalStorage(RedisSession.Url, prefix: prefix, lifetime: lifetime);
+            else
+                services.AddNRedisStackJournalStorage(RedisSession.Url, prefix: prefix, lifetime: lifetime);
+            return services.BuildServiceProvider();
+        }
+
+        // Uses the storage once (so the connection is open), then returns the backend instance the provider holds.
+        BaseJournalBackend Resolve(IServiceProvider sp)
+        {
+            _ = sp.GetRequiredService<BaseStorage>().GetAllStudies();
+            return se
+                ? sp.GetRequiredService<StackExchangeJournalRedisBackend>()
+                : sp.GetRequiredService<NRedisStackJournalRedisBackend>();
+        }
+
+        await using (var scopedProvider = Build(ServiceLifetime.Scoped))
+        {
+            BaseJournalBackend scoped;
+            await using (var scope = scopedProvider.CreateAsyncScope())
+                scoped = Resolve(scope.ServiceProvider);
+            scoped.Invoking(b => b.ReadLogs(0).ToList()).Should().Throw<ObjectDisposedException>(
+                "the asynchronously disposed scope closed the backend it built");
+        }
+
+        var singletonProvider = Build(ServiceLifetime.Singleton);
+        BaseJournalBackend singleton = Resolve(singletonProvider);
+        await singletonProvider.DisposeAsync();
+        singleton.Invoking(b => b.ReadLogs(0).ToList()).Should().Throw<ObjectDisposedException>(
+            "the asynchronously disposed container closed its singleton backend");
     }
 }

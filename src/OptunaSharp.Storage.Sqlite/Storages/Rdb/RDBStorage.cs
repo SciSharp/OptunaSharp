@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using NumSharp;
 using OptunaSharp.Collections;
@@ -37,7 +38,7 @@ namespace OptunaSharp.Storages;
 ///     study.Optimize(t => Math.Pow(t.SuggestFloat("x", -100, 100), 2), nTrials: 10);
 ///     </code>
 /// </example>
-public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
+public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable, IAsyncDisposable
 {
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.storages._rdb.storage");
 
@@ -1557,4 +1558,18 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         if (_ownsConnection)
             _conn.Dispose();
     }
+
+    /// <summary>
+    ///     The asynchronous form of <see cref="Dispose" />: disposes the underlying <see cref="SqliteConnection" />
+    ///     through its <c>DisposeAsync</c> unless it was injected with <c>ownsConnection: false</c>, which stays open.
+    ///     Lets the storage be used with <c>await using</c> and disposed by DI scopes that are disposed asynchronously.
+    /// </summary>
+    /// <returns>A task that completes once the owned connection is closed, or at once when the storage does not own it.</returns>
+    /// <remarks>
+    ///     Microsoft.Data.Sqlite closes a connection synchronously even here (it inherits <c>DbConnection</c>'s default
+    ///     <c>DisposeAsync</c>), so unlike the Redis and PostgreSQL closes this does not free the calling thread; it
+    ///     exists so every OptunaSharp storage that owns a resource supports both <c>using</c> and <c>await using</c>.
+    ///     A second disposal, by either method, does nothing: <see cref="SqliteConnection" /> ignores it.
+    /// </remarks>
+    public ValueTask DisposeAsync() => _ownsConnection ? _conn.DisposeAsync() : default;
 }

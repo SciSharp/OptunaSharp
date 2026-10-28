@@ -14,10 +14,11 @@ namespace OptunaSharp.Storages.Grpc.Extensions;
 ///     talks to a remote Optuna storage server. DI comes from the ASP.NET Core shared framework this
 ///     package already references — no extra package is needed.
 ///     <para>
-///     <b>Lifetime / disposal:</b> <see cref="GrpcStorageProxy" /> is <see cref="IDisposable" /> and owns
-///     the <see cref="GrpcChannel" /> it creates — register it as a <b>singleton</b> (the default) so the
-///     container disposes it (and its channel) on shutdown. The BYO-channel overloads do not transfer
-///     channel ownership to the proxy; dispose such a channel yourself.
+///     <b>Lifetime / disposal:</b> <see cref="GrpcStorageProxy" /> is <see cref="IDisposable" /> and
+///     <see cref="IAsyncDisposable" />, and owns the <see cref="GrpcChannel" /> it creates — register it as a
+///     <b>singleton</b> (the default) so the container disposes it (and its channel) on shutdown, whether the
+///     container is disposed synchronously or asynchronously. The BYO-channel overloads do not transfer channel
+///     ownership to the proxy; dispose such a channel yourself.
 ///     </para>
 /// </summary>
 public static class GrpcStorageProxyServiceCollectionExtensions

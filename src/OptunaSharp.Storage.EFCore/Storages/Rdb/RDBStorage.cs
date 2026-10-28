@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data.Common;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using MySqlConnector;
@@ -44,7 +45,7 @@ namespace OptunaSharp.Storages.EFCore;
 ///     study.Optimize(t => Math.Pow(t.SuggestFloat("x", -100, 100), 2), nTrials: 10);
 ///     </code>
 /// </example>
-public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
+public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable, IAsyncDisposable
 {
     private static readonly Logger _logger = OptunaLogging.GetLogger("optuna.storages._rdb.storage");
 
@@ -1517,9 +1518,28 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     <see cref="SharedPostgresDataSource" />), so disposing one storage never breaks another on the same
     ///     database. MySQL keeps no per-storage resource (MySqlConnector pools by connection string).
     /// </summary>
+    /// <remarks>
+    ///     A DI container calls this when it disposes a scope synchronously. The owned data source closes its pooled
+    ///     physical connections on the calling thread; in async code prefer <see cref="DisposeAsync" />.
+    /// </remarks>
     public void Dispose()
     {
         if (_ownsDataSource)
             _dataSource?.Dispose();
     }
+
+    /// <summary>
+    ///     The asynchronous form of <see cref="Dispose" />: disposes an injected PostgreSQL data source passed with
+    ///     <c>ownsDataSource: true</c> through Npgsql's asynchronous close, which shuts its pooled physical connections
+    ///     without blocking a thread. Everything <see cref="Dispose" /> leaves open stays open here too: a data source
+    ///     the caller owns, the per-connection-string shared data source, and MySQL's pools.
+    /// </summary>
+    /// <returns>A task that completes once the owned data source is closed, or at once when the storage owns none.</returns>
+    /// <remarks>
+    ///     Used by <c>await using</c> and by DI scopes that are disposed asynchronously (ASP.NET Core request scopes,
+    ///     <c>AsyncServiceScope</c>). Safe to combine with <see cref="Dispose" />: an Npgsql data source ignores a second
+    ///     disposal, so whichever method runs first closes it.
+    /// </remarks>
+    public ValueTask DisposeAsync()
+        => _ownsDataSource && _dataSource is not null ? _dataSource.DisposeAsync() : default;
 }

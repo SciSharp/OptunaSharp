@@ -72,6 +72,8 @@ These are per-operation mappings, not a conversion of every possible server fail
 
 `Dispose()` and `Close()` dispose only a channel created by the proxy. An injected channel stays available for other users and must be disposed by its owner. Keep the proxy/channel alive until optimization and any pending storage access finish.
 
+The proxy is also `IAsyncDisposable`, so `await using` works and an asynchronously disposed DI scope can release it. A `GrpcChannel` has no asynchronous close, so `DisposeAsync()` closes the channel synchronously, exactly as `Dispose()` does, and returns a completed task.
+
 The proxy does not expose heartbeat operations, execute objective code remotely, or send artifact file contents. It emits an experimental warning at construction. See [cross-language behavior](cross-language.md) before combining runtime versions or transport configurations.
 
 Implementation: [client and cache](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.Grpc/Storages/Grpc/GrpcStorageProxy.cs). Tests cover [channel configuration, ownership, cache refresh, and errors](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/GrpcStorageProxyTests.cs), and [multiple clients sharing one server](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/GrpcLocalhostInteropTests.cs).

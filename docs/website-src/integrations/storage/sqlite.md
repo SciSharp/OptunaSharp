@@ -77,6 +77,8 @@ using var storage = new RDBStorage(connection, new SqliteRdbOptions
 
 An injected connection is opened if necessary and remains caller-owned unless `ownsConnection: true` is passed. Its existing connection string is used as-is: typed connection-string options and `ConfigureConnectionString` do not rewrite it. PRAGMAs and `ConfigureConnection` still run. URL and builder constructors create a connection that the storage disposes.
 
+The storage is `IDisposable` and `IAsyncDisposable`, so both `using` and `await using` work, and DI scopes can dispose it either way. Microsoft.Data.Sqlite closes a connection synchronously even through `DisposeAsync()`, so the async form frees no thread here. It exists so that every OptunaSharp storage can be disposed the same way.
+
 One connection remains open for the storage's lifetime, and all operations through that instance are serialized by a lock. That lock does not coordinate other processes or other storage instances. SQLite's own locking still governs access to the file. For many competing workers, consider [PostgreSQL / MySQL](ef-core.md) or a [Redis journal](redis/index.md). A gRPC server in front of SQLite retains SQLite's write constraints.
 
 ## Schema compatibility and upgrades

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net.Sockets;
 using System.Threading;
+using System.Threading.Tasks;
 using NumSharp;                     // ValueError
 using OptunaSharp.Collections;      // OrderedDict<,>
 using OptunaSharp.Internal;         // PyJson, OptunaWarnings / WarningCategory
@@ -27,16 +28,16 @@ namespace OptunaSharp.Storages.Journal;
 ///     is reachable; the on-wire journal format is fixed by <see cref="RedisJournalProtocol" />
 ///     regardless of how you connect, so byte-compatibility holds however you configure the client.</para>
 /// </summary>
-public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot, IDisposable
+public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot, IDisposable, IAsyncDisposable
 {
     private readonly string _url;
     private readonly bool _useCluster;
     private readonly string _prefix;
     private readonly IConnectionMultiplexer _connection;
 
-    // True when a constructor opened _connection from a URL or options, so Dispose must close it; false for an
-    // injected multiplexer, which stays the caller's. Before Dispose existed, every scoped or transient DI
-    // registration leaked one open Redis connection per scope (40 scopes left 40 connections).
+    // True when a constructor opened _connection from a URL or options, so Dispose/DisposeAsync must close it;
+    // false for an injected multiplexer, which stays the caller's. Before Dispose existed, every scoped or transient
+    // DI registration leaked one open Redis connection per scope (40 scopes left 40 connections).
     private readonly bool _ownsConnection;
     private int _disposed;
 
@@ -116,7 +117,7 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <param name="url">The database connection URL to resolve.</param>
     /// <param name="useCluster">Whether to use separate counter and log writes for a Redis cluster rather than the standalone Lua script.</param>
     /// <param name="prefix">The journal key namespace, shared by its counter, log records, and snapshot.</param>
-    /// <param name="ownsConnection">Whether this backend opened <paramref name="connection" /> and must close it on <see cref="Dispose" />.</param>
+    /// <param name="ownsConnection">Whether this backend opened <paramref name="connection" /> and must close it on <see cref="Dispose" /> or <see cref="DisposeAsync" />.</param>
     private StackExchangeJournalRedisBackend(IConnectionMultiplexer connection, string url, bool useCluster, string prefix, bool ownsConnection)
     {
         // Optuna decorates JournalRedisBackend with @experimental_class("3.1.0"), which raises an
@@ -136,16 +137,42 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// </summary>
     /// <remarks>
     ///     A DI container calls this when the scope (or, for a singleton, the container) that created the backend is
-    ///     disposed, so scoped and transient registrations no longer leak a connection each. A
-    ///     <see cref="JournalStorage" /> over this backend must not be used afterwards.
+    ///     disposed synchronously, so scoped and transient registrations no longer leak a connection each. A
+    ///     <see cref="JournalStorage" /> over this backend must not be used afterwards. The close runs on the calling
+    ///     thread, which waits while the multiplexer flushes and shuts its sockets; in async code prefer
+    ///     <see cref="DisposeAsync" />.
     /// </remarks>
     public void Dispose()
     {
-        // Only the first call closes; DI may dispose a forwarded registration and the backend itself.
+        // Only the first call closes, whichever of Dispose and DisposeAsync it is; DI may dispose a forwarded
+        // registration and the backend itself.
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
         if (_ownsConnection)
             _connection.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    ///     Closes the Redis connection this backend opened from a URL or options without blocking a thread; an
+    ///     injected multiplexer is left open. This is the asynchronous form of <see cref="Dispose" />, used by
+    ///     <c>await using</c> and by DI scopes that are disposed asynchronously (ASP.NET Core request scopes,
+    ///     <c>AsyncServiceScope</c>).
+    /// </summary>
+    /// <returns>A task that completes once the owned connection is closed, or at once when there is nothing to close.</returns>
+    /// <remarks>
+    ///     Shares <see cref="Dispose" />'s once-only flag: whichever runs first closes the connection, and the other
+    ///     then does nothing. The synchronous close holds the calling thread until the multiplexer's sockets are shut;
+    ///     in an async host that is a thread-pool thread, the resource StackExchange.Redis itself completes calls on. A
+    ///     DI container calls this method when it disposes a scope asynchronously, and <see cref="Dispose" /> when it
+    ///     disposes one synchronously; both paths are supported.
+    /// </remarks>
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        if (_ownsConnection)
+            await _connection.DisposeAsync().ConfigureAwait(false);
         GC.SuppressFinalize(this);
     }
 

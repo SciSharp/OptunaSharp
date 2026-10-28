@@ -63,14 +63,21 @@ unix:///var/run/redis/redis.sock?db=1
 
 `rediss://` enables TLS. The Unix-socket form is supported by StackExchange.Redis and NRedisStack; ServiceStack rejects it. The shared parser handles username, password, and database; supported query values (`db`, `username`, `password`) override URL components. Other native client settings belong in the callback or native client configuration, not arbitrary URL query parameters.
 
-All three backends implement `IDisposable`, and ownership follows how you constructed them:
+All three backends implement `IDisposable` and `IAsyncDisposable`, and ownership follows how you constructed them:
 
-- **Paths 1–3 (URL, URL plus callback, native configuration):** the backend opens the connection or pool, and `Dispose()` closes it. Call it, or wrap the backend in `using`, once every `JournalStorage` over it is done.
-- **Path 4 (an injected client):** `Dispose()` leaves the client open. It stays yours to dispose.
+- **Paths 1–3 (URL, URL plus callback, native configuration):** the backend opens the connection or pool, and `Dispose()` or `DisposeAsync()` closes it. Call one of them, or wrap the backend in `using` or `await using`, once every `JournalStorage` over it is done.
+- **Path 4 (an injected client):** disposing the backend leaves the client open. It stays yours to dispose.
 
-`Dispose()` can be called more than once; after it, the backend must not be used. `JournalStorage` itself has nothing to dispose.
+Disposal happens once: a second call to either method does nothing. After it, the backend must not be used. `JournalStorage` itself has nothing to dispose.
 
-The `Add…JournalStorage` DI methods take a `lifetime`. A backend the container builds is disposed with the scope that created it, or with the container for a singleton. A scoped or transient registration therefore closes its connection when its scope ends. (Before the backends were disposable, each scope leaked one open connection.) A pre-built backend that you register is never disposed by the container.
+`DisposeAsync()` closes without holding a thread. StackExchange.Redis and NRedisStack close the multiplexer through its own `DisposeAsync`, and ServiceStack closes its `RedisManagerPool` the same way. The synchronous `Dispose()` waits on the calling thread while the client shuts its sockets. In async code, prefer `await using`:
+
+```csharp
+await using var backend = new StackExchangeJournalRedisBackend("redis://localhost:6379", prefix: "experiments");
+var study = Optuna.CreateStudy(storage: new JournalStorage(backend), studyName: "s", loadIfExists: true);
+```
+
+The `Add…JournalStorage` DI methods take a `lifetime`. A backend the container builds is disposed with the scope that created it, or with the container for a singleton. A scoped or transient registration therefore closes its connection when its scope ends. (Before the backends were disposable, each scope leaked one open connection.) A scope disposed asynchronously, such as an ASP.NET Core request scope, an `AsyncServiceScope` or `await provider.DisposeAsync()`, calls `DisposeAsync()`. A scope disposed synchronously calls `Dispose()`. A pre-built backend that you register is never disposed by the container.
 
 ## Journal keys, atomicity, and recovery
 

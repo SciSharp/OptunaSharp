@@ -108,6 +108,8 @@ using var storage = new RdbStorage(dataSource);
 
 The injected data source is caller-owned by default; `ownsDataSource: true` transfers disposal to the storage. Because the data source is already built, `ConfigureConnectionString` cannot reconfigure it. The other constructors create and own the PostgreSQL data source. `Dispose()` releases owned PostgreSQL pooled connections; MySQL contexts use provider-managed connections per operation.
 
+The storage is also `IAsyncDisposable`. `DisposeAsync()` closes an owned data source through Npgsql's asynchronous close, without holding a thread, and leaves the same things open as `Dispose()`. Use `await using` in async code. A DI scope disposed asynchronously, such as an ASP.NET Core request scope, calls it for you. Either method can run first; the second does nothing.
+
 ## Concurrency, heartbeats, and schema lifecycle
 
 Each operation creates a short-lived `DbContext`. Trial-update paths use transactions and `SELECT ... FOR UPDATE`, and the implementation handles relevant duplicate-key races. It does not share one `DbContext` between workers.

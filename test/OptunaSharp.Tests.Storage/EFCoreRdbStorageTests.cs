@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data.Common;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -1229,6 +1230,59 @@ public sealed class PostgreSqlRdbStorageTests : EFCoreRdbStorageTestsBase
         conn.Open();
         conn.State.Should().Be(System.Data.ConnectionState.Open);
         dataSource.Dispose();
+    }
+
+    /// <summary>Builds a data source over this test's database with the Optuna enums mapped, as a caller would.</summary>
+    /// <returns>A new data source the caller must dispose (or hand to a storage with <c>ownsDataSource: true</c>).</returns>
+    private NpgsqlDataSource BuildDataSource()
+    {
+        var dsb = new NpgsqlDataSourceBuilder(ConnectionString);
+        RDBStorage.MapOptunaEnums(dsb);
+        return dsb.Build();
+    }
+
+    /// <summary>
+    ///     A data source passed with <c>ownsDataSource: true</c> is disposed with the storage, by <c>Dispose</c> and by
+    ///     <c>DisposeAsync</c> alike, and the other method afterwards does nothing. The synchronous path had no test of
+    ///     its own until the asynchronous one was added.
+    /// </summary>
+    /// <returns>The asynchronous test.</returns>
+    [TestMethod]
+    [TestCategory("Integration")]
+    public async Task OwnedDataSource_IsDisposedWithTheStorage_SyncOrAsync()
+    {
+        EFCoreDbSession.Reset(RdbProvider.PostgreSql);
+
+        var syncSource = BuildDataSource();
+        var syncStorage = new RDBStorage(syncSource, ownsDataSource: true);
+        syncStorage.CreateNewStudy(new[] { StudyDirection.Minimize }, "owned-sync");
+        syncStorage.Dispose();
+        syncSource.Invoking(ds => ds.OpenConnection()).Should().Throw<ObjectDisposedException>(
+            "the storage owned the data source, so Dispose closed it");
+        await syncStorage.Awaiting(s => s.DisposeAsync().AsTask()).Should().NotThrowAsync();
+
+        var asyncSource = BuildDataSource();
+        var asyncStorage = new RDBStorage(asyncSource, ownsDataSource: true);
+        asyncStorage.CreateNewStudy(new[] { StudyDirection.Minimize }, "owned-async");
+        await asyncStorage.DisposeAsync();
+        asyncSource.Invoking(ds => ds.OpenConnection()).Should().Throw<ObjectDisposedException>(
+            "the storage owned the data source, so DisposeAsync closed it");
+        asyncStorage.Invoking(s => s.Dispose()).Should().NotThrow();
+    }
+
+    /// <summary><c>DisposeAsync</c> leaves a caller-owned data source usable, as <c>Dispose</c> does.</summary>
+    /// <returns>The asynchronous test.</returns>
+    [TestMethod]
+    [TestCategory("Integration")]
+    public async Task InjectedDataSource_NotOwned_SurvivesDisposeAsync()
+    {
+        EFCoreDbSession.Reset(RdbProvider.PostgreSql);
+        await using var dataSource = BuildDataSource();
+        await using (var storage = new RDBStorage(dataSource, ownsDataSource: false))
+            storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "byods-async");
+
+        await using var conn = await dataSource.OpenConnectionAsync();
+        conn.State.Should().Be(System.Data.ConnectionState.Open, "ownsDataSource: false keeps the data source the caller's");
     }
 
     [TestMethod]

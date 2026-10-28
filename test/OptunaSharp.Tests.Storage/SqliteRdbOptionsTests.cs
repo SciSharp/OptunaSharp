@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using AwesomeAssertions;
 using Microsoft.Data.Sqlite;
 using NumSharp;
@@ -159,6 +160,44 @@ public class SqliteRdbOptionsTests
         var s = new RDBStorage(conn, ownsConnection: true);
         s.Dispose();
         conn.State.Should().Be(ConnectionState.Closed, "ownsConnection: true hands the lifetime to the storage");
+    }
+
+    /// <summary>
+    ///     <c>DisposeAsync</c> honors the same ownership as <c>Dispose</c>: an injected connection the caller keeps stays
+    ///     open and usable, so <c>await using</c> on the storage is as safe as <c>using</c>.
+    /// </summary>
+    /// <returns>The asynchronous test.</returns>
+    [TestMethod]
+    public async Task InjectedConnection_NotOwned_SurvivesStorageDisposeAsync()
+    {
+        using var conn = new SqliteConnection("Data Source=:memory:");
+        conn.Open();
+        int sid;
+        await using (var s = new RDBStorage(conn, ownsConnection: false))
+            sid = s.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+
+        conn.State.Should().Be(ConnectionState.Open, "the caller retains ownership");
+        using var reopened = new RDBStorage(conn, new SqliteRdbOptions { SkipTableCreation = true }, ownsConnection: false);
+        reopened.GetStudyNameFromId(sid).Should().Be("s");
+    }
+
+    /// <summary>
+    ///     <c>DisposeAsync</c> closes a connection the storage owns, and a later <c>Dispose</c> (or a second
+    ///     <c>DisposeAsync</c>) does nothing: a caller or container may reach the storage both ways.
+    /// </summary>
+    /// <returns>The asynchronous test.</returns>
+    [TestMethod]
+    public async Task InjectedConnection_Owned_IsClosedByDisposeAsync_AndASecondDisposeDoesNothing()
+    {
+        var conn = new SqliteConnection("Data Source=:memory:");
+        conn.Open();
+        var s = new RDBStorage(conn, ownsConnection: true);
+
+        await s.DisposeAsync();
+
+        conn.State.Should().Be(ConnectionState.Closed, "ownsConnection: true hands the lifetime to the storage");
+        s.Invoking(x => x.Dispose()).Should().NotThrow();
+        await s.Awaiting(x => x.DisposeAsync().AsTask()).Should().NotThrowAsync();
     }
 
     // ------------------------------------------------------------------ per-connection PRAGMAs

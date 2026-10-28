@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading.Tasks;
 using NumSharp;                     // ValueError
 using OptunaSharp.Collections;      // OrderedDict<,>
 using OptunaSharp.Internal;         // PyJson, OptunaWarnings / WarningCategory
@@ -39,15 +40,15 @@ namespace OptunaSharp.Storages.Journal;
 ///     request-quota-limited). Prefer the MIT <c>StackExchange</c>/<c>NRedisStack</c> backends unless
 ///     your app already standardizes on ServiceStack.</para>
 /// </summary>
-public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot, IDisposable
+public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot, IDisposable, IAsyncDisposable
 {
     private readonly string _url;
     private readonly bool _useCluster;
     private readonly string _prefix;
     private readonly IRedisClientsManager _manager;
 
-    // True when a constructor built _manager (a RedisManagerPool) from a URL or endpoint, so Dispose must close its
-    // pooled connections; false for an injected manager, which stays the caller's.
+    // True when a constructor built _manager (a RedisManagerPool) from a URL or endpoint, so Dispose/DisposeAsync must
+    // close its pooled connections; false for an injected manager, which stays the caller's.
     private readonly bool _ownsManager;
     private int _disposed;
 
@@ -133,7 +134,7 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// <param name="url">The database connection URL to resolve.</param>
     /// <param name="useCluster">Whether to use separate counter and log writes for a Redis cluster rather than the standalone Lua script.</param>
     /// <param name="prefix">The journal key namespace, shared by its counter, log records, and snapshot.</param>
-    /// <param name="ownsManager">Whether this backend built <paramref name="manager" /> and must close it on <see cref="Dispose" />.</param>
+    /// <param name="ownsManager">Whether this backend built <paramref name="manager" /> and must close it on <see cref="Dispose" /> or <see cref="DisposeAsync" />.</param>
     private ServiceStackJournalRedisBackend(IRedisClientsManager manager, string url, bool useCluster, string prefix, bool ownsManager)
     {
         // Optuna decorates JournalRedisBackend with @experimental_class("3.1.0"), which raises an
@@ -152,16 +153,47 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// </summary>
     /// <remarks>
     ///     A DI container calls this when the scope (or, for a singleton, the container) that created the backend is
-    ///     disposed, so pooled connections close with the scope instead of waiting for garbage collection. A
-    ///     <see cref="JournalStorage" /> over this backend must not be used afterwards.
+    ///     disposed synchronously, so pooled connections close with the scope instead of waiting for garbage
+    ///     collection. A <see cref="JournalStorage" /> over this backend must not be used afterwards. In async code
+    ///     prefer <see cref="DisposeAsync" />.
     /// </remarks>
     public void Dispose()
     {
-        // Only the first call closes; DI may dispose a forwarded registration and the backend itself.
+        // Only the first call closes, whichever of Dispose and DisposeAsync it is; DI may dispose a forwarded
+        // registration and the backend itself.
         if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
         if (_ownsManager)
             _manager.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    ///     Closes the client pool this backend built from a URL or endpoint through ServiceStack's asynchronous close;
+    ///     an injected manager is left open. This is the asynchronous form of <see cref="Dispose" />, used by
+    ///     <c>await using</c> and by DI scopes that are disposed asynchronously (ASP.NET Core request scopes,
+    ///     <c>AsyncServiceScope</c>).
+    /// </summary>
+    /// <returns>A task that completes once the owned pool is closed, or at once when there is nothing to close.</returns>
+    /// <remarks>
+    ///     Shares <see cref="Dispose" />'s once-only flag: whichever runs first closes the pool, and the other then does
+    ///     nothing. A DI container calls this method when it disposes a scope asynchronously, and
+    ///     <see cref="Dispose" /> when it disposes one synchronously; both paths are supported.
+    /// </remarks>
+    public async ValueTask DisposeAsync()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        if (_ownsManager)
+        {
+            // The pool this backend builds (RedisManagerPool) implements IAsyncDisposable, but the interface it is held
+            // through (IRedisClientsManager) does not, so the instance is tested. A manager without an async close is
+            // closed synchronously instead, so disposal never silently skips it.
+            if (_manager is IAsyncDisposable asyncManager)
+                await asyncManager.DisposeAsync().ConfigureAwait(false);
+            else
+                _manager.Dispose();
+        }
         GC.SuppressFinalize(this);
     }
 

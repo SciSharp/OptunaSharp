@@ -32,9 +32,11 @@ namespace OptunaSharp.Extensions;
 ///     <para>
 ///         <b>Disposal follows the resolving provider.</b> A sampler, pruner or storage that implements
 ///         <see cref="IDisposable" /> and is not a singleton is disposed when that provider is: at the end
-///         of the request scope, or at application shutdown for the root. A study that keeps optimizing
-///         after its request scope ends needs a singleton registration, or a factory resolved from a scope
-///         that lives as long as the study.
+///         of the request scope, or at application shutdown for the root. Every OptunaSharp storage that owns a
+///         resource also implements <see cref="IAsyncDisposable" />, so an asynchronously disposed scope (ASP.NET
+///         Core's request scopes) closes it with <c>DisposeAsync</c> and a synchronously disposed one with
+///         <c>Dispose</c>. A study that keeps optimizing after its request scope ends needs a singleton
+///         registration, or a factory resolved from a scope that lives as long as the study.
 ///     </para>
 /// </remarks>
 public sealed class OptunaStudyFactory : IOptunaStudyFactory

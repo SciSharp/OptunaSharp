@@ -35,7 +35,7 @@ namespace OptunaSharp.Storages.Grpc;
 ///     var study = Optuna.CreateStudy(storage: storage);
 ///     </code>
 /// </example>
-public sealed class GrpcStorageProxy : BaseStorage, IDisposable
+public sealed class GrpcStorageProxy : BaseStorage, IDisposable, IAsyncDisposable
 {
     private readonly GrpcChannel _channel;
     private readonly bool _ownsChannel;
@@ -165,6 +165,32 @@ public sealed class GrpcStorageProxy : BaseStorage, IDisposable
 
     /// <summary>Releases resources owned by this storage instance; caller-owned connections or channels remain the caller's responsibility.</summary>
     public void Dispose() => Close();
+
+    /// <summary>
+    ///     The asynchronous form of <see cref="Dispose" />: closes the gRPC channel this proxy created; an injected
+    ///     channel is left open. Lets the proxy be used with <c>await using</c> and disposed by DI scopes that are
+    ///     disposed asynchronously.
+    /// </summary>
+    /// <returns>An already-completed task, or a faulted one when closing the channel failed.</returns>
+    /// <remarks>
+    ///     <see cref="GrpcChannel" /> has no asynchronous close (it is <see cref="IDisposable" /> only), so the channel
+    ///     closes synchronously here, exactly as in <see cref="Dispose" />; this exists so every OptunaSharp storage that
+    ///     owns a resource supports both <c>using</c> and <c>await using</c>. A failure is returned through the task
+    ///     rather than thrown, as an awaiting caller expects. A second disposal, by either method, does nothing: a
+    ///     disposed channel ignores it.
+    /// </remarks>
+    public ValueTask DisposeAsync()
+    {
+        try
+        {
+            Close();
+            return default;
+        }
+        catch (Exception e)
+        {
+            return ValueTask.FromException(e);
+        }
+    }
 
     // ------------------------------------------------------------------ study manipulation
 

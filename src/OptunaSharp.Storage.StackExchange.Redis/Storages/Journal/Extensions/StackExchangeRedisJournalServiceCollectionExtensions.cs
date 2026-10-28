@@ -18,11 +18,13 @@ namespace OptunaSharp.Storages.Journal.Extensions;
 ///     overload) you keep its lifetime.
 ///     </para>
 /// <para>
-/// <b>Disposal.</b> The backend is <see cref="System.IDisposable" />: a backend the container builds (the URL
-/// and factory overloads) is disposed with the scope that created it, or with the container for a singleton, and
-/// closes the connection it opened. Scoped and transient registrations therefore no longer leak a connection
-/// each. A pre-built backend you register is never disposed by the container, and a backend never closes a
-/// client you injected into it.
+/// <b>Disposal.</b> The backend is <see cref="System.IDisposable" /> and <see cref="System.IAsyncDisposable" />: a
+/// backend the container builds (the URL and factory overloads) is disposed with the scope that created it, or with
+/// the container for a singleton, and closes the connection it opened. Scoped and transient registrations therefore
+/// no longer leak a connection each. A scope disposed asynchronously (ASP.NET Core request scopes,
+/// <c>AsyncServiceScope</c>, <c>await provider.DisposeAsync()</c>) closes it through <c>DisposeAsync</c> without
+/// blocking a thread; a scope disposed synchronously uses <c>Dispose</c>. A pre-built backend you register is never
+/// disposed by the container, and a backend never closes a client you injected into it.
 /// </para>
 /// </summary>
 public static class StackExchangeRedisJournalServiceCollectionExtensions

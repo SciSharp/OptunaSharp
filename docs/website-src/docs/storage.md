@@ -339,6 +339,20 @@ BaseStorage s2 = StorageFunctions.GetStorage(existingStorage); // returned as-is
 // redis:// URLs throw ValueError (construct JournalRedisBackend explicitly instead).
 ```
 
+## Disposing a storage
+
+Every storage that owns a connection implements both `IDisposable` and `IAsyncDisposable`: the SQLite and
+EF Core RDB storages, the gRPC proxy, and the three Redis journal backends. Use `using` in synchronous code
+and `await using` in async code. A DI container disposes the ones it builds with their scope or container,
+and an asynchronously disposed scope (an ASP.NET Core request scope, `AsyncServiceScope`) uses
+`DisposeAsync`. Only what a storage created is closed: an injected connection, data source, channel or
+client stays the caller's. Disposing twice, by either method, does nothing. `InMemoryStorage`,
+`JournalStorage` and the journal file backend hold nothing to dispose.
+
+`DisposeAsync` frees the calling thread where the client can close asynchronously: StackExchange.Redis,
+NRedisStack, ServiceStack.Redis and Npgsql. Microsoft.Data.Sqlite and gRPC channels close synchronously
+in either form.
+
 ## The `BaseStorage` contract
 
 Every storage derives from the abstract `BaseStorage`. You rarely call it directly — `Study` does —

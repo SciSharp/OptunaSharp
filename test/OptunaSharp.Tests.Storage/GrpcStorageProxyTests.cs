@@ -335,6 +335,47 @@ public class GrpcStorageProxyTests
         proxy2.GetStudyNameFromId(sid).Should().Be("inj");
     }
 
+    /// <summary>
+    ///     <c>DisposeAsync</c> honors the proxy's channel ownership as <c>Dispose</c> does: an injected channel survives an
+    ///     <c>await using</c> of the proxy and still serves a second proxy.
+    /// </summary>
+    /// <returns>The asynchronous test.</returns>
+    [TestMethod]
+    public async Task Client_InjectedChannel_IsNotDisposedByDisposeAsync()
+    {
+        using var channel = GrpcChannel.ForAddress(
+            $"http://localhost:{_port}",
+            new GrpcChannelOptions { Credentials = ChannelCredentials.Insecure });
+
+        await using (var proxy1 = new GrpcStorageProxy(channel))
+        {
+            proxy1.WaitServerReady(TimeSpan.FromSeconds(15));
+            proxy1.CreateNewStudy(new[] { StudyDirection.Minimize }, "inj-async");
+        }
+
+        var proxy2 = new GrpcStorageProxy(channel);
+        proxy2.GetStudyNameFromId(proxy2.GetStudyIdFromName("inj-async")).Should().Be("inj-async");
+    }
+
+    /// <summary>
+    ///     <c>DisposeAsync</c> closes a channel the proxy created, so a later call fails, and disposing again by either
+    ///     method does nothing.
+    /// </summary>
+    /// <returns>The asynchronous test.</returns>
+    [TestMethod]
+    public async Task Client_OwnedChannel_IsClosedByDisposeAsync()
+    {
+        var proxy = new GrpcStorageProxy("localhost", _port);
+        proxy.WaitServerReady(TimeSpan.FromSeconds(15));
+        proxy.CreateNewStudy(new[] { StudyDirection.Minimize }, "owned-async");
+
+        await proxy.DisposeAsync();
+
+        proxy.Invoking(p => p.GetAllStudies()).Should().Throw<ObjectDisposedException>("the proxy closed the channel it created");
+        proxy.Invoking(p => p.Dispose()).Should().NotThrow();
+        await proxy.Awaiting(p => p.DisposeAsync().AsTask()).Should().NotThrowAsync();
+    }
+
     [TestMethod]
     public void Server_ConfigureGrpc_InterceptorRuns()
     {
