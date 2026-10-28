@@ -46,7 +46,9 @@ internal sealed class JanusMooCmix
     private readonly double _cmixLambda;
     private readonly double _cmixSigma;
     private readonly int _cmixStartTrial;
-    private readonly string _componentAttr;
+    // The user-attribute key TryReadComponents reads each trial's residual vector from; null turns the
+    // component channel off (see the constructor).
+    private readonly string? _componentAttr;
     private readonly string _scalarFallback;
     private readonly Generator _rng;   // PCG64 — the reference's np.random.default_rng(seed) stream
 
@@ -62,12 +64,17 @@ internal sealed class JanusMooCmix
     /// <param name="cmixSigma">Global scale of the normalized curvature-informed Gaussian proposal.</param>
     /// <param name="cmixStartGeneration">Generation-based warmup used when an explicit start trial is absent.</param>
     /// <param name="cmixStartTrial">Explicit first eligible trial number, or null for a history/generation-derived threshold.</param>
-    /// <param name="componentAttr">Trial attribute name used to read observed component losses.</param>
+    /// <param name="componentAttr">
+    ///     User-attribute key read for each windowed trial's residual vector (the reference's
+    ///     <c>user_attrs.get(self._component_attr)</c>). It is read exactly as given. Only the canonical
+    ///     <see cref="ComponentLosses.Key" /> also accepts its <see cref="ComponentLosses.LegacyKey" /> read alias.
+    ///     <c>null</c> disables the component channel, so every fit takes the scalar fallback.
+    /// </param>
     /// <param name="scalarFallback">Feature family used when component-loss observations are unavailable.</param>
     internal JanusMooCmix(
         int populationSize, int? seed, double cmixProb, string cmixWindow, double cmixRidge,
         double cmixLambda, double cmixSigma, int cmixStartGeneration, int? cmixStartTrial,
-        string componentAttr, string scalarFallback)
+        string? componentAttr, string scalarFallback)
     {
         _cmixProb = cmixProb;
         _cmixWindow = string.Equals(cmixWindow, "auto", StringComparison.OrdinalIgnoreCase)
@@ -156,7 +163,7 @@ internal sealed class JanusMooCmix
             catch (Exception) { continue; }
             rows.Add(row);
             usedTrials.Add(t);
-            if (!TryReadComponents(t, out double[] comp)) hasComponents = false;
+            if (!TryReadComponents(t, _componentAttr, out double[] comp)) hasComponents = false;
             else if (hasComponents) components.Add(comp);
         }
 
@@ -379,17 +386,39 @@ internal sealed class JanusMooCmix
 
     // ---- small helpers ---------------------------------------------------------------------------
 
-    /// <summary>Attempts to read a nonempty numeric component-loss vector from trial attributes.</summary>
+    /// <summary>
+    ///     Reads one trial's residual vector from the configured component attribute, the reference's
+    ///     <c>user_attrs.get(self._component_attr)</c>. It accepts the in-process <c>double[]</c> and any
+    ///     numeric sequence a persistent storage deserializes to.
+    /// </summary>
+    /// <remarks>
+    ///     <para>Only the canonical <see cref="ComponentLosses.Key" /> falls back to the shared reader when its value
+    ///     is absent. That adds the documented <see cref="ComponentLosses.LegacyKey" /> read alias, which belongs to
+    ///     the canonical key alone.</para>
+    ///     <para>A custom key is read exactly as configured and never borrows the canonical vector. A study that
+    ///     names its residual key must not have its metric fitted on some other attribute.</para>
+    ///     <para>A <c>null</c> key reads nothing, like the reference's <c>user_attrs.get(None)</c>. Every
+    ///     caller then takes the scalar fallback.</para>
+    /// </remarks>
     /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
+    /// <param name="componentAttr">User-attribute key holding the residual vector, or null when the component channel is off.</param>
     /// <param name="components">Component-loss vector read from the trial; this helper does not itself require every entry to be finite.</param>
     /// <returns>True when a nonempty component-loss vector was read.</returns>
-    private static bool TryReadComponents(FrozenTrial trial, out double[] components)
+    private static bool TryReadComponents(FrozenTrial trial, string? componentAttr, out double[] components)
     {
         components = Array.Empty<double>();
-        if (!trial.UserAttrs.TryGetValue(ComponentLosses.Key, out object? raw) || raw is null)
+
+        // The dictionary rejects a null key, and no stored attribute could ever match one, so a null key
+        // reads as "no components" (the reference's dict.get(None) is None) instead of throwing mid-sample.
+        if (componentAttr is null)
+            return false;
+
+        if (!trial.UserAttrs.TryGetValue(componentAttr, out object? raw) || raw is null)
         {
-            // Fall back to the shared reader (handles the legacy key / list-or-array forms).
-            return ComponentLosses.TryRead(trial.UserAttrs, out components);
+            // The shared reader adds the "rae" alias, and that alias names the canonical key's vector only, so
+            // only the canonical key falls back to it. Any other key has no alias: absent means absent.
+            return string.Equals(componentAttr, ComponentLosses.Key, StringComparison.Ordinal)
+                && ComponentLosses.TryRead(trial.UserAttrs, out components);
         }
         try
         {

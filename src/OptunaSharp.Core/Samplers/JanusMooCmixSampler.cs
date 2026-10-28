@@ -70,7 +70,14 @@ public class JanusMooCmixSampler : NSGAIISampler
     /// <param name="cmixSigma">Normalized step size scaling the inverse-curvature covariance (default 0.002).</param>
     /// <param name="cmixStartGeneration">Warm-up in generations, used only when <paramref name="cmixStartTrial" /> is <c>null</c> (default 3).</param>
     /// <param name="cmixStartTrial">Warm-up in trials before CMIX may fire; <c>null</c> derives it from <paramref name="cmixStartGeneration" /> (default 100).</param>
-    /// <param name="componentAttr">User-attribute key carrying the residual vector (default <c>component_losses</c>).</param>
+    /// <param name="componentAttr">
+    ///     User-attribute key the CMIX metric reads each trial's residual vector from. The default is
+    ///     <c>component_losses</c>, the key <c>trial.SetComponentLosses</c> writes.
+    ///     <para>A custom key is read exactly as given, so store the vector with
+    ///     <c>trial.SetUserAttr(componentAttr, …)</c>. Only the default key also accepts the legacy <c>rae</c> alias.</para>
+    ///     <para>CMIX fits the component metric only when every trial in its window carries a numeric vector under
+    ///     this key; otherwise it uses <paramref name="scalarFallback" />. <c>null</c> turns the component channel off.</para>
+    /// </param>
     /// <param name="scalarFallback">Scalar metric when no components are present: <c>diag_quadratic</c> (default) or <c>none</c>.</param>
     /// <param name="mutation">NSGA-II mutation (forwarded).</param>
     /// <param name="mutationProb">NSGA-II mutation probability (forwarded).</param>
