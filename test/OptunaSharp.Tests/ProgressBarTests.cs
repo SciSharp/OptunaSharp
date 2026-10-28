@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using AwesomeAssertions;
 using OptunaSharp.Internal;
 
@@ -124,5 +125,26 @@ public class ProgressBarTests
         }
 
         messages.Should().NotContain(m => m.Contains("Progress bar won't be displayed"));
+    }
+
+    /// <summary>
+    ///     With nJobs every worker updates the bar: each finished trial must count once, in order, and the bar must
+    ///     end at n_trials, as tqdm's locked update does. The unlocked counter lost increments and could write a line
+    ///     built from an older count after a newer one.
+    /// </summary>
+    [TestMethod]
+    public void ProgressBar_NJobs_CountsEveryTrialOnceAndInOrder()
+    {
+        const int nTrials = 2000;
+        string output = CaptureStderr(() =>
+        {
+            var study = Optuna.CreateStudy(sampler: new OptunaSharp.Samplers.RandomSampler(seed: 1));
+            study.Optimize(Sphere, nTrials: nTrials, nJobs: 16, showProgressBar: true);
+        });
+
+        var counts = System.Text.RegularExpressions.Regex.Matches(output, @"\| (\d+)/" + nTrials + @"\]")
+            .Select(m => int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))
+            .ToList();
+        counts.Should().Equal(Enumerable.Range(1, nTrials), "every trial counts once, and lines are written in count order");
     }
 }
