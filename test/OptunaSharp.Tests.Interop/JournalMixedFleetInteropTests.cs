@@ -15,8 +15,9 @@ using Python.Runtime;
 namespace OptunaSharp.Tests.Interop;
 
 /// <summary>
-///     Python Optuna and OptunaSharp workers optimizing the same studies of ONE journal file at the same time, each
-///     worker with its own storage, so the two languages exclude each other only through the journal's lock file.
+///     Python Optuna and OptunaSharp workers optimizing the same studies of ONE journal at the same time, each worker
+///     with its own storage, so the two languages exclude each other only through the journal itself: the lock file
+///     of a journal file (on one protocol, or Python on the symlink lock and C# on the open-file lock), or Redis.
 ///     The Python workers are threads of the embedded interpreter. They run while the C# workers do, because the
 ///     GIL is free between <c>Py.GIL()</c> blocks.
 /// </summary>
@@ -71,14 +72,75 @@ public class JournalMixedFleetInteropTests
         // Optuna's default is the symlink lock; where symbolic links cannot be created (Windows without Developer
         // Mode) both languages use the open-file lock instead, which Python would need there too.
         bool symlinks = CanCreateSymlinks();
-        Func<JournalFileBackend> backend = symlinks
+        Func<BaseJournalBackend> backend = symlinks
             ? () => new JournalFileBackend(_path)
             : () => new JournalFileBackend(_path, new JournalFileOpenLock(_path));
         string pyLock = symlinks ? "None" : "optuna.storages.journal.JournalFileOpenLock(path)";
 
-        var seed = new JournalStorage(backend());
+        RunFleet(backend,
+            pyWorkerBackend: $"optuna.storages.journal.JournalFileBackend(path, lock_obj={pyLock})",
+            pyReplayBackend: "optuna.storages.journal.JournalFileBackend(path)");
+    }
+
+    /// <summary>
+    ///     The same fleet with the two languages on different lock protocols: Python on Optuna's default symlink lock,
+    ///     C# forced onto the open-file lock, as a C# process that fell back to it (Windows without Developer Mode)
+    ///     would be beside Python workers on a shared drive. Both protocols take the same <c>.lock</c> path, so they
+    ///     still exclude each other and both studies stay perfect. Needs a machine that can create symbolic links.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void PythonOnTheSymlinkLock_CSharpOnTheOpenFileLock_ProduceIdenticalPerfectStudies()
+    {
+        PythonSession.EnsureOrInconclusive();
+        if (!CanCreateSymlinks())
+            Assert.Inconclusive("This machine cannot create symbolic links, so Python cannot use its default lock here.");
+
+        RunFleet(() => new JournalFileBackend(_path, new JournalFileOpenLock(_path)),
+            pyWorkerBackend: "optuna.storages.journal.JournalFileBackend(path)",
+            pyReplayBackend: "optuna.storages.journal.JournalFileBackend(path)");
+    }
+
+    /// <summary>
+    ///     The same fleet on one Redis journal: Python's <c>JournalRedisBackend</c> threads beside C# workers alternating
+    ///     the StackExchange and NRedisStack backends, all on one key prefix. Exclusion goes through Redis alone (the
+    ///     append script's atomic counter), and both studies stay perfect and replay identically in Python.
+    ///     ServiceStack is left out: its free tier's request quota could not cover a fleet's replays, and its wire format
+    ///     is pinned by <see cref="JournalRedisInteropTests" />. Needs Redis on 6379 and redis-py.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("RequiresRedis")]
+    [TestCategory("Integration")]
+    public void PythonAndCSharpWorkers_OnOneRedisJournal_ProduceIdenticalPerfectStudies()
+    {
+        PythonSession.EnsureOrInconclusive();
+        JournalRedisInteropTests.EnsureRedisOrInconclusive();
+        string prefix = $"optunasharp-fleet:{Guid.NewGuid():N}";
+        int built = 0;
+        Func<BaseJournalBackend> backend = () => Interlocked.Increment(ref built) % 2 == 0
+            ? new StackExchangeJournalRedisBackend(JournalRedisInteropTests.Url, prefix: prefix)
+            : new NRedisStackJournalRedisBackend(JournalRedisInteropTests.Url, prefix: prefix);
+        string pyBackend = $"optuna.storages.journal.JournalRedisBackend('{JournalRedisInteropTests.Url}', prefix='{prefix}')";
+
+        RunFleet(backend, pyWorkerBackend: pyBackend, pyReplayBackend: pyBackend);
+    }
+
+    /// <summary>
+    ///     Runs the fleet: seeds both studies, starts the Python threads, runs the C# workers alongside them, then checks
+    ///     that nobody failed, that each study is perfect with both languages' trials, and that Python's replay of each
+    ///     study is bit-identical to C#'s.
+    /// </summary>
+    /// <param name="backend">Builds one C# worker's journal backend; every call returns a new instance.</param>
+    /// <param name="pyWorkerBackend">The Python expression building a worker's backend; it may use <c>path</c>.</param>
+    /// <param name="pyReplayBackend">The Python expression building the backend Python replays the journal through.</param>
+    private void RunFleet(Func<BaseJournalBackend> backend, string pyWorkerBackend, string pyReplayBackend)
+    {
+        var seedBackend = backend();
+        var seed = new JournalStorage(seedBackend);
         foreach (string name in Studies)
             Optuna.CreateStudy(storage: seed, studyName: name);
+        (seedBackend as IDisposable)?.Dispose();
 
         // The module outlives the first GIL block: its threads keep running, and the check below joins them through
         // it. Like every PyObject it is touched, and finally disposed, only while holding the GIL.
@@ -100,7 +162,7 @@ public class JournalMixedFleetInteropTests
                 "    return x * x + k * 1e-3\n" +
                 "def worker(study_name, seed):\n" +
                 "    try:\n" +
-                $"        backend = optuna.storages.journal.JournalFileBackend(path, lock_obj={pyLock})\n" +
+                $"        backend = {pyWorkerBackend}\n" +
                 "        study = optuna.load_study(study_name=study_name, storage=optuna.storages.JournalStorage(backend),\n" +
                 "            sampler=optuna.samplers.RandomSampler(seed=seed), pruner=optuna.pruners.NopPruner())\n" +
                 $"        study.optimize(objective, n_trials={TrialsPerWorker})\n" +
@@ -116,9 +178,11 @@ public class JournalMixedFleetInteropTests
         var csErrors = new ConcurrentQueue<Exception>();
         var csThreads = Studies.SelectMany((name, s) => Enumerable.Range(0, CSharpWorkersPerStudy).Select(w => new Thread(() =>
         {
+            // Each worker owns its backend, as a process would; a Redis backend's connection closes with it.
+            var workerBackend = backend();
             try
             {
-                var study = Optuna.LoadStudy(name, new JournalStorage(backend()),
+                var study = Optuna.LoadStudy(name, new JournalStorage(workerBackend),
                     sampler: new RandomSampler(700 + 10 * s + w), pruner: new NopPruner());
                 study.Optimize(t =>
                 {
@@ -133,6 +197,10 @@ public class JournalMixedFleetInteropTests
             catch (Exception e)
             {
                 csErrors.Enqueue(e);
+            }
+            finally
+            {
+                (workerBackend as IDisposable)?.Dispose();
             }
         }))).ToList();
         csThreads.ForEach(t => t.Start());
@@ -151,7 +219,7 @@ public class JournalMixedFleetInteropTests
                     "def bits(v):\n" +
                     "    return struct.unpack('<q', struct.pack('<d', float(v)))[0]\n" +
                     "def dump(name):\n" +
-                    "    storage = optuna.storages.JournalStorage(optuna.storages.journal.JournalFileBackend(path))\n" +
+                    $"    storage = optuna.storages.JournalStorage({pyReplayBackend})\n" +
                     "    study = optuna.load_study(study_name=name, storage=storage)\n" +
                     "    return '\\n'.join(f\"{t.number}|{t.state.name}|{bits(t.value)}|{bits(t.params['x'])}|{t.params['k']}|{len(t.intermediate_values)}|{t.user_attrs['worker']}\" for t in sorted(study.trials, key=lambda t: t.number))\n");
                 pyErrors = fleet.Eval("repr(errors)").As<string>();
@@ -167,15 +235,17 @@ public class JournalMixedFleetInteropTests
         csErrors.Should().BeEmpty("no C# worker may die of lock contention");
         pyErrors.Should().Be("[]", "no Python worker may fail either");
         int perStudy = (PythonWorkersPerStudy + CSharpWorkersPerStudy) * TrialsPerWorker;
+        var verifyBackend = backend();
         foreach (string name in Studies)
         {
-            var trials = Optuna.LoadStudy(name, new JournalStorage(backend())).Trials;
+            var trials = Optuna.LoadStudy(name, new JournalStorage(verifyBackend)).Trials;
             trials.Select(t => t.Number).Should().Equal(Enumerable.Range(0, perStudy));
             trials.Should().OnlyContain(t => t.State == TrialState.Complete && t.IntermediateValues.Count == 2);
             trials.Count(t => (string)t.UserAttrs["worker"]! == "py").Should().Be(PythonWorkersPerStudy * TrialsPerWorker);
             trials.Count(t => (string)t.UserAttrs["worker"]! == "cs").Should().Be(CSharpWorkersPerStudy * TrialsPerWorker);
             Dump(trials).Should().Be(pyDumps[name], $"Python must replay study {name} exactly as C# does");
         }
+        (verifyBackend as IDisposable)?.Dispose();
     }
 
     /// <summary>The C# side of the canonical dump: one line per trial, floats as their raw 64-bit patterns.</summary>

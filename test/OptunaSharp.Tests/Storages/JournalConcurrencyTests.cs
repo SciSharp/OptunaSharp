@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using AwesomeAssertions;
 using OptunaSharp.Collections;
 using OptunaSharp.Pruners;
@@ -184,6 +185,124 @@ public class JournalConcurrencyTests
         waiter.Release();
         double lagMs = (acquiredAt - releasedAt) * 1000.0 / Stopwatch.Frequency;
         lagMs.Should().BeLessThan(400, "a waiter retries at least every 16 ms");
+    }
+
+    /// <summary>
+    ///     A lock left behind by a holder that died (here a lock nobody owns) is forcibly released once its modification
+    ///     time has stood still for the grace period, and the waiter then takes it with its own protocol: Optuna's
+    ///     recovery (Optuna 5.0: a left-behind <c>.lock</c> with <c>grace_period=1</c> was acquired after 1.03 s).
+    ///     The shorter retry sleep must not shorten the grace period.
+    /// </summary>
+    /// <param name="protocol"><c>open</c> for a regular lock file, <c>symlink</c> for a symbolic link.</param>
+    [TestMethod]
+    [DataRow("open")]
+    [DataRow("symlink")]
+    public void Lock_LeftBehindByADeadHolder_IsReclaimedAfterTheGracePeriod(string protocol)
+    {
+        File.WriteAllText(_path, "");
+        if (protocol == "symlink")
+        {
+            RequireSymlinks();
+            File.CreateSymbolicLink(_path + ".lock", _path);
+        }
+        else
+        {
+            File.WriteAllText(_path + ".lock", "");
+        }
+        // One second keeps the test short; the constructor warns that it is small, as Python's does.
+        BaseJournalFileLock lockObj = protocol == "symlink"
+            ? new JournalFileSymlinkLock(_path, gracePeriod: 1)
+            : new JournalFileOpenLock(_path, gracePeriod: 1);
+
+        var watch = Stopwatch.StartNew();
+        var acquire = Task.Run(() => lockObj.Acquire());
+
+        ((IAsyncResult)acquire).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(15)).Should().BeTrue("a dead holder's lock must be reclaimed");
+        acquire.Result.Should().BeTrue();
+        watch.Elapsed.TotalSeconds.Should().BeGreaterThanOrEqualTo(0.9, "the lock is forced only after the grace period");
+        (new FileInfo(_path + ".lock").LinkTarget is not null).Should().Be(protocol == "symlink",
+            "the waiter now holds the path with its own protocol");
+        lockObj.Release();
+        File.Exists(_path + ".lock").Should().BeFalse();
+    }
+
+    /// <summary>
+    ///     Without a grace period a left-behind lock is never forced: the waiter is still waiting well past the point where
+    ///     a one-second grace period would have reclaimed it, and takes the lock as soon as the file is removed. That is
+    ///     the cost of <c>gracePeriod: null</c>: a crashed holder blocks every writer until someone deletes its lock.
+    /// </summary>
+    [TestMethod]
+    public void Lock_WithoutAGracePeriod_WaitsForALeftBehindLockUntilItIsRemoved()
+    {
+        File.WriteAllText(_path + ".lock", "");
+        var lockObj = new JournalFileOpenLock(_path, gracePeriod: null);
+
+        var acquire = Task.Run(() => lockObj.Acquire());
+        ((IAsyncResult)acquire).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(1.5)).Should().BeFalse("no grace period means no forced release");
+
+        File.Delete(_path + ".lock");
+        ((IAsyncResult)acquire).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(10)).Should().BeTrue();
+        acquire.Result.Should().BeTrue();
+        lockObj.Release();
+    }
+
+    /// <summary>
+    ///     A left-behind lock blocks writers, never readers: journal readers take no lock, as in Optuna, so a study can
+    ///     still be loaded and inspected while a dead holder's lock waits out its grace period.
+    /// </summary>
+    [TestMethod]
+    public void Lock_LeftBehindByADeadHolder_DoesNotBlockReaders()
+    {
+        var study = Optuna.CreateStudy(storage: NewStorage(), studyName: "read", sampler: new RandomSampler(60));
+        study.Optimize(t => Objective(t, "w"), nTrials: 3);
+        File.WriteAllText(_path + ".lock", "");
+
+        var read = Task.Run(() => Optuna.LoadStudy("read", new JournalStorage(new JournalFileBackend(_path,
+            new JournalFileOpenLock(_path, gracePeriod: null)))).Trials);
+
+        ((IAsyncResult)read).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(10)).Should().BeTrue("loading a study takes no lock");
+        ShouldBePerfect(read.Result, 3);
+        File.Delete(_path + ".lock");
+    }
+
+    /// <summary>
+    ///     The two protocols share one lock path, so a symbolic-link holder and an open-file holder exclude each other in
+    ///     both directions. This is what keeps a process that fell back to the open-file protocol (Windows without
+    ///     Developer Mode) safe beside processes on Optuna's default symlink lock, Python's included.
+    /// </summary>
+    [TestMethod]
+    public void SymlinkAndOpenFileLocks_OnOneJournal_ExcludeEachOther()
+    {
+        RequireSymlinks();
+        File.WriteAllText(_path, "");
+        foreach (var (holder, waiter) in new (BaseJournalFileLock Holder, BaseJournalFileLock Waiter)[]
+        {
+            (new JournalFileSymlinkLock(_path), new JournalFileOpenLock(_path)),
+            (new JournalFileOpenLock(_path), new JournalFileSymlinkLock(_path)),
+        })
+        {
+            holder.Acquire().Should().BeTrue();
+            var acquire = Task.Run(() => waiter.Acquire());
+
+            ((IAsyncResult)acquire).AsyncWaitHandle.WaitOne(TimeSpan.FromMilliseconds(500)).Should().BeFalse(
+                $"{waiter.GetType().Name} must wait while {holder.GetType().Name} holds the path");
+            holder.Release();
+            ((IAsyncResult)acquire).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(10)).Should().BeTrue();
+            waiter.Release();
+            File.Exists(_path + ".lock").Should().BeFalse();
+        }
+    }
+
+    /// <summary>
+    ///     Releasing a symbolic-link lock nobody holds raises Python's error (Optuna 5.0, verbatim: "Error: did not possess
+    ///     lock"); the open-file lock's twin is pinned in <c>JournalStorageTests</c>.
+    /// </summary>
+    [TestMethod]
+    public void SymlinkLock_ReleasedWithoutBeingHeld_RaisesPythonsError()
+    {
+        var release = () => new JournalFileSymlinkLock(_path).Release();
+
+        release.Should().Throw<NumSharp.RuntimeError>().WithMessage("Error: did not possess lock");
     }
 
     // ------------------------------------------------------------------ several storages, one study

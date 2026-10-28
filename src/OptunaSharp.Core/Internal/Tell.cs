@@ -27,19 +27,28 @@ internal static class TellHelpers
     /// <exception cref="NumSharp.KeyError">The trial identifier has no corresponding record in the study storage.</exception>
     /// <exception cref="NumSharp.ValueError">The study-local trial number has not been created.</exception>
     internal static FrozenTrial GetFrozenTrial(Study study, int trialNumber)
+        => study.Storage.GetTrial(GetTrialId(study, trialNumber));
+
+    /// <summary>
+    ///     The first half of Python's <c>_get_frozen_trial(study, trial_number)</c>: resolves a study-local trial number
+    ///     to its storage identifier. A tell by number needs the identifier before reading the trial, to take the
+    ///     trial's tell monitor (<see cref="Storages.BaseStorage.TellLockFor" />) first.
+    /// </summary>
+    /// <param name="study">The study whose storage resolves the number.</param>
+    /// <param name="trialNumber">The study-local trial number, rather than the storage's internal trial identifier.</param>
+    /// <returns>The storage identifier of the trial with that number.</returns>
+    /// <exception cref="NumSharp.ValueError">The study-local trial number has not been created.</exception>
+    internal static int GetTrialId(Study study, int trialNumber)
     {
-        int trialId;
         try
         {
-            trialId = study.Storage.GetTrialIdFromStudyIdTrialNumber(study.StudyId, trialNumber);
+            return study.Storage.GetTrialIdFromStudyIdTrialNumber(study.StudyId, trialNumber);
         }
         catch (KeyError e)
         {
             throw new ValueError(
                 $"Cannot tell for trial with number {trialNumber} since it has not been created.", e);
         }
-
-        return study.Storage.GetTrial(trialId);
     }
 
     /// <summary>Python <c>_check_state_and_values</c>.</summary>

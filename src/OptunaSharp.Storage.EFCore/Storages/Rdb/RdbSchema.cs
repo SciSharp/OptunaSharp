@@ -18,14 +18,47 @@ namespace OptunaSharp.Storages.EFCore;
 /// </summary>
 internal static class RdbSchema
 {
+    /// <summary>
+    ///     Takes the transaction-scoped advisory lock under which PostgreSQL schema creation runs. The key is an arbitrary
+    ///     constant, 0x6F7074756E612D73 (the ASCII of "optuna-s"), written out in decimal so the statement is a constant;
+    ///     another application using the same key on the same database only makes the two wait for each other briefly.
+    /// </summary>
+    private const string PostgreSqlSchemaLockSql = "SELECT pg_advisory_xact_lock(8030046183313452403)";
+
     /// <summary>Execute the schema DDL for <paramref name="provider" /> against the context's database.</summary>
     /// <param name="ctx">The operation-scoped EF Core context; the caller owns its lifetime and transaction.</param>
     /// <param name="provider">The relational database dialect whose connection and SQL rules apply.</param>
+    /// <remarks>
+    ///     [Misaligned] Storages opening a fresh PostgreSQL database at once, as a fleet of workers starting together
+    ///     does, used to race: each statement's "if not exists" check passed in several sessions, and all but one then
+    ///     failed with <c>23505 duplicate key value violates unique constraint "pg_type_typname_nsp_index"</c>.
+    ///     Optuna 5.0 fails the same way (15 of 16 storages opening one fresh database; on MySQL its
+    ///     <c>create_all</c> also fails 15 of 16 with "Table 'studies' already exists"). On PostgreSQL the DDL now runs
+    ///     in one transaction holding an advisory lock, and DDL is transactional there, so a later session waits, then
+    ///     finds every type and table in place. MySQL needs nothing: its <c>CREATE TABLE IF NOT EXISTS</c> is atomic
+    ///     under the server's metadata locks, and DDL commits implicitly, so a transaction could not hold a lock
+    ///     across it anyway.
+    /// </remarks>
     internal static void EnsureCreated(OptunaRdbContext ctx, RdbProvider provider)
     {
         var statements = provider == RdbProvider.PostgreSql ? PostgreSql : MySql;
-        foreach (string sql in statements)
-            ctx.Database.ExecuteSqlRaw(sql);
+        if (provider != RdbProvider.PostgreSql)
+        {
+            foreach (string sql in statements)
+                ctx.Database.ExecuteSqlRaw(sql);
+            return;
+        }
+
+        // Under the context's execution strategy, so a storage configured with EnableRetryOnFailure may start this
+        // transaction (a retrying strategy refuses user transactions begun outside it) and retries it whole.
+        ctx.Database.CreateExecutionStrategy().Execute(() =>
+        {
+            using var tx = ctx.Database.BeginTransaction();
+            ctx.Database.ExecuteSqlRaw(PostgreSqlSchemaLockSql);
+            foreach (string sql in statements)
+                ctx.Database.ExecuteSqlRaw(sql);
+            tx.Commit();
+        });
     }
 
     // ------------------------------------------------------------------ PostgreSQL

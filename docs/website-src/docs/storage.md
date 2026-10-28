@@ -261,9 +261,22 @@ What each layer guarantees within one process:
   raises that original exception. Errors among the final trials are not raised, as in Python. They are
   still logged and stored as `FAIL`. `nJobs` of 0 or below -1 raises Python's
   `ValueError: max_workers must be greater than 0`.
+- **Ending a run.** A timeout, `Stop()` or `MaxTrialsCallback` stops scheduling, and the trials already in
+  flight finish, so an `nJobs` run can end up to `nJobs - 1` trials past the limit, as in Python.
+  `Stop()` works only from an objective or a callback. Called from any other thread it raises Python's
+  `RuntimeError` and the run goes on: to cancel from outside, set a flag that a callback checks. A failing
+  sampler `BeforeTrial` is raised whatever `catch` holds and leaves its trial `RUNNING`, as in Python.
 - **One trial, several threads.** A `Trial` serializes its own operations. When several threads report
   the same step, the first value wins, as Optuna documents (Python's own `Trial` races there). Suggesting
   one name from several threads samples it once.
+- **Two tells of one trial.** Tells of one trial through one storage instance, from any thread and from
+  the optimize loop, act in turn. Exactly one stores its result and reaches the sampler's `AfterTrial`.
+  The others are refused with `ValueError: Cannot tell a COMPLETE trial.`, or return the stored trial
+  with `skipIfFinished: true`. That is what Python shows in practice, and it is what a reaper that fails
+  slow trials relies on. Before 2026-10-28 both tells could pass the check: about one round in 150 ran
+  `AfterTrial` twice and failed the second tell with `UpdateFinishedTrialError`, even with
+  `skipIfFinished`. Tells through two storage instances or processes are arbitrated by the storage, as
+  in Python, and the loser gets `UpdateFinishedTrialError`.
 
 Limits and costs:
 
@@ -295,6 +308,30 @@ Limits and costs:
   calls at once, Redis calls time out after `SyncTimeout`. Examples: dozens of `Task.Run(() =>
   study.Optimize(...))`, or an ASP.NET request burst. Use dedicated threads, as `nJobs` does, or raise
   `ThreadPool.SetMinThreads`.
+
+### The same setups on SQLite, PostgreSQL, MySQL and gRPC
+
+The storage suite's `StorageConcurrencyTests` runs four of these setups on the other shared storages. Each
+must produce a perfect study:
+
+1. one storage under `nJobs: 8`;
+2. eight separate storages, each with its own connection, optimizing one study;
+3. eight storages popping enqueued trials;
+4. sixteen storages creating one study name on a fresh database.
+
+How each storage gets there:
+
+- **SQLite.** Each storage serializes its own connection, and separate storages wait on SQLite's database
+  lock (the busy timeout is 30 s). An enqueued trial is popped by exactly one storage. Optuna 5.0 on SQLite
+  can pop it twice: SQLite ignores the `SELECT … FOR UPDATE` its pop relies on. The second worker's tell
+  then fails, and the dead workers leave queued trials `WAITING`.
+- **PostgreSQL and MySQL (EF Core).** Trial creation holds the study's row lock, as Optuna's does, so
+  concurrent creators number their trials one after another. Before 2026-10-28 they could take the same
+  number (see the [EF Core page](../integrations/storage/ef-core.md#concurrency-heartbeats-and-schema-lifecycle)).
+  On a fresh PostgreSQL database, schema creation is serialized, so a fleet opening it at once succeeds;
+  Optuna fails that case 15 times in 16.
+- **gRPC proxy.** Every client's call reaches the server's storage, which arbitrates between them;
+  separate clients behave as separate processes on that storage.
 
 ## Caching over a backend
 
@@ -346,8 +383,10 @@ EF Core RDB storages, the gRPC proxy, and the three Redis journal backends. Use 
 and `await using` in async code. A DI container disposes the ones it builds with their scope or container,
 and an asynchronously disposed scope (an ASP.NET Core request scope, `AsyncServiceScope`) uses
 `DisposeAsync`. Only what a storage created is closed: an injected connection, data source, channel or
-client stays the caller's. Disposing twice, by either method, does nothing. `InMemoryStorage`,
-`JournalStorage` and the journal file backend hold nothing to dispose.
+client stays the caller's. Disposing twice, by either method, does nothing. That matters with a scoped or
+transient registration: the container disposes the instance once through its concrete registration and
+once through the `BaseStorage` forwarder. `InMemoryStorage`, `JournalStorage` and the journal file backend
+hold nothing to dispose.
 
 `DisposeAsync` frees the calling thread where the client can close asynchronously: StackExchange.Redis,
 NRedisStack, ServiceStack.Redis and Npgsql. Microsoft.Data.Sqlite and gRPC channels close synchronously

@@ -351,13 +351,19 @@ internal static class OptimizeLoop
         string? warningMessage;
         try
         {
-            var frozen = TellHelpers.GetFrozenTrial(study, trial);
-            (updatedState, values, warningMessage) = TellHelpers.TellWithWarning(
-                study: study,
-                frozenTrial: frozen,
-                valueOrValues: valueOrValues,
-                state: state,
-                suppressWarning: true);
+            // Under the trial's tell monitor, as Study.Tell: an application thread telling this trial at the same
+            // time (a reaper failing slow trials, say) acts wholly before or after this tell, so exactly one of the
+            // two passes the "still running" check and reaches the sampler's AfterTrial (see BaseStorage.TellLockFor).
+            lock (study.Storage.TellLockFor(trial.TrialId))
+            {
+                var frozen = TellHelpers.GetFrozenTrial(study, trial);
+                (updatedState, values, warningMessage) = TellHelpers.TellWithWarning(
+                    study: study,
+                    frozenTrial: frozen,
+                    valueOrValues: valueOrValues,
+                    state: state,
+                    suppressWarning: true);
+            }
         }
         catch (Exception)
         {

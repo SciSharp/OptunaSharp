@@ -155,6 +155,85 @@ public class SamplerNJobsSweepTests
     }
 
     /// <summary>
+    ///     The second-pass edge: every cheap sampler at <c>nJobs: 8</c> on a conditional search space whose branch is a
+    ///     categorical choice, with a fixed share of trials failing (a caught exception) and of trials pruned. Samplers
+    ///     reading the history while it changes see trials of both branches and of every state, which is how
+    ///     relative-space inference, the genetic samplers' populations and the evolution strategies' generations meet
+    ///     FAIL and PRUNED trials mid-run. Every trial must end in the state its number dictates, with exactly the
+    ///     parameters of its branch, and the numbering stays contiguous.
+    /// </summary>
+    /// <param name="name">The sampler under test (see <see cref="Make" />).</param>
+    /// <exception cref="NumSharp.ValueError">Thrown by every seventh trial; caught, so the trial is recorded as FAIL.</exception>
+    /// <exception cref="TrialPruned">Thrown by trials numbered 5 mod 11 that do not fail; recorded as PRUNED.</exception>
+    [TestMethod]
+    [DataRow("random")]
+    [DataRow("tpe")]
+    [DataRow("tpe-independent")]
+    [DataRow("cmaes")]
+    [DataRow("qmc")]
+    [DataRow("qmc-scrambled")]
+    [DataRow("partialfixed")]
+    [DataRow("janus")]
+    [DataRow("janusde")]
+    [DataRow("de")]
+    [DataRow("pso")]
+    [DataRow("lmcma")]
+    [DataRow("vkd")]
+    [DataRow("openaies")]
+    [DataRow("snes")]
+    [DataRow("xnes")]
+    [DataRow("moead")]
+    [DataRow("nsga2")]
+    [DataRow("nsga3")]
+    [DataRow("nsga3cpt")]
+    [DataRow("smsemoa")]
+    [DataRow("agemoea2")]
+    [DataRow("agemoea2cpt")]
+    [DataRow("rvea")]
+    [DataRow("janusmoo")]
+    [DataRow("janussms")]
+    [DataRow("janusage2")]
+    [DataRow("janusage2cpt")]
+    public void NJobs_Sampler_OnAConditionalSpaceWithFailedAndPrunedTrials_EndsEveryTrialAsDictated(string name)
+    {
+        const int nTrials = 60;
+        var sampler = Make(name);
+        bool mo = MultiObjective.Contains(name);
+        var study = mo
+            ? Optuna.CreateStudy(sampler: sampler, directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize })
+            : Optuna.CreateStudy(sampler: sampler);
+
+        study.Optimize(t =>
+        {
+            // "z" is common to both branches (and the parameter the partial-fixed sampler pins); the branch decides the rest.
+            double z = t.SuggestFloat("z", 0, 1);
+            string kind = t.SuggestCategorical("kind", new[] { "a", "b" });
+            double loss = kind == "a"
+                ? Math.Pow(t.SuggestFloat("a_x", -5, 5) - 1, 2) + t.SuggestInt("a_n", 1, 8) * 0.1
+                : Math.Log(t.SuggestFloat("b_y", 1e-3, 1e3, log: true)) + (t.SuggestCategorical("b_c", new[] { "p", "q", "r" }) == "q" ? 0 : 1);
+            if (t.Number % 7 == 3)
+                throw new NumSharp.ValueError("failing trial");
+            if (t.Number % 11 == 5)
+                throw new TrialPruned();
+            return mo ? new[] { loss + z, (1 - z) * (1 - z) } : new[] { loss + z };
+        }, nTrials: nTrials, nJobs: 8, @catch: new[] { typeof(NumSharp.ValueError) });
+
+        var trials = study.Trials;
+        trials.Select(t => t.Number).Should().Equal(Enumerable.Range(0, nTrials));
+        foreach (var trial in trials)
+        {
+            var expected = trial.Number % 7 == 3 ? TrialState.Fail
+                : trial.Number % 11 == 5 ? TrialState.Pruned
+                : TrialState.Complete;
+            trial.State.Should().Be(expected, $"trial {trial.Number} ends as its number dictates");
+            string kind = (string)trial.Params["kind"]!;
+            var branch = kind == "a" ? new[] { "a_n", "a_x" } : new[] { "b_c", "b_y" };
+            trial.Params.Keys.Order().Should().Equal(branch.Append("kind").Append("z").Order(),
+                $"trial {trial.Number} holds exactly the parameters of branch {kind}");
+        }
+    }
+
+    /// <summary>
     ///     Runs the named sampler over a three-parameter space at <c>nJobs: 8</c> and checks the study: the trial count,
     ///     contiguous numbering, and every trial complete with all three parameters.
     /// </summary>

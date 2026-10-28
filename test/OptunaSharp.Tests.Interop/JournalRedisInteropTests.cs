@@ -22,7 +22,8 @@ namespace OptunaSharp.Tests.Interop;
 [TestClass]
 public class JournalRedisInteropTests
 {
-    private const string Url = "redis://127.0.0.1:6379";
+    /// <summary>The Redis every case uses (the Storage suite's compose service).</summary>
+    internal const string Url = "redis://127.0.0.1:6379";
     private const string ProbeConfig = "127.0.0.1:6379,connectTimeout=1500,connectRetry=0,abortConnect=true";
 
     private string _prefix = null!;
@@ -127,7 +128,8 @@ public class JournalRedisInteropTests
     }
 
     /// <summary>Skip (Inconclusive) unless a Redis server is reachable AND redis-py is importable.</summary>
-    private static void EnsureRedisOrInconclusive()
+    /// <remarks>Shared with the Redis fleet of <see cref="JournalMixedFleetInteropTests" />.</remarks>
+    internal static void EnsureRedisOrInconclusive()
     {
         try
         {

@@ -68,7 +68,7 @@ All three backends implement `IDisposable` and `IAsyncDisposable`, and ownership
 - **Paths 1–3 (URL, URL plus callback, native configuration):** the backend opens the connection or pool, and `Dispose()` or `DisposeAsync()` closes it. Call one of them, or wrap the backend in `using` or `await using`, once every `JournalStorage` over it is done.
 - **Path 4 (an injected client):** disposing the backend leaves the client open. It stays yours to dispose.
 
-Disposal happens once: a second call to either method does nothing. After it, the backend must not be used. `JournalStorage` itself has nothing to dispose.
+Disposal happens once: a second call to either method does nothing, and the two may even race on two threads. After it, the backend must not be used. A backend that closed its own connection or pool throws `ObjectDisposedException` on every later journal operation (ServiceStack's pool would otherwise keep serving after its own disposal, so that backend checks itself). A backend over an injected client keeps using it. `JournalStorage` itself has nothing to dispose.
 
 `DisposeAsync()` closes without holding a thread. StackExchange.Redis and NRedisStack close the multiplexer through its own `DisposeAsync`, and ServiceStack closes its `RedisManagerPool` the same way. The synchronous `Dispose()` waits on the calling thread while the client shuts its sockets. In async code, prefer `await using`:
 

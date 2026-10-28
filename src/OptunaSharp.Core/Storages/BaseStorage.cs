@@ -30,6 +30,44 @@ public abstract class BaseStorage
     /// <summary>Prefix prepended to automatically generated study names.</summary>
     public const string DefaultStudyNamePrefix = "no-name-";
 
+    // How many monitors TellLockFor spreads trials over: enough that unrelated tells rarely share one, few enough that
+    // the set is a fixed, small allocation per storage instance however many trials the storage ever holds.
+    private const int TellLockStripes = 64;
+
+    private readonly object[] _tellLocks = Enumerable.Range(0, TellLockStripes).Select(_ => new object()).ToArray();
+
+    /// <summary>
+    ///     The monitor under which a tell of one trial through this storage instance runs, by <c>Study.Tell</c> and by
+    ///     the optimize loop alike: the check that the trial is still running, the sampler's <c>AfterTrial</c>, and the
+    ///     final state write. Two threads telling one trial therefore act in turn, and the second sees the first one's
+    ///     result: it is refused with <c>Cannot tell a COMPLETE trial.</c>, or skipped with <c>skipIfFinished</c>.
+    /// </summary>
+    /// <param name="trialId">The trial's storage identifier.</param>
+    /// <returns>
+    ///     The trial's stripe of a fixed set of monitors. Trials that share a stripe only wait for each other's tell,
+    ///     which is short; the monitor is reentrant, so a sampler hook telling another trial of a shared stripe on the
+    ///     same thread does not deadlock.
+    /// </returns>
+    /// <remarks>
+    ///     <para>
+    ///         Python runs that check and that write as separate storage calls too. Under the GIL two threads
+    ///         practically never pass the check together: on Optuna 5.0, 300 of 300 rounds of two threads telling one
+    ///         trial stored one tell and refused the other. Here the threads run in parallel, and without the monitor
+    ///         both passed the check in about one round of 150. The loser then ran the sampler's <c>AfterTrial</c> with
+    ///         its own values, which were never stored, and failed in the storage with
+    ///         <see cref="UpdateFinishedTrialError" />, even with <c>skipIfFinished</c>.
+    ///     </para>
+    ///     <para>
+    ///         Lock order: this monitor is taken before the sampler's monitor and the storage's own locks, and no code
+    ///         holding those takes it. Footgun: a Python-bridged sampler takes the GIL inside its <c>AfterTrial</c>, so
+    ///         that order continues to the GIL, and code that holds the GIL while it calls <c>Tell</c> can deadlock
+    ///         against a concurrent tell, as it already can around <c>Suggest</c> against the sampler's monitor. Tells
+    ///         through two storage instances, or from two processes, are not covered: the storage arbitrates them, as
+    ///         Python's does, and the loser gets <see cref="UpdateFinishedTrialError" />.
+    ///     </para>
+    /// </remarks>
+    internal object TellLockFor(int trialId) => _tellLocks[(int)((uint)trialId % TellLockStripes)];
+
     // ------------------------------------------------------------------ study manipulation
 
     /// <summary>

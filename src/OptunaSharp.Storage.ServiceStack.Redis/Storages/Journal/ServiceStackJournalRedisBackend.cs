@@ -149,7 +149,9 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
 
     /// <summary>
     ///     Closes the client pool this backend built from a URL or endpoint; an injected manager is left open.
-    ///     Calling it again does nothing. A journal operation after disposal fails in ServiceStack.Redis.
+    ///     Calling it again does nothing. Any later journal operation on a backend that closed its own pool fails with
+    ///     <see cref="ObjectDisposedException" />; one over an injected manager keeps using it, as the StackExchange
+    ///     backends keep using an injected multiplexer.
     /// </summary>
     /// <remarks>
     ///     A DI container calls this when the scope (or, for a singleton, the container) that created the backend is
@@ -199,6 +201,7 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
 
     /// <inheritdoc />
     /// <exception cref="NumSharp.ValueError">A nonfinal journal record contains malformed JSON.</exception>
+    /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
     public override IEnumerable<OrderedDict<string, object?>> ReadLogs(int logNumberFrom)
     {
         string? maxStr = GetValue(RedisJournalProtocol.LogNumberKey(_prefix));
@@ -243,9 +246,10 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     }
 
     /// <inheritdoc />
+    /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
     public override void AppendLogs(IReadOnlyList<OrderedDict<string, object?>> logs)
     {
-        using IRedisClient client = _manager.GetClient();
+        using IRedisClient client = BorrowClient();
         client.SetValueIfNotExists(
             RedisJournalProtocol.LogNumberKey(_prefix),
             RedisJournalProtocol.InitialLogNumber.ToString(CultureInfo.InvariantCulture));
@@ -269,28 +273,49 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
 
     /// <summary>Replaces the Redis journal snapshot with the supplied opaque serialized bytes.</summary>
     /// <param name="snapshot">The serialized journal-state snapshot to store as opaque bytes.</param>
+    /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
     public void SaveSnapshot(byte[] snapshot)
     {
-        using IRedisClient client = _manager.GetClient();
+        using IRedisClient client = BorrowClient();
         ((IRedisNativeClient)client).Set(RedisJournalProtocol.SnapshotKey(_prefix), snapshot);
     }
 
     /// <summary>Reads the latest Redis journal snapshot, if one has been saved.</summary>
     /// <returns>The saved snapshot bytes, or null when the snapshot key is absent.</returns>
+    /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
     public byte[]? LoadSnapshot()
     {
-        using IRedisClient client = _manager.GetClient();
+        using IRedisClient client = BorrowClient();
         // ServiceStack's native GET returns null for a missing key — same as the other backends'
         // RedisValue.IsNull, so an absent snapshot is null and a present one is its exact bytes.
         return ((IRedisNativeClient)client).Get(RedisJournalProtocol.SnapshotKey(_prefix));
     }
 
+    /// <summary>
+    ///     Borrows a client from the manager, refusing once this backend has closed a pool it owns.
+    /// </summary>
+    /// <returns>A pooled client; disposing it returns it to the pool.</returns>
+    /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
+    /// <remarks>
+    ///     ServiceStack's <c>RedisManagerPool</c> keeps handing out clients after its own disposal, so without this check
+    ///     a disposed backend went on serving journal operations through the pool it had closed, while the StackExchange
+    ///     and NRedisStack backends fail with their closed multiplexer. An injected manager is the caller's to close, and
+    ///     a backend over one keeps using it after the backend's own disposal.
+    /// </remarks>
+    private IRedisClient BorrowClient()
+    {
+        if (_ownsManager && System.Threading.Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(GetType().FullName, "This backend closed the Redis client pool it owned.");
+        return _manager.GetClient();
+    }
+
     /// <summary>Reads the string value of a Redis key through a borrowed pooled connection.</summary>
     /// <param name="key">The attribute name or exact storage key to access.</param>
     /// <returns>The Redis value, or null when the key is absent.</returns>
+    /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
     private string? GetValue(string key)
     {
-        using IRedisClient client = _manager.GetClient();
+        using IRedisClient client = BorrowClient();
         return client.GetValue(key);   // null when the key does not exist
     }
 

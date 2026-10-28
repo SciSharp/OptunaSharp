@@ -267,6 +267,53 @@ public class RedisJournalConcurrencyTests
         await asyncFirst.Awaiting(b => ((IAsyncDisposable)b).DisposeAsync().AsTask()).Should().NotThrowAsync();
     }
 
+    /// <summary>
+    ///     <c>Dispose</c> and <c>DisposeAsync</c> racing on two threads, as a host shutting down along two paths at once:
+    ///     neither throws, and afterwards the backend is closed. The once-only flag is an interlocked exchange, so
+    ///     exactly one of the two runs the close. Ten rounds per client, a few requests each, well inside ServiceStack's
+    ///     hourly budget.
+    /// </summary>
+    /// <param name="backendName">One of <see cref="RedisSession.Backends" />.</param>
+    [TestMethod]
+    [DataRow("StackExchange")]
+    [DataRow("NRedisStack")]
+    [DataRow("ServiceStack")]
+    public void DisposeAndDisposeAsync_RacingOnTwoThreads_NeitherThrows_AndTheBackendIsClosed(string backendName)
+    {
+        RedisSession.EnsureReachable();
+        var create = RedisSession.Backends.Single(b => b.Name == backendName).Create;
+
+        for (int round = 0; round < 10; round++)
+        {
+            var backend = create(RedisSession.UniquePrefix(), false);
+            backend.AppendLogs(new[] { new OrderedDict<string, object?> { ["op"] = 0L } });
+            using var barrier = new Barrier(2);
+            var errors = new ConcurrentQueue<Exception>();
+            var closers = new Action[]
+            {
+                () => ((IDisposable)backend).Dispose(),
+                () => ((IAsyncDisposable)backend).DisposeAsync().AsTask().GetAwaiter().GetResult(),
+            }.Select(close => new Thread(() =>
+            {
+                barrier.SignalAndWait();
+                try
+                {
+                    close();
+                }
+                catch (Exception e)
+                {
+                    errors.Enqueue(e);
+                }
+            })).ToList();
+            closers.ForEach(t => t.Start());
+            closers.ForEach(t => t.Join());
+
+            errors.Should().BeEmpty($"round {round}: two disposals at once must not fail");
+            backend.Invoking(b => b.ReadLogs(0).ToList()).Should().Throw<ObjectDisposedException>(
+                $"round {round}: one of the two disposals closed the owned connection");
+        }
+    }
+
     /// <summary>A ServiceStack backend leaves an injected client manager open when disposed asynchronously.</summary>
     /// <returns>The asynchronous test.</returns>
     [TestMethod]

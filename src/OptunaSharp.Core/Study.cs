@@ -437,6 +437,14 @@ public class Study
     /// <exception cref="NumSharp.ValueError">The trial number is invalid, the trial is not running, its requested state and values disagree, or explicit completion has invalid objective values.</exception>
     /// <exception cref="NumSharp.KeyError">The requested trial cannot be found.</exception>
     /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
+    /// <exception cref="UpdateFinishedTrialError">Another storage instance or process finished the trial while this tell was writing it; the storage admits one of them.</exception>
+    /// <remarks>
+    ///     Thread-safe for one trial: tells of it through this study's storage instance, from any thread and from
+    ///     the optimize loop, act in turn. Exactly one stores its result and reaches the sampler's <c>AfterTrial</c>;
+    ///     every later one is refused with <c>Cannot tell a COMPLETE trial.</c> (or the trial's state), or skipped
+    ///     when <c>skipIfFinished</c> is set. Optuna behaves the same in practice, because its GIL makes that order
+    ///     near certain; without the ordering, two tells could both pass the check and both reach <c>AfterTrial</c>.
+    /// </remarks>
     public FrozenTrial Tell(Trial trial, double value, bool skipIfFinished = false)
         => TellInternal(trial, new[] { value }, null, skipIfFinished);
 
@@ -463,6 +471,14 @@ public class Study
     /// <exception cref="NumSharp.ValueError">The trial number is invalid, the trial is not running, its requested state and values disagree, or explicit completion has invalid objective values.</exception>
     /// <exception cref="NumSharp.KeyError">The requested trial cannot be found.</exception>
     /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
+    /// <exception cref="UpdateFinishedTrialError">Another storage instance or process finished the trial while this tell was writing it; the storage admits one of them.</exception>
+    /// <remarks>
+    ///     Thread-safe for one trial: tells of it through this study's storage instance, from any thread and from
+    ///     the optimize loop, act in turn. Exactly one stores its result and reaches the sampler's <c>AfterTrial</c>;
+    ///     every later one is refused with <c>Cannot tell a COMPLETE trial.</c> (or the trial's state), or skipped
+    ///     when <c>skipIfFinished</c> is set. Optuna behaves the same in practice, because its GIL makes that order
+    ///     near certain; without the ordering, two tells could both pass the check and both reach <c>AfterTrial</c>.
+    /// </remarks>
     public FrozenTrial Tell(
         Trial trial, IReadOnlyList<double>? values = null, TrialState? state = null, bool skipIfFinished = false)
         => TellInternal(trial, values, state, skipIfFinished);
@@ -475,6 +491,14 @@ public class Study
     /// <exception cref="NumSharp.ValueError">The trial number is invalid, the trial is not running, its requested state and values disagree, or explicit completion has invalid objective values.</exception>
     /// <exception cref="NumSharp.KeyError">The requested trial cannot be found.</exception>
     /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
+    /// <exception cref="UpdateFinishedTrialError">Another storage instance or process finished the trial while this tell was writing it; the storage admits one of them.</exception>
+    /// <remarks>
+    ///     Thread-safe for one trial: tells of it through this study's storage instance, from any thread and from
+    ///     the optimize loop, act in turn. Exactly one stores its result and reaches the sampler's <c>AfterTrial</c>;
+    ///     every later one is refused with <c>Cannot tell a COMPLETE trial.</c> (or the trial's state), or skipped
+    ///     when <c>skipIfFinished</c> is set. Optuna behaves the same in practice, because its GIL makes that order
+    ///     near certain; without the ordering, two tells could both pass the check and both reach <c>AfterTrial</c>.
+    /// </remarks>
     public FrozenTrial Tell(int trialNumber, double value, bool skipIfFinished = false)
         => TellInternal(trialNumber, new[] { value }, null, skipIfFinished);
 
@@ -487,6 +511,14 @@ public class Study
     /// <exception cref="NumSharp.ValueError">The trial number is invalid, the trial is not running, its requested state and values disagree, or explicit completion has invalid objective values.</exception>
     /// <exception cref="NumSharp.KeyError">The requested trial cannot be found.</exception>
     /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
+    /// <exception cref="UpdateFinishedTrialError">Another storage instance or process finished the trial while this tell was writing it; the storage admits one of them.</exception>
+    /// <remarks>
+    ///     Thread-safe for one trial: tells of it through this study's storage instance, from any thread and from
+    ///     the optimize loop, act in turn. Exactly one stores its result and reaches the sampler's <c>AfterTrial</c>;
+    ///     every later one is refused with <c>Cannot tell a COMPLETE trial.</c> (or the trial's state), or skipped
+    ///     when <c>skipIfFinished</c> is set. Optuna behaves the same in practice, because its GIL makes that order
+    ///     near certain; without the ordering, two tells could both pass the check and both reach <c>AfterTrial</c>.
+    /// </remarks>
     public FrozenTrial Tell(
         int trialNumber, IReadOnlyList<double>? values = null, TrialState? state = null, bool skipIfFinished = false)
         => TellInternal(trialNumber, values, state, skipIfFinished);
@@ -502,7 +534,11 @@ public class Study
     /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
     private FrozenTrial TellInternal(Trial trial, IReadOnlyList<double>? values, TrialState? state, bool skipIfFinished)
     {
-        TellHelpers.TellWithWarning(this, TellHelpers.GetFrozenTrial(this, trial), values, state, skipIfFinished);
+        // The snapshot is read, checked and written under the trial's tell monitor: one read before it could predate
+        // another thread's tell of this trial, and both tells would pass the "still running" check
+        // (see BaseStorage.TellLockFor).
+        lock (Storage.TellLockFor(trial.TrialId))
+            TellHelpers.TellWithWarning(this, TellHelpers.GetFrozenTrial(this, trial), values, state, skipIfFinished);
         return TellHelpers.GetFrozenTrial(this, trial).DeepCopy();
     }
 
@@ -517,8 +553,12 @@ public class Study
     /// <exception cref="System.Exception">The sampler AfterTrial hook or the storage backend fails.</exception>
     private FrozenTrial TellInternal(int trialNumber, IReadOnlyList<double>? values, TrialState? state, bool skipIfFinished)
     {
-        TellHelpers.TellWithWarning(this, TellHelpers.GetFrozenTrial(this, trialNumber), values, state, skipIfFinished);
-        return TellHelpers.GetFrozenTrial(this, trialNumber).DeepCopy();
+        // The monitor is keyed by storage identifier, so the number is resolved first: a tell by number and a tell of
+        // the same trial's Trial object then exclude each other (see BaseStorage.TellLockFor).
+        int trialId = TellHelpers.GetTrialId(this, trialNumber);
+        lock (Storage.TellLockFor(trialId))
+            TellHelpers.TellWithWarning(this, Storage.GetTrial(trialId), values, state, skipIfFinished);
+        return Storage.GetTrial(trialId).DeepCopy();
     }
 
     // ------------------------------------------------------------------ attributes
