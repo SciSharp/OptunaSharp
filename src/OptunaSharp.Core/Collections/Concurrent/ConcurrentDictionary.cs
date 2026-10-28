@@ -32,6 +32,10 @@ using System.Threading;
 
 namespace OptunaSharp.Collections.Concurrent
 {
+    // TODO(NumSharp 0.80.0): once NumSharp 0.80.0 is released, use its
+    // NumSharp.Collections.Concurrent.ConcurrentDictionary<TKey,TValue> instead of this vendored copy. Bump
+    // $(NumSharpVersion) in Directory.Build.props, then delete this file and ConcurrentDictionaryInternals.cs.
+    // The only consumer is ConcurrentOrderedDict, which moves to NumSharp in the same step.
     /// <summary>Represents a thread-safe collection of keys and values.</summary>
     /// <typeparam name="TKey">The type of the keys in the dictionary.</typeparam>
     /// <typeparam name="TValue">The type of the values in the dictionary.</typeparam>

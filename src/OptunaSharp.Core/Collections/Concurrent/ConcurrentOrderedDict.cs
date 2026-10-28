@@ -7,6 +7,11 @@ using OptunaSharp.Collections.Concurrent;
 
 namespace OptunaSharp.Collections;
 
+// TODO(NumSharp 0.80.0): once NumSharp 0.80.0 is released, use its
+// NumSharp.Collections.ConcurrentOrderedDictionary<TKey,TValue> instead of this type, which differs in name
+// (…Dictionary, not …Dict). Bump $(NumSharpVersion) in Directory.Build.props, then delete this file.
+// ConcurrentOrderedDictTests pins this copy's contract: point the tests that still apply at the NumSharp type
+// and drop the rest.
 /// <summary>
 ///     A thread-safe collection with <b>two access paths over one set of entries</b>: a dictionary path keyed
 ///     by <typeparamref name="TKey" /> (uniqueness, dedup and O(1) lookup) and a list path addressed by
