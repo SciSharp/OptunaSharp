@@ -23,7 +23,7 @@ var study = Optuna.CreateStudy(
 study.Optimize(trial => Math.Pow(trial.SuggestFloat("x", -10, 10), 2), nTrials: 20);
 ```
 
-The application owns the manager. The adapter returns borrowed `IRedisClient` instances after command use, but does not dispose the manager. Keep the manager alive for the entire study workload.
+The application owns the manager. The adapter returns borrowed `IRedisClient` instances after command use. Disposing the adapter does not dispose an injected manager. Keep the manager alive for the entire study workload.
 
 ## Constructors and endpoint settings
 
@@ -51,7 +51,7 @@ The endpoint and URL paths build a pool from the endpoint's `ToString()` connect
 
 The implementation's documented ServiceStack caveat is that pooled-manager timeouts/retry use `RedisConfig` defaults rather than simply applying per-endpoint `ConnectTimeout`. Configure those settings where you manage ServiceStack. Leave the native endpoint's `NamespacePrefix` unset and use OptunaSharp's `prefix` argument to preserve the shared journal keys.
 
-As with the other adapters, no backend `Dispose()` or `Close()` API is provided. URL and endpoint convenience constructors create an internal pool without an exposed shutdown hook; inject a manager when deterministic disposal matters.
+As with the other adapters, the backend is `IDisposable`. The URL and endpoint convenience constructors create an internal pool that the backend owns, and `Dispose()` closes it. An injected manager is never disposed by the backend.
 
 ## Commands, compatibility, and limits
 

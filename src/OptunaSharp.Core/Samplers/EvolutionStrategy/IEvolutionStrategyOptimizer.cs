@@ -33,7 +33,13 @@ internal interface IEvolutionStrategyOptimizer
     ///     reproducibly and the caller may clamp/step-snap the result without corrupting later
     ///     reconstruction.
     /// </summary>
-    /// <param name="index">Zero-based position of the candidate within the current generation, in <c>[0, PopulationSize)</c>.</param>
+    /// <param name="index">
+    ///     Zero-based position of the candidate within the current generation. <c>[0, PopulationSize)</c> are the
+    ///     generation's members; a larger index is an extra candidate for an ask that arrives while every member is
+    ///     handed out (parallel workers at a generation's tail). Extra candidates come from the same
+    ///     <c>(seed, generation)</c> stream after the members' rows, so they never repeat or change a member, and any
+    ///     <see cref="PopulationSize" /> of the evaluated candidates form a valid generation for <see cref="Tell" />.
+    /// </param>
     /// <returns>The proposed decision vector (length <see cref="Dim" />) before box clamping.</returns>
     double[] Ask(int index);
 

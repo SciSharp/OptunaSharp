@@ -39,12 +39,17 @@ namespace OptunaSharp.Storages.Journal;
 ///     request-quota-limited). Prefer the MIT <c>StackExchange</c>/<c>NRedisStack</c> backends unless
 ///     your app already standardizes on ServiceStack.</para>
 /// </summary>
-public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot
+public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot, IDisposable
 {
     private readonly string _url;
     private readonly bool _useCluster;
     private readonly string _prefix;
     private readonly IRedisClientsManager _manager;
+
+    // True when a constructor built _manager (a RedisManagerPool) from a URL or endpoint, so Dispose must close its
+    // pooled connections; false for an injected manager, which stays the caller's.
+    private readonly bool _ownsManager;
+    private int _disposed;
 
     // ---------------------------------------------------------------- construction
     //
@@ -64,8 +69,9 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// <param name="useCluster">If <c>false</c> (default), standalone + atomic Lua <c>EVAL</c>; if
     ///   <c>true</c>, cluster + non-atomic <c>INCR</c>+<c>SET</c>.</param>
     /// <param name="prefix">Prefix of the preserved keys.</param>
+    /// <remarks>The backend owns the client pool it builds here: <see cref="Dispose" /> closes it.</remarks>
     public ServiceStackJournalRedisBackend(string url, bool useCluster = false, string prefix = "")
-        : this(CreateManager(RedisUrl.Parse(url)), url, useCluster, prefix)
+        : this(CreateManager(RedisUrl.Parse(url)), url, useCluster, prefix, ownsManager: true)
     {
     }
 
@@ -82,9 +88,10 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     ///   <paramref name="url" /> immediately before the client manager is built; mutate it in place.</param>
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    /// <remarks>The backend owns the client pool it builds here: <see cref="Dispose" /> closes it.</remarks>
     public ServiceStackJournalRedisBackend(string url, Action<SsRedisEndpoint> configure,
         bool useCluster = false, string prefix = "")
-        : this(CreateManager(RedisUrl.Parse(url), configure), url, useCluster, prefix)
+        : this(CreateManager(RedisUrl.Parse(url), configure), url, useCluster, prefix, ownsManager: true)
     {
     }
 
@@ -97,8 +104,9 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
     /// <exception cref="System.ArgumentNullException"><paramref name="endpoint" /> is null.</exception>
+    /// <remarks>The backend owns the client pool it builds here: <see cref="Dispose" /> closes it.</remarks>
     public ServiceStackJournalRedisBackend(SsRedisEndpoint endpoint, bool useCluster = false, string prefix = "")
-        : this(PoolFor(endpoint ?? throw new ArgumentNullException(nameof(endpoint))), "", useCluster, prefix)
+        : this(PoolFor(endpoint ?? throw new ArgumentNullException(nameof(endpoint))), "", useCluster, prefix, ownsManager: true)
     {
     }
 
@@ -114,8 +122,9 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
     /// <exception cref="System.ArgumentNullException"><paramref name="manager" /> is null.</exception>
+    /// <remarks><see cref="Dispose" /> leaves an injected manager open: its lifetime stays yours.</remarks>
     public ServiceStackJournalRedisBackend(IRedisClientsManager manager, bool useCluster = false, string prefix = "")
-        : this(manager ?? throw new ArgumentNullException(nameof(manager)), "", useCluster, prefix)
+        : this(manager ?? throw new ArgumentNullException(nameof(manager)), "", useCluster, prefix, ownsManager: false)
     {
     }
 
@@ -124,7 +133,8 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// <param name="url">The database connection URL to resolve.</param>
     /// <param name="useCluster">Whether to use separate counter and log writes for a Redis cluster rather than the standalone Lua script.</param>
     /// <param name="prefix">The journal key namespace, shared by its counter, log records, and snapshot.</param>
-    private ServiceStackJournalRedisBackend(IRedisClientsManager manager, string url, bool useCluster, string prefix)
+    /// <param name="ownsManager">Whether this backend built <paramref name="manager" /> and must close it on <see cref="Dispose" />.</param>
+    private ServiceStackJournalRedisBackend(IRedisClientsManager manager, string url, bool useCluster, string prefix, bool ownsManager)
     {
         // Optuna decorates JournalRedisBackend with @experimental_class("3.1.0"), which raises an
         // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats
@@ -133,6 +143,26 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
         _manager = manager;
         _useCluster = useCluster;
         _prefix = prefix;
+        _ownsManager = ownsManager;
+    }
+
+    /// <summary>
+    ///     Closes the client pool this backend built from a URL or endpoint; an injected manager is left open.
+    ///     Calling it again does nothing. A journal operation after disposal fails in ServiceStack.Redis.
+    /// </summary>
+    /// <remarks>
+    ///     A DI container calls this when the scope (or, for a singleton, the container) that created the backend is
+    ///     disposed, so pooled connections close with the scope instead of waiting for garbage collection. A
+    ///     <see cref="JournalStorage" /> over this backend must not be used afterwards.
+    /// </remarks>
+    public void Dispose()
+    {
+        // Only the first call closes; DI may dispose a forwarded registration and the backend itself.
+        if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        if (_ownsManager)
+            _manager.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     /// <inheritdoc />

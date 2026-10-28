@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using OptunaSharp.Logging;
 using OptunaSharp.Storages;
@@ -23,7 +24,14 @@ internal static class OptimizeLoop
     /// <param name="gcAfterTrial">Whether to request garbage collection after each objective invocation.</param>
     /// <param name="showProgressBar">Whether optimization should render progress to the console.</param>
     /// <exception cref="NumSharp.RuntimeError">Optimization is invoked recursively for a study already being optimized on the current execution context.</exception>
+    /// <exception cref="NumSharp.ValueError"><paramref name="nJobs" /> is 0 or below -1 (Python's <c>ThreadPoolExecutor</c> refusal).</exception>
     /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
+    /// <remarks>
+    ///     With <paramref name="nJobs" /> other than 1 this follows Python's executor block exactly: a failure is
+    ///     raised (as the original exception, not an <see cref="AggregateException" />) only after every trial
+    ///     still running has finished, and a failure among the trials that finish after the last submission is
+    ///     not raised at all; such a trial is still recorded as FAIL and logged.
+    /// </remarks>
     internal static void Optimize(
         Study study,
         Func<Trial, IReadOnlyList<double>> func,
@@ -62,35 +70,57 @@ internal static class OptimizeLoop
             {
                 if (nJobs == -1)
                     nJobs = Environment.ProcessorCount;
+                // Python passes n_jobs to ThreadPoolExecutor(max_workers=n_jobs), which refuses anything below one.
+                // Without this check 0 or -2 reached Task.WhenAny on an empty set, an ArgumentException Python never raises.
+                if (nJobs <= 0)
+                    throw new NumSharp.ValueError("max_workers must be greater than 0");
 
                 var timeStart = DateTime.Now;
                 var futures = new HashSet<Task>();
 
-                for (int nSubmittedTrials = 0; ; nSubmittedTrials++)
+                try
                 {
-                    if (study.StopFlag)
-                        break;
-
-                    if (timeout is not null && (DateTime.Now - timeStart).TotalSeconds > timeout.Value)
-                        break;
-
-                    if (nTrials is not null && nSubmittedTrials >= nTrials.Value)
-                        break;
-
-                    if (futures.Count >= nJobs)
+                    for (int nSubmittedTrials = 0; ; nSubmittedTrials++)
                     {
-                        var completed = Task.WhenAny(futures).GetAwaiter().GetResult();
-                        futures.Remove(completed);
-                        // Raise if exception occurred in executing the completed futures.
-                        completed.GetAwaiter().GetResult();
+                        if (study.StopFlag)
+                            break;
+
+                        if (timeout is not null && (DateTime.Now - timeStart).TotalSeconds > timeout.Value)
+                            break;
+
+                        if (nTrials is not null && nSubmittedTrials >= nTrials.Value)
+                            break;
+
+                        if (futures.Count >= nJobs)
+                        {
+                            Task.WhenAny(futures).GetAwaiter().GetResult();
+                            // Python's wait(FIRST_COMPLETED) returns every future finished by then, removes them
+                            // all, and raises the first failure among them; GetResult rethrows that original
+                            // exception (not an AggregateException).
+                            var completed = futures.Where(f => f.IsCompleted).ToList();
+                            foreach (var f in completed)
+                                futures.Remove(f);
+                            // Reading Exception marks every failure observed: Python drops the ones after the first,
+                            // and here they must not resurface later through TaskScheduler.UnobservedTaskException.
+                            foreach (var f in completed)
+                                _ = f.Exception;
+                            completed.FirstOrDefault(f => !f.IsCompletedSuccessfully)?.GetAwaiter().GetResult();
+                        }
+
+                        futures.Add(StartWorker(() => OptimizeSequential(
+                            study, func, 1, timeout, catchTypes, callbacks, gcAfterTrial,
+                            reseedSamplerRng: true, timeStart: timeStart, progressBar: progressBar,
+                            restoreLoopFlag: true)));
                     }
-
-                    futures.Add(Task.Run(() => OptimizeSequential(
-                        study, func, 1, timeout, catchTypes, callbacks, gcAfterTrial,
-                        reseedSamplerRng: true, timeStart: timeStart, progressBar: progressBar)));
                 }
-
-                Task.WaitAll(futures.ToArray());
+                finally
+                {
+                    // Python's `with ThreadPoolExecutor(...)` exit: wait for every trial still running, on success
+                    // and on failure alike, so Optimize never returns while its trials are in flight. Their
+                    // exceptions are not raised, as Python never calls result() on them; RunTrial already logged
+                    // each failure and the storage holds it as FAIL.
+                    WaitForAllWithoutRaising(futures);
+                }
             }
         }
         finally
@@ -111,6 +141,10 @@ internal static class OptimizeLoop
     /// <param name="reseedSamplerRng">Whether the worker should reseed its sampler before starting sequential trials.</param>
     /// <param name="timeStart">The start time shared by workers when enforcing the overall timeout.</param>
     /// <param name="progressBar">The progress renderer shared with this optimization loop, or null when no progress is displayed.</param>
+    /// <param name="restoreLoopFlag">
+    ///     True for an n_jobs worker: put this thread's <c>InOptimizeLoop</c> back to its previous value on exit.
+    ///     False on the caller's own thread, where <see cref="Optimize" /> clears it, as Python does.
+    /// </param>
     /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
     private static void OptimizeSequential(
         Study study,
@@ -122,14 +156,59 @@ internal static class OptimizeLoop
         bool gcAfterTrial,
         bool reseedSamplerRng,
         DateTime? timeStart,
-        ProgressBar? progressBar)
+        ProgressBar? progressBar,
+        bool restoreLoopFlag = false)
     {
         // Here we set `InOptimizeLoop = true`, not at the beginning of the `Optimize()` function.
         // Because it is a thread-local value and the n_jobs option spawns new threads.
+        bool wasInOptimizeLoop = study.ThreadLocal.InOptimizeLoop;
         study.ThreadLocal.InOptimizeLoop = true;
-        if (reseedSamplerRng)
-            study.Sampler.ReseedRng();
+        try
+        {
+            if (reseedSamplerRng)
+            {
+                // Workers reseed the one shared sampler concurrently with each other's draws; the sampler's
+                // monitor keeps the generator state whole (numpy's RandomState locks every call).
+                var sampler = study.Sampler;
+                lock (sampler.SyncRoot)
+                    sampler.ReseedRng();
+            }
 
+            RunTrials(study, func, nTrials, timeout, catchTypes, callbacks, gcAfterTrial, timeStart, progressBar);
+        }
+        finally
+        {
+            // Python's executor threads end with the executor, taking their flag with them. Workers used to run on
+            // thread-pool threads, which outlive this call: a stale `true` made 61 of 64 later Optimize calls of
+            // this study on pool threads fail with a false "Nested invocation" error. Workers now get dedicated
+            // threads (StartWorker); restoring the flag keeps any thread that runs a worker clean regardless.
+            if (restoreLoopFlag)
+                study.ThreadLocal.InOptimizeLoop = wasInOptimizeLoop;
+        }
+    }
+
+    /// <summary>The trial loop of Python's <c>_optimize_sequential</c>, after its thread-local setup.</summary>
+    /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
+    /// <param name="func">The objective callback returning one value per study objective for each running trial.</param>
+    /// <param name="nTrials">The trial-count limit; null leaves the count unlimited.</param>
+    /// <param name="timeout">The optimization time limit in seconds; null leaves time unlimited.</param>
+    /// <param name="catchTypes">Exception types permitted to fail a trial while optimization continues.</param>
+    /// <param name="callbacks">Delegates invoked after each trial has been recorded in its final state.</param>
+    /// <param name="gcAfterTrial">Whether to request garbage collection after each objective invocation.</param>
+    /// <param name="timeStart">The start time shared by workers when enforcing the overall timeout.</param>
+    /// <param name="progressBar">The progress renderer shared with this optimization loop, or null when no progress is displayed.</param>
+    /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
+    private static void RunTrials(
+        Study study,
+        Func<Trial, IReadOnlyList<double>> func,
+        int? nTrials,
+        double? timeout,
+        Type[] catchTypes,
+        IReadOnlyList<Action<Study, FrozenTrial>>? callbacks,
+        bool gcAfterTrial,
+        DateTime? timeStart,
+        ProgressBar? progressBar)
+    {
         int iTrial = 0;
 
         timeStart ??= DateTime.Now;
@@ -179,6 +258,47 @@ internal static class OptimizeLoop
         }
 
         study.Storage.RemoveSession();
+    }
+
+    /// <summary>
+    ///     Starts one n_jobs worker on a dedicated thread, as Python's <c>ThreadPoolExecutor</c> runs its work on
+    ///     threads of its own.
+    /// </summary>
+    /// <param name="work">One <c>_optimize_sequential(n_trials=1)</c> call.</param>
+    /// <returns>The worker's task; it completes when the trial and its callbacks are done.</returns>
+    /// <remarks>
+    ///     A worker spends most of its time blocked: on the storage's lock, on file or network I/O, on the
+    ///     objective. Run on the .NET thread pool, n_jobs above the pool's minimum thread count blocked every pool
+    ///     thread, and StackExchange.Redis (which completes even synchronous calls on the pool) then timed out:
+    ///     <c>Optimize(nJobs: 96)</c> on a Redis journal died after 88 trials. A dedicated thread per trial costs
+    ///     microseconds against a trial's milliseconds, and it starts with fresh thread-local state, as a new
+    ///     executor thread does.
+    /// </remarks>
+    private static Task StartWorker(Action work)
+        => Task.Factory.StartNew(work, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    /// <summary>
+    ///     Blocks until every worker task has finished, observing (not raising) their failures: the exit of
+    ///     Python's <c>with ThreadPoolExecutor(...)</c> block, which calls <c>shutdown(wait=True)</c> only.
+    /// </summary>
+    /// <param name="futures">Worker tasks that may still be running; failed ones are observed and dropped.</param>
+    /// <remarks>
+    ///     Workers run on dedicated threads (see <see cref="StartWorker" />), which are never inlined into this
+    ///     wait. Catching the <see cref="AggregateException" /> marks every failure observed, so none resurfaces
+    ///     later through <see cref="TaskScheduler.UnobservedTaskException" />.
+    /// </remarks>
+    private static void WaitForAllWithoutRaising(IReadOnlyCollection<Task> futures)
+    {
+        if (futures.Count == 0)
+            return;
+        try
+        {
+            Task.WaitAll(futures.ToArray());
+        }
+        catch (AggregateException)
+        {
+            // Not raised, as in Python (see the summary); each failure was already logged by RunTrial.
+        }
     }
 
     /// <summary>Python <c>_run_trial</c>.</summary>

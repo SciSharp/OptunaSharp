@@ -524,6 +524,9 @@ study.Optimize(Objective, nTrials: 100, nJobs: 4);
 
 Point multiple processes at the same [journal-file storage](recipes/journal-storage.md) or a
 client/server RDB (PostgreSQL/MySQL via [`OptunaSharp.Storage.EFCore`](../integrations/storage/ef-core.md)).
+A journal file can be shared by C# and Python processes at once, and by several studies; the
+[journal concurrency section](storage.md#concurrency-workers-studies-and-languages-on-one-journal) lists
+what is synchronized, and the limits.
 
 ### 3. Multi-processing across multiple nodes
 

@@ -15,6 +15,13 @@ namespace OptunaSharp.Storages.Journal.Extensions;
 ///     client at once does not clash. <b>Connection ownership:</b> the backend does not dispose the Redis
 ///     connection you supply through the factory overload.
 ///     </para>
+/// <para>
+/// <b>Disposal.</b> The backend is <see cref="System.IDisposable" />: a backend the container builds (the URL
+/// and factory overloads) is disposed with the scope that created it, or with the container for a singleton, and
+/// closes the connection it opened. Scoped and transient registrations therefore no longer leak a connection
+/// each. A pre-built backend you register is never disposed by the container, and a backend never closes a
+/// client you injected into it.
+/// </para>
 /// </summary>
 public static class NRedisStackJournalServiceCollectionExtensions
 {
@@ -40,7 +47,7 @@ public static class NRedisStackJournalServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(url);
         ArgumentNullException.ThrowIfNull(prefix);
-        return Add(services, _ => new NRedisStackJournalRedisBackend(url, useCluster, prefix), lifetime);
+        return Add(services, new ServiceDescriptor(typeof(NRedisStackJournalRedisBackend), _ => new NRedisStackJournalRedisBackend(url, useCluster, prefix), lifetime), lifetime);
     }
 
     /// <summary>Register a pre-built <see cref="NRedisStackJournalRedisBackend" /> (wrapped in a <see cref="JournalStorage" /> and exposed as <see cref="BaseStorage" />).</summary>
@@ -54,7 +61,10 @@ public static class NRedisStackJournalServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(backend);
-        return Add(services, _ => backend, ServiceLifetime.Singleton);
+        // An instance registration: a container never disposes an instance it was handed, so this backend (and
+        // any connection it owns) stays the caller's to dispose. A factory returning it would be disposed with the
+        // container now that backends are IDisposable.
+        return Add(services, new ServiceDescriptor(typeof(NRedisStackJournalRedisBackend), backend), ServiceLifetime.Singleton);
     }
 
     /// <summary>Register an <see cref="NRedisStackJournalRedisBackend" /> produced by a factory (the ConfigurationOptions / IConnectionMultiplexer paths go here).</summary>
@@ -70,20 +80,20 @@ public static class NRedisStackJournalServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(factory);
-        return Add(services, factory, lifetime);
+        return Add(services, new ServiceDescriptor(typeof(NRedisStackJournalRedisBackend), factory, lifetime), lifetime);
     }
 
     /// <summary>Registers the backend, a <see cref="JournalStorage" /> over it, and a <see cref="BaseStorage" /> forwarder, all under one lifetime.</summary>
     /// <param name="services">The service collection to add to.</param>
-    /// <param name="backendFactory">The concrete-backend factory.</param>
+    /// <param name="backend">The concrete backend's registration: a pre-built instance, or a factory under <paramref name="lifetime" />.</param>
     /// <param name="lifetime">The lifetime shared by the backend, its journal storage, and the base-storage forwarder.</param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     private static IServiceCollection Add(
         IServiceCollection services,
-        Func<IServiceProvider, NRedisStackJournalRedisBackend> backendFactory,
+        ServiceDescriptor backend,
         ServiceLifetime lifetime)
     {
-        services.Add(new ServiceDescriptor(typeof(NRedisStackJournalRedisBackend), backendFactory, lifetime));
+        services.Add(backend);
         services.Add(new ServiceDescriptor(typeof(JournalStorage),
             sp => new JournalStorage(sp.GetRequiredService<NRedisStackJournalRedisBackend>()), lifetime));
         services.Add(new ServiceDescriptor(typeof(BaseStorage), sp => sp.GetRequiredService<JournalStorage>(), lifetime));

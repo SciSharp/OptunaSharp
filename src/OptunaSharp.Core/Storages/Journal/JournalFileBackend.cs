@@ -28,7 +28,14 @@ public class JournalFileBackend : BaseJournalBackend
 
     private readonly string _filePath;
     private readonly BaseJournalFileLock _lock;
+
+    // Byte offset of every log number seen so far, so a sync can seek instead of re-reading the journal. Python's
+    // dict is safe to share between readers under the GIL; this Dictionary is not, and one backend instance can be
+    // read by several JournalStorage instances at once (a singleton backend under scoped or transient storages).
+    // Every access therefore takes _offsetLock, and a reader never looks up an entry another reader may still be
+    // writing (see ReadLogs).
     private readonly Dictionary<int, long> _logNumberOffset = new() { [0] = 0 };
+    private readonly object _offsetLock = new();
 
     /// <summary>
     ///     The lock this backend acquires around every append: the caller's, or the
@@ -74,17 +81,32 @@ public class JournalFileBackend : BaseJournalBackend
     /// <exception cref="System.UnauthorizedAccessException">The journal cannot be opened for reading.</exception>
     /// <exception cref="NumSharp.ValueError">A malformed record is followed by another record.</exception>
     /// <exception cref="System.InvalidCastException">A decoded record is not a JSON object.</exception>
+    /// <remarks>
+    ///     Safe to call from several threads, and from several <see cref="JournalStorage" /> instances that share
+    ///     this backend: the offset cache is locked per access, and each enumeration tracks its own byte position.
+    ///     Readers never take the journal lock, as in Optuna; a record that a writer is still appending is left
+    ///     for the next read (see the size snapshot below).
+    /// </remarks>
     public override IEnumerable<OrderedDict<string, object?>> ReadLogs(int logNumberFrom)
     {
         using var f = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         // Maintain remaining_log_size to allow writing by another process while reading the log.
         long remainingLogSize = new FileInfo(_filePath).Length;
         int logNumberStart = 0;
-        if (_logNumberOffset.TryGetValue(logNumberFrom, out long offset))
+        // Byte offset of the line being read. Python reads `_log_number_offset[log_number]` for it, but that entry
+        // can be missing here while another reader of this backend is still inserting it, so the position is
+        // carried by this enumeration instead; it equals the cached offset whenever both exist.
+        long position = 0;
+        bool known;
+        long offset;
+        lock (_offsetLock)
+            known = _logNumberOffset.TryGetValue(logNumberFrom, out offset);
+        if (known)
         {
             f.Seek(offset, SeekOrigin.Begin);
             logNumberStart = logNumberFrom;
             remainingLogSize -= offset;
+            position = offset;
         }
 
         Exception? lastDecodeError = null;
@@ -105,8 +127,10 @@ public class JournalFileBackend : BaseJournalBackend
                 logNumber++;
                 continue;
             }
-            if (!_logNumberOffset.ContainsKey(logNumber + 1))
-                _logNumberOffset[logNumber + 1] = _logNumberOffset[logNumber] + byteLen;
+            // First writer wins, as Python's `if log_number + 1 not in ...`; every reader computes the same value.
+            lock (_offsetLock)
+                _logNumberOffset.TryAdd(logNumber + 1, position + byteLen);
+            position += byteLen;
             if (logNumber < logNumberFrom)
             {
                 logNumber++;
@@ -121,7 +145,9 @@ public class JournalFileBackend : BaseJournalBackend
             catch (ValueError err)
             {
                 lastDecodeError = err;
-                _logNumberOffset.Remove(logNumber + 1);
+                // A record that does not decode must not become a seek target, or the next sync would skip it.
+                lock (_offsetLock)
+                    _logNumberOffset.Remove(logNumber + 1);
             }
             if (parsed is not null)
                 yield return parsed;
@@ -276,21 +302,20 @@ public class JournalFileSymlinkLock : BaseJournalFileLock
         {
             try
             {
+                // A cheap fast path for a held lock. It carries Windows' ERROR_FILE_EXISTS code on every OS, which
+                // JournalFileLockProtocol.IsAlreadyExists accepts everywhere for exactly this reason; the symlink call
+                // below stays the atomic test when the path appears in between.
                 if (File.Exists(_lockFile) || Directory.Exists(_lockFile))
-                    throw new IOException("File exists", unchecked((int)0x80070050));
+                    throw new IOException("File exists", JournalFileLockProtocol.ErrorFileExistsHResult);
                 File.CreateSymbolicLink(_lockFile, _lockTargetFile);
                 return true;
             }
-            catch (IOException)
+            catch (IOException e) when (JournalFileLockProtocol.IsAlreadyExists(e))
             {
-                bool exists = File.Exists(_lockFile) || Directory.Exists(_lockFile);
-                if (!exists)
-                {
-                    // Symlink creation failed for a non-EEXIST reason (e.g. missing privilege
-                    // on Windows) — propagate, like Python re-raises non-EEXIST OSErrors.
-                    throw;
-                }
-
+                // Contention is read from the failed call's own error code, as Python tests
+                // `err.errno == errno.EEXIST`. Re-checking the path here instead raced with the holder's release:
+                // a lock released in between turned plain contention into a fatal error. Any other failure (no
+                // symlink privilege on Windows, a missing directory) is not caught and propagates, as in Python.
                 if ((Environment.TickCount64 - lastWarningTimestamp) / 1000.0 > warningInterval)
                 {
                     _logger.Warning(
@@ -335,7 +360,7 @@ public class JournalFileSymlinkLock : BaseJournalFileLock
                 }
 
                 Thread.Sleep(TimeSpan.FromSeconds(sleepSecs));
-                sleepSecs = Math.Min(sleepSecs * 2, 1);
+                sleepSecs = Math.Min(sleepSecs * 2, JournalFileLockProtocol.MaxRetrySleepSeconds);
             }
         }
     }
@@ -414,14 +439,10 @@ public class JournalFileOpenLock : BaseJournalFileLock
                 new FileStream(_lockFile, FileMode.CreateNew, FileAccess.Write, FileShare.None).Dispose();
                 return true;
             }
-            catch (IOException)
+            catch (IOException e) when (JournalFileLockProtocol.IsAlreadyExists(e))
             {
-                if (!File.Exists(_lockFile))
-                {
-                    // Non-EEXIST failure — propagate like Python.
-                    throw;
-                }
-
+                // EEXIST from the exclusive create itself means another holder; see JournalFileSymlinkLock.Acquire
+                // for why the path is not re-checked. Other failures are not caught and propagate, as in Python.
                 if ((Environment.TickCount64 - lastWarningTimestamp) / 1000.0 > warningInterval)
                 {
                     _logger.Warning(
@@ -466,7 +487,7 @@ public class JournalFileOpenLock : BaseJournalFileLock
                 }
 
                 Thread.Sleep(TimeSpan.FromSeconds(sleepSecs));
-                sleepSecs = Math.Min(sleepSecs * 2, 1);
+                sleepSecs = Math.Min(sleepSecs * 2, JournalFileLockProtocol.MaxRetrySleepSeconds);
             }
         }
     }
@@ -513,11 +534,18 @@ public class JournalFileOpenLock : BaseJournalFileLock
 ///         and deleting the renamed file.
 ///     </para>
 ///     <para>
-///         <b>When it switches.</b> <see cref="JournalFileSymlinkLock.Acquire" /> waits while the lock path
-///         exists and throws only when creating the link failed with no lock path present. Contention never
-///         causes a switch, and a switch is permanent for this instance. If the open-file protocol cannot
-///         create its file either (a missing directory, a denied path), its exception propagates, so a
-///         journal that cannot be locked at all still fails loudly.
+///         <b>When it switches.</b> <see cref="JournalFileSymlinkLock.Acquire" /> waits while the link creation
+///         reports that the lock path exists (EEXIST, recognized by <see cref="JournalFileLockProtocol" />) and
+///         throws for any other failure. Contention therefore never causes a switch, and a switch is permanent
+///         for this instance. If the open-file protocol cannot create its file either (a missing directory, a
+///         denied path), its exception propagates, so a journal that cannot be locked at all still fails loudly.
+///     </para>
+///     <para>
+///         <b>Footgun fixed in 2026-10.</b> Both protocols used to decide "contention or real error" by
+///         re-checking the path after a failed create. A holder that released in between turned contention into
+///         an exception, which killed 7–10 of 16 concurrent workers on one journal and made this lock switch
+///         protocols under load (up to 31 of 32 instances). Python decides from the error code, as both
+///         protocols now do.
 ///     </para>
 /// </remarks>
 internal sealed class JournalFileDefaultLock : BaseJournalFileLock
@@ -575,9 +603,9 @@ internal sealed class JournalFileDefaultLock : BaseJournalFileLock
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                // The symlink protocol throws only when the link could not be created while no lock path
-                // existed: this process cannot make symbolic links here. Contention waits inside Acquire
-                // and never reaches this catch.
+                // The symlink protocol throws only for a failure other than "the lock path exists": this
+                // process cannot make symbolic links here. Contention is recognized from the error code and
+                // waits inside Acquire, so it never reaches this catch.
                 openLock = SwitchToOpenLock(e);
             }
         }
@@ -604,6 +632,57 @@ internal sealed class JournalFileDefaultLock : BaseJournalFileLock
                 "Cannot create a symbolic link for the journal lock (" + cause.Message + "). " +
                 "Using JournalFileOpenLock for this journal instead.");
         return installed;
+    }
+}
+
+/// <summary>
+///     Rules both journal file locks share: how a failed acquire is classified (the port of Python's
+///     <c>err.errno == errno.EEXIST</c>, which tells "another holder owns the lock path" apart from every other way
+///     an exclusive create or a symbolic-link creation can fail), and how long a waiter sleeps between attempts.
+/// </summary>
+/// <remarks>
+///     The classification must come from the failed call's own exception. Looking at the path afterwards is a
+///     race: the holder can release between the failure and the look, and the waiter then reports a fatal error
+///     for plain contention. .NET carries the OS error in <see cref="Exception.HResult" />: Windows wraps Win32
+///     codes as <c>0x8007xxxx</c>, while Unix builds put the raw <c>errno</c> there.
+/// </remarks>
+internal static class JournalFileLockProtocol
+{
+    /// <summary><c>HRESULT_FROM_WIN32(ERROR_FILE_EXISTS)</c>: <c>CreateFile(CREATE_NEW)</c> on an existing path.</summary>
+    internal const int ErrorFileExistsHResult = unchecked((int)0x80070050);
+
+    /// <summary><c>HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)</c>: <c>CreateSymbolicLink</c> on an existing path.</summary>
+    internal const int ErrorAlreadyExistsHResult = unchecked((int)0x800700B7);
+
+    /// <summary><c>EEXIST</c> on Linux, macOS and the BSDs, which .NET stores as the HResult of a Unix IOException.</summary>
+    internal const int EExist = 17;
+
+    /// <summary>
+    ///     Longest sleep between two attempts to take a held lock, in seconds; the sleep starts at 1 ms and doubles
+    ///     up to this. Python doubles up to 1 s.
+    /// </summary>
+    /// <remarks>
+    ///     Timing only: exclusion, the lock path and the grace-period recovery are unchanged, so Python and C#
+    ///     workers still share a journal. With Python's 1 s cap, a waiter that had lost a few rounds slept up to a
+    ///     second after the lock was freed, and the journal sat idle: 16 contending writers managed about 43
+    ///     appends per second here, and this cap gave 2.5–4× that. The cost is at most about 60 failed attempts per
+    ///     second per waiter (one existence check and one create), negligible next to an append's <c>fsync</c>.
+    /// </remarks>
+    internal const double MaxRetrySleepSeconds = 0.016;
+
+    /// <summary>True when a lock-acquire failure means the lock path already exists, so the caller should wait.</summary>
+    /// <param name="e">The exception the exclusive create or the symbolic-link creation threw.</param>
+    /// <returns>
+    ///     True for the two Windows "already exists" codes on every OS, and for <c>EEXIST</c> off Windows. The
+    ///     Windows codes are accepted everywhere because <see cref="JournalFileSymlinkLock.Acquire" />'s fast path
+    ///     throws a synthetic <see cref="ErrorFileExistsHResult" />; a raw <c>errno</c> is small and can never
+    ///     equal them.
+    /// </returns>
+    internal static bool IsAlreadyExists(IOException e)
+    {
+        int hr = e.HResult;
+        return hr == ErrorFileExistsHResult || hr == ErrorAlreadyExistsHResult
+            || (!OperatingSystem.IsWindows() && hr == EExist);
     }
 }
 

@@ -232,8 +232,11 @@ public sealed class RandomEmbeddingSampler : BaseSampler
     public override void ReseedRng()
     {
         // Reseed the delegated samplers' streams for parallel workers; the embedding matrix stays fixed on
-        // purpose (reseeding it would silently reinterpret every already-stored latent point).
-        _innerSampler.ReseedRng();
+        // purpose (reseeding it would silently reinterpret every already-stored latent point). The default
+        // configuration has no inner sampler (the paper-faithful proposer derives its streams from the study),
+        // and Optimize(nJobs > 1) reseeds every worker: an unconditional call here threw NullReferenceException
+        // before the first trial.
+        _innerSampler?.ReseedRng();
         _independentSampler.ReseedRng();
     }
 

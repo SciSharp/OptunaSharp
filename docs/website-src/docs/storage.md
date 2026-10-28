@@ -88,6 +88,12 @@ var backend = new JournalFileBackend("study.log", new JournalFileOpenLock("study
 Both accept an optional `gracePeriod` (seconds, default `30`) after which a stale lock left by a
 crashed process is reclaimed.
 
+Both locks decide "another worker holds the lock" from the error code of the failed create, as Python
+checks `errno == EEXIST`, and wait it out. Any other failure, such as a missing directory or no symlink
+privilege, is raised. A waiter retries with a sleep that doubles from 1 ms up to 16 ms; Python's
+cap is 1 s, which left the journal idle under contention. Exclusion is unaffected, so Python and C#
+workers still share one journal.
+
 ## Redis journal storage (distributed)
 
 For distributed workers sharing state through Redis, install a concrete client adapter such as
@@ -217,6 +223,78 @@ Storage errors map through gRPC status codes exactly as Optuna does, so a missin
 > Like Optuna, the gRPC proxy does **not** support `JournalStorage`; put the SQLite `RDBStorage` behind
 > the server. The transport is insecure (cleartext HTTP/2), matching Optuna — keep it behind your own
 > network boundary.
+
+## Concurrency: workers, studies and languages on one journal
+
+A journal (a file or a Redis prefix) holds any number of studies. Workers can share it in every
+combination below, and each study comes out complete: trial numbers are contiguous from 0, every
+trial finishes, and Python replays the journal exactly as C# does.
+
+| Setup | How it is synchronized |
+|---|---|
+| One `JournalStorage`, many threads (`Optimize(nJobs: …)`, your own threads, Ask/Tell) | The storage's monitor serializes its operations |
+| Several `JournalStorage` instances in one process, on one journal | The journal lock (file) or Redis's atomic append, exactly as between processes |
+| Several `JournalStorage` instances over one backend instance | As above; the file backend's offset cache is thread-safe |
+| Several processes, C# and Python mixed | The same lock path and protocol as Python Optuna's `JournalFileBackend` (file), or Redis |
+| Several studies at once, on shared or separate storages | Study and trial ids are assigned in journal order; numbering is per study |
+| Concurrent same-name `CreateStudy(..., loadIfExists: true)` | One study is created; every caller loads it. Without `loadIfExists`, the others get `DuplicatedStudyError` |
+| Concurrent workers popping `EnqueueTrial` trials | Each queued trial runs exactly once |
+
+What each layer guarantees within one process:
+
+- **Sampler and pruner.** Every call a study makes into its sampler (sample, infer, before/after trial,
+  reseed) and pruner (prune, filter) runs under that instance's monitor. Concurrent trials never draw
+  the same random numbers or corrupt a sampler's caches. The cost: model-based sampling for concurrent
+  trials is serial, while the objectives still run in parallel. Single-threaded studies never contend,
+  so seeded runs stay bit-identical to Optuna. An unseeded sampler seeds itself from OS entropy, as
+  numpy does, so samplers created together never share a stream: not in one process, and not in
+  worker processes or parallel `optunasharp ask` calls started at the same moment.
+- **One sampler instance per study.** The monitor makes one sampler safe across threads, not across
+  studies. A relative sampler caches its study's search space: TPE (multivariate by default in a
+  single-objective study), CMA-ES, GP, NSGA-II/III and the other samplers built on
+  `IntersectionSearchSpace`. Given a second study, it raises ``ValueError: `IntersectionSearchSpace` cannot
+  handle multiple studies.``, exactly as Python's does. Give each concurrent study its own sampler.
+  `AddOptunaSampler(factory)` does this by default: it registers the sampler as transient, so the study
+  factory builds a new one per study.
+- **`nJobs`.** Workers run on dedicated threads, as Python's `ThreadPoolExecutor` does. When one trial
+  raises an exception that is not caught, `Optimize` waits for the trials still running and then
+  raises that original exception. Errors among the final trials are not raised, as in Python. They are
+  still logged and stored as `FAIL`. `nJobs` of 0 or below -1 raises Python's
+  `ValueError: max_workers must be greater than 0`.
+- **One trial, several threads.** A `Trial` serializes its own operations. When several threads report
+  the same step, the first value wins, as Optuna documents (Python's own `Trial` races there). Suggesting
+  one name from several threads samples it once.
+
+Limits and costs:
+
+- **Throughput.** The file journal syncs every append to disk (`fsync`), so many workers on a fast
+  objective are bound by the disk. 16 contending workers sustained about 80–150 appends per second on
+  an SSD in testing. Redis is about 5–8× faster at the same contention. A [gRPC proxy](#grpc-storage-proxy-distributed-cross-language)
+  in front of the file gives one writer process.
+- **Crashed workers.** The journal has no heartbeat, in Python too. A trial whose process dies stays
+  `RUNNING`.
+- **Repeated candidates.** Every Core sampler completes every trial under `nJobs`: all 32 were checked at
+  `nJobs: 16` on a journal file (SAASBO, whose model is slow, at `nJobs: 8`). Draws from a sampler's random
+  generator never repeat. TPE, Random, CMA-ES, GP, QMC, VkD-CMA, PartialFixed and the NES samplers
+  (OpenAI-ES, SNES, xNES) give every concurrent trial a different point. Some samplers can give one point to
+  two concurrent trials, because they derive it from state that changes only when trials finish (counts are
+  whole repeated points in 120 trials at `nJobs: 16`):
+  - JANUS picks a generation's candidate by trial number, as its reference implementation does. Pass it the
+    same `nJobs` as `Optimize` to keep one optimizer lane per worker: 0 repeats with 16 lanes, 30 without.
+  - REMBO's default proposer maximizes the same acquisition until a trial finishes: 51 repeats, against 8
+    sequentially. JANUS-DE repeats 29, LM-CMA 24 (11 sequentially) and TuRBO 4.
+  - The genetic samplers (NSGA-II/III, SMS-EMOA, AGE-MOEA-2, RVEA, MOEA/D and the JANUS multi-objective
+    family) sometimes copy a parent unchanged, as often sequentially as in parallel.
+  - Grid and BruteForce can hand out a point twice while it is still running, as Optuna documents for them,
+    and still cover every point before they stop the study (a 90-point grid took 101 and 112 trials).
+  - QMC keys its sequence counter by the search space, which differs while the first trials are still
+    running, so early concurrent trials reuse sequence positions, as Python's `QMCSampler` does. Their points
+    still differ in the other coordinates.
+- **StackExchange.Redis and the thread pool.** StackExchange.Redis 3.x completes even synchronous calls
+  on the .NET thread pool. If your code blocks more pool threads than the pool's minimum on journal
+  calls at once, Redis calls time out after `SyncTimeout`. Examples: dozens of `Task.Run(() =>
+  study.Optimize(...))`, or an ASP.NET request burst. Use dedicated threads, as `nJobs` does, or raise
+  `ThreadPool.SetMinThreads`.
 
 ## Caching over a backend
 

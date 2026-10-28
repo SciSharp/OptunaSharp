@@ -177,8 +177,15 @@ public abstract class EvolutionStrategySampler : BaseSampler
             solutionTrials = GetSolutionTrials(completedTrials, optimizer.Generation);
         }
 
-        // Position within the current generation (0-based). Clamp guards a mild parallel overrun.
-        int index = Math.Min(solutionTrials.Count, optimizer.PopulationSize - 1);
+        // Position within the current generation (0-based): every candidate already handed out, finished or still
+        // running. Counting only the finished ones gave all concurrent workers of a generation the same member, so
+        // Optimize(nJobs: 16) evaluated 49-54 of 120 trials at a point another trial already had. Past the
+        // population (workers asking at a generation's tail, before its last members finish) the index names an
+        // extra candidate from the same noise stream instead of clamping onto the last member, as Optuna's CMA-ES
+        // draws a fresh point there; Tell takes the first `popsize` finished candidates either way. A sequential run
+        // has no other running candidate and never passes the population, so its indices, and seeded results, are
+        // unchanged.
+        int index = solutionTrials.Count + CountRunningMembers(study, trial, optimizer.Generation);
 
         double[] esParams = optimizer.Ask(index);
         for (int i = 0; i < nDim; i++)
@@ -276,6 +283,36 @@ public abstract class EvolutionStrategySampler : BaseSampler
             if (t.State == TrialState.Complete)
                 completeTrials.Add(t);
         return completeTrials;
+    }
+
+    /// <summary>
+    ///     Counts the other trials still running a member of <paramref name="generation" />: members handed out but
+    ///     not yet evaluated, which the next ask must skip.
+    /// </summary>
+    /// <param name="study">Study supplying trial history; its per-trial snapshot is read, as for the finished members.</param>
+    /// <param name="trial">The trial being sampled; it carries no generation stamp yet and is excluded regardless.</param>
+    /// <param name="generation">Zero-based generation whose running members are counted.</param>
+    /// <returns>The number of running trials, other than <paramref name="trial" />, stamped with the generation.</returns>
+    /// <exception cref="System.FormatException">A stored generation stamp cannot be parsed as an integer.</exception>
+    /// <exception cref="System.InvalidCastException">A stored generation stamp does not support integer conversion.</exception>
+    /// <exception cref="System.OverflowException">A stored generation stamp exceeds the range of a 64-bit integer.</exception>
+    /// <remarks>
+    ///     The snapshot is taken inside this sampler's monitor (see <see cref="BaseSampler" />), after every
+    ///     earlier ask of this process stamped its trial, so in-process workers never share a member. Workers in other
+    ///     processes stamp concurrently and can still collide, as Optuna's own samplers do across processes. A trial
+    ///     whose worker died stays RUNNING and keeps its member reserved until the generation is told.
+    /// </remarks>
+    private int CountRunningMembers(Study study, FrozenTrial trial, int generation)
+    {
+        int running = 0;
+        foreach (var t in study.GetTrialsInternal(deepcopy: false, states: null, useCache: true))
+        {
+            if (t.State != TrialState.Running || t.TrialId == trial.TrialId)
+                continue;
+            if (t.SystemAttrs.TryGetValue(AttrKeyGeneration, out var v) && Convert.ToInt64(v) == generation)
+                running++;
+        }
+        return running;
     }
 
     /// <summary>Selects trials belonging to one optimizer generation so adaptation uses a coherent population.</summary>

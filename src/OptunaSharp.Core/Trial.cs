@@ -37,11 +37,25 @@ public class Trial : BaseTrial
     private OrderedDict<string, object?>? _relativeParams;
     private readonly OrderedDict<string, object?> _fixedParams;
 
+    // Serializes this trial's operations (suggest, report, prune check, attributes, constraint) when several
+    // threads drive one Trial. Optuna's Trial is not thread-safe: its "already reported?" check and the write
+    // after it are separate steps, so racing reporters stored the LAST value of a step instead of the first
+    // (5-23% of contended steps here, 63% in Python 5.0), and the cache dictionaries were written concurrently.
+    // Uncontended in the usual one-thread-per-trial use, so single-threaded behavior is unchanged.
+    // Lock order: this monitor, then the pruner's or sampler's SyncRoot, then the storage's own lock.
+    private readonly object _syncRoot = new();
+
     /// <param name="study">Study whose history and storage are used by the operation.</param>
     /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
     /// <summary>Binds to an existing trial record and invokes the sampler's BeforeTrial hook.</summary>
     /// <exception cref="NumSharp.KeyError">The trial identifier does not exist in storage.</exception>
     /// <exception cref="System.Exception">The configured storage or sampler hook fails; its original exception propagates.</exception>
+    /// <remarks>
+    ///     The trial keeps a private copy of the stored record. Python's <c>Trial</c> keeps the storage's own
+    ///     object and later mutates it, after the storage has already replaced it with a copy-on-write update.
+    ///     Other threads may still hold that object from <c>GetAllTrials(deepcopy: false)</c>, so the mutation
+    ///     was a data race on its dictionaries.
+    /// </remarks>
     public Trial(Study study, int trialId)
     {
         Study = study;
@@ -49,10 +63,12 @@ public class Trial : BaseTrial
 
         Storage = study.Storage;
 
-        _cachedFrozenTrial = Storage.GetTrial(TrialId);
+        _cachedFrozenTrial = DetachedCopy(Storage.GetTrial(TrialId));
         var filteredStudy = PrunerHelpers.FilterStudy(Study, _cachedFrozenTrial);
 
-        Study.Sampler.BeforeTrial(filteredStudy, _cachedFrozenTrial);
+        var sampler = Study.Sampler;
+        lock (sampler.SyncRoot)
+            sampler.BeforeTrial(filteredStudy, _cachedFrozenTrial);
 
         // NOTE(not522): Evaluate it lazily to get as latest search as possible.
         _relativeSearchSpace = null;
@@ -70,14 +86,40 @@ public class Trial : BaseTrial
     {
         get
         {
-            if (_relativeParams is null)
+            lock (_syncRoot)
             {
-                var study = PrunerHelpers.FilterStudy(Study, _cachedFrozenTrial);
-                _relativeSearchSpace = Study.Sampler.InferRelativeSearchSpace(study, _cachedFrozenTrial);
-                _relativeParams = Study.Sampler.SampleRelative(study, _cachedFrozenTrial, _relativeSearchSpace);
+                if (_relativeParams is null)
+                {
+                    var study = PrunerHelpers.FilterStudy(Study, _cachedFrozenTrial);
+                    // Inference and sampling form one sampler call, as in Python: a concurrent trial must not
+                    // change the sampler's state between the two.
+                    var sampler = Study.Sampler;
+                    lock (sampler.SyncRoot)
+                    {
+                        _relativeSearchSpace = sampler.InferRelativeSearchSpace(study, _cachedFrozenTrial);
+                        _relativeParams = sampler.SampleRelative(study, _cachedFrozenTrial, _relativeSearchSpace);
+                    }
+                }
+                return _relativeParams;
             }
-            return _relativeParams;
         }
+    }
+
+    /// <summary>
+    ///     A private copy of a stored trial record: the scalars are shared, the five dictionaries this trial
+    ///     mutates (parameters, distributions, user and system attributes, intermediate values) are cloned.
+    /// </summary>
+    /// <param name="stored">The record returned by the storage, possibly the storage's live object.</param>
+    /// <returns>A record whose dictionaries no other object references.</returns>
+    private static FrozenTrial DetachedCopy(FrozenTrial stored)
+    {
+        var copy = stored.ShallowCopy();
+        copy.ParamsDict = stored.ParamsDict.ShallowClone();
+        copy.DistributionsDict = stored.DistributionsDict.ShallowClone();
+        copy.UserAttrsDict = stored.UserAttrsDict.ShallowClone();
+        copy.SystemAttrsDict = stored.SystemAttrsDict.ShallowClone();
+        copy.IntermediateValues = stored.IntermediateValues.ShallowClone();
+        return copy;
     }
 
     /// <summary>
@@ -204,18 +246,23 @@ public class Trial : BaseTrial
         if (step < 0)
             throw new ValueError($"`step={step}` must be non-negative.");
 
-        if (_cachedFrozenTrial.IntermediateValues.ContainsKey(step))
+        // The check and the write form one step under this trial's monitor, so the first report of a step wins
+        // even when several threads report it at once (Optuna documents first-wins but races here).
+        lock (_syncRoot)
         {
-            // Do nothing if already reported.
-            OptunaWarnings.Warn(
-                $"The reported value is ignored because this `step={step}` is already reported.");
-            return;
-        }
+            if (_cachedFrozenTrial.IntermediateValues.ContainsKey(step))
+            {
+                // Do nothing if already reported.
+                OptunaWarnings.Warn(
+                    $"The reported value is ignored because this `step={step}` is already reported.");
+                return;
+            }
 
-        // Publish to storage before changing the cache so a rejected write cannot appear successful
-        // to the objective or to a later pruning decision on this Trial instance.
-        Storage.SetTrialIntermediateValue(TrialId, step, value);
-        _cachedFrozenTrial.IntermediateValues[step] = value;
+            // Publish to storage before changing the cache so a rejected write cannot appear successful
+            // to the objective or to a later pruning decision on this Trial instance.
+            Storage.SetTrialIntermediateValue(TrialId, step, value);
+            _cachedFrozenTrial.IntermediateValues[step] = value;
+        }
     }
 
     /// <summary>
@@ -234,8 +281,15 @@ public class Trial : BaseTrial
             throw new NotImplementedException(
                 "Trial.should_prune is not supported for multi-objective optimization.");
 
-        var trial = GetLatestTrial();
-        return Study.Pruner.Prune(Study, trial);
+        // The latest-trial view shares this trial's dictionaries, so a concurrent Report on this trial waits until
+        // the pruner is done reading them. The pruner's monitor keeps its own state whole across trials.
+        lock (_syncRoot)
+        {
+            var trial = GetLatestTrial();
+            var pruner = Study.Pruner;
+            lock (pruner.SyncRoot)
+                return pruner.Prune(Study, trial);
+        }
     }
 
     /// <summary>
@@ -248,8 +302,11 @@ public class Trial : BaseTrial
     /// <exception cref="System.Exception">A configured storage or sampler implementation fails; its exception propagates.</exception>
     public override void SetUserAttr(string key, object? value)
     {
-        Storage.SetTrialUserAttr(TrialId, key, value);
-        _cachedFrozenTrial.UserAttrsDict[key] = value;
+        lock (_syncRoot)
+        {
+            Storage.SetTrialUserAttr(TrialId, key, value);
+            _cachedFrozenTrial.UserAttrsDict[key] = value;
+        }
     }
 
     // Trial.set_system_attr (deprecated 3.1.0) was removed in Optuna 5.0.0 (#6834). Optuna-internal
@@ -266,45 +323,52 @@ public class Trial : BaseTrial
         var storage = Storage;
         int trialId = TrialId;
 
-        var trial = GetLatestTrial();
+        // One suggestion is one step: two threads suggesting the same name on this trial must not both sample it.
+        lock (_syncRoot)
+        {
+            var trial = GetLatestTrial();
 
-        object? paramValue;
-        if (trial.DistributionsDict.ContainsKey(name))
-        {
-            // No need to sample if already suggested.
-            Distribution.CheckDistributionCompatibility(trial.DistributionsDict[name], distribution);
-            paramValue = trial.ParamsDict[name];
-        }
-        else
-        {
-            // This precedence preserves queued values and singleton distributions before invoking
-            // stochastic samplers, so replay and degenerate ranges do not consume random draws.
-            if (IsFixedParam(name, distribution))
+            object? paramValue;
+            if (trial.DistributionsDict.ContainsKey(name))
             {
-                paramValue = _fixedParams[name];
-            }
-            else if (distribution.Single())
-            {
-                paramValue = Distribution.GetSingleValue(distribution);
-            }
-            else if (IsRelativeParam(name, distribution))
-            {
-                paramValue = RelativeParams[name];
+                // No need to sample if already suggested.
+                Distribution.CheckDistributionCompatibility(trial.DistributionsDict[name], distribution);
+                paramValue = trial.ParamsDict[name];
             }
             else
             {
-                var study = PrunerHelpers.FilterStudy(Study, trial);
-                paramValue = Study.Sampler.SampleIndependent(study, trial, name, distribution);
+                // This precedence preserves queued values and singleton distributions before invoking
+                // stochastic samplers, so replay and degenerate ranges do not consume random draws.
+                if (IsFixedParam(name, distribution))
+                {
+                    paramValue = _fixedParams[name];
+                }
+                else if (distribution.Single())
+                {
+                    paramValue = Distribution.GetSingleValue(distribution);
+                }
+                else if (IsRelativeParam(name, distribution))
+                {
+                    paramValue = RelativeParams[name];
+                }
+                else
+                {
+                    var study = PrunerHelpers.FilterStudy(Study, trial);
+                    // Concurrent trials share this sampler and its random generator (see BaseSampler.SyncRoot).
+                    var sampler = Study.Sampler;
+                    lock (sampler.SyncRoot)
+                        paramValue = sampler.SampleIndependent(study, trial, name, distribution);
+                }
+
+                // `paramValue` is validated here (invalid value like NaN raises ValueError).
+                double paramValueInInternalRepr = distribution.ToInternalRepr(paramValue);
+                storage.SetTrialParam(trialId, name, paramValueInInternalRepr, distribution);
+
+                _cachedFrozenTrial.DistributionsDict[name] = distribution;
+                _cachedFrozenTrial.ParamsDict[name] = paramValue is CategoricalChoice choice ? choice.Value : paramValue;
             }
-
-            // `paramValue` is validated here (invalid value like NaN raises ValueError).
-            double paramValueInInternalRepr = distribution.ToInternalRepr(paramValue);
-            storage.SetTrialParam(trialId, name, paramValueInInternalRepr, distribution);
-
-            _cachedFrozenTrial.DistributionsDict[name] = distribution;
-            _cachedFrozenTrial.ParamsDict[name] = paramValue is CategoricalChoice choice ? choice.Value : paramValue;
+            return paramValue is CategoricalChoice c ? c.Value : paramValue;
         }
-        return paramValue is CategoricalChoice c ? c.Value : paramValue;
     }
 
     /// <summary>Python <c>Trial._is_fixed_param</c>.</summary>
@@ -361,7 +425,9 @@ public class Trial : BaseTrial
     /// <param name="distribution">Distribution defining the parameter representation and allowed values.</param>
     private void CheckDistribution(string name, BaseDistribution distribution)
     {
-        var oldDistribution = _cachedFrozenTrial.DistributionsDict.GetValueOrDefault(name, distribution)!;
+        BaseDistribution oldDistribution;
+        lock (_syncRoot)
+            oldDistribution = _cachedFrozenTrial.DistributionsDict.GetValueOrDefault(name, distribution)!;
         if (!oldDistribution.Equals(distribution))
         {
             OptunaWarnings.Warn(
@@ -378,26 +444,51 @@ public class Trial : BaseTrial
 
     /// <summary>Python <c>Trial._get_latest_trial</c>.</summary>
     /// <returns>A shallow view of the local trial with system attributes loaded from storage on first access.</returns>
+    /// <remarks>
+    ///     The view shares this trial's dictionaries, as Python's <c>copy.copy</c> does. Read it while holding this
+    ///     trial's monitor (every caller here does), or a concurrent report or suggestion may change it under you.
+    /// </remarks>
     internal FrozenTrial GetLatestTrial()
     {
-        var latestTrial = _cachedFrozenTrial.ShallowCopy();
-        latestTrial.SetLazySystemAttrs(() => Storage.GetTrialSystemAttrs(TrialId) is OrderedDict<string, object?> d
-            ? d
-            : new OrderedDict<string, object?>(Storage.GetTrialSystemAttrs(TrialId)));
-        return latestTrial;
+        lock (_syncRoot)
+        {
+            var latestTrial = _cachedFrozenTrial.ShallowCopy();
+            latestTrial.SetLazySystemAttrs(() => Storage.GetTrialSystemAttrs(TrialId) is OrderedDict<string, object?> d
+                ? d
+                : new OrderedDict<string, object?>(Storage.GetTrialSystemAttrs(TrialId)));
+            return latestTrial;
+        }
     }
 
     /// <summary>Return parameters to be optimized.</summary>
     public override IReadOnlyDictionary<string, object?> Params
-        => _cachedFrozenTrial.DeepCopy().ParamsDict;
+    {
+        get
+        {
+            lock (_syncRoot)
+                return _cachedFrozenTrial.DeepCopy().ParamsDict;
+        }
+    }
 
     /// <summary>Return distributions of parameters to be optimized.</summary>
     public override IReadOnlyDictionary<string, BaseDistribution> Distributions
-        => _cachedFrozenTrial.DistributionsDict.ShallowClone();
+    {
+        get
+        {
+            lock (_syncRoot)
+                return _cachedFrozenTrial.DistributionsDict.ShallowClone();
+        }
+    }
 
     /// <summary>Return user attributes.</summary>
     public override IReadOnlyDictionary<string, object?> UserAttrs
-        => _cachedFrozenTrial.DeepCopy().UserAttrsDict;
+    {
+        get
+        {
+            lock (_syncRoot)
+                return _cachedFrozenTrial.DeepCopy().UserAttrsDict;
+        }
+    }
 
     // Trial.system_attrs (deprecated 3.1.0) was removed in Optuna 5.0.0 (#6834); FrozenTrial and
     // FixedTrial keep theirs. A live trial's system attributes are optuna-internal storage state:
@@ -442,16 +533,20 @@ public class Trial : BaseTrial
 
         string constraintKey = $"{ConstrainedOptimization.ConstraintsKey}:{key}";
 
-        var systemAttrs = Storage.GetTrialSystemAttrs(TrialId);
-        if (systemAttrs.ContainsKey(constraintKey))
+        // First-set-wins, like Report: the existence check and the write must not interleave with another thread's.
+        lock (_syncRoot)
         {
-            // Do nothing if already set.
-            OptunaWarnings.Warn(
-                $"The constraint value is ignored because this constraint `key={PythonRepr.Repr(key)}` is already set.");
-            return;
-        }
+            var systemAttrs = Storage.GetTrialSystemAttrs(TrialId);
+            if (systemAttrs.ContainsKey(constraintKey))
+            {
+                // Do nothing if already set.
+                OptunaWarnings.Warn(
+                    $"The constraint value is ignored because this constraint `key={PythonRepr.Repr(key)}` is already set.");
+                return;
+            }
 
-        Storage.SetTrialSystemAttr(TrialId, constraintKey, value);
-        _cachedFrozenTrial.SystemAttrsDict[constraintKey] = value;
+            Storage.SetTrialSystemAttr(TrialId, constraintKey, value);
+            _cachedFrozenTrial.SystemAttrsDict[constraintKey] = value;
+        }
     }
 }

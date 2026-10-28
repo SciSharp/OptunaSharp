@@ -186,9 +186,12 @@ internal static class TellHelpers
         // Post-processing and storing the trial.
         try
         {
-            // Sampler defined trial post-processing.
+            // Sampler defined trial post-processing, serialized with the sampler's other calls from concurrent
+            // trials (see BaseSampler.SyncRoot).
             var filteredStudy = PrunerHelpers.FilterStudy(study, frozenTrial);
-            study.Sampler.AfterTrial(filteredStudy, frozenTrial, state!.Value, finalValues);
+            var sampler = study.Sampler;
+            lock (sampler.SyncRoot)
+                sampler.AfterTrial(filteredStudy, frozenTrial, state!.Value, finalValues);
         }
         finally
         {

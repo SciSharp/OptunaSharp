@@ -104,13 +104,15 @@ internal sealed class XnesOptimizer : IEvolutionStrategyOptimizer
     internal double Sigma => _sigma;
 
     /// <inheritdoc />
-    /// <exception cref="System.ArgumentOutOfRangeException"><paramref name="index" /> is outside the current generation.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException"><paramref name="index" /> is negative.</exception>
     public double[] Ask(int index)
     {
-        if (index < 0 || index >= _popsize) throw new ArgumentOutOfRangeException(nameof(index));
+        if (index < 0) throw new ArgumentOutOfRangeException(nameof(index));
 
+        // An extra candidate (index >= popsize) draws the (seed, generation) stream further; the members' rows
+        // are its prefix, so they are unchanged.
         _rng.seed(EsSampling.Combine(_seed, _generation));
-        double[][] s = EsSampling.StandardNormalMatrix(_rng, _popsize, _nDim);
+        double[][] s = EsSampling.StandardNormalMatrix(_rng, Math.Max(_popsize, index + 1), _nDim);
         double[] si = s[index];
         double[] bs = LinAlg.Dot(_b, si);   // B·s
         var x = new double[_nDim];

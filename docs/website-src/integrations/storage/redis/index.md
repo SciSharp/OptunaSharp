@@ -63,7 +63,14 @@ unix:///var/run/redis/redis.sock?db=1
 
 `rediss://` enables TLS. The Unix-socket form is supported by StackExchange.Redis and NRedisStack; ServiceStack rejects it. The shared parser handles username, password, and database; supported query values (`db`, `username`, `password`) override URL components. Other native client settings belong in the callback or native client configuration, not arbitrary URL query parameters.
 
-The Redis backend classes and `JournalStorage` currently expose no `Dispose()` or `Close()` method. In particular, the URL and native-options convenience constructors internally create a client without exposing a deterministic cleanup hook. Inject a client owned by your application or DI container when you need control over connection lifetime. Keep it alive until all journal operations finish, then dispose it yourself.
+All three backends implement `IDisposable`, and ownership follows how you constructed them:
+
+- **Paths 1–3 (URL, URL plus callback, native configuration):** the backend opens the connection or pool, and `Dispose()` closes it. Call it, or wrap the backend in `using`, once every `JournalStorage` over it is done.
+- **Path 4 (an injected client):** `Dispose()` leaves the client open. It stays yours to dispose.
+
+`Dispose()` can be called more than once; after it, the backend must not be used. `JournalStorage` itself has nothing to dispose.
+
+The `Add…JournalStorage` DI methods take a `lifetime`. A backend the container builds is disposed with the scope that created it, or with the container for a singleton. A scoped or transient registration therefore closes its connection when its scope ends. (Before the backends were disposable, each scope leaked one open connection.) A pre-built backend that you register is never disposed by the container.
 
 ## Journal keys, atomicity, and recovery
 

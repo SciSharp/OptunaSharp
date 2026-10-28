@@ -139,13 +139,12 @@ internal sealed class OpenEsOptimizer : IEvolutionStrategyOptimizer
     internal double Sigma => _sigma;
 
     /// <inheritdoc />
-    /// <exception cref="System.ArgumentOutOfRangeException"><paramref name="index" /> is outside the current generation.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException"><paramref name="index" /> is negative.</exception>
     public double[] Ask(int index)
     {
-        if (index < 0 || index >= _popsize) throw new ArgumentOutOfRangeException(nameof(index));
+        if (index < 0) throw new ArgumentOutOfRangeException(nameof(index));
 
-        double[][] epsilon = SampleEpsilon();
-        double[] e = epsilon[index];
+        double[] e = index < _popsize ? SampleEpsilon()[index] : SampleExtraEpsilon(index);
         var x = new double[_nDim];
         for (int j = 0; j < _nDim; j++)
             x[j] = _mean[j] + _sigma * e[j];   // candidate = mean + σ·ε
@@ -180,6 +179,23 @@ internal sealed class OpenEsOptimizer : IEvolutionStrategyOptimizer
             epsilon[half + i] = neg;
         }
         return epsilon;
+    }
+
+    /// <summary>
+    ///     The perturbation of an extra candidate, past the generation's members (see
+    ///     <see cref="IEvolutionStrategyOptimizer.Ask" />): an independent row of the same <c>(seed, generation)</c>
+    ///     stream, drawn after the rows the members use. Unmirrored, so it has no antithetic partner; the update does
+    ///     not pair candidates, it recovers each one's noise from its evaluated vector.
+    /// </summary>
+    /// <param name="index">The candidate's index; at least the population size.</param>
+    /// <returns>The candidate's perturbation, of length <c>dim</c>.</returns>
+    private double[] SampleExtraEpsilon(int index)
+    {
+        _rng.seed(EsSampling.Combine(_seed, _generation));
+        // The members draw `half` rows when mirrored (their negations need no draws), else all `_popsize` rows.
+        int memberRows = _mirrored ? _popsize / 2 : _popsize;
+        int row = memberRows + (index - _popsize);
+        return EsSampling.StandardNormalMatrix(_rng, row + 1, _nDim)[row];
     }
 
     /// <inheritdoc />

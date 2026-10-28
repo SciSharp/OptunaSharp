@@ -39,6 +39,28 @@ public abstract class BaseSampler
     public override string ToString() => GetType().Name;
 
     /// <summary>
+    ///     The monitor that every study-driven call into this sampler runs under:
+    ///     <see cref="BeforeTrial" />, <see cref="InferRelativeSearchSpace" /> together with
+    ///     <see cref="SampleRelative" />, <see cref="SampleIndependent" />, <see cref="AfterTrial" /> and
+    ///     <see cref="ReseedRng" />, taken by <see cref="Trial" />, <c>Study.Tell</c> and the n_jobs workers.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Why.</b> One sampler instance serves every thread of a study, and every study that shares it.
+    ///         Python gets away without a lock: numpy's <c>RandomState</c> locks each draw and the GIL serializes
+    ///         the rest. NumSharp's generator takes no lock, so two threads drawing at once produced bit-identical
+    ///         parameters (1–7 duplicates per 400 trials at <c>n_jobs=16</c>), and samplers' own caches raced.
+    ///     </para>
+    ///     <para>
+    ///         <b>Consequences.</b> One sampler serves one call at a time, so model-based sampling of concurrent
+    ///         trials is serial; objectives still run in parallel. A single-threaded study never contends, so
+    ///         seeded runs stay bit-identical to Optuna. A sampler that delegates to an inner sampler calls it
+    ///         directly; the outer monitor already covers the inner one, so do not lock the inner one too.
+    ///     </para>
+    /// </remarks>
+    internal object SyncRoot { get; } = new();
+
+    /// <summary>
     ///     Infer the search space that will be used by relative sampling in the target trial.
     ///
     ///     This method is called right before <see cref="SampleRelative" />, and the search space

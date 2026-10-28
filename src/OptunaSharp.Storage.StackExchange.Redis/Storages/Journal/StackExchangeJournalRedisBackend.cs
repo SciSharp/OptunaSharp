@@ -27,12 +27,18 @@ namespace OptunaSharp.Storages.Journal;
 ///     is reachable; the on-wire journal format is fixed by <see cref="RedisJournalProtocol" />
 ///     regardless of how you connect, so byte-compatibility holds however you configure the client.</para>
 /// </summary>
-public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot
+public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot, IDisposable
 {
     private readonly string _url;
     private readonly bool _useCluster;
     private readonly string _prefix;
     private readonly IConnectionMultiplexer _connection;
+
+    // True when a constructor opened _connection from a URL or options, so Dispose must close it; false for an
+    // injected multiplexer, which stays the caller's. Before Dispose existed, every scoped or transient DI
+    // registration leaked one open Redis connection per scope (40 scopes left 40 connections).
+    private readonly bool _ownsConnection;
+    private int _disposed;
 
     // ---------------------------------------------------------------- construction
     //
@@ -49,8 +55,9 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <param name="useCluster">If <c>false</c> (default), a standalone server + one atomic Lua
     ///   <c>EVAL</c>; if <c>true</c>, a cluster + non-atomic <c>INCR</c>+<c>SET</c>.</param>
     /// <param name="prefix">Prefix of the preserved keys — useful when many users share one server.</param>
+    /// <remarks>The backend owns the connection it opens here: <see cref="Dispose" /> closes it.</remarks>
     public StackExchangeJournalRedisBackend(string url, bool useCluster = false, string prefix = "")
-        : this(ConnectionMultiplexer.Connect(ToConfiguration(RedisUrl.Parse(url))), url, useCluster, prefix)
+        : this(ConnectionMultiplexer.Connect(ToConfiguration(RedisUrl.Parse(url))), url, useCluster, prefix, ownsConnection: true)
     {
     }
 
@@ -65,9 +72,10 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     ///   <paramref name="url" /> immediately before connecting; mutate it in place.</param>
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    /// <remarks>The backend owns the connection it opens here: <see cref="Dispose" /> closes it.</remarks>
     public StackExchangeJournalRedisBackend(string url, Action<ConfigurationOptions> configure,
         bool useCluster = false, string prefix = "")
-        : this(ConnectionMultiplexer.Connect(Configure(RedisUrl.Parse(url), configure)), url, useCluster, prefix)
+        : this(ConnectionMultiplexer.Connect(Configure(RedisUrl.Parse(url), configure)), url, useCluster, prefix, ownsConnection: true)
     {
     }
 
@@ -80,9 +88,10 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
     /// <exception cref="System.ArgumentNullException"><paramref name="options" /> is null.</exception>
+    /// <remarks>The backend owns the connection it opens here: <see cref="Dispose" /> closes it.</remarks>
     public StackExchangeJournalRedisBackend(ConfigurationOptions options, bool useCluster = false, string prefix = "")
         : this(ConnectionMultiplexer.Connect(options ?? throw new ArgumentNullException(nameof(options))),
-               "", useCluster, prefix)
+               "", useCluster, prefix, ownsConnection: true)
     {
     }
 
@@ -96,8 +105,9 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
     /// <exception cref="System.ArgumentNullException"><paramref name="connection" /> is null.</exception>
+    /// <remarks><see cref="Dispose" /> leaves an injected multiplexer open: its lifetime stays yours.</remarks>
     public StackExchangeJournalRedisBackend(IConnectionMultiplexer connection, bool useCluster = false, string prefix = "")
-        : this(connection ?? throw new ArgumentNullException(nameof(connection)), "", useCluster, prefix)
+        : this(connection ?? throw new ArgumentNullException(nameof(connection)), "", useCluster, prefix, ownsConnection: false)
     {
     }
 
@@ -106,7 +116,8 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <param name="url">The database connection URL to resolve.</param>
     /// <param name="useCluster">Whether to use separate counter and log writes for a Redis cluster rather than the standalone Lua script.</param>
     /// <param name="prefix">The journal key namespace, shared by its counter, log records, and snapshot.</param>
-    private StackExchangeJournalRedisBackend(IConnectionMultiplexer connection, string url, bool useCluster, string prefix)
+    /// <param name="ownsConnection">Whether this backend opened <paramref name="connection" /> and must close it on <see cref="Dispose" />.</param>
+    private StackExchangeJournalRedisBackend(IConnectionMultiplexer connection, string url, bool useCluster, string prefix, bool ownsConnection)
     {
         // Optuna decorates JournalRedisBackend with @experimental_class("3.1.0"), which raises an
         // ExperimentalWarning on construction. OptunaSharp targets the Optuna 5.x surface and treats
@@ -115,6 +126,27 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
         _connection = connection;
         _useCluster = useCluster;
         _prefix = prefix;
+        _ownsConnection = ownsConnection;
+    }
+
+    /// <summary>
+    ///     Closes the Redis connection this backend opened from a URL or options; an injected multiplexer is left
+    ///     open. Calling it again does nothing. Any later journal operation on this backend fails with
+    ///     <see cref="ObjectDisposedException" /> from StackExchange.Redis.
+    /// </summary>
+    /// <remarks>
+    ///     A DI container calls this when the scope (or, for a singleton, the container) that created the backend is
+    ///     disposed, so scoped and transient registrations no longer leak a connection each. A
+    ///     <see cref="JournalStorage" /> over this backend must not be used afterwards.
+    /// </remarks>
+    public void Dispose()
+    {
+        // Only the first call closes; DI may dispose a forwarded registration and the backend itself.
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        if (_ownsConnection)
+            _connection.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     private IDatabase Db => _connection.GetDatabase();

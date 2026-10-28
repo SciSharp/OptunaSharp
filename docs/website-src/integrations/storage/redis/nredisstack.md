@@ -57,7 +57,7 @@ var backend = new NRedisStackJournalRedisBackend(
     prefix: "experiments");
 ```
 
-The URL and configuration constructors create a multiplexer internally, but the backend has no disposal hook. Use an application-owned multiplexer, as in the first example, for explicit lifetime management.
+The URL and configuration constructors create a multiplexer internally, and the backend owns it: `Dispose()` closes it. An application-owned multiplexer, as in the first example, stays open when the backend is disposed.
 
 ## Why the journal does not use RedisJSON
 

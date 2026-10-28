@@ -30,11 +30,15 @@ public class HyperbandPruner : BasePruner
     private long? _maxResource;
     private readonly bool _maxResourceIsAuto;
     private readonly int _reductionFactor;
-    private readonly List<SuccessiveHalvingPruner> _pruners = new();
     private readonly int _bootstrapCount;
-    private int _totalTrialAllocationBudget;
-    private readonly List<int> _trialAllocationBudgets = new();
     private int? _nBrackets;
+
+    // Python's `_pruners`, `_trial_allocation_budgets` and `_total_trial_allocation_budget`, built once and
+    // published as one immutable plan (null = Python's empty `_pruners`). Prune and FilterStudy run under the
+    // pruner's monitor, but bracket studies call GetBracketId from inside sampler calls on other threads without
+    // it; appending to shared lists there crashed Optimize at n_jobs above 1. A reader now sees no plan or a
+    // complete one.
+    private volatile BracketPlan? _plan;
 
     /// <param name="minResource">
     ///     The minimum resource allocated to a trial (<c>r</c> in the paper). See
@@ -63,7 +67,6 @@ public class HyperbandPruner : BasePruner
         _maxResourceIsAuto = maxResource is null;
         _reductionFactor = reductionFactor;
         _bootstrapCount = bootstrapCount;
-        _totalTrialAllocationBudget = 0;
         _nBrackets = null;
 
         if (_bootstrapCount > 0 && _maxResourceIsAuto)
@@ -78,12 +81,14 @@ public class HyperbandPruner : BasePruner
     /// <exception cref="System.InvalidOperationException">Initialized bracket allocation budgets are inconsistent.</exception>
     public override bool Prune(Study study, FrozenTrial trial)
     {
-        if (_pruners.Count == 0)
+        var plan = _plan;
+        if (plan is null)
         {
             // Automatic maximum resource depends on completed reports; until available, there is
             // no stable bracket schedule under which this trial could fairly be pruned.
             TryInitialization(study);
-            if (_pruners.Count == 0)
+            plan = _plan;
+            if (plan is null)
                 return false;
         }
 
@@ -91,7 +96,7 @@ public class HyperbandPruner : BasePruner
         _logger.Debug($"{bracketId}th bracket is selected");
         // Compete only against this bracket's trials, whose minimum-resource schedules match.
         var bracketStudy = CreateBracketStudy(study, bracketId);
-        return _pruners[bracketId].Prune(bracketStudy, trial);
+        return plan.Pruners[bracketId].Prune(bracketStudy, trial);
     }
 
     /// <inheritdoc />
@@ -102,6 +107,11 @@ public class HyperbandPruner : BasePruner
     /// <summary>Initializes Hyperband brackets once the maximum resource can be determined.</summary>
     /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
     /// <exception cref="NumSharp.ValueError">A successive-halving bracket rejects the configured resource, reduction, or bootstrap settings.</exception>
+    /// <remarks>
+    ///     Builds the brackets into locals and publishes them as one <see cref="BracketPlan" />. Python appends to
+    ///     its lists in place, which is equivalent here because it only runs while <c>_pruners</c> is empty. A
+    ///     schedule with no brackets stays unpublished, as Python's empty <c>_pruners</c> retries next time.
+    /// </remarks>
     private void TryInitialization(Study study)
     {
         if (_maxResource is null)
@@ -125,19 +135,20 @@ public class HyperbandPruner : BasePruner
 
         _logger.Debug($"Hyperband has {_nBrackets} brackets");
 
+        var budgets = new List<int>();
+        var pruners = new List<SuccessiveHalvingPruner>();
         for (int bracketId = 0; bracketId < _nBrackets.Value; bracketId++)
         {
-            int trialAllocationBudget = CalculateTrialAllocationBudget(bracketId);
-            _totalTrialAllocationBudget += trialAllocationBudget;
-            _trialAllocationBudgets.Add(trialAllocationBudget);
-
-            var pruner = new SuccessiveHalvingPruner(
+            budgets.Add(CalculateTrialAllocationBudget(bracketId));
+            pruners.Add(new SuccessiveHalvingPruner(
                 minResource: _minResource,
                 reductionFactor: _reductionFactor,
                 minEarlyStoppingRate: bracketId,
-                bootstrapCount: _bootstrapCount);
-            _pruners.Add(pruner);
+                bootstrapCount: _bootstrapCount));
         }
+
+        if (pruners.Count > 0)
+            _plan = new BracketPlan(budgets.ToArray(), pruners.ToArray());
     }
 
     /// <summary>
@@ -164,20 +175,47 @@ public class HyperbandPruner : BasePruner
     /// <exception cref="System.InvalidOperationException">Initialized bracket budgets fail to cover the computed allocation index.</exception>
     internal int GetBracketId(Study study, FrozenTrial trial)
     {
-        if (_pruners.Count == 0)
+        // One read of the published plan: every field below then comes from the same, complete schedule.
+        var plan = _plan;
+        if (plan is null)
             return 0;
 
-        System.Diagnostics.Debug.Assert(_nBrackets is not null);
         long n = Crc32.Compute(Encoding.UTF8.GetBytes($"{study.StudyName}_{trial.Number}"))
-            % _totalTrialAllocationBudget;
-        for (int bracketId = 0; bracketId < _nBrackets!.Value; bracketId++)
+            % plan.TotalBudget;
+        for (int bracketId = 0; bracketId < plan.Budgets.Length; bracketId++)
         {
-            n -= _trialAllocationBudgets[bracketId];
+            n -= plan.Budgets[bracketId];
             if (n < 0)
                 return bracketId;
         }
 
         throw new InvalidOperationException("This line should be unreachable.");
+    }
+
+    /// <summary>
+    ///     The complete bracket schedule: per-bracket trial-allocation budgets, their sum, and one
+    ///     <see cref="SuccessiveHalvingPruner" /> per bracket. Immutable, so it can be read without a lock.
+    /// </summary>
+    private sealed class BracketPlan
+    {
+        /// <summary>Creates the schedule from its per-bracket budgets and pruners.</summary>
+        /// <param name="budgets">Python's <c>_trial_allocation_budgets</c>, one entry per bracket.</param>
+        /// <param name="pruners">Python's <c>_pruners</c>, one successive-halving pruner per bracket.</param>
+        internal BracketPlan(int[] budgets, SuccessiveHalvingPruner[] pruners)
+        {
+            Budgets = budgets;
+            Pruners = pruners;
+            TotalBudget = budgets.Sum();
+        }
+
+        /// <summary>Trial-allocation budget of each bracket, in bracket order.</summary>
+        internal int[] Budgets { get; }
+
+        /// <summary>The successive-halving pruner of each bracket, in bracket order.</summary>
+        internal SuccessiveHalvingPruner[] Pruners { get; }
+
+        /// <summary>Python's <c>_total_trial_allocation_budget</c>: the sum of <see cref="Budgets" />.</summary>
+        internal int TotalBudget { get; }
     }
 
     /// <summary>Python <c>_create_bracket_study</c>.</summary>

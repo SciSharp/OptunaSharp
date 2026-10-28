@@ -88,15 +88,16 @@ internal sealed class SnesOptimizer : IEvolutionStrategyOptimizer
     internal double[] SigmaSnapshot() => (double[])_sigma.Clone();
 
     /// <inheritdoc />
-    /// <exception cref="System.ArgumentOutOfRangeException"><paramref name="index" /> is outside the current generation.</exception>
+    /// <exception cref="System.ArgumentOutOfRangeException"><paramref name="index" /> is negative.</exception>
     public double[] Ask(int index)
     {
-        if (index < 0 || index >= _popsize) throw new ArgumentOutOfRangeException(nameof(index));
+        if (index < 0) throw new ArgumentOutOfRangeException(nameof(index));
 
         // Deterministic reseed: the whole generation's noise is a pure function of (seed, generation), so
-        // any trial can reproduce any row.
+        // any trial can reproduce any row. An extra candidate (index >= popsize) draws the stream further; the
+        // members' rows are its prefix, so they are unchanged.
         _rng.seed(EsSampling.Combine(_seed, _generation));
-        double[][] s = EsSampling.StandardNormalMatrix(_rng, _popsize, _nDim);
+        double[][] s = EsSampling.StandardNormalMatrix(_rng, Math.Max(_popsize, index + 1), _nDim);
         double[] si = s[index];
         var x = new double[_nDim];
         for (int j = 0; j < _nDim; j++)

@@ -30,7 +30,7 @@ var study = Optuna.CreateStudy(
 study.Optimize(trial => Math.Pow(trial.SuggestFloat("x", -10, 10), 2), nTrials: 20);
 ```
 
-The multiplexer is application-owned. Keep it alive for all workers that use it and dispose it after their work finishes; the journal backend has no disposal method.
+The multiplexer is application-owned. Keep it alive for all workers that use it, and dispose it after their work finishes. Disposing the backend leaves an injected multiplexer open. A backend built from a URL or `ConfigurationOptions` owns its multiplexer instead, and `Dispose()` closes it.
 
 ## Constructors and database selection
 
