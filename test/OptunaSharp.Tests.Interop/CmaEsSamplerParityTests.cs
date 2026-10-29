@@ -1,30 +1,36 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using AwesomeAssertions;
+using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
+using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
+using OptunaSharp.Samplers.CmaEs;
 using OptunaSharp.Storages;
 
 namespace OptunaSharp.Tests.Interop;
 
 /// <summary>
 ///     Full-state bit-parity of <see cref="CmaEsSampler" /> against live Optuna (5.0.0.dev + cmaes
-///     0.13.0). Every trial's params (external + internal IEEE bits), value, distributions, and the
+///     0.13.1). Every trial's params (external + internal IEEE bits), value, distributions, and the
 ///     <c>cma:generation</c> attribution must agree byte-for-byte: the CMA optimizer is bit-exact
 ///     (MT19937 draws, <c>eigh</c> via OpenBLAS, numpy pairwise/sequential reductions, and the
 ///     upper-triangle covariance symmetry preserved across the per-trial optimizer round-trip), the
 ///     per-trial reseed <c>randint(1,2**16)+trial.number</c> matches, and the first trial is the
 ///     independent <see cref="RandomSampler" />.
 ///
-///     <para>The <c>cma:optimizer:*</c> system attrs are excluded from the comparison: Optuna pickles
-///     the optimizer, OptunaSharp serializes its own JSON (<c>[Misaligned]</c> — pickle is a
-///     non-goal, so no cross-language mid-CMA resume). Everything else, including <c>cma:generation</c>,
-///     is compared bit-for-bit.</para>
+///     <para>The stored optimizer states (<c>cma:optimizer:*</c>) are Optuna's pickle on both sides
+///     (review item P3-2) and are compared decoded: byte-identical once the <c>_funhist_values</c>
+///     entries cmaes leaves uninitialized (<c>np.empty</c>, so Python's own bytes there are leftover
+///     memory) are taken from Python's state. The rest of the snapshot is then compared bit-for-bit,
+///     <c>cma:generation</c> included. The tolerance-bounded with-margin test compares trajectories only.</para>
 /// </summary>
 [TestClass]
 public class CmaEsSamplerParityTests : OptunaInteropTestBase
 {
-    /// <summary>Drop the pickle-vs-JSON optimizer blob so parity compares the algorithmic state.</summary>
+    /// <summary>Removes the stored optimizer states, which <see cref="AssertOptimizerStatesMatch" /> compares decoded.</summary>
+    /// <param name="s">The snapshot to edit in place.</param>
     private static void StripOptimizerAttrs(StudySnapshot s)
     {
         foreach (var t in s.Trials)
@@ -32,14 +38,87 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
                 t.SystemAttrs.Remove(key);
     }
 
+    /// <summary>
+    ///     Runs the Python study and asserts full parity with the C# one: the stored optimizer states decoded and
+    ///     byte-compared (<see cref="AssertOptimizerStatesMatch" />), then every other field bit for bit.
+    /// </summary>
+    /// <param name="csStudy">The finished OptunaSharp study.</param>
+    /// <param name="pyCreateAndRun">Python that creates and runs the same study as <c>study</c>.</param>
     private void AssertParityExceptOptimizerBlob(Study csStudy, string pyCreateAndRun)
     {
         var csState = StudySnapshot.Capture(csStudy);
         PyExec(pyCreateAndRun);
         var pyState = PyStudyState("study");
+        AssertOptimizerStatesMatch(pyState, csState);
         StripOptimizerAttrs(csState);
         StripOptimizerAttrs(pyState);
         StudySnapshot.AssertParity(pyState, csState, DatetimeComparison.NullnessOnly);
+    }
+
+    /// <summary>
+    ///     Every trial stores an optimizer state in both languages or in neither, and each pair is the same pickle,
+    ///     byte for byte, once the funhist entries cmaes has not written yet are taken from Python's state.
+    /// </summary>
+    /// <param name="py">Python's snapshot.</param>
+    /// <param name="cs">OptunaSharp's snapshot.</param>
+    private static void AssertOptimizerStatesMatch(StudySnapshot py, StudySnapshot cs)
+    {
+        int compared = 0;
+        for (int i = 0; i < Math.Min(py.Trials.Count, cs.Trials.Count); i++)
+        {
+            string? pyHex = OptimizerState(py.Trials[i].SystemAttrs);
+            string? csHex = OptimizerState(cs.Trials[i].SystemAttrs);
+            (csHex is null).Should().Be(pyHex is null, $"trial {i} must store an optimizer state in both languages or neither");
+            if (pyHex is null || csHex is null)
+                continue;
+            byte[] pyBytes = CmaPickle.FromHexString(pyHex);
+            var pyOptimizer = (PyInstance)PythonPickle.Loads(pyBytes)!;
+            var csOptimizer = (PyInstance)PythonPickle.Loads(CmaPickle.FromHexString(csHex))!;
+            CopyUninitializedFunhist(csOptimizer, pyOptimizer);
+            PythonPickle.Dumps(csOptimizer).Should().Equal(pyBytes, $"trial {i}'s stored optimizer state");
+            compared++;
+        }
+        compared.Should().BePositive("the study must have stored optimizer states to compare");
+    }
+
+    /// <summary>A trial's stored optimizer state, its chunks concatenated, or null when it stored none.</summary>
+    /// <param name="attrs">The trial's system attrs.</param>
+    /// <returns>The hex text.</returns>
+    private static string? OptimizerState(OrderedDict<string, object?> attrs)
+    {
+        var keys = attrs.Keys.Where(k => k.Contains(":optimizer:")).ToList();
+        if (keys.Count == 0)
+            return null;
+        string stem = keys[0][..(keys[0].IndexOf(":optimizer:", StringComparison.Ordinal) + ":optimizer:".Length)];
+        return string.Concat(Enumerable.Range(0, keys.Count).Select(j => (string)attrs[stem + j]!));
+    }
+
+    /// <summary>
+    ///     Copies Python's values into the <c>_funhist_values</c> entries cmaes has not written yet: generation
+    ///     <c>g</c> writes entries <c>2(g mod term)</c> and the next one, and the others still hold what
+    ///     <c>np.empty</c> returned, which no other process can reproduce (OptunaSharp starts them at zero).
+    /// </summary>
+    /// <param name="cs">OptunaSharp's state, edited in place.</param>
+    /// <param name="py">Python's state for the same trial.</param>
+    private static void CopyUninitializedFunhist(PyInstance cs, PyInstance py)
+    {
+        if (cs.TryGet("_cma", out var inner) && inner is PyInstance csInner)
+        {
+            CopyUninitializedFunhist(csInner, (PyInstance)py.Get("_cma")!);
+            return;
+        }
+        double[] csValues = ((NpArray)cs.Get("_funhist_values")!).Doubles!;
+        double[] pyValues = ((NpArray)py.Get("_funhist_values")!).Doubles!;
+        long generation = (long)cs.Get("_g")!, term = (long)cs.Get("_funhist_term")!;
+        var written = new HashSet<long>();
+        for (long g = 1; g <= generation; g++)
+        {
+            written.Add(2 * (g % term));
+            written.Add(2 * (g % term) + 1);
+        }
+        for (int i = 0; i < csValues.Length && i < pyValues.Length; i++)
+            if (!written.Contains(i))
+                csValues[i] = pyValues[i];
     }
 
     [TestMethod]

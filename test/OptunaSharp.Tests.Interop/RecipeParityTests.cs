@@ -272,10 +272,11 @@ public class RecipeParityTests : OptunaInteropTestBase
     private static object? Unwrap(object? value) => value is CategoricalChoice c ? c.Value : value;
 
     /// <summary>
-    ///     Drops the CMA-ES pickle-vs-JSON optimizer blob (<c>cma:optimizer:*</c>) from a snapshot before
-    ///     parity: Optuna pickles its optimizer, OptunaSharp serializes its own JSON — a documented
-    ///     <c>[Misaligned]</c> (cross-language mid-CMA resume is a non-goal). Every other field, including
-    ///     the algorithmic <c>cma:generation</c> attribution, still compares bit-for-bit.
+    ///     Drops the CMA-ES optimizer state (<c>cma:optimizer:*</c>) from a snapshot before parity. Both
+    ///     languages store Optuna's pickle there, but cmaes leaves part of it uninitialized
+    ///     (<c>np.empty</c>), so Python's own bytes differ run to run; <c>CmaEsSamplerParityTests</c>
+    ///     compares the states decoded with that part masked. Every other field, including the
+    ///     algorithmic <c>cma:generation</c> attribution, still compares bit-for-bit.
     /// </summary>
     /// <param name="s">Snapshot whose optimizer-state system attrs are removed in place.</param>
     private static void StripOptimizerAttrs(StudySnapshot s)

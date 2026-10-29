@@ -332,7 +332,9 @@ public class CmaEsSamplerTests
             m.Item2 == WarningCategory.FutureWarning && m.Item1.Contains("deprecated"));
     }
 
-    // ---- optimizer-state serialization (the pickle analogue; [Misaligned] own JSON) -----------
+    // ---- legacy JSON optimizer state ------------------------------------------------------------
+    // The JSON OptunaSharp stored before 2026-10-29, which the sampler still restores. The stored form is now
+    // Optuna's own pickle (CmaPickle), pinned byte for byte by CmaPickleOracleTests.
 
     [TestMethod]
     public void CmaState_JsonRoundTrip_IsIdempotentAndDeterministic()

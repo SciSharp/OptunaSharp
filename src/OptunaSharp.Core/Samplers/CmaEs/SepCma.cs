@@ -60,6 +60,11 @@ internal class SepCma : ICmaOptimizer
     private readonly int _funhistTerm;
     private readonly double[] _funhistValues;
 
+    // Python's type of the scalars whose type cmaes' arithmetic decides (numpy.float64 or float), tracked only so a
+    // pickled state is byte-identical to the one cmaes pickles (see Cma for the full story).
+    private readonly bool _tolxIsNumpy;
+    private bool _sigmaIsNumpy;
+
     /// <summary>Initializes a Gaussian proposal with diagonal covariance and separable adaptation.</summary>
     /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
     /// <param name="sigma">Initial positive global proposal standard deviation.</param>
@@ -67,6 +72,10 @@ internal class SepCma : ICmaOptimizer
     /// <param name="nMaxResampling">Maximum rejected box-infeasible proposals before coordinate repair.</param>
     /// <param name="seed">Seed used to reset the optimizer random stream.</param>
     /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
+    /// <param name="sigmaIsNumpyScalar">
+    ///     Whether the Python caller would pass <paramref name="sigma" /> as a <c>numpy.float64</c>; it only decides
+    ///     the type of the pickled <c>_tolx</c> (and of the untold <c>_sigma</c>). See <see cref="Cma" />.
+    /// </param>
     /// <exception cref="System.ArgumentException">The scale is nonpositive, mean dimension is below two or exceeds the supported magnitude, or population size is nonpositive.</exception>
     internal SepCma(
         double[] mean,
@@ -74,7 +83,8 @@ internal class SepCma : ICmaOptimizer
         double[,]? bounds = null,
         int nMaxResampling = 100,
         int? seed = null,
-        int? populationSize = null)
+        int? populationSize = null,
+        bool sigmaIsNumpyScalar = false)
     {
         if (sigma <= 0) throw new ArgumentException("sigma must be non-zero positive value");
         foreach (double m in mean)
@@ -147,6 +157,10 @@ internal class SepCma : ICmaOptimizer
         _tolx = 1e-12 * sigma;
         _funhistTerm = 10 + (int)Math.Ceiling(30.0 * nDim / popsize);
         _funhistValues = new double[_funhistTerm * 2];
+
+        // `self._sigma = sigma` and `self._tolx = 1e-12 * sigma` take sigma's type.
+        _tolxIsNumpy = sigmaIsNumpyScalar;
+        _sigmaIsNumpy = sigmaIsNumpyScalar;
     }
 
     /// <summary>Number of numerical decision coordinates.</summary>
@@ -170,7 +184,10 @@ internal class SepCma : ICmaOptimizer
     /// <param name="seed">Seed used to reset the optimizer random stream.</param>
     public void ReseedRng(int seed) => _rng.seed((uint)seed);
 
-    // ---- state serialization (own JSON; SepCMA's covariance is a 1-D vector — no symmetry trick) ---
+    // ---- state serialization -------------------------------------------------------------------
+    // ToPyInstance/FromPyInstance map this class to cmaes' SepCMA state, which CmaPickle writes and reads as
+    // Python's exact pickle. ToState/FromState are the JSON form stored before 2026-10-29, still read so older
+    // studies keep restoring. SepCMA's covariance is a 1-D vector, so neither form needs a symmetry trick.
 
     /// <summary>Captures constructor settings and evolving optimizer arrays in a serializable state object.</summary>
     /// <returns>A serializable snapshot of optimizer settings and evolving state.</returns>
@@ -196,8 +213,9 @@ internal class SepCma : ICmaOptimizer
     /// <exception cref="System.ArgumentException">Stored constructor settings or population dimensions are rejected when the optimizer is recreated.</exception>
     internal static SepCma FromState(SepCmaState s)
     {
+        // The JSON never recorded Python types; the sampler's default sigma0 (np.min) is numpy (see Cma.FromState).
         var cma = new SepCma(new double[s.NDim], s.Sigma0, FromJagged(s.Bounds), s.NMaxResampling,
-            seed: null, populationSize: s.Popsize);
+            seed: null, populationSize: s.Popsize, sigmaIsNumpyScalar: true);
         cma._g = s.G;
         cma._mean = (double[])s.Mean.Clone();
         cma._sigma = s.Sigma;
@@ -206,7 +224,110 @@ internal class SepCma : ICmaOptimizer
         cma._pc = (double[])s.Pc.Clone();
         Array.Copy(s.FunhistValues, cma._funhistValues, cma._funhistValues.Length);
         cma._d = null;
+        // A stored state has been told: sigma is numpy unless the tell's clamp replaced it by the float bound.
+        if (s.G > 0)
+            cma._sigmaIsNumpy = s.Sigma != SigmaMax;
         return cma;
+    }
+
+    /// <summary>
+    ///     Describes this optimizer as the state cmaes' <c>SepCMA.__getstate__</c> returns, attribute for attribute,
+    ///     with Python's types and numpy's dtype sharing, so <see cref="PythonPickle.Dumps" /> of it is the pickle cmaes
+    ///     writes for the same optimizer.
+    /// </summary>
+    /// <param name="layout">The pickle's dtype objects and whether this optimizer was restored before its last tell.</param>
+    /// <returns>The <c>cmaes._sepcma.SepCMA</c> instance description; its arrays are copies.</returns>
+    /// <remarks>
+    ///     The key order is <c>__init__</c>'s in both a fresh and a restored optimizer (SepCMA's <c>__setstate__</c>
+    ///     keeps the stored order). <c>_cc</c> is a float here (<c>4 / (n_dim + 4)</c>), unlike CMA's.
+    /// </remarks>
+    internal PyInstance ToPyInstance(CmaPickleLayout layout)
+    {
+        var state = new List<KeyValuePair<string, object?>>();
+        void Add(string key, object? value) => state.Add(new(key, value));
+
+        // Rebuilt by every tell: _p_sigma, _pc and _C; the rest is updated in place or never touched.
+        Add("_n_dim", (long)_nDim);
+        Add("_popsize", (long)_popsize);
+        Add("_mu", (long)_mu);
+        Add("_mu_eff", layout.Scalar(_muEff));
+        Add("_cc", _cc);
+        Add("_c1", layout.Scalar(_c1));
+        Add("_cmu", layout.Scalar(_cmu));
+        Add("_c_sigma", layout.Scalar(_cSigma));
+        Add("_d_sigma", layout.Scalar(_dSigma));
+        Add("_cm", CmaPickle.PyNumber(_cm));
+        Add("_chi_n", _chiN);
+        Add("_weights", layout.Vector(_weights, rebuiltByTell: false));
+        Add("_p_sigma", layout.Vector(_pSigma, rebuiltByTell: true));
+        Add("_pc", layout.Vector(_pc, rebuiltByTell: true));
+        Add("_mean", layout.Vector(_mean, rebuiltByTell: false));
+        Add("_sigma", layout.Float(_sigma, _sigmaIsNumpy));
+        // Tell clears the sqrt(C) cache, so a stored state has None here.
+        Add("_D", _d is null ? null : layout.Vector(_d, rebuiltByTell: true));
+        Add("_C", layout.Vector(_c, rebuiltByTell: true));
+        Add("_bounds", _bounds is null ? null : layout.Matrix(_bounds, rebuiltByTell: false));
+        Add("_n_max_resampling", (long)_nMaxResampling);
+        Add("_g", (long)_g);
+        Add("_tolx", layout.Float(_tolx, _tolxIsNumpy));
+        Add("_tolxup", _tolxup);
+        Add("_tolfun", _tolfun);
+        Add("_tolconditioncov", _tolconditioncov);
+        Add("_funhist_term", (long)_funhistTerm);
+        Add("_funhist_values", layout.Vector(_funhistValues, rebuiltByTell: false));
+        return new PyInstance("cmaes._sepcma", "SepCMA", state);
+    }
+
+    /// <summary>
+    ///     Restores an optimizer from a pickled cmaes <c>SepCMA</c> state, taking every value from the state, the
+    ///     configuration included, so a state Python wrote continues exactly as Python would continue it.
+    /// </summary>
+    /// <param name="state">The unpickled <c>cmaes._sepcma.SepCMA</c> instance.</param>
+    /// <returns>The restored optimizer; its random stream is unseeded, as after Python's <c>__setstate__</c>.</returns>
+    /// <exception cref="ValueError">
+    ///     The state lacks an attribute of cmaes' <c>SepCMA</c>, or an attribute has the wrong type or shape.
+    /// </exception>
+    internal static SepCma FromPyInstance(PyInstance state) => new(state);
+
+    /// <summary>The constructor behind <see cref="FromPyInstance" />: assigns every field from the pickled state.</summary>
+    /// <param name="s">The unpickled <c>cmaes._sepcma.SepCMA</c> instance.</param>
+    /// <exception cref="ValueError">An attribute is missing, mistyped or misshapen.</exception>
+    private SepCma(PyInstance s)
+    {
+        _nDim = CmaPickle.Int(s, "_n_dim");
+        _popsize = CmaPickle.Int(s, "_popsize");
+        if (_nDim <= 0 || _popsize <= 0)
+            throw new ValueError($"The pickled cmaes SepCMA has n_dim {_nDim} and popsize {_popsize}; both must be positive.");
+        _mu = CmaPickle.Int(s, "_mu");
+        _muEff = CmaPickle.Float(s, "_mu_eff");
+        _cc = CmaPickle.Float(s, "_cc");
+        _c1 = CmaPickle.Float(s, "_c1");
+        _cmu = CmaPickle.Float(s, "_cmu");
+        _cSigma = CmaPickle.Float(s, "_c_sigma");
+        _dSigma = CmaPickle.Float(s, "_d_sigma");
+        _cm = CmaPickle.Float(s, "_cm");
+        _chiN = CmaPickle.Float(s, "_chi_n");
+        _weights = CmaPickle.Vector(s, "_weights", _mu);
+        _pSigma = CmaPickle.Vector(s, "_p_sigma", _nDim);
+        _pc = CmaPickle.Vector(s, "_pc", _nDim);
+        _mean = CmaPickle.Vector(s, "_mean", _nDim);
+        _sigma = CmaPickle.Float(s, "_sigma");
+        _sigmaIsNumpy = CmaPickle.IsNumpy(s, "_sigma");
+        _d = CmaPickle.OptionalVector(s, "_D", _nDim);
+        _c = CmaPickle.Vector(s, "_C", _nDim);
+        _bounds = CmaPickle.OptionalMatrix(s, "_bounds", _nDim, 2);
+        _nMaxResampling = CmaPickle.Int(s, "_n_max_resampling");
+        _g = CmaPickle.Int(s, "_g");
+        _rng = np.random.RandomState();
+        _tolx = CmaPickle.Float(s, "_tolx");
+        _tolxIsNumpy = CmaPickle.IsNumpy(s, "_tolx");
+        _tolxup = CmaPickle.Float(s, "_tolxup");
+        _tolfun = CmaPickle.Float(s, "_tolfun");
+        _tolconditioncov = CmaPickle.Float(s, "_tolconditioncov");
+        _funhistTerm = CmaPickle.Int(s, "_funhist_term");
+        _funhistValues = CmaPickle.Vector(s, "_funhist_values", 2 * _funhistTerm);
+        // Only the legacy JSON form (ToState) reads _sigma0; `_tolx = 1e-12 * sigma0` is all a pickle keeps of it.
+        _sigma0 = _tolx / 1e-12;
     }
 
     /// <summary>Draws one candidate from the current proposal without advancing the generation.</summary>
@@ -323,6 +444,8 @@ internal class SepCma : ICmaOptimizer
 
         double normPSigma = LinAlg.Norm(_pSigma);
         _sigma *= Math.Exp((_cSigma / _dSigma) * (normPSigma / _chiN - 1));
+        // Numpy after `*= np.exp(...)`; Python's min() returns the float bound only when it is strictly smaller.
+        _sigmaIsNumpy = !(SigmaMax < _sigma);
         _sigma = Math.Min(_sigma, SigmaMax);
 
         double hSigmaCondLeft = normPSigma / Math.Sqrt(1 - Math.Pow(1 - _cSigma, 2 * (_g + 1)));

@@ -127,6 +127,26 @@ public class JournalMixedFleetInteropTests
     }
 
     /// <summary>
+    ///     The same fleet with CMA-ES workers (review item P3-2): every worker restores whichever optimizer state is
+    ///     newest, whichever language stored it, so the two languages read each other's states while they race. Before
+    ///     2026-10-29 OptunaSharp stored its own JSON there and the first cross-language restore failed; now both store
+    ///     Optuna's pickle and both studies stay perfect. Both languages use the open-file lock, which works on every
+    ///     machine.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void PythonAndCSharpCmaEsWorkers_OnOneJournalFile_ProduceIdenticalPerfectStudies()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        RunFleet(() => new JournalFileBackend(_path, new JournalFileOpenLock(_path)),
+            pyWorkerBackend: "optuna.storages.journal.JournalFileBackend(path, lock_obj=optuna.storages.journal.JournalFileOpenLock(path))",
+            pyReplayBackend: "optuna.storages.journal.JournalFileBackend(path)",
+            csSampler: seed => new CmaEsSampler(seed: seed),
+            pySampler: "optuna.samplers.CmaEsSampler(seed=seed)");
+    }
+
+    /// <summary>
     ///     Runs the fleet: seeds both studies, starts the Python threads, runs the C# workers alongside them, then checks
     ///     that nobody failed, that each study is perfect with both languages' trials, and that Python's replay of each
     ///     study is bit-identical to C#'s.
@@ -134,8 +154,12 @@ public class JournalMixedFleetInteropTests
     /// <param name="backend">Builds one C# worker's journal backend; every call returns a new instance.</param>
     /// <param name="pyWorkerBackend">The Python expression building a worker's backend; it may use <c>path</c>.</param>
     /// <param name="pyReplayBackend">The Python expression building the backend Python replays the journal through.</param>
-    private void RunFleet(Func<BaseJournalBackend> backend, string pyWorkerBackend, string pyReplayBackend)
+    /// <param name="csSampler">Builds a C# worker's sampler from its seed; a <see cref="RandomSampler" /> by default.</param>
+    /// <param name="pySampler">The Python expression building a worker's sampler; it may use <c>seed</c>.</param>
+    private void RunFleet(Func<BaseJournalBackend> backend, string pyWorkerBackend, string pyReplayBackend,
+        Func<int, BaseSampler>? csSampler = null, string pySampler = "optuna.samplers.RandomSampler(seed=seed)")
     {
+        csSampler ??= seed => new RandomSampler(seed);
         var seedBackend = backend();
         var seed = new JournalStorage(seedBackend);
         foreach (string name in Studies)
@@ -164,7 +188,7 @@ public class JournalMixedFleetInteropTests
                 "    try:\n" +
                 $"        backend = {pyWorkerBackend}\n" +
                 "        study = optuna.load_study(study_name=study_name, storage=optuna.storages.JournalStorage(backend),\n" +
-                "            sampler=optuna.samplers.RandomSampler(seed=seed), pruner=optuna.pruners.NopPruner())\n" +
+                $"            sampler={pySampler}, pruner=optuna.pruners.NopPruner())\n" +
                 $"        study.optimize(objective, n_trials={TrialsPerWorker})\n" +
                 "    except BaseException as e:\n" +
                 "        errors.append(repr(e))\n" +
@@ -183,7 +207,7 @@ public class JournalMixedFleetInteropTests
             try
             {
                 var study = Optuna.LoadStudy(name, new JournalStorage(workerBackend),
-                    sampler: new RandomSampler(700 + 10 * s + w), pruner: new NopPruner());
+                    sampler: csSampler(700 + 10 * s + w), pruner: new NopPruner());
                 study.Optimize(t =>
                 {
                     double x = t.SuggestFloat("x", -10, 10);

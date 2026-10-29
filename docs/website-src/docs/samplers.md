@@ -218,8 +218,9 @@ These are the documented, tested differences from Optuna:
 - **TPESampler** rides the error-function path, so its float outputs match Python only to a few ULP
   (bit-exact off that path); certain argsort ties and repeated discrete observations in the
   multivariate estimator are order-sensitive.
-- **CmaEsSampler** persists optimizer state as JSON, not Python `pickle`, so a study cannot be resumed
-  *mid-CMA* across languages; the with-margin variant is tolerance-bounded rather than bit-exact.
+- **CmaEsSampler**'s with-margin variant is tolerance-bounded rather than bit-exact. Its optimizer state
+  is Optuna's own pickle, so C# and Python workers can share one CMA-ES study in any order; see
+  [mixed fleets](storage.md#concurrency-workers-studies-and-languages-on-one-journal).
 - **GridSampler** may order not-yet-visited grid points differently under concurrency (cosmetic).
 - **NSGAIIISampler** can differ on near-tie reference-point selection; **UNDXCrossover** uses a managed
   QR and diverges for 1-D search spaces.

@@ -18,11 +18,16 @@ namespace OptunaSharp.Samplers;
 ///     <para>This sampler does not support <see cref="CategoricalDistribution" />. If the search
 ///     space includes categorical parameters they are sampled by the independent sampler.</para>
 ///
-///     <para><b>[Misaligned] optimizer state is our own JSON, not Python <c>pickle</c>.</b> Optuna
-///     stores <c>pickle.dumps(optimizer).hex()</c> in trial system attrs; OptunaSharp serializes an
-///     equivalent <see cref="CmaState" /> JSON under the same chunked <c>cma:optimizer:{i}</c> keys.
-///     A study therefore can NOT resume CMA-ES mid-optimization across the Python/C# boundary — but a
-///     pure-OptunaSharp study is bit-exact with the Python <c>cmaes</c> package for a shared seed.</para>
+///     <para><b>Optimizer state is Optuna's pickle.</b> Like Optuna, the sampler stores
+///     <c>pickle.dumps(optimizer).hex()</c> of a cmaes <c>CMA</c>, <c>SepCMA</c> or <c>CMAwM</c> under the
+///     chunked <c>cma:optimizer:{i}</c> (<c>sepcma:</c>, <c>cmawm:</c>) system attrs, written and read by
+///     <see cref="CmaPickle" />, so C# and Python workers can share one CMA-ES study in any order. A
+///     stored state is byte-identical to the one cmaes 0.13.1 stores for the same optimizer, except
+///     the <c>_funhist_values</c> entries cmaes leaves uninitialized (<c>np.empty</c>) until its first
+///     generations fill them. States written by OptunaSharp before 2026-10-29 (a <c>cma\n</c>-tagged
+///     JSON) are still read; Python cannot read those, so a study gains Python workers once a current
+///     C# worker has stored the next state. With <c>with_margin=True</c> the Python workers need
+///     cmaes 0.13.1, whose <c>CMAwM</c> state OptunaSharp reads.</para>
 /// </summary>
 /// <example>
 ///     <code>
@@ -187,7 +192,8 @@ public class CmaEsSampler : BaseSampler
         // When `with_margin=true`, bounds in discrete dimensions are handled inside `CMAwM`.
         var trans = new SearchSpaceTransform(searchSpace, transformStep: !_withMargin, transform01: true);
 
-        var optimizer = RestoreOptimizer(completedTrials) ?? InitOptimizer(trans, study.Direction, searchSpace);
+        var restoredOptimizer = RestoreOptimizer(completedTrials);
+        var optimizer = restoredOptimizer ?? InitOptimizer(trans, study.Direction, searchSpace);
 
         int nDim = (int)trans.Bounds.shape[0];
         if (optimizer.Dim != nDim)
@@ -222,8 +228,8 @@ public class CmaEsSampler : BaseSampler
 
             optimizer.Tell(solutions);
 
-            // Store optimizer.
-            string optimizerStr = SerializeOptimizer(optimizer);
+            // Store optimizer. Python pickles a restored optimizer differently from a fresh one (see CmaPickle.ToHex).
+            string optimizerStr = SerializeOptimizer(optimizer, restored: restoredOptimizer is not null);
             foreach (var (key, value) in SplitOptimizerStr(optimizerStr))
                 study.Storage.SetTrialSystemAttr(trial.TrialId, key, value);
         }
@@ -280,44 +286,48 @@ public class CmaEsSampler : BaseSampler
         return attrs;
     }
 
-    // Our optimizer-state JSON is self-describing (like Optuna's pickle): a `<tag>\n` prefix names
-    // the concrete optimizer so restore reconstructs the right type regardless of the sampler's
-    // current config — e.g. a single-dimensional `use_separable_cma=True` study stores a fallback
-    // `Cma` under the `sepcma:` prefix and must restore it as `Cma`, not `SepCma`. The JSON is written
-    // by OptimizerStateJson, which emits no newlines, so the `\n` split is unambiguous. It also encodes
-    // ±inf/NaN as named literals: the funhist records each generation's best and worst value, so one
-    // infinite objective value lands in the state, and pickle-based Optuna keeps going in that case too.
+    // The stored state is Optuna's: the hex of the optimizer's pickle, which names its own class, so restore builds
+    // the right type regardless of the sampler's current config (a single-dimensional `use_separable_cma=True` study
+    // stores a fallback CMA under the `sepcma:` prefix and must restore it as a Cma, not a SepCma). OptunaSharp
+    // before 2026-10-29 stored its own JSON instead, self-describing through a `<tag>\n` prefix and written by
+    // OptimizerStateJson, which emits no newlines and encodes ±inf/NaN as named literals. Hex never contains a
+    // newline, so the newline tells the two apart. Both keep a non-finite funhist value (one generation's best or
+    // worst), and so does pickle-based Optuna.
 
-    /// <summary>Serialize the optimizer's evolving state to our own JSON (the pickle analogue).</summary>
+    /// <summary>Serializes the optimizer as Optuna stores it: the lowercase hex of its cmaes pickle.</summary>
     /// <param name="optimizer">Optimizer whose proposal and adaptation state are persisted.</param>
-    /// <returns>A tagged JSON representation of the optimizer state; non-finite values are kept as named literals.</returns>
-    /// <exception cref="System.NotSupportedException">The optimizer implementation has no supported serialization tag.</exception>
-    private static string SerializeOptimizer(ICmaOptimizer optimizer) => optimizer switch
-    {
-        Cma c => "cma\n" + OptimizerStateJson.Serialize(c.ToState()),
-        SepCma s => "sepcma\n" + OptimizerStateJson.Serialize(s.ToState()),
-        CmaWm w => "cmawm\n" + OptimizerStateJson.Serialize(w.ToState()),
-        _ => throw new NotSupportedException($"Cannot serialize optimizer of type {optimizer.GetType().Name}."),
-    };
+    /// <param name="restored">Whether the optimizer was restored from a stored state before this tell.</param>
+    /// <returns><c>pickle.dumps(optimizer).hex()</c> of the equivalent cmaes optimizer.</returns>
+    /// <exception cref="System.NotSupportedException">The optimizer implementation has no cmaes counterpart.</exception>
+    private static string SerializeOptimizer(ICmaOptimizer optimizer, bool restored)
+        => CmaPickle.ToHex(optimizer, restored);
 
-    /// <summary>Decodes a persisted optimizer tag and reconstructs its matching state type.</summary>
-    /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
-    /// <returns>The optimizer reconstructed from the tagged state.</returns>
-    /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
-    /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type, or is the literal null.</exception>
-    /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
-    /// <exception cref="System.ArgumentOutOfRangeException">The stored text has no <c>&lt;tag&gt;\n</c> line, as a state pickled by Python Optuna does (review item M3).</exception>
+    /// <summary>
+    ///     Reconstructs a stored optimizer: Optuna's hex pickle (written by Python or by OptunaSharp), or the
+    ///     <c>&lt;tag&gt;\n</c> JSON OptunaSharp wrote before 2026-10-29.
+    /// </summary>
+    /// <param name="optimizerStr">The stored state, after chunk reassembly.</param>
+    /// <returns>The optimizer reconstructed from the state.</returns>
+    /// <exception cref="NumSharp.ValueError">
+    ///     The text is not a legacy JSON state and not hexadecimal (Python's <c>bytes.fromhex</c> message), or its
+    ///     pickle is not a cmaes optimizer state this version reads (for example a with-margin state from cmaes 0.13.0
+    ///     or older).
+    /// </exception>
+    /// <exception cref="System.Text.Json.JsonException">A legacy JSON payload is not valid JSON for its state type, or is the literal null.</exception>
+    /// <exception cref="System.ArgumentException">A legacy JSON state contains invalid optimizer constructor settings.</exception>
     private static ICmaOptimizer DeserializeOptimizer(string optimizerStr)
     {
         int nl = optimizerStr.IndexOf('\n');
-        string tag = optimizerStr[..nl];
-        string json = optimizerStr[(nl + 1)..];
+        string tag = nl < 0 ? "" : optimizerStr[..nl];
+        string json = nl < 0 ? "" : optimizerStr[(nl + 1)..];
         return tag switch
         {
             "cma" => Cma.FromState(OptimizerStateJson.Deserialize<CmaState>(json)),
             "sepcma" => SepCma.FromState(OptimizerStateJson.Deserialize<SepCmaState>(json)),
             "cmawm" => CmaWm.FromState(OptimizerStateJson.Deserialize<CmaWmState>(json)),
-            _ => throw new NotSupportedException($"Unknown optimizer state tag '{tag}'."),
+            // Anything else is Optuna's hex pickle, read as Python reads it (bytes.fromhex skips whitespace, so a
+            // newline alone does not make a legacy state).
+            _ => CmaPickle.FromHex(optimizerStr),
         };
     }
 
@@ -418,6 +428,11 @@ public class CmaEsSampler : BaseSampler
             (mean, sigma0, cov) = WarmStart.GetWarmStartMgd(sourceSolutions);
         }
 
+        // Python's sigma0 is a numpy.float64 only when it came from `np.min(...)` and survived
+        // `max(sigma0, _EPS)`, which returns the float _EPS when that is strictly larger; a user sigma0 and a warm
+        // start's `math.pow` are floats. The type changes no value; it only shapes the pickled state (see Cma).
+        bool sigmaIsNumpy = _sourceTrials == null && _sigma0 == null && !(Eps > sigma0);
+
         // Avoid ZeroDivisionError in cmaes.
         sigma0 = Math.Max(sigma0, Eps);
 
@@ -438,7 +453,8 @@ public class CmaEsSampler : BaseSampler
                     bounds: boundsArr,
                     nMaxResampling: 10 * nDim,
                     seed: (int)_cmaRng.Rng.randint(1, 2147483646),
-                    populationSize: _popsize);
+                    populationSize: _popsize,
+                    sigmaIsNumpyScalar: sigmaIsNumpy);
             }
         }
 
@@ -472,7 +488,8 @@ public class CmaEsSampler : BaseSampler
                 nMaxResampling: 10 * nDim,
                 seed: (int)_cmaRng.Rng.randint(1, 2147483646),
                 populationSize: _popsize,
-                cov: cov);
+                cov: cov,
+                sigmaIsNumpyScalar: sigmaIsNumpy);
         }
 
         int seed = (int)_cmaRng.Rng.randint(1, 2147483646);
@@ -484,7 +501,8 @@ public class CmaEsSampler : BaseSampler
             seed: seed,
             populationSize: _popsize,
             cov: cov,
-            lrAdapt: _lrAdapt);
+            lrAdapt: _lrAdapt,
+            sigmaIsNumpyScalar: sigmaIsNumpy);
     }
 
     /// <summary>

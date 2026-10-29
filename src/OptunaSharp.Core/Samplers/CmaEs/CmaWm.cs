@@ -1,13 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using NumSharp;
 using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.CmaEs;
 
 /// <summary>
 ///     CMA-ES with Margin (CMAwM) — port of the external <c>cmaes</c> package's <c>CMAwM</c> class
-///     (<c>cmaes/_cmawm.py</c>, v0.13.0), the backend Optuna's <c>CmaEsSampler(with_margin=True)</c>
+///     (<c>cmaes/_cmawm.py</c>, v0.13.0; its discrete-space description and pickled state follow v0.13.1,
+///     see <see cref="ToPyInstance" />), the backend Optuna's <c>CmaEsSampler(with_margin=True)</c>
 ///     drives. It wraps a full-covariance <see cref="Cma" /> and, on every <see cref="Tell" />, applies
 ///     a <b>margin correction</b> that lower-bounds the marginal probability of each discrete
 ///     dimension so its samples never collapse onto a single grid point (Hamano et al., GECCO 2022).
@@ -37,6 +39,11 @@ internal sealed class CmaWm : ICmaOptimizer
     private int[] _continuousIdx = Array.Empty<int>();
     private double[,] _continuousSpace = new double[0, 2];   // bounds[continuous_idx]  (n_cont × 2)
     private int _nZdim;
+    // cmaes 0.13.1's description of each discrete dimension, which its pickle stores: the grid is
+    // low + i·step for i < size (np.arange's values, with its actual step (low + step) - low).
+    private double[] _discreteSpaceLow = Array.Empty<double>();
+    private long[] _discreteSpaceSize = Array.Empty<long>();
+    private double[] _discreteSpaceStep = Array.Empty<double>();
     private double[,] _zSpace = new double[0, 0];            // (n_zdim × max_discrete) grid, NaN-filled → nanmax
     private double[,] _zLim = new double[0, 0];              // (n_zdim × max_discrete-1) midpoints, NaN-filled → nanmax
 
@@ -56,7 +63,11 @@ internal sealed class CmaWm : ICmaOptimizer
     /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
     /// <param name="cov">Initial covariance matrix, or null for the identity default.</param>
     /// <param name="margin">Minimum probability retained near discrete choices; null selects the dimension-dependent default.</param>
-    /// <exception cref="System.ArgumentException">Bounds and steps have incompatible lengths, a step is NaN, bounds are invalid, margin is nonpositive, or the underlying CMA settings are invalid.</exception>
+    /// <param name="sigmaIsNumpyScalar">
+    ///     Whether the Python caller would pass <paramref name="sigma" /> as a <c>numpy.float64</c>; passed to the inner
+    ///     <see cref="Cma" />, where it only decides the types its pickle records.
+    /// </param>
+    /// <exception cref="System.ArgumentException">Bounds and steps have incompatible lengths, a step is NaN, bounds are invalid, a discrete parameter has fewer than two choices, margin is nonpositive, or the underlying CMA settings are invalid.</exception>
     internal CmaWm(
         double[] mean,
         double sigma,
@@ -66,10 +77,11 @@ internal sealed class CmaWm : ICmaOptimizer
         int? seed = null,
         int? populationSize = null,
         double[,]? cov = null,
-        double? margin = null)
+        double? margin = null,
+        bool sigmaIsNumpyScalar = false)
     {
         // initialize `CMA` (no learning-rate adaptation — CMAwM is incompatible with lr_adapt).
-        _cma = new Cma(mean, sigma, bounds, nMaxResampling, seed, populationSize, cov);
+        _cma = new Cma(mean, sigma, bounds, nMaxResampling, seed, populationSize, cov, sigmaIsNumpyScalar: sigmaIsNumpyScalar);
         int nDim = _cma.Dim;
         int populationSizeValue = _cma.PopulationSize;
         _nMaxResampling = nMaxResampling;
@@ -89,6 +101,9 @@ internal sealed class CmaWm : ICmaOptimizer
             _a = Enumerable.Repeat(1.0, nDim).ToArray();  // harmless; unused when there are no discrete dims
             return;
         }
+        foreach (long size in _discreteSpaceSize)
+            if (size < 2)
+                throw new ArgumentException("each discrete parameter must have at least two choices");
 
         _margin = margin ?? 1.0 / (nDim * populationSizeValue);
         if (!(_margin > 0)) throw new ArgumentException("margin must be non-zero positive value.");
@@ -149,10 +164,9 @@ internal sealed class CmaWm : ICmaOptimizer
     // ---- construction helpers -----------------------------------------------------------------
 
     /// <summary>
-    ///     The <c>__init__</c> body that splits the space into discrete/continuous dimensions and
-    ///     builds the per-discrete grid (<c>z_space</c>) and its midpoints (<c>z_lim</c>), NaN-padding
-    ///     ragged rows and back-filling each with its row <c>nanmax</c>. Also seeds <c>m_z_lim_low/up</c>
-    ///     from <paramref name="mean" /> exactly as the Python constructor does.
+    ///     The <c>__init__</c> body that splits the space into discrete/continuous dimensions and describes each
+    ///     discrete one as cmaes 0.13.1 does (<c>_discrete_space_low/size/step</c>), then builds the grid from that
+    ///     description (<see cref="BuildGrid" />).
     /// </summary>
     /// <param name="bounds">Optional box with one row per decision coordinate and lower/upper bound columns.</param>
     /// <param name="steps">Quantization step per coordinate; zero identifies a continuous coordinate.</param>
@@ -170,21 +184,20 @@ internal sealed class CmaWm : ICmaOptimizer
         _discreteIdx = disc.ToArray();
         _continuousIdx = cont.ToArray();
 
-        // discrete_list[k] = np.arange(bounds[i,0], bounds[i,1] + steps[i]/2, steps[i]).
-        var discreteList = new double[_discreteIdx.Length][];
-        int maxDiscrete = 0;
+        // _discrete_space_low = bounds[idx, 0]; _discrete_space_size = ceil((high + step/2 - low) / step), the length
+        // np.arange(low, high + step/2, step) has; _discrete_space_step = low + step - low, the step np.arange
+        // actually takes. So the grid holds exactly the values cmaes <= 0.13.0 built with np.arange.
+        _discreteSpaceLow = new double[_discreteIdx.Length];
+        _discreteSpaceSize = new long[_discreteIdx.Length];
+        _discreteSpaceStep = new double[_discreteIdx.Length];
         for (int k = 0; k < _discreteIdx.Length; k++)
         {
             int i = _discreteIdx[k];
-            discreteList[k] = Arange(bounds[i, 0], bounds[i, 1] + steps[i] / 2, steps[i]);
-            maxDiscrete = Math.Max(maxDiscrete, discreteList[k].Length);
+            double low = bounds[i, 0];
+            _discreteSpaceLow[k] = low;
+            _discreteSpaceSize[k] = (long)Math.Ceiling((bounds[i, 1] + steps[i] / 2 - low) / steps[i]);
+            _discreteSpaceStep[k] = low + steps[i] - low;
         }
-
-        // discrete_space = np.full((n_zdim, max_discrete), nan); fill each row's prefix.
-        _zSpace = new double[_discreteIdx.Length, maxDiscrete];
-        for (int k = 0; k < _discreteIdx.Length; k++)
-            for (int j = 0; j < maxDiscrete; j++)
-                _zSpace[k, j] = j < discreteList[k].Length ? discreteList[k][j] : double.NaN;
 
         // continuous_space = bounds[continuous_idx]  (n_cont × 2)
         _continuousSpace = new double[_continuousIdx.Length, 2];
@@ -193,6 +206,41 @@ internal sealed class CmaWm : ICmaOptimizer
             _continuousSpace[k, 0] = bounds[_continuousIdx[k], 0];
             _continuousSpace[k, 1] = bounds[_continuousIdx[k], 1];
         }
+
+        BuildGrid(mean);
+    }
+
+    /// <summary>
+    ///     Builds the per-discrete grid (<c>z_space</c>, row <c>k</c> = <c>low + i·step</c> for <c>i &lt; size</c>) and its
+    ///     midpoints (<c>z_lim</c>), NaN-padding ragged rows and back-filling each with its row <c>nanmax</c>, from
+    ///     <c>_discrete_space_low/size/step</c>. Also seeds <c>m_z_lim_low/up</c> from <paramref name="mean" /> exactly
+    ///     as the Python constructor does.
+    /// </summary>
+    /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
+    /// <remarks>
+    ///     The padded grid is how cmaes 0.13.0 encoded and corrected (<c>searchsorted</c> over the midpoints); cmaes
+    ///     0.13.1 computes the same nearest index (lower on ties) and the same midpoints <c>(lower + upper) / 2</c> per
+    ///     dimension instead, so both give identical results on this grid.
+    /// </remarks>
+    private void BuildGrid(double[] mean)
+    {
+        var discreteList = new double[_discreteIdx.Length][];
+        int maxDiscrete = 0;
+        for (int k = 0; k < _discreteIdx.Length; k++)
+        {
+            // A size below one leaves an empty row, as np.arange gives for an empty range.
+            var row = new double[Math.Max(0, checked((int)_discreteSpaceSize[k]))];
+            for (int j = 0; j < row.Length; j++)
+                row[j] = _discreteSpaceLow[k] + j * _discreteSpaceStep[k];
+            discreteList[k] = row;
+            maxDiscrete = Math.Max(maxDiscrete, row.Length);
+        }
+
+        // discrete_space = np.full((n_zdim, max_discrete), nan); fill each row's prefix.
+        _zSpace = new double[_discreteIdx.Length, maxDiscrete];
+        for (int k = 0; k < _discreteIdx.Length; k++)
+            for (int j = 0; j < maxDiscrete; j++)
+                _zSpace[k, j] = j < discreteList[k].Length ? discreteList[k][j] : double.NaN;
 
         _nZdim = _discreteIdx.Length;   // == len(discrete_space)
         if (_nZdim == 0)
@@ -444,7 +492,111 @@ internal sealed class CmaWm : ICmaOptimizer
         }
     }
 
-    // ---- state serialization (own JSON; the pickle analogue — see CmaEsSampler) ----------------
+    // ---- state serialization -------------------------------------------------------------------
+    // ToPyInstance/FromPyInstance map this class to cmaes 0.13.1's CMAwM state, which CmaPickle writes and reads as
+    // Python's exact pickle. ToState/FromState are the JSON form stored before 2026-10-29, still read so older
+    // studies keep restoring.
+
+    /// <summary>
+    ///     Describes this optimizer as the state cmaes 0.13.1 pickles for a <c>CMAwM</c> (its instance dict, in
+    ///     <c>__init__</c>'s order), with the inner <c>CMA</c> nested, so <see cref="PythonPickle.Dumps" /> of it is the
+    ///     pickle cmaes writes for the same optimizer.
+    /// </summary>
+    /// <param name="layout">The pickle's dtype objects and whether this optimizer was restored before its last tell.</param>
+    /// <returns>The <c>cmaes._cmawm.CMAwM</c> instance description; its arrays are copies.</returns>
+    /// <remarks>
+    ///     Without discrete dimensions cmaes returns from <c>__init__</c> before setting <c>margin</c>,
+    ///     <c>m_z_lim_low</c>, <c>m_z_lim_up</c> and <c>_A</c>, so the state omits them. Every outer array is updated in
+    ///     place or rebuilt from <c>_discrete_space_low</c> (a numpy result keeps its first operand's dtype object), so
+    ///     in a restored optimizer all of them keep the dtype unpickling gave them.
+    /// </remarks>
+    internal PyInstance ToPyInstance(CmaPickleLayout layout)
+    {
+        var state = new List<KeyValuePair<string, object?>>();
+        void Add(string key, object? value) => state.Add(new(key, value));
+        Add("_cma", _cma.ToPyInstance(layout));
+        Add("_n_max_resampling", (long)_nMaxResampling);
+        Add("_discrete_idx", layout.Int64Vector(_discreteIdx));
+        Add("_discrete_space_low", layout.Vector(_discreteSpaceLow, rebuiltByTell: false));
+        Add("_discrete_space_size", layout.Int64Vector(_discreteSpaceSize));
+        Add("_discrete_space_step", layout.Vector(_discreteSpaceStep, rebuiltByTell: false));
+        Add("_continuous_idx", layout.Int64Vector(_continuousIdx));
+        Add("_continuous_space", layout.Matrix(_continuousSpace, rebuiltByTell: false));
+        Add("_n_zdim", (long)_nZdim);
+        if (_nZdim > 0)
+        {
+            Add("margin", _margin);
+            Add("m_z_lim_low", layout.Vector(_mZLimLow, rebuiltByTell: false));
+            Add("m_z_lim_up", layout.Vector(_mZLimUp, rebuiltByTell: false));
+            Add("_A", layout.Vector(_a, rebuiltByTell: false));
+        }
+        return new PyInstance("cmaes._cmawm", "CMAwM", state);
+    }
+
+    /// <summary>
+    ///     Restores an optimizer from a pickled cmaes 0.13.1 <c>CMAwM</c> state, taking every value from it (the inner
+    ///     <c>CMA</c> through <see cref="Cma.FromPyInstance" />) and building the discrete grid from its
+    ///     <c>_discrete_space_low/size/step</c>.
+    /// </summary>
+    /// <param name="state">The unpickled <c>cmaes._cmawm.CMAwM</c> instance.</param>
+    /// <returns>The restored optimizer; its random stream is unseeded, as after Python's <c>__setstate__</c>.</returns>
+    /// <exception cref="ValueError">
+    ///     The state was written by cmaes 0.13.0 or older (whose <c>CMAwM</c> keeps <c>z_space</c>/<c>z_lim</c>
+    ///     instead), or an attribute is missing, mistyped, misshapen or out of range.
+    /// </exception>
+    internal static CmaWm FromPyInstance(PyInstance state)
+    {
+        // cmaes 0.13.1 replaced the materialized z_space/z_lim grids by this triple; Python workers of one study must
+        // run one cmaes version, and OptunaSharp speaks 0.13.1's.
+        if (!state.TryGet("_discrete_space_low", out _))
+            throw new ValueError(
+                "The pickled cmaes CMAwM has no _discrete_space_low: cmaes 0.13.0 or older wrote it. OptunaSharp reads " +
+                "the CMAwM state of cmaes 0.13.1; run that version on the Python workers of a with_margin study.");
+        if (state.Get("_cma") is not PyInstance { Module: "cmaes._cma", QualName: "CMA" } inner)
+            throw new ValueError("The pickled cmaes CMAwM's _cma is not a cmaes CMA.");
+        return new CmaWm(Cma.FromPyInstance(inner), state);
+    }
+
+    /// <summary>The constructor behind <see cref="FromPyInstance" />: assigns every field from the pickled state.</summary>
+    /// <param name="cma">The inner optimizer, already restored from the state's <c>_cma</c>.</param>
+    /// <param name="s">The unpickled <c>cmaes._cmawm.CMAwM</c> instance.</param>
+    /// <exception cref="ValueError">An attribute is missing, mistyped, misshapen or out of range.</exception>
+    private CmaWm(Cma cma, PyInstance s)
+    {
+        _cma = cma;
+        int nDim = cma.Dim;
+        _nMaxResampling = CmaPickle.Int(s, "_n_max_resampling");
+        int nZdim = CmaPickle.Int(s, "_n_zdim");
+        if (nZdim < 0 || nZdim > nDim)
+            throw new ValueError($"The pickled cmaes CMAwM has n_zdim {nZdim} for {nDim} dimensions.");
+        _discreteIdx = CmaPickle.IndexVector(s, "_discrete_idx", nZdim, nDim);
+        _discreteSpaceLow = CmaPickle.Vector(s, "_discrete_space_low", nZdim);
+        _discreteSpaceSize = CmaPickle.Int64Vector(s, "_discrete_space_size", nZdim);
+        _discreteSpaceStep = CmaPickle.Vector(s, "_discrete_space_step", nZdim);
+        // The grid is materialized here (see BuildGrid), so a size must fit an array; cmaes requires two choices.
+        foreach (long size in _discreteSpaceSize)
+            if (size < 2 || size > int.MaxValue)
+                throw new ValueError($"The pickled cmaes CMAwM has a discrete dimension with {size} choices.");
+        _continuousIdx = CmaPickle.IndexVector(s, "_continuous_idx", nDim - nZdim, nDim);
+        _continuousSpace = CmaPickle.Matrix(s, "_continuous_space", nDim - nZdim, 2);
+
+        // The legacy JSON form (ToState) keeps per-dimension steps; on Optuna's [0, 1] space the actual step equals
+        // the requested one.
+        _steps = new double[nDim];
+        for (int k = 0; k < nZdim; k++)
+            _steps[_discreteIdx[k]] = _discreteSpaceStep[k];
+
+        BuildGrid(cma.Mean);
+        _a = Enumerable.Repeat(1.0, nDim).ToArray();
+        if (nZdim > 0)
+        {
+            // The evolving margin state replaces what BuildGrid seeded from the mean.
+            _margin = CmaPickle.Float(s, "margin");
+            _mZLimLow = CmaPickle.Vector(s, "m_z_lim_low", nZdim);
+            _mZLimUp = CmaPickle.Vector(s, "m_z_lim_up", nZdim);
+            _a = CmaPickle.Vector(s, "_A", nDim);
+        }
+    }
 
     /// <summary>Captures constructor settings and evolving optimizer arrays in a serializable state object.</summary>
     /// <returns>A serializable snapshot of optimizer settings and evolving state.</returns>
@@ -512,21 +664,6 @@ internal sealed class CmaWm : ICmaOptimizer
     }
 
     // ---- small numpy-shaped helpers -----------------------------------------------------------
-
-    /// <summary>numpy <c>np.arange(start, stop, step)</c> for floats — length <c>ceil((stop-start)/step)</c>,
-    /// element <c>start + i*step</c> (verified bit-identical to numpy over the grids used).</summary>
-    /// <param name="start">Inclusive beginning of the arithmetic progression.</param>
-    /// <param name="stop">Exclusive upper endpoint of the arithmetic progression.</param>
-    /// <param name="step">Positive spacing between adjacent quantized numerical values.</param>
-    /// <returns>Values beginning at the lower endpoint and strictly below the upper endpoint.</returns>
-    private static double[] Arange(double start, double stop, double step)
-    {
-        int n = (int)Math.Ceiling((stop - start) / step);
-        if (n < 0) n = 0;
-        var r = new double[n];
-        for (int i = 0; i < n; i++) r[i] = start + i * step;
-        return r;
-    }
 
     /// <summary>numpy <c>np.searchsorted(a[row], v, side='left')</c> — leftmost index <c>i</c> with
     /// <c>a[i-1] &lt; v &lt;= a[i]</c> (the count of elements strictly less than <paramref name="v" />).</summary>

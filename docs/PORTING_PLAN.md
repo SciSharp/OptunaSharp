@@ -1432,5 +1432,5 @@ post-v1) framework integration adapters — the `optuna.integration` analog.
 | Journal-file format drift across Optuna versions | Tier N interop breaks on their upgrades | format pinned to Optuna release; interop gate runs against pinned + latest |
 | SQLAlchemy schema drift | Tier X interop breaks | schema pinned to alembic revision; same dual-version gate |
 | Python-equality of `CategoricalChoice` edge cases | silent wrong index → wrong param | dedicated property tests (`True/1`, `1.0/1`, `nan`, mixed lists) from 0.2 |
-| Pickle-serialized sampler state (CMA-ES attrs) | cross-language studies can't resume mid-CMA | own JSON state, `[Misaligned]`, migration notes |
+| Pickle-serialized sampler state (CMA-ES attrs) | cross-language studies can't resume mid-CMA | **RESOLVED 2026-10-29** (review item P3-2) — `CmaEsSampler` writes and reads Optuna's own pickle (`Internal/PythonPickle` + `Samplers/CmaEs/CmaPickle`): byte-identical to cmaes 0.13.1's states except the `np.empty` funhist entries, pinned by the committed `cma_pickle_oracle.json` and live mixed fleets; the pre-2026-10-29 JSON is still read |
 | `frompyfunc`/object-array sites | none — audited: 1 site (NSGA-II crossover) + 1 intermediate | plain C# arrays (dtype audit, 2026-08-29) |

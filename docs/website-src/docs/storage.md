@@ -240,6 +240,20 @@ trial finishes, and Python replays the journal exactly as C# does.
 | Concurrent same-name `CreateStudy(..., loadIfExists: true)` | One study is created; every caller loads it. Without `loadIfExists`, the others get `DuplicatedStudyError` |
 | Concurrent workers popping `EnqueueTrial` trials | Each queued trial runs exactly once |
 
+C# and Python workers can also share a sampler's state. `CmaEsSampler` keeps its optimizer in trial
+system attributes as Optuna does, `pickle.dumps(optimizer).hex()` of a cmaes `CMA`, `SepCMA` or
+`CMAwM`. Each language continues the state the other stored. Two workers taking turns on one study
+produce exactly the trials two Python workers produce from the same seeds, and the stored states are
+byte-identical to cmaes 0.13.1's. The exception is the history entries cmaes leaves uninitialized
+(`np.empty`) until its first generations fill them. Two conditions apply:
+
+- **`with_margin=True`.** The Python workers need cmaes 0.13.1, which changed `CMAwM`'s state; an
+  older `CMAwM` state raises a `ValueError` naming the version. `CMA` and `SepCMA` states are the same
+  in every cmaes Optuna supports (0.12.0 and later).
+- **Studies started before 2026-10-29.** OptunaSharp stored its own JSON there, which a Python worker
+  cannot read (`ValueError: non-hexadecimal number found in fromhex()`). C# still reads it, and stores a
+  pickle at its next generation; Python workers can join from then on.
+
 What each layer guarantees within one process:
 
 - **Sampler and pruner.** Every call a study makes into its sampler (sample, infer, before/after trial,

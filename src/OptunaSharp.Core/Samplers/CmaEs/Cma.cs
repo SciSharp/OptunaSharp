@@ -76,6 +76,14 @@ internal class Cma : ICmaOptimizer
     private readonly int _funhistTerm;
     private readonly double[] _funhistValues;
 
+    // Python's type of the scalars whose type cmaes' arithmetic decides (numpy.float64 or float). A pickle records
+    // the type, so these are tracked to keep a state OptunaSharp pickles byte-identical to the one cmaes pickles for
+    // the same run (see ToPyInstance). The values are unaffected.
+    private readonly bool _tolxIsNumpy;
+    private bool _sigmaIsNumpy;
+    private bool _etaMeanIsNumpy;
+    private bool _etaSigmaIsNumpy;
+
     /// <summary>Initializes a Gaussian proposal, evolution paths, and covariance learning rates.</summary>
     /// <param name="mean">Initial or current proposal center in transformed coordinates.</param>
     /// <param name="sigma">Initial positive global proposal standard deviation.</param>
@@ -85,6 +93,13 @@ internal class Cma : ICmaOptimizer
     /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
     /// <param name="cov">Initial covariance matrix, or null for the identity default.</param>
     /// <param name="lrAdapt">Whether to adapt mean and covariance learning rates from their measured signal-to-noise ratios.</param>
+    /// <param name="sigmaIsNumpyScalar">
+    ///     Whether the Python caller would pass <paramref name="sigma" /> as a <c>numpy.float64</c> rather than a
+    ///     <c>float</c>. It changes nothing numerically; it only decides the type the pickled <c>_tolx</c> (and the
+    ///     untold <c>_sigma</c>) get, so a pickled state matches Python's byte for byte. Optuna's default
+    ///     <c>sigma0 = np.min(...)</c> is numpy; a user <c>sigma0</c>, a warm start's <c>math.pow</c> and the
+    ///     <c>_EPS</c> fallback are floats.
+    /// </param>
     /// <exception cref="System.ArgumentException">The scale is nonpositive, the mean is empty or exceeds the supported magnitude, population size is nonpositive, or covariance shape differs from the decision dimension.</exception>
     internal Cma(
         double[] mean,
@@ -94,7 +109,8 @@ internal class Cma : ICmaOptimizer
         int? seed = null,
         int? populationSize = null,
         double[,]? cov = null,
-        bool lrAdapt = false)
+        bool lrAdapt = false,
+        bool sigmaIsNumpyScalar = false)
     {
         if (sigma <= 0) throw new ArgumentException("sigma must be non-zero positive value");
         foreach (double m in mean)
@@ -198,6 +214,11 @@ internal class Cma : ICmaOptimizer
         _tolx = 1e-12 * sigma;
         _funhistTerm = 10 + (int)Math.Ceiling(30.0 * nDim / popsize);
         _funhistValues = new double[_funhistTerm * 2];
+
+        // `self._sigma = sigma` and `self._tolx = 1e-12 * sigma` take sigma's type; `_eta_mean`/`_eta_Sigma` start
+        // as the float literal 1.0.
+        _tolxIsNumpy = sigmaIsNumpyScalar;
+        _sigmaIsNumpy = sigmaIsNumpyScalar;
     }
 
     /// <summary>Number of numerical decision coordinates.</summary>
@@ -251,12 +272,13 @@ internal class Cma : ICmaOptimizer
     public void ReseedRng(int seed) => _rng.seed((uint)seed);
 
     // ---- state serialization ------------------------------------------------------------------
-    // Optuna pickles the optimizer into system_attrs; we serialize our OWN JSON instead (pickle is
-    // a non-goal — [Misaligned], no cross-language mid-CMA resume; see CmaEsSampler). The readonly
-    // configuration (weights, learning rates, tolerances, …) is a pure function of the constructor
-    // inputs, so restore reruns the constructor and overwrites only the evolving state — no field
-    // is re-derived by hand. The RNG is not persisted (Optuna drops it too); the sampler reseeds
-    // the optimizer every trial before ask().
+    // Optuna pickles the optimizer into system_attrs, and so does OptunaSharp: ToPyInstance/FromPyInstance
+    // below map this class to cmaes' CMA state, which CmaPickle writes and reads as Python's exact pickle, so
+    // C# and Python workers can share one CMA-ES study. ToState/FromState are the JSON form OptunaSharp stored
+    // before 2026-10-29, still read so older studies keep restoring. For that JSON the readonly configuration
+    // (weights, learning rates, tolerances, …) is a pure function of the constructor inputs, so restore reruns
+    // the constructor and overwrites only the evolving state. The RNG is not persisted (Optuna drops it too);
+    // the sampler reseeds the optimizer every trial before ask().
 
     /// <summary>Captures constructor settings and evolving optimizer arrays in a serializable state object.</summary>
     /// <returns>A serializable snapshot of optimizer settings and evolving state.</returns>
@@ -294,8 +316,10 @@ internal class Cma : ICmaOptimizer
     /// <exception cref="System.ArgumentException">Stored constructor settings or population dimensions are rejected when the optimizer is recreated.</exception>
     internal static Cma FromState(CmaState s)
     {
+        // The JSON never recorded Python types. The sampler's default sigma0 (np.min) is numpy, and the types only
+        // shape the pickle this optimizer is stored as next, never a value.
         var cma = new Cma(new double[s.NDim], s.Sigma0, FromJagged(s.Bounds), s.NMaxResampling,
-            seed: null, populationSize: s.Popsize, cov: null, lrAdapt: s.LrAdapt);
+            seed: null, populationSize: s.Popsize, cov: null, lrAdapt: s.LrAdapt, sigmaIsNumpyScalar: true);
         cma.RestoreEvolvingState(s);
         return cma;
     }
@@ -322,6 +346,165 @@ internal class Cma : ICmaOptimizer
             _etaMean = s.EtaMean;
             _etaSigma = s.EtaSigma;
         }
+        // The types cmaes' tell would have given (see Tell): numpy after a tell, except a value its clamp replaced
+        // by the float bound. A stored state has always been told.
+        if (s.G > 0)
+            _sigmaIsNumpy = s.Sigma != SigmaMax;
+        _etaMeanIsNumpy = _lrAdapt && s.EtaMean != 1.0;
+        _etaSigmaIsNumpy = _lrAdapt && s.EtaSigma != 1.0;
+    }
+
+    /// <summary>
+    ///     Describes this optimizer as the state cmaes 0.13.1's <c>CMA.__getstate__</c> returns, attribute for attribute,
+    ///     with Python's types and numpy's dtype sharing, so <see cref="PythonPickle.Dumps" /> of it is the pickle
+    ///     cmaes writes for the same optimizer.
+    /// </summary>
+    /// <param name="layout">
+    ///     The pickle's dtype objects and whether this optimizer was restored from a stored state before its last tell,
+    ///     which decides where <c>_c_1d</c> goes and which arrays keep the dtype unpickling gave them.
+    /// </param>
+    /// <returns>The <c>cmaes._cma.CMA</c> instance description; its arrays are copies.</returns>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Key order.</b> <c>__getstate__</c> writes the covariance as <c>_c_1d</c> (the upper triangle) where
+    ///         <c>_C</c> sits in the instance dict: after <c>_mean</c> in a fresh optimizer, but last in a restored one,
+    ///         because <c>__setstate__</c> re-adds <c>_C</c> after every other key.
+    ///     </para>
+    ///     <para>
+    ///         <b>Types.</b> <c>_mu_eff</c>, <c>_cc</c>, <c>_c1</c>, <c>_cmu</c>, <c>_c_sigma</c> and <c>_d_sigma</c> are
+    ///         numpy scalars (they come from <c>np.sum</c>); <c>_chi_n</c>, the learning-rate constants, <c>_Vmean</c>,
+    ///         <c>_VSigma</c> and the fixed tolerances are floats; <c>_sigma</c>, <c>_tolx</c> and the <c>_eta_*</c>
+    ///         rates follow the tracked types.
+    ///     </para>
+    /// </remarks>
+    internal PyInstance ToPyInstance(CmaPickleLayout layout)
+    {
+        var state = new List<KeyValuePair<string, object?>>();
+        void Add(string key, object? value) => state.Add(new(key, value));
+
+        // Rebuilt by every tell (a new array on numpy's builtin dtype): _p_sigma, _pc, the covariance and, with
+        // learning-rate adaptation, the E statistics. Everything else is updated in place or never touched, so in a
+        // restored optimizer it keeps the dtype object unpickling created.
+        NpArray c1d = layout.Vector(CmaPickle.CompressSymmetric(_c), rebuiltByTell: true);
+        Add("_n_dim", (long)_nDim);
+        Add("_popsize", (long)_popsize);
+        Add("_mu", (long)_mu);
+        Add("_mu_eff", layout.Scalar(_muEff));
+        Add("_cc", layout.Scalar(_cc));
+        Add("_c1", layout.Scalar(_c1));
+        Add("_cmu", layout.Scalar(_cmu));
+        Add("_c_sigma", layout.Scalar(_cSigma));
+        Add("_d_sigma", layout.Scalar(_dSigma));
+        Add("_cm", CmaPickle.PyNumber(_cm));
+        Add("_chi_n", _chiN);
+        Add("_weights", layout.Vector(_weights, rebuiltByTell: false));
+        Add("_p_sigma", layout.Vector(_pSigma, rebuiltByTell: true));
+        Add("_pc", layout.Vector(_pc, rebuiltByTell: true));
+        Add("_mean", layout.Vector(_mean, rebuiltByTell: false));
+        if (!layout.Restored)
+            Add("_c_1d", c1d);
+        Add("_sigma", layout.Float(_sigma, _sigmaIsNumpy));
+        // Tell clears the eigendecomposition cache, so a stored state has None here; a state pickled between an ask
+        // and the next tell carries numpy's eigh results.
+        Add("_D", _d is null ? null : layout.Vector(_d, rebuiltByTell: true));
+        Add("_B", _b is null ? null : layout.Matrix(_b, rebuiltByTell: true));
+        Add("_bounds", _bounds is null ? null : layout.Matrix(_bounds, rebuiltByTell: false));
+        Add("_n_max_resampling", (long)_nMaxResampling);
+        Add("_g", (long)_g);
+        Add("_lr_adapt", _lrAdapt);
+        Add("_alpha", _alpha);
+        Add("_beta_mean", _betaMean);
+        Add("_beta_Sigma", _betaSigma);
+        Add("_gamma", _gamma);
+        Add("_Emean", layout.Matrix(_eMean, rebuiltByTell: _lrAdapt));
+        Add("_ESigma", layout.Matrix(_eSigma, rebuiltByTell: _lrAdapt));
+        Add("_Vmean", _vMean);
+        Add("_VSigma", _vSigma);
+        Add("_eta_mean", layout.Float(_etaMean, _etaMeanIsNumpy));
+        Add("_eta_Sigma", layout.Float(_etaSigma, _etaSigmaIsNumpy));
+        Add("_tolx", layout.Float(_tolx, _tolxIsNumpy));
+        Add("_tolxup", _tolxup);
+        Add("_tolfun", _tolfun);
+        Add("_tolconditioncov", _tolconditioncov);
+        Add("_funhist_term", (long)_funhistTerm);
+        Add("_funhist_values", layout.Vector(_funhistValues, rebuiltByTell: false));
+        if (layout.Restored)
+            Add("_c_1d", c1d);
+        return new PyInstance("cmaes._cma", "CMA", state);
+    }
+
+    /// <summary>
+    ///     Restores an optimizer from a pickled cmaes <c>CMA</c> state, taking every value from the state, the
+    ///     configuration included, so a state Python wrote continues exactly as Python would continue it.
+    /// </summary>
+    /// <param name="state">The unpickled <c>cmaes._cma.CMA</c> instance.</param>
+    /// <returns>The restored optimizer; its random stream is unseeded, as after Python's <c>__setstate__</c>.</returns>
+    /// <exception cref="ValueError">
+    ///     The state lacks an attribute of cmaes 0.13.1's <c>CMA</c>, or an attribute has the wrong type or shape.
+    /// </exception>
+    internal static Cma FromPyInstance(PyInstance state) => new(state);
+
+    /// <summary>The constructor behind <see cref="FromPyInstance" />: assigns every field from the pickled state.</summary>
+    /// <param name="s">The unpickled <c>cmaes._cma.CMA</c> instance.</param>
+    /// <exception cref="ValueError">An attribute is missing, mistyped or misshapen.</exception>
+    private Cma(PyInstance s)
+    {
+        _nDim = CmaPickle.Int(s, "_n_dim");
+        _popsize = CmaPickle.Int(s, "_popsize");
+        if (_nDim <= 0 || _popsize <= 0)
+            throw new ValueError($"The pickled cmaes CMA has n_dim {_nDim} and popsize {_popsize}; both must be positive.");
+        _mu = CmaPickle.Int(s, "_mu");
+        _muEff = CmaPickle.Float(s, "_mu_eff");
+        _cc = CmaPickle.Float(s, "_cc");
+        _c1 = CmaPickle.Float(s, "_c1");
+        _cmu = CmaPickle.Float(s, "_cmu");
+        _cSigma = CmaPickle.Float(s, "_c_sigma");
+        _dSigma = CmaPickle.Float(s, "_d_sigma");
+        _cm = CmaPickle.Float(s, "_cm");
+        _chiN = CmaPickle.Float(s, "_chi_n");
+        _weights = CmaPickle.Vector(s, "_weights", _popsize);
+        _pSigma = CmaPickle.Vector(s, "_p_sigma", _nDim);
+        _pc = CmaPickle.Vector(s, "_pc", _nDim);
+        _mean = CmaPickle.Vector(s, "_mean", _nDim);
+        // __setstate__ mirrors the stored upper triangle into both halves, so the covariance is exactly symmetric.
+        _c = CmaPickle.DecompressSymmetric(CmaPickle.Vector(s, "_c_1d", _nDim * (_nDim + 1) / 2), _nDim);
+        _sigma = CmaPickle.Float(s, "_sigma");
+        _sigmaIsNumpy = CmaPickle.IsNumpy(s, "_sigma");
+        _d = CmaPickle.OptionalVector(s, "_D", _nDim);
+        _b = CmaPickle.OptionalMatrix(s, "_B", _nDim, _nDim);
+        // Both halves of the cache or neither: EigenDecomposition trusts it only when both are present.
+        if (_d is null || _b is null)
+        {
+            _d = null;
+            _b = null;
+        }
+        _bounds = CmaPickle.OptionalMatrix(s, "_bounds", _nDim, 2);
+        _nMaxResampling = CmaPickle.Int(s, "_n_max_resampling");
+        _g = CmaPickle.Int(s, "_g");
+        _rng = np.random.RandomState();
+        _lrAdapt = CmaPickle.Bool(s, "_lr_adapt");
+        _alpha = CmaPickle.Float(s, "_alpha");
+        _betaMean = CmaPickle.Float(s, "_beta_mean");
+        _betaSigma = CmaPickle.Float(s, "_beta_Sigma");
+        _gamma = CmaPickle.Float(s, "_gamma");
+        _eMean = CmaPickle.Matrix(s, "_Emean", _nDim, 1);
+        _eSigma = CmaPickle.Matrix(s, "_ESigma", _nDim * _nDim, 1);
+        _vMean = CmaPickle.Float(s, "_Vmean");
+        _vSigma = CmaPickle.Float(s, "_VSigma");
+        _etaMean = CmaPickle.Float(s, "_eta_mean");
+        _etaMeanIsNumpy = CmaPickle.IsNumpy(s, "_eta_mean");
+        _etaSigma = CmaPickle.Float(s, "_eta_Sigma");
+        _etaSigmaIsNumpy = CmaPickle.IsNumpy(s, "_eta_Sigma");
+        _tolx = CmaPickle.Float(s, "_tolx");
+        _tolxIsNumpy = CmaPickle.IsNumpy(s, "_tolx");
+        _tolxup = CmaPickle.Float(s, "_tolxup");
+        _tolfun = CmaPickle.Float(s, "_tolfun");
+        _tolconditioncov = CmaPickle.Float(s, "_tolconditioncov");
+        _funhistTerm = CmaPickle.Int(s, "_funhist_term");
+        _funhistValues = CmaPickle.Vector(s, "_funhist_values", 2 * _funhistTerm);
+        // `_tolx = 1e-12 * sigma0` is all a pickle keeps of the initial sigma. Only the legacy JSON form (ToState)
+        // reads _sigma0, so the inexact inverse is harmless.
+        _sigma0 = _tolx / 1e-12;
     }
 
     /// <summary>Sample a parameter.</summary>
@@ -482,6 +665,9 @@ internal class Cma : ICmaOptimizer
 
         double normPSigma = LinAlg.Norm(_pSigma);
         _sigma *= Math.Exp((_cSigma / _dSigma) * (normPSigma / _chiN - 1));
+        // `sigma *= np.exp(...)` makes it numpy; Python's `min(sigma, _SIGMA_MAX)` returns the float bound only when
+        // the bound is strictly smaller (a NaN sigma stays numpy, as min() keeps its first argument then).
+        _sigmaIsNumpy = !(SigmaMax < _sigma);
         _sigma = Math.Min(_sigma, SigmaMax);
 
         // Covariance matrix adaptation.
@@ -589,10 +775,14 @@ internal class Cma : ICmaOptimizer
 
         // update learning rate
         double beforeEtaMean = _etaMean;
+        bool beforeEtaMeanIsNumpy = _etaMeanIsNumpy;
         double relSnrMean = Clip(hatSnrMean / _alpha / _etaMean - 1, -1, 1);
         _etaMean *= Math.Exp(Math.Min(_gamma * _etaMean, _betaMean) * relSnrMean);
         double relSnrSigma = Clip(hatSnrSigma / _alpha / _etaSigma - 1, -1, 1);
         _etaSigma *= Math.Exp(Math.Min(_gamma * _etaSigma, _betaSigma) * relSnrSigma);
+        // `eta * np.exp(...)` is numpy; `min(eta, 1.0)` returns the float 1.0 only when it is strictly smaller.
+        _etaMeanIsNumpy = !(1.0 < _etaMean);
+        _etaSigmaIsNumpy = !(1.0 < _etaSigma);
         _etaMean = Math.Min(_etaMean, 1.0);
         _etaSigma = Math.Min(_etaSigma, 1.0);
 
@@ -609,11 +799,14 @@ internal class Cma : ICmaOptimizer
         double logEigSum = 0;
         for (int i = 0; i < _nDim; i++) logEigSum += Math.Log(eigs[i]);  // Python: sum([...]) sequential
         _sigma = Math.Exp(logEigSum / 2.0 / _nDim);
+        _sigmaIsNumpy = !(SigmaMax < _sigma);  // np.exp of a numpy sum, then min() as in Tell
         _sigma = Math.Min(_sigma, SigmaMax);
         _c = DivideScalar(sigmaNew, Math.Pow(_sigma, 2));  // `Sigma / sigma**2` elementwise divide
 
         // step-size correction
         _sigma *= beforeEtaMean / _etaMean;
+        // A product is numpy when either operand is: sigma, or the ratio of the two eta values.
+        _sigmaIsNumpy |= beforeEtaMeanIsNumpy || _etaMeanIsNumpy;
     }
 
     /// <summary>Checks numerical and progress criteria that indicate the current optimizer has converged or stalled.</summary>

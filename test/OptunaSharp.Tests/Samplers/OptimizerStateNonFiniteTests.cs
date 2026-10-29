@@ -13,6 +13,7 @@ namespace OptunaSharp.Tests.Samplers;
 ///     later ask of a study fail for the samplers that persist their optimizer as JSON, because
 ///     System.Text.Json's default options refuse to write non-finite doubles. Optuna pickles the same
 ///     state and keeps going, so a diverged run that reports <c>inf</c> must not end the study here either.
+///     (Since 2026-10-29 the CMA-ES family stores Optuna's pickle itself; it is still covered here, end to end.)
 ///     <para>Each sampler runs long enough for the infinite values to be told to its optimizer and for the
 ///     resulting state to be written to, and restored from, the trial system attributes several times.</para>
 /// </summary>
@@ -117,11 +118,33 @@ public class OptimizerStateNonFiniteTests
             "an infinite objective value must not make any later ask or tell fail");
         if (stateHoldsFitness)
         {
-            study.Trials
-                .SelectMany(t => t.SystemAttrs.Values.OfType<string>())
-                .Should().Contain(s => s.Contains("Infinity"),
-                    "the optimizer state written after the infinite trials must carry them as named literals");
+            study.Trials.Should().Contain(t => StoredStateHoldsInfinity(t, samplerName),
+                "the optimizer state written after the infinite trials must carry them");
         }
+    }
+
+    /// <summary>
+    ///     Whether a trial's stored optimizer state holds an infinite fitness value. The JSON states keep it as a named
+    ///     literal; the CMA-ES family stores Optuna's pickle instead (review item P3-2), whose <c>_funhist_values</c>
+    ///     array keeps it as an IEEE value, so those states are decoded and that array is inspected.
+    /// </summary>
+    /// <param name="trial">A finished trial.</param>
+    /// <param name="samplerName">The DataRow sampler name.</param>
+    /// <returns>True when the trial stored a state that holds +inf or -inf.</returns>
+    private static bool StoredStateHoldsInfinity(FrozenTrial trial, string samplerName)
+    {
+        string? prefix = samplerName switch { "cma" => "cma:", "sepcma" => "sepcma:", "cmawm" => "cmawm:", _ => null };
+        if (prefix is null)
+            return trial.SystemAttrs.Values.OfType<string>().Any(s => s.Contains("Infinity"));
+        int chunks = trial.SystemAttrs.Keys.Count(k => k.StartsWith(prefix + "optimizer:", StringComparison.Ordinal));
+        if (chunks == 0)
+            return false;
+        string hex = string.Concat(Enumerable.Range(0, chunks).Select(i => (string)trial.SystemAttrs[$"{prefix}optimizer:{i}"]!));
+        var state = (PyInstance)PythonPickle.Loads(CmaPickle.FromHexString(hex))!;
+        // CMAwM keeps the funhist on its inner CMA.
+        if (state.TryGet("_cma", out var inner))
+            state = (PyInstance)inner!;
+        return ((NpArray)state.Get("_funhist_values")!).Doubles!.Any(double.IsInfinity);
     }
 
     /// <summary>Builds the seeded sampler variant named by a test row.</summary>
