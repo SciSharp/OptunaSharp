@@ -233,7 +233,9 @@ def main():
               f"sizes {[len(p['hex']) // 2 for p in pickles[:keep]]}")
     oracle["protocol5_cases"] = protocol5_cases(oracle["variants"])
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cma_pickle_oracle.json")
-    with open(path, "w") as f:
+    # LF on every OS, as the repository stores text (.gitattributes eol=lf).
+    with open(path, "w", newline="
+") as f:
         json.dump(oracle, f, indent=1)
     print("wrote", path)
 
