@@ -244,8 +244,9 @@ public static class RedisUrl
     ///     next to a <c>credential_provider</c>; redis-py's, Python's or the server's messages.
     /// </exception>
     /// <exception cref="TypeError">
-    ///     An argument the connection class does not take, <c>self</c>, or a text value where redis-py calls a class
-    ///     (<c>connection_class</c> on <c>redis://</c>, <c>parser_class</c>) or needs a <c>DriverInfo</c>.
+    ///     An argument the connection class does not take, <c>self</c>, a text value where redis-py calls a class
+    ///     (<c>connection_class</c> on <c>redis://</c>, <c>parser_class</c>) or needs a <c>DriverInfo</c>, or an
+    ///     <c>ssl_keyfile</c> without an <c>ssl_certfile</c> (<c>certfile should be a valid filesystem path</c>).
     /// </exception>
     /// <exception cref="OverflowException">An infinite or astronomically large timeout, or a TLS version beyond a C long; Python's messages.</exception>
     /// <exception cref="NotSupportedException">An argument that takes a Python object, a non-UTF-8 encoding, or a TLS setting no .NET client offers.</exception>
@@ -416,6 +417,11 @@ public static class RedisUrl
     /// <exception cref="ValueError">A port outside 1–65535 from <c>?port=</c>, a NaN or negative timeout, an unknown TLS version, both OCSP modes, a client name the server refuses, or a database index outside 0–2147483647.</exception>
     /// <exception cref="OverflowException">A timeout of 2⁶³ nanoseconds or more, or a TLS version beyond a C long.</exception>
     /// <exception cref="NotSupportedException">A zero timeout, which makes a Python socket non-blocking.</exception>
+    /// <exception cref="TypeError">
+    ///     <c>rediss://</c> with an <c>ssl_keyfile</c> but no <c>ssl_certfile</c>: redis-py calls
+    ///     <c>load_cert_chain(certfile=None, …)</c>, which the <c>ssl</c> module refuses (<c>certfile should be a valid
+    ///     filesystem path</c>).
+    /// </exception>
     private static RedisEndpoint Build(Kwargs kwargs, bool unix, bool ssl)
     {
         int port = 6379;
@@ -429,6 +435,11 @@ public static class RedisUrl
         }
         double connectTimeout = Timeout("socket_connect_timeout", kwargs.Get("socket_connect_timeout"));
         double socketTimeout = Timeout("socket_timeout", kwargs.Get("socket_timeout"));
+
+        // _wrap_socket_with_ssl loads the client certificate ("if self.certfile or self.keyfile") before it sets the
+        // TLS version, and the ssl module refuses a key without a certificate file.
+        if (ssl && kwargs.Get("ssl_certfile") is null && Truthy(kwargs.Get("ssl_keyfile")))
+            throw new TypeError("certfile should be a valid filesystem path");
 
         int? minVersion = null;
         if (ssl && kwargs.Get("ssl_min_version") is BigInteger version)
@@ -518,6 +529,12 @@ public static class RedisUrl
     /// <summary>redis-py's <c>to_bool</c> for a non-empty value: <c>0 F FALSE N NO</c> (any case) are false, everything else true.</summary>
     /// <param name="value">The query value.</param>
     /// <returns>The boolean.</returns>
+    /// <remarks>
+    ///     Python's <c>str.upper()</c> maps more characters than <see cref="string.ToUpperInvariant" /> (<c>ı</c>,
+    ///     and full mappings such as <c>ß</c> → <c>SS</c>), but none of those can produce one of these five ASCII
+    ///     words: the only non-ASCII characters whose upper case lands on their letters are <c>ſ</c> → <c>S</c>, which
+    ///     both map, and ligatures such as <c>ﬂ</c> → <c>FL</c>, which no word contains. So the comparison is exact.
+    /// </remarks>
     private static bool ToBool(string value) => value.ToUpperInvariant() is not ("0" or "F" or "FALSE" or "N" or "NO");
 
     /// <summary>redis-py's <c>parse_ssl_verify_flags</c>: <c>[A, B]</c> or <c>A,B</c>, each a member of <c>ssl.VerifyFlags</c>.</summary>

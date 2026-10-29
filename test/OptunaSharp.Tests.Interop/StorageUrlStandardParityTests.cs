@@ -97,6 +97,9 @@ public class StorageUrlStandardParityTests : OptunaInteropTestBase
     /// <returns>The canonical outcome.</returns>
     private static string Failure(Exception e) => e switch
     {
+        // Python's UnicodeDecodeError and UnicodeEncodeError are ValueErrors; they report their own names.
+        UnicodeDecodeError => $"UnicodeDecodeError|{e.Message}",
+        UnicodeEncodeError => $"UnicodeEncodeError|{e.Message}",
         ValueError => $"ValueError|{e.Message}",
         TypeError => $"TypeError|{e.Message}",
         OverflowException => $"OverflowError|{e.Message}",
@@ -226,6 +229,12 @@ public class StorageUrlStandardParityTests : OptunaInteropTestBase
         "postgresql://u:p@h/db?target_session_attrs=read-write&load_balance_hosts=random",
         "postgresql://u:p@h/db?client_encoding=utf8",
         "postgresql://u:p@h/db?dsn=host%3Dother%20port%3D6000",
+        "postgresql://u@h/db?dsn=postgresql%3A%2F%2Fx%3A5%2Fy%3Fsslmode%3Drequire",
+        "postgresql:///?dsn=postgresql%3A%2F%2Fa%40x%3A5%2Cz%3A6%2Fy%3Fapplication_name%3Dq%2520r",
+        "postgresql:///?dsn=postgresql%3A%2F%2F%5B%3A%3A1%5D%3A7%2Fd%3Fssl%3Dtrue",
+        "postgresql:///?dsn=postgresql%3A%2F%2Fh%2Fd%3Fbogus%3D1",
+        "postgresql:///?dsn=postgresql%3A%2F%2Fh%2F%25ff",
+        "postgresql://u@h/db?dsn=a&dsn=b",
         "postgresql://u:p@h/db?requiressl=1",
         "postgresql://u:p@h/{SCHEMA_VERSION}",
         "postgres://u:p@h/db",

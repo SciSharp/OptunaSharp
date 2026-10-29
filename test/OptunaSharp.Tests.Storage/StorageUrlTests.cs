@@ -242,4 +242,23 @@ public class StorageUrlTests
         failure.Should().NotBeAssignableTo<NotSupportedException>()
             .And.NotBeAssignableTo<ArgumentException>("the URL is valid and its package is referenced");
     }
+
+    /// <summary>
+    ///     <c>sqlite3.connect</c> compares the isolation level with <c>sqlite3_stricmp</c>, which folds ASCII letters only:
+    ///     any ASCII spelling works, and a non-ASCII look-alike (dotless <c>ı</c>, dotted <c>İ</c>) is refused, as
+    ///     CPython 3.12 refuses it.
+    /// </summary>
+    [TestMethod]
+    public void SqliteIsolationLevel_FoldsAsciiOnly()
+    {
+        foreach (string level in new[] { "", "deferred", "Immediate", "EXCLUSIVE" })
+            SqliteUrl.Connect("x.db", new OptunaSharp.Collections.OrderedDict<string, object?> { ["isolation_level"] = level })
+                .Filename.Should().Be("x.db", level);
+        foreach (string level in new[] { "\U00000131mmed\U00000131ate", "EXCLUS\U00000130VE" })
+        {
+            Action act = () => SqliteUrl.Connect("x.db", new OptunaSharp.Collections.OrderedDict<string, object?> { ["isolation_level"] = level });
+            act.Should().Throw<NumSharp.ValueError>().Which.Message.Should()
+                .Be("isolation_level string must be '', 'DEFERRED', 'IMMEDIATE', or 'EXCLUSIVE'");
+        }
+    }
 }

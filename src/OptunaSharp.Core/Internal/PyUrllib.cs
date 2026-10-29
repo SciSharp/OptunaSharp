@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using NumSharp;
+using OptunaSharp.Storages.SqlAlchemy;
 
 namespace OptunaSharp.Internal;
 
@@ -408,8 +409,9 @@ internal sealed record PySplitResult(string Scheme, string Netloc, string Path, 
     ///     zone after <c>%</c>; <see langword="null" /> when empty.
     /// </summary>
     /// <remarks>
-    ///     Python's <c>str.lower</c> applies full case mapping (U+0130 becomes two characters); .NET's invariant
-    ///     lower-casing maps one character to one. Host names never contain the few characters where that differs.
+    ///     Lower-cased with Python's <c>str.lower</c> (<see cref="PyStrings.Lower" />), not .NET's invariant
+    ///     lower case: the two differ on U+0130 (two characters in Python) and on a word-final <c>Σ</c> (<c>ς</c> in
+    ///     Python), so an internationalized host name such as <c>ΑΣ</c> resolves to the name Python looks up.
     /// </remarks>
     internal string? Hostname
     {
@@ -420,8 +422,8 @@ internal sealed record PySplitResult(string Scheme, string Netloc, string Path, 
                 return null;
             int percent = host.IndexOf('%');
             return percent < 0
-                ? host.ToLowerInvariant()
-                : host.Substring(0, percent).ToLowerInvariant() + host.Substring(percent);
+                ? PyStrings.Lower(host)
+                : PyStrings.Lower(host.Substring(0, percent)) + host.Substring(percent);
         }
     }
 

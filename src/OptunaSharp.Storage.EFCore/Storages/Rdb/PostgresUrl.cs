@@ -29,13 +29,21 @@ namespace OptunaSharp.Storages.EFCore;
 ///     Multi-host URLs (<c>?host=h1:5432&amp;host=h2:5433</c> or <c>?host=h1,h2&amp;port=5432,5433</c>), Unix-domain
 ///     socket directories (<c>?host=/var/run/postgresql</c>) and the <c>?user=</c>/<c>?dbname=</c> overrides behave as
 ///     in Python.</para>
+///     <para><b>Connection strings and service files.</b> A <c>?dsn=</c> (psycopg2) or <c>?conninfo=</c> (psycopg)
+///     argument may be in libpq's keyword form or its URI form (<c>postgresql://…</c>), merged with the other
+///     arguments as the driver merges them. <c>?service=name</c> or <c>PGSERVICE</c> reads the group from
+///     <c>pg_service.conf</c> the way libpq does (see <see cref="LibpqService" />), filling in what the URL leaves
+///     out, with libpq's errors for a missing or malformed file. <c>PGREQUIRESSL</c> and the
+///     <c>sslrootcert=system</c> default of <c>sslmode=verify-full</c> apply too.</para>
 ///     <para><b>What Npgsql cannot express.</b> A libpq parameter with no Npgsql counterpart (<c>hostaddr</c>,
-///     <c>service</c>, <c>sslcrl</c>, <c>keepalives_count</c>, <c>tcp_user_timeout</c>, <c>requirepeer</c>,
-///     <c>replication</c>, OAuth, …) raises <see cref="NotSupportedException" /> naming it, instead of being dropped:
-///     dropping it would connect to a different server or with weaker security than Python. Parameters whose libpq
-///     value Npgsql already honors by default are accepted as no-ops (<c>sslsni=1</c>, <c>gssencmode=disable</c>,
-///     <c>sslcertmode=allow</c>, <c>min_protocol_version=3.0</c>, an <c>ssl_min_protocol_version</c> at or below
-///     TLS 1.2, which .NET never goes below).</para>
+///     <c>require_auth</c>, <c>sslcrl</c>, <c>keepalives_count</c>, <c>tcp_user_timeout</c>, <c>requirepeer</c>,
+///     <c>replication</c>, the SCRAM keys, OAuth, …) raises <see cref="NotSupportedException" /> naming it, instead of
+///     being dropped: dropping it would connect to a different server or with weaker security than Python. libpq's
+///     own validation runs first, so a value libpq refuses fails with libpq's message, not with the refusal.
+///     Parameters whose libpq value Npgsql already honors by default are accepted as no-ops (<c>sslsni=1</c>,
+///     <c>gssencmode=disable</c>, <c>sslcertmode=allow</c>, <c>min_protocol_version=3.0</c>, an
+///     <c>ssl_min_protocol_version</c> at or below TLS 1.2, which .NET never goes below, and any UTF-8 spelling of
+///     <c>client_encoding</c>).</para>
 ///     <para><b>Defaults that differ by design</b> (documented divergences): with no host anywhere, libpq uses a
 ///     Unix-domain socket on Linux and macOS — <c>/var/run/postgresql</c> when that directory exists, else
 ///     <c>/tmp</c>, which covers the Debian and upstream builds — and <c>localhost</c> on Windows; Npgsql's own
@@ -82,9 +90,13 @@ internal static class PostgresUrl
     /// <param name="prepared">The URL after template filling, parsing and driver lookup.</param>
     /// <returns>The connection string builder for the database the URL names.</returns>
     /// <exception cref="ArgumentException">SQLAlchemy's multi-host errors (<c>number of hosts and ports don't match</c>, …).</exception>
-    /// <exception cref="ValueError">A URL port that is not an integer, or Python's unpacking error for malformed multi-host lists.</exception>
-    /// <exception cref="TypeError">psycopg2's <c>database</c>/<c>dbname</c> clash, or pg8000 without a user.</exception>
-    /// <exception cref="FormatException">libpq refuses the connection info or a value; libpq's message.</exception>
+    /// <exception cref="ValueError">
+    ///     A URL port that is not an integer, Python's unpacking error for malformed multi-host lists, psycopg2's
+    ///     <c>embedded null character</c>, or a <see cref="UnicodeDecodeError" /> for a URI escape that is not UTF-8.
+    /// </exception>
+    /// <exception cref="TypeError">psycopg2's <c>database</c>/<c>dbname</c> clash, a repeated <c>?dsn=</c>, or pg8000 without a user.</exception>
+    /// <exception cref="AttributeError">A repeated <c>?conninfo=</c> for psycopg 3.</exception>
+    /// <exception cref="FormatException">libpq refuses the connection info, a value or the service file; libpq's message.</exception>
     /// <exception cref="NotSupportedException">A parameter Npgsql cannot express.</exception>
     /// <exception cref="InvalidOperationException">An asyncio driver (<c>+asyncpg</c>, <c>+psycopg_async</c>).</exception>
     internal static NpgsqlConnectionStringBuilder Build(PreparedStorageUrl prepared)
@@ -107,10 +119,14 @@ internal static class PostgresUrl
     ///     for the connection string psycopg2 builds — before environment defaults and value checks apply.
     /// </summary>
     /// <param name="prepared">A URL whose driver is <c>psycopg2</c>, <c>psycopg2cffi</c>, <c>psycopg</c> or <c>psycopg_async</c>.</param>
-    /// <returns>The parameters, in connection-string order.</returns>
+    /// <returns>The parameters, in libpq's option order.</returns>
     /// <exception cref="ArgumentException">A SQLAlchemy multi-host error.</exception>
-    /// <exception cref="ValueError">Python's unpacking error for malformed multi-host lists.</exception>
-    /// <exception cref="TypeError">psycopg2's <c>database</c>/<c>dbname</c> clash.</exception>
+    /// <exception cref="ValueError">
+    ///     Python's unpacking error for malformed multi-host lists, psycopg2's <c>embedded null character</c>, or a
+    ///     <see cref="UnicodeDecodeError" /> for a URI escape that is not UTF-8.
+    /// </exception>
+    /// <exception cref="TypeError">psycopg2's <c>database</c>/<c>dbname</c> clash, or a repeated <c>?dsn=</c>.</exception>
+    /// <exception cref="AttributeError">A repeated <c>?conninfo=</c> for psycopg 3.</exception>
     /// <exception cref="FormatException">libpq refuses the connection string.</exception>
     /// <exception cref="NotSupportedException">A driver-level argument.</exception>
     /// <exception cref="InvalidOperationException">The asyncio driver <c>psycopg_async</c>.</exception>
@@ -283,10 +299,22 @@ internal static class PostgresUrl
     /// </summary>
     /// <param name="opts">SQLAlchemy's connection arguments.</param>
     /// <param name="psycopg3">Whether the driver is psycopg 3 (no <c>database</c> alias, its own driver-level arguments).</param>
-    /// <returns>The libpq parameters the connection string sets, in order.</returns>
-    /// <exception cref="TypeError">psycopg2's <c>database</c>/<c>dbname</c> clash.</exception>
+    /// <returns>The libpq parameters the connection string sets, in libpq's option order (as <c>parse_dsn</c> lists them).</returns>
+    /// <exception cref="TypeError">
+    ///     psycopg2's <c>database</c>/<c>dbname</c> clash, or a repeated <c>?dsn=</c> (a tuple, which psycopg2's
+    ///     <c>parse_dsn</c> refuses).
+    /// </exception>
+    /// <exception cref="AttributeError">A repeated <c>?conninfo=</c> for psycopg 3, which calls <c>.encode()</c> on it.</exception>
     /// <exception cref="FormatException">libpq refuses the connection string; libpq's message after the driver's prefix.</exception>
+    /// <exception cref="UnicodeDecodeError">A percent-escape in a connection URI decodes to bytes that are not UTF-8.</exception>
+    /// <exception cref="ValueError">psycopg2 and a NUL anywhere in the connection string (<c>embedded null character</c>), once the part before it has parsed.</exception>
     /// <exception cref="NotSupportedException">A driver-level argument (<c>connection_factory</c>, <c>autocommit</c>, …), which a URL cannot meaningfully carry.</exception>
+    /// <remarks>
+    ///     <c>make_dsn</c> merges like a Python <c>dict.update</c>: a keyword the dsn already sets keeps the dsn's
+    ///     position with the keyword's value, other keywords follow in order. The order matters because libpq reads the
+    ///     joined string as a C string: with psycopg 3 a NUL in one value silently drops every parameter after it, and
+    ///     with psycopg2 the part before the NUL is what <c>make_dsn</c> validates before <c>connect</c> refuses the NUL.
+    /// </remarks>
     private static OrderedDict<string, string> ConnectionInfo(OrderedDict<string, object?> opts, bool psycopg3)
     {
         string prefix = psycopg3 ? "" : "invalid dsn: ";
@@ -301,19 +329,34 @@ internal static class PostgresUrl
                     "which has no counterpart in Npgsql; remove it from the storage URL.");
         }
 
-        // connect(dsn=...) / connect(conninfo=...): a connection string given as a keyword is parsed and then
-        // overridden by the other keywords, as make_dsn / make_conninfo do.
+        // connect(dsn=...) / connect(conninfo=...): a connection string given as a keyword, in libpq's keyword or URI
+        // form, parsed and then overridden by the other keywords, as make_dsn / make_conninfo do.
         string dsnKey = psycopg3 ? "conninfo" : "dsn";
-        OrderedDict<string, string>? baseInfo = null;
+        string? dsn = null;
         if (opts.TryGetValue(dsnKey, out object? dsnValue))
         {
             opts.Remove(dsnKey);
-            string text = PyValues.Str(dsnValue);
-            if (text.StartsWith("postgresql://", StringComparison.Ordinal) || text.StartsWith("postgres://", StringComparison.Ordinal))
-                throw new NotSupportedException(
-                    $"A libpq connection URI in the '{dsnKey}' query argument is not supported; write its parameters as query arguments instead.");
-            baseInfo = text.Length > 0 ? ParseConnectionInfo(text, prefix) : new OrderedDict<string, string>();
+            // A repeated key is a tuple: psycopg2's parse_dsn wants text, psycopg calls conninfo.encode().
+            if (dsnValue is string[])
+                throw psycopg3
+                    ? new AttributeError("'tuple' object has no attribute 'encode'")
+                    : new TypeError("Expected bytes or unicode string, got tuple instead");
+            dsn = PyValues.Str(dsnValue);
         }
+
+        // make_dsn verifies with parse_dsn, which reads a C string and so stops at a NUL; psycopg2's _connect then takes
+        // the whole dsn with the "s" argument format, which refuses the NUL. psycopg hands libpq the bytes, which end there.
+        OrderedDict<string, string> Verified(string text)
+        {
+            OrderedDict<string, string> parsed = ParseConnectionInfo(text, prefix);
+            if (!psycopg3 && text.Contains('\0'))
+                throw new ValueError("embedded null character");
+            return parsed;
+        }
+
+        // Without other keywords the dsn is only verified and then used as it is: a URI reaches libpq as a URI.
+        if (opts.Count == 0)
+            return string.IsNullOrEmpty(dsn) ? new OrderedDict<string, string>() : Verified(dsn);
 
         if (!psycopg3 && opts.ContainsKey("database"))
         {
@@ -324,24 +367,23 @@ internal static class PostgresUrl
             opts["dbname"] = database;
         }
 
-        var parts = new List<KeyValuePair<string, string>>();
-        if (baseInfo is not null)
+        // tmp = parse_dsn(dsn); tmp.update(kwargs): OrderedDict assignment keeps an existing key's position, as a
+        // Python dict does, and appends a new one.
+        var merged = new OrderedDict<string, string>();
+        if (!string.IsNullOrEmpty(dsn))
         {
-            foreach (KeyValuePair<string, string> pair in baseInfo)
-            {
-                if (!opts.ContainsKey(pair.Key))
-                    parts.Add(pair);
-            }
+            foreach (KeyValuePair<string, string> pair in ParseConnectionInfo(dsn, prefix))
+                merged[pair.Key] = pair.Value;
         }
         foreach (KeyValuePair<string, object?> pair in opts)
         {
             if (pair.Value is not null)
-                parts.Add(new KeyValuePair<string, string>(pair.Key, PyValues.Str(pair.Value)));
+                merged[pair.Key] = PyValues.Str(pair.Value);
         }
-        if (parts.Count == 0)
+        if (merged.Count == 0)
             return new OrderedDict<string, string>();
-        string conninfo = string.Join(" ", parts.Select(p => p.Key + "=" + ParamEscape(p.Value)));
-        return ParseConnectionInfo(conninfo, prefix);
+        string conninfo = string.Join(" ", merged.Select(p => p.Key + "=" + ParamEscape(p.Value)));
+        return Verified(conninfo);
     }
 
     /// <summary>
@@ -367,15 +409,59 @@ internal static class PostgresUrl
     }
 
     /// <summary>
+    ///     libpq's <c>PQconninfoParse</c> as psycopg2's <c>parse_dsn</c> exposes it: the connection string is read as a
+    ///     C string, in the URI grammar when it starts with <c>postgresql://</c> or <c>postgres://</c> and in the
+    ///     <c>keyword=value</c> grammar otherwise.
+    /// </summary>
+    /// <param name="conninfo">The connection string.</param>
+    /// <param name="prefix">The driver's prefix for parse errors (<c>invalid dsn: </c> for psycopg2).</param>
+    /// <returns>The parameters the string sets, in libpq's option order, which is the order <c>parse_dsn</c> returns.</returns>
+    /// <exception cref="FormatException">The string does not parse; libpq's message after the prefix.</exception>
+    /// <exception cref="UnicodeDecodeError">A URI percent-escape decodes to bytes that are not UTF-8, which psycopg2 refuses as it builds the result.</exception>
+    /// <remarks>
+    ///     The string reaches libpq as a C string, so a NUL ends it here, as in <c>parse_dsn</c>. Footgun, as in
+    ///     Python: with psycopg 3 a value such as <c>options=%00…</c> in the URL silently drops that value's remainder
+    ///     and every parameter after it (psycopg2 refuses the NUL afterwards, see <c>ConnectionInfo</c>).
+    /// </remarks>
+    internal static OrderedDict<string, string> ParseConnectionInfo(string conninfo, string prefix = "invalid dsn: ")
+    {
+        int nul = conninfo.IndexOf('\0');
+        if (nul >= 0)
+            conninfo = conninfo.Substring(0, nul);
+        // uri_prefix_length: the prefixes are case-sensitive; "POSTGRESQL://h" is a keyword string missing its "=".
+        bool uri = conninfo.StartsWith("postgresql://", StringComparison.Ordinal) || conninfo.StartsWith("postgres://", StringComparison.Ordinal);
+        var result = new OrderedDict<string, string>();
+        if (uri)
+        {
+            Dictionary<string, byte[]> raw = ParseConnectionUri(conninfo, prefix);
+            // psycopg2 decodes each value as UTF-8 while it builds the dict, in libpq's order, after libpq has parsed
+            // the whole URI: so a syntax error anywhere wins over a bad percent-escape.
+            foreach (string key in LibpqKeywords.Keys)
+            {
+                if (raw.TryGetValue(key, out byte[]? bytes))
+                    result[key] = PyUtf8.DecodeStrict(bytes);
+            }
+            return result;
+        }
+        OrderedDict<string, string> found = ParseKeywordValue(conninfo, prefix);
+        foreach (string key in LibpqKeywords.Keys)
+        {
+            if (found.TryGetValue(key, out string? value))
+                result[key] = value;
+        }
+        return result;
+    }
+
+    /// <summary>
     ///     libpq's <c>conninfo_parse</c>: <c>keyword = value</c> pairs separated by whitespace, values optionally
     ///     single-quoted, <c>\</c> escaping the next character, later keywords overriding earlier ones, and every
     ///     keyword checked against libpq's list (<c>requiressl</c> still maps to <c>sslmode</c>).
     /// </summary>
-    /// <param name="conninfo">The connection string.</param>
+    /// <param name="conninfo">The connection string, without a NUL.</param>
     /// <param name="prefix">The driver's prefix for parse errors (<c>invalid dsn: </c> for psycopg2).</param>
     /// <returns>The parameters, in the order of their first appearance.</returns>
     /// <exception cref="FormatException">A missing <c>=</c>, an unterminated quote or an unknown keyword; libpq's message.</exception>
-    internal static OrderedDict<string, string> ParseConnectionInfo(string conninfo, string prefix = "invalid dsn: ")
+    private static OrderedDict<string, string> ParseKeywordValue(string conninfo, string prefix)
     {
         // libpq works on the UTF-8 bytes, with C isspace(); non-ASCII bytes are never spaces, so chars work too.
         static bool IsSpace(char c) => c is ' ' or '\t' or '\n' or '\v' or '\f' or '\r';
@@ -456,44 +542,350 @@ internal static class PostgresUrl
         return result;
     }
 
+    /// <summary>
+    ///     libpq's <c>conninfo_uri_parse_options</c>:
+    ///     <c>postgresql://[user[:password]@][host[:port][,host[:port]…]][/dbname][?key=value&amp;…]</c>, with IPv6 hosts
+    ///     in brackets, percent-decoding, and the query keys checked against libpq's list (<c>ssl=true</c> is JDBC's
+    ///     spelling of <c>sslmode=require</c>).
+    /// </summary>
+    /// <param name="uri">The URI, without a NUL.</param>
+    /// <param name="prefix">The driver's prefix for parse errors.</param>
+    /// <returns>The decoded values as bytes, which libpq never validates as UTF-8.</returns>
+    /// <exception cref="FormatException">A malformed URI; libpq's message after the prefix.</exception>
+    /// <remarks>
+    ///     libpq works on the UTF-8 bytes in place, so this port does too: positions in messages are byte offsets, and
+    ///     a percent-escape may produce any byte but NUL. The user stops at the first <c>:</c>, the password at the
+    ///     first <c>@</c>; the look-ahead for <c>@</c> stops only at <c>/</c>, so an <c>@</c> in the query still marks
+    ///     credentials, exactly as in libpq. Unlike urllib, a <c>#</c> is not special: it belongs to the database name.
+    /// </remarks>
+    private static Dictionary<string, byte[]> ParseConnectionUri(string uri, string prefix)
+    {
+        byte[] u = Encoding.UTF8.GetBytes(uri);
+        var options = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        int start = uri.StartsWith("postgresql://", StringComparison.Ordinal) ? 13 : 11;
+        int p = start;
+        while (p < u.Length && u[p] != '@' && u[p] != '/')
+            p++;
+        if (p < u.Length && u[p] == '@')
+        {
+            // user[:password]@ — the '@' found above is reached before the end, so these loops stay in bounds.
+            int user = start;
+            p = user;
+            while (u[p] != ':' && u[p] != '@')
+                p++;
+            byte terminator = u[p];
+            if (p > user)
+                StoreUriComponent(options, "user", u, user, p, prefix);
+            if (terminator == ':')
+            {
+                int password = p + 1;
+                while (u[p] != '@')
+                    p++;
+                if (p > password)
+                    StoreUriComponent(options, "password", u, password, p, prefix);
+            }
+            p++;
+        }
+        else
+        {
+            p = start;
+        }
+
+        // Every netloc[:port] pair, separated by commas, accumulated as libpq's host and port lists.
+        var hosts = new List<byte>();
+        var ports = new List<byte>();
+        int prevchar;
+        while (true)
+        {
+            int host;
+            int hostEnd;
+            if (p < u.Length && u[p] == '[')
+            {
+                host = ++p;
+                while (p < u.Length && u[p] != ']')
+                    p++;
+                if (p >= u.Length)
+                    throw new FormatException($"{prefix}end of string reached when looking for matching \"]\" in IPv6 host address in URI: \"{uri}\"");
+                if (p == host)
+                    throw new FormatException($"{prefix}IPv6 host address may not be empty in URI: \"{uri}\"");
+                hostEnd = p++;
+                if (p < u.Length && u[p] is not ((byte)':' or (byte)'/' or (byte)'?' or (byte)','))
+                {
+                    // %c prints the one byte; psycopg2 decodes the message with replacement, so a non-ASCII byte is U+FFFD.
+                    char shown = u[p] < 0x80 ? (char)u[p] : '\uFFFD';
+                    throw new FormatException(
+                        $"{prefix}unexpected character \"{shown}\" at position {p + 1} in URI (expected \":\" or \"/\"): \"{uri}\"");
+                }
+            }
+            else
+            {
+                host = p;
+                while (p < u.Length && u[p] is not ((byte)':' or (byte)'/' or (byte)'?' or (byte)','))
+                    p++;
+                hostEnd = p;
+            }
+            hosts.AddRange(u.AsSpan(host, hostEnd - host).ToArray());
+            prevchar = p < u.Length ? u[p] : 0;
+            if (prevchar == ':')
+            {
+                int port = ++p;
+                while (p < u.Length && u[p] is not ((byte)'/' or (byte)'?' or (byte)','))
+                    p++;
+                ports.AddRange(u.AsSpan(port, p - port).ToArray());
+                prevchar = p < u.Length ? u[p] : 0;
+            }
+            if (prevchar != ',')
+                break;
+            p++;
+            hosts.Add((byte)',');
+            ports.Add((byte)',');
+        }
+        byte[] hostBytes = hosts.ToArray();
+        byte[] portBytes = ports.ToArray();
+        if (hostBytes.Length > 0)
+            StoreUriComponent(options, "host", hostBytes, 0, hostBytes.Length, prefix);
+        if (portBytes.Length > 0)
+            StoreUriComponent(options, "port", portBytes, 0, portBytes.Length, prefix);
+
+        if (prevchar != 0 && prevchar != '?')
+        {
+            // "/dbname": an empty name is not stored, so PGDATABASE (or the user name) still applies.
+            int dbname = ++p;
+            while (p < u.Length && u[p] != '?')
+                p++;
+            prevchar = p < u.Length ? u[p] : 0;
+            if (p > dbname)
+                StoreUriComponent(options, "dbname", u, dbname, p, prefix);
+        }
+        if (prevchar != 0)
+            ParseUriParameters(u, p + 1, options, prefix);
+        return options;
+    }
+
+    /// <summary>
+    ///     <c>conninfo_uri_parse_params</c>: <c>key=value</c> pairs separated by <c>&amp;</c>, each part
+    ///     percent-decoded, an unknown key refused (<c>invalid URI query parameter</c>) rather than ignored.
+    /// </summary>
+    /// <param name="u">The URI's bytes.</param>
+    /// <param name="start">The index just past the <c>?</c>.</param>
+    /// <param name="options">Where to store the values.</param>
+    /// <param name="prefix">The driver's prefix for errors.</param>
+    /// <exception cref="FormatException">A pair without <c>=</c> or with two, a bad escape, or an unknown key; libpq's messages.</exception>
+    private static void ParseUriParameters(byte[] u, int start, Dictionary<string, byte[]> options, string prefix)
+    {
+        int i = start;
+        while (i < u.Length)
+        {
+            int keyword = i;
+            int keywordEnd = -1;
+            int value = -1;
+            int valueEnd;
+            int q = i;
+            while (true)
+            {
+                if (q < u.Length && u[q] == '=')
+                {
+                    // The first '=' was already cut off, so the message quotes the keyword alone.
+                    if (value >= 0)
+                        throw new FormatException($"{prefix}extra key/value separator \"=\" in URI query parameter: \"{Text(u, keyword, keywordEnd)}\"");
+                    keywordEnd = q++;
+                    value = q;
+                }
+                else if (q >= u.Length || u[q] == '&')
+                {
+                    int end = q;
+                    if (q < u.Length)
+                        q++;
+                    if (value < 0)
+                        throw new FormatException($"{prefix}missing key/value separator \"=\" in URI query parameter: \"{Text(u, keyword, end)}\"");
+                    valueEnd = end;
+                    break;
+                }
+                else
+                {
+                    q++;
+                }
+            }
+
+            string key = Text(UriDecode(u, keyword, keywordEnd, prefix));
+            byte[] decoded = UriDecode(u, value, valueEnd, prefix);
+            // JDBC compatibility: ssl=true is sslmode=require (and nothing else about "ssl" is accepted).
+            if (key == "ssl" && Text(decoded) == "true")
+            {
+                key = "sslmode";
+                decoded = Encoding.ASCII.GetBytes("require");
+            }
+            // conninfo_storeval: requiressl maps to sslmode, then the key must be a libpq keyword.
+            if (key == "requiressl")
+            {
+                key = "sslmode";
+                decoded = Encoding.ASCII.GetBytes(decoded.Length > 0 && decoded[0] == '1' ? "require" : "prefer");
+            }
+            if (!LibpqKeywords.ContainsKey(key))
+                throw new FormatException($"{prefix}invalid URI query parameter: \"{key}\"");
+            options[key] = decoded;
+            i = q;
+        }
+    }
+
+    /// <summary>
+    ///     <c>conninfo_storeval</c> for a URI component (user, password, host, port, dbname): percent-decoded as it is
+    ///     stored, replacing any earlier value.
+    /// </summary>
+    /// <param name="options">Where to store it.</param>
+    /// <param name="keyword">The libpq keyword.</param>
+    /// <param name="bytes">The bytes holding the encoded component.</param>
+    /// <param name="start">The component's first byte.</param>
+    /// <param name="end">One past its last byte.</param>
+    /// <param name="prefix">The driver's prefix for errors.</param>
+    /// <exception cref="FormatException">A bad escape, <c>%00</c>, or an unescaped space inside the component.</exception>
+    private static void StoreUriComponent(Dictionary<string, byte[]> options, string keyword, byte[] bytes, int start, int end, string prefix)
+        => options[keyword] = UriDecode(bytes, start, end, prefix);
+
+    /// <summary>
+    ///     libpq's <c>conninfo_uri_decode</c>: leading and trailing spaces are dropped, <c>%XX</c> becomes its byte
+    ///     (never NUL), and a space anywhere else ends the value, which is an error.
+    /// </summary>
+    /// <param name="u">The bytes.</param>
+    /// <param name="start">The encoded value's first byte.</param>
+    /// <param name="end">One past its last byte.</param>
+    /// <param name="prefix">The driver's prefix for errors.</param>
+    /// <returns>The decoded bytes.</returns>
+    /// <exception cref="FormatException">
+    ///     <c>invalid percent-encoded token</c>, <c>forbidden value %00 in percent-encoded value</c>, or
+    ///     <c>unexpected spaces found in "…", use percent-encoded spaces (%20) instead</c>; each quotes the encoded value.
+    /// </exception>
+    private static byte[] UriDecode(byte[] u, int start, int end, string prefix)
+    {
+        var decoded = new List<byte>(end - start);
+        int q = start;
+        while (q < end && u[q] == ' ')
+            q++;
+        while (q < end && u[q] != ' ')
+        {
+            if (u[q] != '%')
+            {
+                decoded.Add(u[q++]);
+                continue;
+            }
+            q++;
+            // get_hexdigit(*q++) && get_hexdigit(*q++): the end of the value is not a hex digit.
+            int hi = q < end ? HexDigit(u[q]) : -1;
+            q++;
+            int lo = hi >= 0 && q < end ? HexDigit(u[q]) : -1;
+            q++;
+            if (hi < 0 || lo < 0)
+                throw new FormatException($"{prefix}invalid percent-encoded token: \"{Text(u, start, end)}\"");
+            int c = (hi << 4) | lo;
+            if (c == 0)
+                throw new FormatException($"{prefix}forbidden value %00 in percent-encoded value: \"{Text(u, start, end)}\"");
+            decoded.Add((byte)c);
+        }
+        while (q < end && u[q] == ' ')
+            q++;
+        if (q < end)
+            throw new FormatException($"{prefix}unexpected spaces found in \"{Text(u, start, end)}\", use percent-encoded spaces (%20) instead");
+        return decoded.ToArray();
+    }
+
+    /// <summary>libpq's <c>get_hexdigit</c>.</summary>
+    /// <param name="c">The byte.</param>
+    /// <returns>Its value, or -1 when it is not <c>0-9</c>, <c>a-f</c> or <c>A-F</c>.</returns>
+    private static int HexDigit(byte c) => c switch
+    {
+        >= (byte)'0' and <= (byte)'9' => c - '0',
+        >= (byte)'a' and <= (byte)'f' => c - 'a' + 10,
+        >= (byte)'A' and <= (byte)'F' => c - 'A' + 10,
+        _ => -1,
+    };
+
+    /// <summary>Bytes of the URI as text for a message or a key (they came from a .NET string, so they are UTF-8).</summary>
+    /// <param name="u">The bytes.</param>
+    /// <param name="start">The first byte.</param>
+    /// <param name="end">One past the last byte.</param>
+    /// <returns>The text, with U+FFFD for bytes a percent-escape made invalid.</returns>
+    private static string Text(byte[] u, int start, int end) => Encoding.UTF8.GetString(u, start, end - start);
+
+    /// <summary>Decoded bytes as text (see <see cref="Text(byte[], int, int)" />).</summary>
+    /// <param name="u">The bytes.</param>
+    /// <returns>The text.</returns>
+    private static string Text(byte[] u) => Encoding.UTF8.GetString(u);
+
     // ------------------------------------------------------------------ libpq → Npgsql
 
     /// <summary>
-    ///     Applies libpq's semantics to parsed connection parameters — environment defaults, value validation, host
-    ///     and port lists — and expresses the result with Npgsql.
+    ///     Applies libpq's semantics to parsed connection parameters — a service-file group, environment defaults,
+    ///     value validation, host and port lists — and expresses the result with Npgsql.
     /// </summary>
     /// <param name="given">The parameters the connection string sets.</param>
     /// <returns>The Npgsql connection string builder.</returns>
-    /// <exception cref="FormatException">A value libpq refuses; libpq's message.</exception>
-    /// <exception cref="NotSupportedException">A parameter Npgsql cannot express.</exception>
+    /// <exception cref="FormatException">A service file or a value libpq refuses; libpq's message.</exception>
+    /// <exception cref="NotSupportedException">A parameter Npgsql cannot express, refused only after libpq's own checks pass.</exception>
+    /// <remarks>
+    ///     The order is libpq's: <c>conninfo_add_defaults</c> (the service group, then the <c>PG*</c> variables, then
+    ///     the compiled-in defaults), then <c>pqConnectOptions2</c>'s checks in the order libpq 18 runs them (measured
+    ///     pairwise against psycopg2: the port count, <c>require_auth</c>, <c>channel_binding</c>, <c>sslmode</c>,
+    ///     <c>sslnegotiation</c>, the TLS versions and their range, <c>sslcertmode</c>, <c>gssencmode</c>,
+    ///     <c>target_session_attrs</c>, the SCRAM keys, <c>load_balance_hosts</c>, the protocol versions). A refusal of
+    ///     what Npgsql cannot express waits until all of them have passed, so a URL Python rejects fails here with
+    ///     Python's error rather than with OptunaSharp's.
+    /// </remarks>
     internal static NpgsqlConnectionStringBuilder FromLibpq(OrderedDict<string, string> given)
     {
-        // conninfo_add_defaults: a parameter the connection string leaves out takes its PG* variable, if set.
         var p = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (KeyValuePair<string, string> pair in given)
+            p[pair.Key] = pair.Value;
+        // conninfo_add_defaults: the service group fills what the string leaves out, then the PG* variables do.
+        foreach (KeyValuePair<string, string> pair in LibpqService.Options(given, LibpqKeywords.Keys))
+            p.TryAdd(pair.Key, pair.Value);
+        bool sslmodeDefaulted = false;
         foreach (KeyValuePair<string, string?> keyword in LibpqKeywords)
         {
-            if (given.TryGetValue(keyword.Key, out string? value))
-                p[keyword.Key] = value;
-            else if (keyword.Value is not null && Environment.GetEnvironmentVariable(keyword.Value) is { } env)
+            if (p.ContainsKey(keyword.Key))
+                continue;
+            if (keyword.Value is not null && Environment.GetEnvironmentVariable(keyword.Value) is { } env)
                 p[keyword.Key] = env;
+            else if (keyword.Key == "sslmode")
+            {
+                // The pre-9.3 PGREQUIRESSL: a value starting with 1 means sslmode=require; PGSSLMODE wins over it.
+                if (Environment.GetEnvironmentVariable("PGREQUIRESSL") is { } requireSsl && requireSsl.StartsWith('1'))
+                    p["sslmode"] = "require";
+                else
+                    sslmodeDefaulted = true;
+            }
         }
+        // The compiled-in sslmode is "prefer", which libpq raises to verify-full for sslrootcert=system.
+        if (sslmodeDefaulted)
+            p["sslmode"] = p.TryGetValue("sslrootcert", out string? root) && root == "system" ? "verify-full" : "prefer";
+        // Most parameters treat an empty value as unset; the enumerated ones validate it, so an explicit empty value
+        // (PGSSLMODE exported empty, sslmode='' in a dsn) is refused as libpq refuses it. Raw keeps it; Get drops it.
         string? Get(string key) => p.TryGetValue(key, out string? v) && v.Length > 0 ? v : null;
+        string? Raw(string key) => p.TryGetValue(key, out string? v) ? v : null;
+        NotSupportedException? refusal = null;
+        void Refuse(NotSupportedException e) => refusal ??= e;
 
         foreach (string key in new[]
                  {
-                     "service", "hostaddr", "keepalives_count", "tcp_user_timeout", "sslcrl", "sslcrldir", "requirepeer",
-                     "require_auth", "gsslib", "replication", "scram_client_key", "scram_server_key", "oauth_issuer",
-                     "oauth_client_id", "oauth_client_secret", "oauth_scope", "sslkeylogfile",
+                     "hostaddr", "keepalives_count", "tcp_user_timeout", "sslcrl", "sslcrldir", "requirepeer", "gsslib",
+                     "replication", "oauth_issuer", "oauth_client_id", "oauth_client_secret", "oauth_scope", "sslkeylogfile",
                  })
         {
             if (Get(key) is not null)
-                throw Unsupported(key, p[key]);
+                Refuse(Unsupported(key, p[key]));
         }
 
         var b = new NpgsqlConnectionStringBuilder();
 
-        // pqConnectOptions2's checks, in its order.
-        string? channelBinding = Get("channel_binding");
+        // pqConnectOptions2's checks, in its order. First the host and port lists must pair up.
+        CheckPortCount(Get("host"), p.TryGetValue("port", out string? portText) ? portText : null);
+        if (Get("require_auth") is { } requireAuth)
+        {
+            CheckRequireAuth(requireAuth);
+            // Npgsql has no way to restrict which authentication requests it answers; dropping the restriction would
+            // let the client accept weaker authentication than Python allows.
+            Refuse(Unsupported("require_auth", requireAuth));
+        }
+        string? channelBinding = Raw("channel_binding");
         if (channelBinding is not null)
             b.ChannelBinding = channelBinding switch
             {
@@ -502,7 +894,7 @@ internal static class PostgresUrl
                 "require" => ChannelBinding.Require,
                 _ => throw Invalid("channel_binding", channelBinding),
             };
-        string sslmode = Get("sslmode") ?? "prefer";
+        string sslmode = Raw("sslmode")!;
         b.SslMode = sslmode switch
         {
             "disable" => SslMode.Disable,
@@ -513,7 +905,7 @@ internal static class PostgresUrl
             "verify-full" => SslMode.VerifyFull,
             _ => throw Invalid("sslmode", sslmode),
         };
-        string? negotiation = Get("sslnegotiation");
+        string? negotiation = Raw("sslnegotiation");
         if (negotiation is not null)
         {
             if (negotiation is not ("postgres" or "direct"))
@@ -524,7 +916,7 @@ internal static class PostgresUrl
 #if NET8_0
             // Npgsql 8 (the net8.0 build) predates PostgreSQL 17's direct TLS handshake; "postgres" is its only mode.
             if (negotiation == "direct")
-                throw Unsupported("sslnegotiation", negotiation);
+                Refuse(Unsupported("sslnegotiation", negotiation));
 #else
             b.SslNegotiation = negotiation == "direct" ? SslNegotiation.Direct : SslNegotiation.Postgres;
 #endif
@@ -540,24 +932,36 @@ internal static class PostgresUrl
         {
             b.RootCertificate = rootCert;
         }
-        string? certMode = Get("sslcertmode");
+        // ssl_min_protocol_version has a compiled-in default, TLSv1.2, so a lone maximum below it is an invalid range.
+        CheckTlsRange(p.TryGetValue("ssl_min_protocol_version", out string? sslMin) ? sslMin : "TLSv1.2",
+            Raw("ssl_max_protocol_version"), Refuse);
+        string? certMode = Raw("sslcertmode");
         if (certMode is not null && certMode is not ("disable" or "allow" or "require"))
             throw Invalid("sslcertmode", certMode);
         if (certMode is "disable" or "require")
-            throw Unsupported("sslcertmode", certMode);
-        string? gss = Get("gssencmode");
+            Refuse(Unsupported("sslcertmode", certMode));
+        string? gss = Raw("gssencmode");
         if (gss is not null && gss is not ("disable" or "prefer" or "require"))
             throw Invalid("gssencmode", gss);
         if (gss == "require")
-            throw Unsupported("gssencmode", gss);
-        string? tsa = Get("target_session_attrs");
+            Refuse(Unsupported("gssencmode", gss));
+        string? tsa = Raw("target_session_attrs");
         if (tsa is not null)
         {
             if (tsa is not ("any" or "read-write" or "read-only" or "primary" or "standby" or "prefer-standby"))
                 throw Invalid("target_session_attrs", tsa);
             b.TargetSessionAttributes = tsa;
         }
-        string? loadBalance = Get("load_balance_hosts");
+        foreach (string side in new[] { "client", "server" })
+        {
+            // Validated as libpq validates them, then refused: Npgsql cannot take precomputed SCRAM keys.
+            if (Raw($"scram_{side}_key") is { } scramKey)
+            {
+                CheckScramKey(scramKey, side);
+                Refuse(Unsupported($"scram_{side}_key", scramKey));
+            }
+        }
+        string? loadBalance = Raw("load_balance_hosts");
         if (loadBalance is not null)
             b.LoadBalanceHosts = loadBalance switch
             {
@@ -565,30 +969,9 @@ internal static class PostgresUrl
                 "random" => true,
                 _ => throw Invalid("load_balance_hosts", loadBalance),
             };
-        CheckProtocol("min_protocol_version", Get("min_protocol_version"), allowed: "3.0");
-        CheckProtocol("max_protocol_version", Get("max_protocol_version"), allowed: null);
-        string? sslMin = Get("ssl_min_protocol_version");
-        string? sslMax = Get("ssl_max_protocol_version");
-        int TlsRank(string key, string? v) => v switch
-        {
-            null => -1,
-            "TLSv1" => 0,
-            "TLSv1.1" => 1,
-            "TLSv1.2" => 2,
-            "TLSv1.3" => 3,
-            _ => throw new FormatException($"invalid \"{key}\" value: \"{v}\""),
-        };
-        int minRank = TlsRank("ssl_min_protocol_version", sslMin);
-        int maxRank = TlsRank("ssl_max_protocol_version", sslMax);
-        if (minRank >= 0 && maxRank >= 0 && minRank > maxRank)
-            throw new FormatException("invalid SSL protocol version range");
-        // .NET negotiates TLS 1.2 or later by OS policy, so a minimum up to 1.2 and a maximum of 1.3 already hold.
-        if (minRank == 3)
-            throw Unsupported("ssl_min_protocol_version", sslMin!);
-        if (maxRank is >= 0 and < 3)
-            throw Unsupported("ssl_max_protocol_version", sslMax!);
+        CheckProtocolRange(Raw("min_protocol_version"), Raw("max_protocol_version"), Refuse);
 
-        (string Host, int Port)[] endpoints = Endpoints(Get("host"), p.TryGetValue("port", out string? portText) ? portText : null);
+        (string Host, int Port)[] endpoints = Endpoints(Get("host"), portText);
         if (endpoints.Length == 1)
         {
             b.Host = endpoints[0].Host;
@@ -613,10 +996,10 @@ internal static class PostgresUrl
         string? application = Get("application_name") ?? Get("fallback_application_name");
         if (application is not null)
             b.ApplicationName = application;
-        if (Get("client_encoding") is { } encoding
-            && !encoding.Equals("UTF8", StringComparison.OrdinalIgnoreCase) && !encoding.Equals("UTF-8", StringComparison.OrdinalIgnoreCase)
-            && !encoding.Equals("UNICODE", StringComparison.OrdinalIgnoreCase))
-            throw Unsupported("client_encoding", encoding);
+        // The server reads client_encoding through PostgreSQL's clean_encoding_name, so utf_8, Utf-8 and unicode all
+        // name UTF-8 — the one encoding Npgsql speaks.
+        if (Get("client_encoding") is { } encoding && CleanEncodingName(encoding) is not ("utf8" or "unicode"))
+            Refuse(Unsupported("client_encoding", encoding));
         if (Get("sslcert") is { } cert)
             b.SslCertificate = cert;
         if (Get("sslkey") is { } sslKey)
@@ -626,9 +1009,9 @@ internal static class PostgresUrl
         if (Get("krbsrvname") is { } kerberos)
             b.KerberosServiceName = kerberos;
         if (Get("sslsni") is { } sni && !sni.StartsWith('1'))
-            throw Unsupported("sslsni", sni);
+            Refuse(Unsupported("sslsni", sni));
         if (Get("gssdelegation") is { } delegation && delegation != "0")
-            throw Unsupported("gssdelegation", delegation);
+            Refuse(Unsupported("gssdelegation", delegation));
         // sslcompression is accepted and ignored: TLS compression is disabled in every modern TLS stack, libpq's too.
 
         if (Get("connect_timeout") is { } timeoutText)
@@ -643,7 +1026,249 @@ internal static class PostgresUrl
             b.TcpKeepAliveTime = ParseIntParam(idle, "keepalives_idle");
         if (Get("keepalives_interval") is { } interval)
             b.TcpKeepAliveInterval = ParseIntParam(interval, "keepalives_interval");
+        // Every libpq check has passed: only now does a parameter Npgsql cannot express stop the connection.
+        if (refusal is not null)
+            throw refusal;
         return b;
+    }
+
+    /// <summary>
+    ///     PostgreSQL's <c>clean_encoding_name</c>, which the server applies to <c>client_encoding</c>: every
+    ///     character that is not an ASCII letter or digit is dropped and ASCII letters are lower-cased.
+    /// </summary>
+    /// <param name="name">The encoding name.</param>
+    /// <returns>The cleaned name, for example <c>utf8</c> for <c>UTF-8</c> or <c>utf_8</c>.</returns>
+    private static string CleanEncodingName(string name)
+    {
+        var sb = new StringBuilder(name.Length);
+        foreach (char c in name)
+        {
+            // isalnum((unsigned char) byte) in the C locale: ASCII only, so non-ASCII text (whose UTF-8 bytes are all
+            // above 0x7F) vanishes entirely.
+            if (c is >= 'a' and <= 'z' or >= '0' and <= '9')
+                sb.Append(c);
+            else if (c is >= 'A' and <= 'Z')
+                sb.Append((char)(c + ('a' - 'A')));
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    ///     The first check of <c>pqConnectOptions2</c>: one port for all hosts, or one port per host.
+    /// </summary>
+    /// <param name="host">The <c>host</c> parameter, or <see langword="null" />.</param>
+    /// <param name="port">The <c>port</c> parameter, or <see langword="null" />.</param>
+    /// <exception cref="FormatException"><c>could not match N port numbers to M hosts</c>.</exception>
+    private static void CheckPortCount(string? host, string? port)
+    {
+        int hosts = (host ?? "").Split(',').Length;
+        int ports = string.IsNullOrEmpty(port) ? 1 : port.Split(',').Length;
+        if (ports != 1 && ports != hosts)
+            throw new FormatException($"could not match {ports} port numbers to {hosts} hosts");
+    }
+
+    /// <summary>
+    ///     libpq's parsing of <c>require_auth</c> (PostgreSQL 16+): a comma-separated list of <c>password</c>,
+    ///     <c>md5</c>, <c>gss</c>, <c>sspi</c>, <c>scram-sha-256</c>, <c>oauth</c> and <c>none</c>, either all
+    ///     negated with <c>!</c> or none of them, each at most once. Nothing is trimmed and names are case-sensitive.
+    /// </summary>
+    /// <param name="value">The non-empty parameter value.</param>
+    /// <exception cref="FormatException">
+    ///     libpq's messages: <c>invalid require_auth value: "…"</c>, the two mixing errors, and
+    ///     <c>require_auth method "…" is specified more than once</c>.
+    /// </exception>
+    private static void CheckRequireAuth(string value)
+    {
+        // The request codes behind each method: gss and sspi share GSS_CONT, so "gss,sspi" is not a duplicate but
+        // a second "gss" is (all of its bits are already set).
+        const int Password = 1, Md5 = 2, Gss = 4, Sspi = 8, GssCont = 16;
+        bool negated = false;
+        bool authRequired = true;
+        int allowed = 0;
+        var mechanisms = new HashSet<string>(StringComparer.Ordinal);
+        string[] parts = value.Split(',');
+        for (int i = 0; i < parts.Length; i++)
+        {
+            string part = parts[i];
+            string method = part;
+            if (method.StartsWith('!'))
+            {
+                if (i == 0)
+                {
+                    // A negated list starts from everything allowed and subtracts.
+                    authRequired = false;
+                    allowed = Password | Md5 | Gss | Sspi | GssCont;
+                    mechanisms.Add("scram-sha-256");
+                    mechanisms.Add("oauth");
+                }
+                else if (!negated)
+                {
+                    throw new FormatException($"negative require_auth method \"{method}\" cannot be mixed with non-negative methods");
+                }
+                negated = true;
+                method = method.Substring(1);
+            }
+            else if (negated)
+            {
+                throw new FormatException($"require_auth method \"{method}\" cannot be mixed with negative methods");
+            }
+
+            int bits = method switch
+            {
+                "password" => Password,
+                "md5" => Md5,
+                "gss" => Gss | GssCont,
+                "sspi" => Sspi | GssCont,
+                _ => 0,
+            };
+            bool duplicate;
+            if (bits != 0)
+            {
+                duplicate = negated ? (allowed & bits) == 0 : (allowed & bits) == bits;
+                allowed = negated ? allowed & ~bits : allowed | bits;
+            }
+            else if (method is "scram-sha-256" or "oauth")
+            {
+                // SASL mechanisms are tracked by name: removing an absent one or adding a present one repeats it.
+                duplicate = negated ? !mechanisms.Remove(method) : !mechanisms.Add(method);
+            }
+            else if (method == "none")
+            {
+                // "none" allows connections without an authentication request; "!none" forbids them.
+                duplicate = negated ? authRequired : !authRequired;
+                authRequired = negated;
+            }
+            else
+            {
+                throw new FormatException($"invalid require_auth value: \"{method}\"");
+            }
+            if (duplicate)
+                throw new FormatException($"require_auth method \"{part}\" is specified more than once");
+        }
+    }
+
+    /// <summary>
+    ///     libpq 18's check of <c>scram_client_key</c> / <c>scram_server_key</c>: strict base64 (PostgreSQL's
+    ///     <c>pg_b64_decode</c>) of exactly 32 bytes.
+    /// </summary>
+    /// <param name="value">The parameter value, possibly empty.</param>
+    /// <param name="side"><c>client</c> or <c>server</c>, for the message.</param>
+    /// <exception cref="FormatException"><c>invalid SCRAM client key</c> or <c>invalid SCRAM client key length: N</c> (and the server variants).</exception>
+    private static void CheckScramKey(string value, string side)
+    {
+        int length = DecodeBase64Length(value);
+        if (length < 0)
+            throw new FormatException($"invalid SCRAM {side} key");
+        if (length != 32)
+            throw new FormatException($"invalid SCRAM {side} key length: {length}");
+    }
+
+    /// <summary>
+    ///     PostgreSQL's <c>pg_b64_decode</c>, reduced to the decoded length: whitespace and stray <c>=</c> are errors,
+    ///     the input must end on a four-character boundary, and the output may not outgrow
+    ///     <c>pg_b64_dec_len(len) = len * 3 / 4</c>.
+    /// </summary>
+    /// <param name="text">The base64 text.</param>
+    /// <returns>The number of decoded bytes, or -1 for invalid input.</returns>
+    private static int DecodeBase64Length(string text)
+    {
+        // The text reaches libpq as UTF-8 bytes; a byte outside ASCII is never a base64 symbol.
+        byte[] src = Encoding.UTF8.GetBytes(text);
+        int capacity = (src.Length * 3) >> 2;
+        int produced = 0, pos = 0, end = 0;
+        foreach (byte c in src)
+        {
+            if (c is (byte)' ' or (byte)'\t' or (byte)'\n' or (byte)'\r')
+                return -1;
+            if (c == '=')
+            {
+                // The first '=' fixes how many bytes the final group yields; it may only come third or fourth.
+                if (end == 0)
+                {
+                    if (pos == 2)
+                        end = 1;
+                    else if (pos == 3)
+                        end = 2;
+                    else
+                        return -1;
+                }
+            }
+            else if (!(c is >= (byte)'A' and <= (byte)'Z' or >= (byte)'a' and <= (byte)'z' or >= (byte)'0' and <= (byte)'9' or (byte)'+' or (byte)'/'))
+            {
+                return -1;
+            }
+            if (++pos == 4)
+            {
+                int bytes = end == 0 ? 3 : end == 1 ? 1 : 2;
+                if (produced + bytes > capacity)
+                    return -1;
+                produced += bytes;
+                pos = 0;
+            }
+        }
+        return pos != 0 ? -1 : produced;
+    }
+
+    /// <summary>
+    ///     libpq's <c>sslVerifyProtocolVersion</c> and <c>sslVerifyProtocolRange</c>: each bound, when set and not
+    ///     empty, is one of <c>TLSv1</c>, <c>TLSv1.1</c>, <c>TLSv1.2</c>, <c>TLSv1.3</c> in any ASCII case, and the
+    ///     minimum is not above the maximum. Bounds .NET cannot enforce are refused afterwards.
+    /// </summary>
+    /// <param name="min">The minimum, with libpq's default <c>TLSv1.2</c> already applied when unset.</param>
+    /// <param name="max">The maximum, or <see langword="null" />.</param>
+    /// <param name="refuse">Records a refusal to raise once every libpq check has passed.</param>
+    /// <exception cref="FormatException"><c>invalid "ssl_min_protocol_version" value: "…"</c> (or max), or <c>invalid SSL protocol version range</c>.</exception>
+    private static void CheckTlsRange(string? min, string? max, Action<NotSupportedException> refuse)
+    {
+        static int Rank(string key, string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return -1;
+            // pg_strcasecmp: ASCII letters fold, everything else compares as it is.
+            for (int rank = 0; rank < TlsVersions.Length; rank++)
+            {
+                if (System.Text.Ascii.EqualsIgnoreCase(value, TlsVersions[rank]))
+                    return rank;
+            }
+            throw new FormatException($"invalid \"{key}\" value: \"{value}\"");
+        }
+        int minRank = Rank("ssl_min_protocol_version", min);
+        int maxRank = Rank("ssl_max_protocol_version", max);
+        if (minRank >= 0 && maxRank >= 0 && minRank > 0 && (maxRank == 0 || minRank > maxRank))
+            throw new FormatException("invalid SSL protocol version range");
+        // .NET negotiates TLS 1.2 or later by OS policy, so a minimum up to 1.2 and a maximum of 1.3 already hold.
+        if (minRank == 3)
+            refuse(Unsupported("ssl_min_protocol_version", min!));
+        if (maxRank is >= 0 and < 3)
+            refuse(Unsupported("ssl_max_protocol_version", max!));
+    }
+
+    /// <summary>libpq's TLS protocol names, in rank order.</summary>
+    private static readonly string[] TlsVersions = { "TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3" };
+
+    /// <summary>
+    ///     libpq 18's <c>min_protocol_version</c> / <c>max_protocol_version</c>: each is exactly <c>3.0</c>,
+    ///     <c>3.2</c> or <c>latest</c>; an unset maximum is 3.0, or the latest when the minimum is above 3.0; and the
+    ///     minimum may not exceed the maximum. Npgsql speaks protocol 3.0 only, so a higher minimum is refused.
+    /// </summary>
+    /// <param name="min">The minimum, or <see langword="null" />.</param>
+    /// <param name="max">The maximum, or <see langword="null" />.</param>
+    /// <param name="refuse">Records a refusal to raise once every libpq check has passed.</param>
+    /// <exception cref="FormatException"><c>invalid min_protocol_version value: "…"</c> (or max), or <c>"min_protocol_version" is greater than "max_protocol_version"</c>.</exception>
+    private static void CheckProtocolRange(string? min, string? max, Action<NotSupportedException> refuse)
+    {
+        static int Version(string key, string value) => value switch
+        {
+            "3.0" => 30,
+            "3.2" or "latest" => 32,
+            _ => throw Invalid(key, value),
+        };
+        int minVersion = min is null ? 30 : Version("min_protocol_version", min);
+        int maxVersion = max is null ? (minVersion > 30 ? 32 : 30) : Version("max_protocol_version", max);
+        if (minVersion > maxVersion)
+            throw new FormatException("\"min_protocol_version\" is greater than \"max_protocol_version\"");
+        if (minVersion > 30)
+            refuse(Unsupported("min_protocol_version", min!));
     }
 
     /// <summary>
@@ -698,22 +1323,6 @@ internal static class PostgresUrl
         if (!m.Success || !int.TryParse(m.Groups[1].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int result))
             throw new FormatException($"invalid integer value \"{value}\" for connection option \"{context}\"");
         return result;
-    }
-
-    /// <summary>Validates <c>min_protocol_version</c>/<c>max_protocol_version</c> (libpq 18) and refuses a minimum above 3.0.</summary>
-    /// <param name="key">The parameter name.</param>
-    /// <param name="value">Its value, or <see langword="null" />.</param>
-    /// <param name="allowed">The only minimum Npgsql meets, or <see langword="null" /> for a maximum (any valid one holds).</param>
-    /// <exception cref="FormatException">Not one of <c>3.0</c>, <c>3.2</c>, <c>latest</c>.</exception>
-    /// <exception cref="NotSupportedException">A minimum above protocol 3.0, which Npgsql does not speak.</exception>
-    private static void CheckProtocol(string key, string? value, string? allowed)
-    {
-        if (value is null)
-            return;
-        if (value is not ("3.0" or "3.2" or "latest"))
-            throw Invalid(key, value);
-        if (allowed is not null && value != allowed)
-            throw Unsupported(key, value);
     }
 
     /// <summary>libpq's message for an invalid enumerated value: <c>invalid key value: "value"</c>.</summary>

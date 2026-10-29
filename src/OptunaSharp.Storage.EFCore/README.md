@@ -57,8 +57,11 @@ The URL is read exactly as Python Optuna reads it: Optuna's `{SCHEMA_VERSION}` t
 grammar and driver registry, the driver's `create_connect_args`, then the Python driver's own handling of
 those arguments, with Python's error kinds and messages (`postgres://` is refused as SQLAlchemy refuses it;
 a native .NET keyword such as `?Pooling=false` fails as libpq fails — set those with
-`ConfigureConnectionString`). SQLite URLs (`sqlite:///…`) are rejected — use the `OptunaSharp.Storage.Sqlite`
-package for those.
+`ConfigureConnectionString`). libpq's `pg_service.conf` service files, the URI form of `?dsn=`, and libpq's
+validation of `require_auth`, the SCRAM keys and the TLS and protocol ranges work as in Python, and so do
+MySQLdb's and PyMySQL's own argument checks. What MySqlConnector or Npgsql cannot express raises
+`NotSupportedException`, but only after the Python driver's checks have passed. SQLite URLs (`sqlite:///…`) are
+rejected — use the `OptunaSharp.Storage.Sqlite` package for those.
 
 ## Configuration — Optuna's API *and* the native EF Core / Npgsql / Pomelo surface
 

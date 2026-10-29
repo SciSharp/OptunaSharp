@@ -393,12 +393,16 @@ internal static class PyValues
     /// </summary>
     /// <param name="value">The value.</param>
     /// <returns>The boolean.</returns>
-    /// <exception cref="ValueError">A string outside both lists: <c>String is not true/false: '…'</c>.</exception>
+    /// <exception cref="ValueError">
+    ///     A string outside both lists: <c>String is not true/false: '…'</c>, quoting the stripped and lower-cased
+    ///     text as Python's <c>str.lower()</c> gives it (<c>İ</c> appears as <c>i̇</c>).
+    /// </exception>
     internal static bool AsBool(object? value)
     {
         if (value is string s)
         {
-            string normalized = PyStrings.Strip(s).ToLowerInvariant();
+            // Python's lower(), not ToLowerInvariant: the message quotes the lowered text, and the two differ on İ and Σ.
+            string normalized = PyStrings.Lower(PyStrings.Strip(s));
             if (normalized is "true" or "yes" or "on" or "y" or "t" or "1")
                 return true;
             if (normalized is "false" or "no" or "off" or "n" or "f" or "0")
@@ -492,9 +496,143 @@ internal static class PyValues
     }
 }
 
-/// <summary>Python <c>str</c> operations whose .NET counterparts differ: code-point ordering and <c>strip()</c>.</summary>
+/// <summary>
+///     Python <c>str</c> operations whose .NET counterparts differ: code-point ordering, <c>strip()</c> and
+///     <c>lower()</c>.
+/// </summary>
 internal static class PyStrings
 {
+    /// <summary>
+    ///     Python <c>str.lower()</c>: the full lower-case mapping, which differs from
+    ///     <see cref="string.ToLowerInvariant" /> in two places. U+0130 (<c>İ</c>) becomes the two code points
+    ///     <c>i̇</c> (U+0069 U+0307), where .NET leaves it unchanged; and U+03A3 (<c>Σ</c>) becomes the final sigma
+    ///     <c>ς</c> at the end of a word (Unicode's Final_Sigma context), where .NET always gives <c>σ</c>.
+    /// </summary>
+    /// <param name="text">The text to lower-case; a lone surrogate passes through unchanged, as in Python.</param>
+    /// <returns>The lower-cased text, possibly longer than <paramref name="text" />.</returns>
+    /// <remarks>
+    ///     Every other code point maps as .NET's invariant lower case maps it: the two tables were compared over all
+    ///     of Unicode against CPython 3.12 and agree. The Final_Sigma context needs Unicode's Cased and
+    ///     Case_Ignorable properties, which .NET does not expose; <see cref="IsCased" /> and
+    ///     <see cref="IsCaseIgnorable" /> derive them from general categories plus Unicode's short lists, and
+    ///     reproduce CPython 3.12's sets exactly for every character Unicode 15.0 assigns. A character assigned
+    ///     later (Unicode 16.0, which .NET 10 knows and CPython 3.12 does not) can differ, as it can in
+    ///     <see cref="PythonRepr.StringRepr" />.
+    /// </remarks>
+    internal static string Lower(string text)
+    {
+        // ASCII lower-cases the same everywhere; most URLs never leave it.
+        bool ascii = true;
+        foreach (char c in text)
+        {
+            if (c >= 0x80)
+            {
+                ascii = false;
+                break;
+            }
+        }
+        if (ascii)
+            return text.ToLowerInvariant();
+
+        var sb = new StringBuilder(text.Length);
+        Span<char> buffer = stackalloc char[2];
+        for (int i = 0; i < text.Length;)
+        {
+            int cp = CodePointAt(text, i, out int units);
+            if (cp == 0x130)
+                sb.Append("i\u0307");
+            else if (cp == 0x3A3)
+                sb.Append(IsFinalSigma(text, i, units) ? '\u03C2' : '\u03C3');
+            else if (cp is >= 0xD800 and <= 0xDFFF)
+                sb.Append((char)cp);
+            else
+                sb.Append(buffer[..Rune.ToLowerInvariant(new Rune(cp)).EncodeToUtf16(buffer)]);
+            i += units;
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    ///     The code point of the Python character at an index: a surrogate pair is one character, a lone surrogate is
+    ///     a character of its own (its own value, not U+FFFD).
+    /// </summary>
+    /// <param name="text">The text.</param>
+    /// <param name="index">The index of the character's first UTF-16 unit.</param>
+    /// <param name="units">The number of UTF-16 units the character occupies, 1 or 2.</param>
+    /// <returns>The code point.</returns>
+    internal static int CodePointAt(string text, int index, out int units)
+    {
+        if (index + 1 < text.Length && char.IsSurrogatePair(text[index], text[index + 1]))
+        {
+            units = 2;
+            return char.ConvertToUtf32(text[index], text[index + 1]);
+        }
+        units = 1;
+        return text[index];
+    }
+
+    /// <summary>
+    ///     CPython's <c>handle_capital_sigma</c>: the sigma at <paramref name="index" /> is final when, skipping
+    ///     case-ignorable characters, a cased character precedes it and none follows it.
+    /// </summary>
+    /// <param name="text">The text.</param>
+    /// <param name="index">The sigma's index.</param>
+    /// <param name="units">The sigma's length in UTF-16 units (1).</param>
+    /// <returns><see langword="true" /> when the sigma lower-cases to <c>ς</c>.</returns>
+    private static bool IsFinalSigma(string text, int index, int units)
+    {
+        int before = -1;
+        for (int j = index; j > 0;)
+        {
+            // Step back one Python character: a low surrogate preceded by its high surrogate is one code point.
+            int start = j - 1;
+            if (start > 0 && char.IsSurrogatePair(text[start - 1], text[start]))
+                start--;
+            int cp = CodePointAt(text, start, out _);
+            j = start;
+            if (!IsCaseIgnorable(cp))
+            {
+                before = cp;
+                break;
+            }
+        }
+        if (before < 0 || !IsCased(before))
+            return false;
+        for (int k = index + units; k < text.Length;)
+        {
+            int cp = CodePointAt(text, k, out int step);
+            if (!IsCaseIgnorable(cp))
+                return !IsCased(cp);
+            k += step;
+        }
+        return true;
+    }
+
+    /// <summary>
+    ///     Unicode's Case_Ignorable property: marks (Mn, Me), format characters (Cf), modifier letters and symbols
+    ///     (Lm, Sk), and the Word_Break MidLetter, MidNumLet and Single_Quote characters.
+    /// </summary>
+    /// <param name="cp">The code point.</param>
+    /// <returns>Whether the Final_Sigma scan skips it.</returns>
+    private static bool IsCaseIgnorable(int cp)
+        => CharUnicodeInfo.GetUnicodeCategory(cp) is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark
+               or UnicodeCategory.Format or UnicodeCategory.ModifierLetter or UnicodeCategory.ModifierSymbol
+           || cp is 0x27 or 0x2E or 0x3A or 0xB7 or 0x387 or 0x55F or 0x5F4 or 0x2018 or 0x2019 or 0x2024 or 0x2027
+               or 0xFE13 or 0xFE52 or 0xFE55 or 0xFF07 or 0xFF0E or 0xFF1A;
+
+    /// <summary>
+    ///     Unicode's Cased property for a character that is not case-ignorable (the only kind the Final_Sigma scan asks
+    ///     about): the cased letter categories plus the Other_Lowercase / Other_Uppercase characters outside them
+    ///     (<c>ª º</c>, the Roman numerals, the circled and squared Latin letters).
+    /// </summary>
+    /// <param name="cp">The code point.</param>
+    /// <returns>Whether it has case.</returns>
+    private static bool IsCased(int cp)
+        => CharUnicodeInfo.GetUnicodeCategory(cp) is UnicodeCategory.UppercaseLetter or UnicodeCategory.LowercaseLetter
+               or UnicodeCategory.TitlecaseLetter
+           || cp is 0xAA or 0xBA or (>= 0x2160 and <= 0x217F) or (>= 0x24B6 and <= 0x24E9)
+               or (>= 0x1F130 and <= 0x1F149) or (>= 0x1F150 and <= 0x1F169) or (>= 0x1F170 and <= 0x1F189);
+
     /// <summary>
     ///     Python <c>str.strip()</c>: removes leading and trailing characters for which <c>str.isspace()</c> holds.
     ///     That set is .NET's <see cref="char.IsWhiteSpace(char)" /> plus U+001C–U+001F (the C0 information
@@ -527,10 +665,11 @@ internal static class PyStrings
         int i = 0, j = 0;
         while (i < a.Length && j < b.Length)
         {
-            Rune.DecodeFromUtf16(a.AsSpan(i), out Rune ra, out int la);
-            Rune.DecodeFromUtf16(b.AsSpan(j), out Rune rb, out int lb);
-            if (ra.Value != rb.Value)
-                return ra.Value.CompareTo(rb.Value);
+            // CodePointAt, not Rune.DecodeFromUtf16: a lone surrogate keeps its own value (it would sort as U+FFFD).
+            int ca = CodePointAt(a, i, out int la);
+            int cb = CodePointAt(b, j, out int lb);
+            if (ca != cb)
+                return ca.CompareTo(cb);
             i += la;
             j += lb;
         }
@@ -560,6 +699,10 @@ internal static class StorageUrlTemplate
     /// <exception cref="TypeError">A field indexes the integer.</exception>
     /// <exception cref="NotSupportedException">A field reads one of <c>int</c>'s methods.</exception>
     /// <exception cref="OverflowException">A format spec that CPython rejects with <c>OverflowError</c>.</exception>
+    /// <exception cref="OutOfMemoryException">
+    ///     A field padded past the longest .NET string (a width above about 2<sup>30</sup>), which CPython would build
+    ///     when memory allows.
+    /// </exception>
     /// <remarks>
     ///     Footgun: braces are special in every part of the URL. A password containing <c>{</c> or <c>}</c> must be
     ///     written <c>{{</c> / <c>}}</c> (or percent-encoded as <c>%7B</c> / <c>%7D</c>), exactly as with Python Optuna.

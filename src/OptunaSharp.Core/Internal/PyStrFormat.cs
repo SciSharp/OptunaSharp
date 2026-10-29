@@ -26,11 +26,21 @@ namespace OptunaSharp.Internal;
 ///     <see cref="NotSupportedException" />, because CPython would render a bound method's repr, which contains a
 ///     memory address. Locale-dependent <c>n</c> formatting uses the "C" locale, which is what a Python process has
 ///     unless it calls <c>locale.setlocale</c>.</para>
+///     <para><b>Characters are code points.</b> CPython indexes a <c>str</c> by code point, so a fill, a presentation
+///     type or a conversion outside the Basic Multilingual Plane (an emoji) is one character there and two UTF-16
+///     units here; the parser reads such a surrogate pair as one character and widths count code points, so
+///     <c>{SCHEMA_VERSION:😀^5}</c> gives <c>😀12😀😀</c> as in Python.</para>
 /// </remarks>
 internal static class PyStrFormat
 {
     /// <summary>PEP 3101's nesting limit: a field's format spec may contain fields, theirs may not.</summary>
     private const int RecursionDepth = 2;
+
+    /// <summary>
+    ///     The longest string a 64-bit .NET runtime allocates, in UTF-16 units (<c>0x3FFFFFDF</c>); padding past it is
+    ///     refused with <see cref="OutOfMemoryException" /> before any allocation is attempted.
+    /// </summary>
+    private const long MaxStringLength = 0x3FFFFFDF;
 
     /// <summary>The methods and class-level attributes of Python's <c>int</c> type, for the AttributeError check.</summary>
     private static readonly string[] IntMethodAttributes =
@@ -56,6 +66,10 @@ internal static class PyStrFormat
     /// <exception cref="TypeError">A field indexes the integer (<c>{SCHEMA_VERSION[0]}</c>).</exception>
     /// <exception cref="NotSupportedException">A field reads one of <c>int</c>'s methods (see the remarks).</exception>
     /// <exception cref="OverflowException">A <c>c</c> format of a value outside <c>range(0x110000)</c>, or a float format of an integer too large for a double.</exception>
+    /// <exception cref="OutOfMemoryException">
+    ///     A width pads a field past the longest string .NET allocates (about 2<sup>30</sup> characters). CPython
+    ///     builds such a string when the memory is there, so this is the one place the port stops short of it.
+    /// </exception>
     internal static string FormatKeyword(string template, string name, BigInteger value)
         => BuildString(template, 0, template.Length, name, value, RecursionDepth);
 
@@ -68,6 +82,13 @@ internal static class PyStrFormat
     /// <param name="depth">The remaining nesting depth.</param>
     /// <returns>The rendered text.</returns>
     /// <exception cref="ValueError">The nesting limit is exceeded, or the format string is malformed.</exception>
+    /// <exception cref="KeyError">A field names another keyword.</exception>
+    /// <exception cref="IndexError">A field is positional.</exception>
+    /// <exception cref="AttributeError">A field reads an attribute Python's <c>int</c> does not have.</exception>
+    /// <exception cref="TypeError">A field indexes the integer.</exception>
+    /// <exception cref="NotSupportedException">A field reads one of <c>int</c>'s methods.</exception>
+    /// <exception cref="OverflowException">A <c>c</c> format out of range, or a float format of an integer too large for a double.</exception>
+    /// <exception cref="OutOfMemoryException">A width beyond the longest .NET string.</exception>
     private static string BuildString(string s, int start, int end, string name, BigInteger value, int depth)
     {
         if (depth <= 0)
@@ -112,10 +133,11 @@ internal static class PyStrFormat
             if (!markupFollows)
                 continue;
 
-            ParseField(s, ref pos, end, out int nameStart, out int nameEnd, out char conversion,
+            ParseField(s, ref pos, end, out int nameStart, out int nameEnd, out int conversion,
                 out int specStart, out int specEnd, out bool specNeedsExpanding);
             object field = GetFieldObject(s, nameStart, nameEnd, name, value);
-            if (conversion != '\0')
+            // CPython's "no conversion" sentinel is NUL, so a literal "!\0" converts nothing there either.
+            if (conversion != 0)
                 field = DoConversion(field, conversion);
             string spec = specNeedsExpanding
                 ? BuildString(s, specStart, specEnd, name, value, depth - 1)
@@ -134,15 +156,18 @@ internal static class PyStrFormat
     /// <param name="end">The index just past the format string.</param>
     /// <param name="nameStart">The field name's first index.</param>
     /// <param name="nameEnd">The index just past the field name.</param>
-    /// <param name="conversion">The conversion character, or <c>'\0'</c> for none.</param>
+    /// <param name="conversion">
+    ///     The conversion character's code point, or 0 for none; one Python character, so an emoji after <c>!</c> is a
+    ///     (bad) conversion, as in CPython, not a conversion followed by stray text.
+    /// </param>
     /// <param name="specStart">The format spec's first index.</param>
     /// <param name="specEnd">The index just past the format spec (equal to <paramref name="specStart" /> when absent).</param>
     /// <param name="specNeedsExpanding">Whether the format spec contains fields of its own.</param>
     /// <exception cref="ValueError">The field is malformed; CPython's messages.</exception>
     private static void ParseField(string s, ref int pos, int end, out int nameStart, out int nameEnd,
-        out char conversion, out int specStart, out int specEnd, out bool specNeedsExpanding)
+        out int conversion, out int specStart, out int specEnd, out bool specNeedsExpanding)
     {
-        conversion = '\0';
+        conversion = 0;
         specNeedsExpanding = false;
         nameStart = pos;
         char c = '\0';
@@ -169,7 +194,8 @@ internal static class PyStrFormat
             {
                 if (pos >= end)
                     throw new ValueError("end of string while looking for conversion specifier");
-                conversion = s[pos++];
+                conversion = CodePointAt(s, pos, end, out int units);
+                pos += units;
                 if (pos < end)
                 {
                     char next = s[pos++];
@@ -307,16 +333,19 @@ internal static class PyStrFormat
 
     /// <summary><c>do_conversion</c>: <c>!r</c>, <c>!s</c> and <c>!a</c> all give the integer's decimal text.</summary>
     /// <param name="field">The field's integer value.</param>
-    /// <param name="conversion">The conversion character.</param>
+    /// <param name="conversion">The conversion character's code point, not 0.</param>
     /// <returns>The converted value, a string.</returns>
-    /// <exception cref="ValueError">An unknown conversion character; CPython's message.</exception>
-    private static object DoConversion(object field, char conversion)
+    /// <exception cref="ValueError">
+    ///     An unknown conversion character; CPython's message, which quotes printable ASCII as it is and anything else as
+    ///     <c>\x</c> with the code point in hexadecimal (<c>\x1f600</c> for an emoji).
+    /// </exception>
+    private static object DoConversion(object field, int conversion)
     {
         if (conversion is 'r' or 's' or 'a')
             return ((BigInteger)field).ToString(CultureInfo.InvariantCulture);
-        if (conversion is > (char)32 and < (char)127)
-            throw new ValueError($"Unknown conversion specifier {conversion}");
-        throw new ValueError($"Unknown conversion specifier \\x{((int)conversion).ToString("x", CultureInfo.InvariantCulture)}");
+        if (conversion is > 32 and < 127)
+            throw new ValueError($"Unknown conversion specifier {(char)conversion}");
+        throw new ValueError($"Unknown conversion specifier \\x{conversion.ToString("x", CultureInfo.InvariantCulture)}");
     }
 
     // ------------------------------------------------------------------ format specs (formatter_unicode.c)
@@ -324,8 +353,11 @@ internal static class PyStrFormat
     /// <summary>A parsed <c>InternalFormatSpec</c>.</summary>
     private sealed class Spec
     {
-        /// <summary>The fill character (default space).</summary>
-        public char Fill = ' ';
+        /// <summary>
+        ///     The fill character (default space) as UTF-16 text: one Python character, so two units when it lies outside
+        ///     the Basic Multilingual Plane (an emoji fill is legal in CPython).
+        /// </summary>
+        public string Fill = " ";
 
         /// <summary>The alignment: <c>&lt;</c>, <c>&gt;</c>, <c>^</c> or <c>=</c>.</summary>
         public char Align;
@@ -351,8 +383,12 @@ internal static class PyStrFormat
         /// <summary>The precision, or -1.</summary>
         public long Precision = -1;
 
-        /// <summary>The presentation type.</summary>
-        public char Type;
+        /// <summary>
+        ///     The presentation type as a code point (<c>Py_UCS4</c> in CPython): the caller's default unless the spec
+        ///     ends in a type character, which may be any code point, NUL included. A code point rather than a
+        ///     <see cref="char" /> because an astral type character must reach the error message whole.
+        /// </summary>
+        public int Type;
     }
 
     /// <summary>
@@ -372,12 +408,15 @@ internal static class PyStrFormat
         int end = spec.Length;
         bool alignSpecified = false;
         bool fillSpecified = false;
-        if (end - pos >= 2 && IsAlign(spec[pos + 1]))
+        // CPython indexes the spec by code point, so "the second character is an alignment token" means the one after
+        // the first code point: an emoji fill occupies two UTF-16 units here and one character there.
+        int fillUnits = end > 0 ? CodePointUnits(spec, 0, end) : 0;
+        if (end - pos > fillUnits && IsAlign(spec[pos + fillUnits]))
         {
-            f.Align = spec[pos + 1];
-            f.Fill = spec[pos];
+            f.Align = spec[pos + fillUnits];
+            f.Fill = spec.Substring(pos, fillUnits);
             fillSpecified = alignSpecified = true;
-            pos += 2;
+            pos += fillUnits + 1;
         }
         else if (end - pos >= 1 && IsAlign(spec[pos]))
         {
@@ -400,7 +439,7 @@ internal static class PyStrFormat
         if (!fillSpecified && end - pos >= 1 && spec[pos] == '0')
         {
             // Backwards-compatible zero padding: '0' alone means fill 0 with '=' alignment for numbers.
-            f.Fill = '0';
+            f.Fill = "0";
             if (!alignSpecified && defaultAlign == '>')
                 f.Align = '=';
             pos++;
@@ -428,10 +467,15 @@ internal static class PyStrFormat
                 throw new ValueError("Format specifier missing precision");
             f.Precision = precision;
         }
-        if (end - pos > 1)
-            throw new ValueError($"Invalid format specifier '{spec}' for object of type '{typeName}'");
-        if (end - pos == 1)
-            f.Type = spec[pos];
+        // "More than one character remains" counts code points too: a lone astral type character is a type, which
+        // then fails as an unknown format code, not as an invalid specifier.
+        if (end > pos)
+        {
+            int type = CodePointAt(spec, pos, end, out int typeUnits);
+            if (end - pos > typeUnits)
+                throw new ValueError($"Invalid format specifier '{spec}' for object of type '{typeName}'");
+            f.Type = type;
+        }
 
         if (f.Separator != '\0')
         {
@@ -454,13 +498,72 @@ internal static class PyStrFormat
     /// <returns><see langword="true" /> for <c>&lt;</c>, <c>&gt;</c>, <c>=</c> and <c>^</c>.</returns>
     private static bool IsAlign(char c) => c is '<' or '>' or '=' or '^';
 
-    /// <summary>The presentation type as CPython quotes it: <c>'x'</c>, or <c>'\x..'</c> outside printable ASCII.</summary>
-    /// <param name="type">The presentation type character.</param>
+    /// <summary>
+    ///     The presentation type as CPython quotes it (<c>unknown_presentation_type</c>): <c>'x'</c> for printable
+    ///     ASCII, <c>'\x..'</c> with the code point in hexadecimal for anything else, an emoji included
+    ///     (<c>'\x1f600'</c>).
+    /// </summary>
+    /// <param name="type">The presentation type's code point.</param>
     /// <returns>The quoted text.</returns>
-    private static string TypeForMessage(char type)
-        => type is > (char)32 and < (char)128
-            ? $"'{type}'"
-            : $"'\\x{((int)type).ToString("x", CultureInfo.InvariantCulture)}'";
+    private static string TypeForMessage(int type)
+        => type is > 32 and < 128
+            ? $"'{(char)type}'"
+            : $"'\\x{type.ToString("x", CultureInfo.InvariantCulture)}'";
+
+    /// <summary>
+    ///     The number of UTF-16 units of the Python character at an index: 2 for a surrogate pair, else 1. A lone
+    ///     surrogate is a character of its own, as it is in a Python <c>str</c>.
+    /// </summary>
+    /// <param name="s">The text.</param>
+    /// <param name="index">The index of the character's first unit; below <paramref name="end" />.</param>
+    /// <param name="end">The index just past the text being parsed; a pair never reaches past it.</param>
+    /// <returns>1 or 2.</returns>
+    private static int CodePointUnits(string s, int index, int end)
+        => index + 1 < end && char.IsSurrogatePair(s[index], s[index + 1]) ? 2 : 1;
+
+    /// <summary>The code point of the Python character at an index (see <see cref="CodePointUnits" />).</summary>
+    /// <param name="s">The text.</param>
+    /// <param name="index">The index of the character's first unit; below <paramref name="end" />.</param>
+    /// <param name="end">The index just past the text being parsed.</param>
+    /// <param name="units">The number of UTF-16 units the character occupies, 1 or 2.</param>
+    /// <returns>The code point; a lone surrogate's own value.</returns>
+    private static int CodePointAt(string s, int index, int end, out int units)
+    {
+        units = CodePointUnits(s, index, end);
+        return units == 2 ? char.ConvertToUtf32(s[index], s[index + 1]) : s[index];
+    }
+
+    /// <summary>The length of a text in Python characters, which is what format widths and precisions count.</summary>
+    /// <param name="text">The text.</param>
+    /// <returns>The number of code points: a surrogate pair counts once.</returns>
+    private static int CodePointLength(string text)
+    {
+        int length = 0;
+        for (int i = 0; i < text.Length; i += CodePointUnits(text, i, text.Length))
+            length++;
+        return length;
+    }
+
+    /// <summary>
+    ///     Appends the fill character <paramref name="count" /> times, refusing a result .NET cannot hold.
+    /// </summary>
+    /// <param name="sb">The output.</param>
+    /// <param name="fill">The fill character as UTF-16 text (one or two units).</param>
+    /// <param name="count">How many times to append it; zero or more.</param>
+    /// <exception cref="OutOfMemoryException">
+    ///     The padded text would exceed the longest string .NET allocates. CPython builds such a string when memory
+    ///     allows (a width of 3,000,000,000 gives a 3 GB URL); a .NET string stops near 2<sup>30</sup> characters.
+    /// </exception>
+    private static void AppendFill(StringBuilder sb, string fill, long count)
+    {
+        if (count <= 0)
+            return;
+        // Checked up front: a cast to int would go negative and StringBuilder would throw ArgumentOutOfRangeException,
+        // a misleading report of the "too large to build" condition CPython reports as MemoryError when it runs out.
+        if (count > (MaxStringLength - sb.Length) / fill.Length)
+            throw TooLong();
+        sb.Insert(sb.Length, fill, (int)count);
+    }
 
     /// <summary><c>get_integer</c> inside a format spec: consumes Unicode decimal digits.</summary>
     /// <param name="spec">The format spec.</param>
@@ -491,6 +594,7 @@ internal static class PyStrFormat
     /// <param name="specText">The format spec.</param>
     /// <returns>The formatted string.</returns>
     /// <exception cref="ValueError">The spec does not apply to strings; CPython's messages.</exception>
+    /// <exception cref="OutOfMemoryException">The width is beyond what a .NET string holds (see <see cref="AppendFill" />).</exception>
     private static string FormatString(string value, string specText)
     {
         if (specText.Length == 0)
@@ -506,28 +610,40 @@ internal static class PyStrFormat
             throw new ValueError("Alternate form (#) not allowed in string format specifier");
         if (f.Align == '=')
             throw new ValueError("'=' alignment not allowed in string format specifier");
-        if (f.Precision >= 0 && value.Length > f.Precision)
-            value = value.Substring(0, (int)f.Precision);
+        // The precision keeps that many Python characters, so a surrogate pair is kept or cut as a whole.
+        if (f.Precision >= 0 && CodePointLength(value) > f.Precision)
+        {
+            int units = 0;
+            for (long kept = 0; kept < f.Precision; kept++)
+                units += CodePointUnits(value, units, value.Length);
+            value = value.Substring(0, units);
+        }
         return Pad(value, f.Width, f.Align, f.Fill);
     }
 
-    /// <summary><c>calc_padding</c> + <c>fill_padding</c> for a whole value.</summary>
+    /// <summary><c>calc_padding</c> + <c>fill_padding</c> for a whole value; widths count code points.</summary>
     /// <param name="text">The content.</param>
     /// <param name="width">The minimum width, or -1.</param>
     /// <param name="align">The alignment.</param>
-    /// <param name="fill">The fill character.</param>
+    /// <param name="fill">The fill character as UTF-16 text (one or two units).</param>
     /// <returns>The padded content.</returns>
-    private static string Pad(string text, long width, char align, char fill)
+    /// <exception cref="OutOfMemoryException">The width is beyond what a .NET string holds (see <see cref="AppendFill" />).</exception>
+    private static string Pad(string text, long width, char align, string fill)
     {
-        long total = Math.Max(text.Length, width);
+        int length = CodePointLength(text);
+        long total = Math.Max(length, width);
         long left = align switch
         {
-            '>' => total - text.Length,
-            '^' => (total - text.Length) / 2,
+            '>' => total - length,
+            '^' => (total - length) / 2,
             _ => 0,
         };
-        long right = total - text.Length - left;
-        return new string(fill, (int)left) + text + new string(fill, (int)right);
+        long right = total - length - left;
+        var sb = new StringBuilder(text.Length);
+        AppendFill(sb, fill, left);
+        sb.Append(text);
+        AppendFill(sb, fill, right);
+        return sb.ToString();
     }
 
     /// <summary><c>format(int, spec)</c>: <c>_PyLong_FormatAdvancedWriter</c>, integer and float presentation types.</summary>
@@ -536,6 +652,7 @@ internal static class PyStrFormat
     /// <returns>The formatted string.</returns>
     /// <exception cref="ValueError">The spec does not apply to integers; CPython's messages.</exception>
     /// <exception cref="OverflowException">A <c>c</c> format out of range, or a float format of an integer too large for a double.</exception>
+    /// <exception cref="OutOfMemoryException">The width is beyond what a .NET string holds (see <see cref="AppendFill" />).</exception>
     private static string FormatInteger(BigInteger value, string specText)
     {
         if (specText.Length == 0)
@@ -558,6 +675,7 @@ internal static class PyStrFormat
     /// <returns>The formatted string.</returns>
     /// <exception cref="ValueError">Precision, <c>z</c>, or a sign/<c>#</c> with <c>c</c>; CPython's messages.</exception>
     /// <exception cref="OverflowException">A <c>c</c> format of a value outside <c>range(0x110000)</c>.</exception>
+    /// <exception cref="OutOfMemoryException">The width is beyond what a .NET string holds (see <see cref="AppendFill" />).</exception>
     private static string FormatLong(BigInteger value, Spec f)
     {
         if (f.Precision != -1)
@@ -596,6 +714,7 @@ internal static class PyStrFormat
     /// <returns>The formatted string.</returns>
     /// <exception cref="ValueError">The precision is above <see cref="int.MaxValue" />.</exception>
     /// <exception cref="OverflowException">The integer does not fit a double (<c>int too large to convert to float</c>).</exception>
+    /// <exception cref="OutOfMemoryException">The width is beyond what a .NET string holds (see <see cref="AppendFill" />).</exception>
     private static string FormatFloat(BigInteger value, Spec f)
     {
         if (f.Precision > int.MaxValue)
@@ -604,7 +723,7 @@ internal static class PyStrFormat
         if (double.IsInfinity(d))
             throw new OverflowException("int too large to convert to float");
 
-        char type = f.Type;
+        int type = f.Type;
         bool percent = type == '%';
         if (percent)
         {
@@ -749,6 +868,7 @@ internal static class PyStrFormat
     /// <param name="remainder">Fraction, exponent and suffix characters, copied as they are.</param>
     /// <param name="f">The parsed spec.</param>
     /// <returns>The formatted number.</returns>
+    /// <exception cref="OutOfMemoryException">The width is beyond what a .NET string holds (see <see cref="AppendFill" />).</exception>
     private static string LayoutNumber(char sign, string prefix, string digits, string decimalPoint, string remainder, Spec f)
     {
         char signChar = f.Sign switch
@@ -758,8 +878,9 @@ internal static class PyStrFormat
             _ => sign == '-' ? '-' : '\0',
         };
         int nSign = signChar == '\0' ? 0 : 1;
-        long nonDigit = nSign + prefix.Length + decimalPoint.Length + remainder.Length;
-        long minWidth = f.Fill == '0' && f.Align == '=' ? f.Width - nonDigit : 0;
+        // Widths count code points: a 'c' of an astral value is one character of remainder, two UTF-16 units.
+        long nonDigit = nSign + prefix.Length + decimalPoint.Length + CodePointLength(remainder);
+        long minWidth = f.Fill == "0" && f.Align == '=' ? f.Width - nonDigit : 0;
         string grouped = digits.Length == 0 ? "" : Group(digits, minWidth, f.Separator, f.GroupSize);
         long padding = f.Width - (nonDigit + grouped.Length);
         long left = 0, inner = 0, right = 0;
@@ -783,13 +904,13 @@ internal static class PyStrFormat
             }
         }
         var sb = new StringBuilder();
-        sb.Append(f.Fill, (int)left);
+        AppendFill(sb, f.Fill, left);
         if (nSign == 1)
             sb.Append(signChar);
         sb.Append(prefix);
-        sb.Append(f.Fill, (int)inner);
+        AppendFill(sb, f.Fill, inner);
         sb.Append(grouped).Append(decimalPoint).Append(remainder);
-        sb.Append(f.Fill, (int)right);
+        AppendFill(sb, f.Fill, right);
         return sb.ToString();
     }
 
@@ -802,9 +923,16 @@ internal static class PyStrFormat
     /// <param name="separator">The separator, or <c>'\0'</c> for no grouping.</param>
     /// <param name="groupSize">Digits per group.</param>
     /// <returns>The grouped digits.</returns>
+    /// <exception cref="OutOfMemoryException">The zero-padded width is beyond what a .NET string holds (see <see cref="AppendFill" />).</exception>
     private static string Group(string digits, long minWidth, char separator, int groupSize)
     {
         minWidth = Math.Max(0, minWidth);
+        // A zero-padded width CPython may build but .NET cannot: refuse it before the zero groups are made.
+        if (minWidth > MaxStringLength)
+            throw TooLong();
+        // The groups are produced right to left, so each is appended and the list reversed once at the end; inserting
+        // at the front made a zero-padded, grouped width of a few million characters quadratic (minutes, not
+        // milliseconds as in CPython).
         var parts = new System.Collections.Generic.List<string>();
         long remaining = digits.Length;
         int sepLength = separator == '\0' ? 0 : 1;
@@ -816,7 +944,7 @@ internal static class PyStrFormat
                 long l = Math.Min(groupSize, Math.Max(Math.Max(remaining, minWidth), 1));
                 long zeros = Math.Max(0, l - remaining);
                 long chars = Math.Max(0, Math.Min(remaining, l));
-                parts.Insert(0, new string('0', (int)zeros) + digits.Substring((int)(remaining - chars), (int)chars));
+                parts.Add(new string('0', (int)zeros) + digits.Substring((int)(remaining - chars), (int)chars));
                 remaining -= chars;
                 minWidth -= l;
                 if (remaining <= 0 && minWidth <= 0)
@@ -832,8 +960,16 @@ internal static class PyStrFormat
             long l = Math.Max(Math.Max(remaining, minWidth), 1);
             long zeros = Math.Max(0, l - remaining);
             long chars = Math.Max(0, Math.Min(remaining, l));
-            parts.Insert(0, new string('0', (int)zeros) + digits.Substring(0, (int)chars));
+            parts.Add(new string('0', (int)zeros) + digits.Substring(0, (int)chars));
         }
+        parts.Reverse();
         return string.Join(separator == '\0' ? "" : separator.ToString(), parts);
     }
+
+    /// <summary>The error for a field padded past the longest string .NET allocates (see <see cref="AppendFill" />).</summary>
+    /// <returns>The exception to throw.</returns>
+    private static OutOfMemoryException TooLong()
+        => new("The storage URL template pads a field past the longest string .NET can hold " +
+               $"({MaxStringLength.ToString(CultureInfo.InvariantCulture)} UTF-16 units); CPython builds such a string " +
+               "when memory allows.");
 }

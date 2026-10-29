@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using OptunaSharp.Storages.SqlAlchemy;
 
 namespace OptunaSharp.Internal;
 
@@ -131,10 +132,127 @@ internal static class PyOsPath
         (string aDrive, _, _) = NtSplitRoot(a.Replace('/', '\\'));
         if (bRoot.Length > 0)
             return (bDrive.Length > 0 ? bDrive : aDrive) + bRoot + bRest;
-        if (bDrive.Length > 0 && !string.Equals(bDrive, aDrive, StringComparison.OrdinalIgnoreCase))
-            return b;
-        string sep = a.EndsWith('\\') || a.EndsWith('/') ? "" : "\\";
+        if (bDrive.Length > 0 && bDrive != aDrive)
+        {
+            // Python compares drives with str.lower(), which OrdinalIgnoreCase does not reproduce (it equates ς and
+            // σ, and not the Kelvin sign and k); different drives make b replace a entirely.
+            if (PyStrings.Lower(bDrive) != PyStrings.Lower(aDrive))
+                return b;
+            // The same drive spelled in another case: Python keeps b's spelling of it.
+            a = bDrive + a.Substring(aDrive.Length);
+            aDrive = bDrive;
+        }
+        // No separator after an existing one, nor after a bare drive letter ("C:" + "x" is the drive-relative "C:x");
+        // a bare UNC drive does get one.
+        bool bareDrive = aDrive.Length == a.Length && aDrive.EndsWith(':');
+        string sep = a.EndsWith('\\') || a.EndsWith('/') || bareDrive ? "" : "\\";
         return a + sep + bRest;
+    }
+
+    /// <summary>
+    ///     <c>os.path.expanduser(path)</c> (CPython 3.12) for the running operating system: a leading <c>~</c> or
+    ///     <c>~user</c> becomes that user's home directory; any other path is returned unchanged.
+    /// </summary>
+    /// <param name="path">The path.</param>
+    /// <returns>The expanded path, or <paramref name="path" /> when Python cannot expand it.</returns>
+    /// <remarks>
+    ///     Windows (<c>ntpath</c>): the home is <c>USERPROFILE</c>, else <c>HOMEDRIVE</c> joined with
+    ///     <c>HOMEPATH</c> (neither set: unchanged); <c>~other</c> is guessed as a sibling of the current user's home,
+    ///     and only when that home's last component is the current <c>USERNAME</c>. POSIX (<c>posixpath</c>): the home
+    ///     is <c>HOME</c>, else the account's directory; <c>~other</c> is looked up in <c>/etc/passwd</c> (CPython asks
+    ///     <c>getpwnam</c>, which may also consult directory services; those accounts are not found here).
+    /// </remarks>
+    internal static string ExpandUser(string path)
+    {
+        if (!path.StartsWith('~'))
+            return path;
+        if (OperatingSystem.IsWindows())
+        {
+            int i = 1;
+            while (i < path.Length && path[i] is not ('\\' or '/'))
+                i++;
+            string userhome;
+            if (Environment.GetEnvironmentVariable("USERPROFILE") is { } profile)
+                userhome = profile;
+            else if (Environment.GetEnvironmentVariable("HOMEPATH") is not { } homePath)
+                return path;
+            else
+                userhome = NtJoin(Environment.GetEnvironmentVariable("HOMEDRIVE") ?? "", homePath);
+            if (i != 1)
+            {
+                string target = path.Substring(1, i - 1);
+                string? current = Environment.GetEnvironmentVariable("USERNAME");
+                if (target != current)
+                {
+                    // Profiles usually sit side by side, named after their users; a home that does not follow that
+                    // layout makes the guess unreliable, and Python then leaves the path alone.
+                    (string head, string tail) = NtSplit(userhome);
+                    if (current != tail)
+                        return path;
+                    userhome = NtJoin(head, target);
+                }
+            }
+            return userhome + path.Substring(i);
+        }
+
+        int slash = path.IndexOf('/', 1);
+        int end = slash < 0 ? path.Length : slash;
+        string? home;
+        if (end == 1)
+        {
+            home = Environment.GetEnvironmentVariable("HOME");
+            if (home is null)
+            {
+                string account = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (account.Length == 0)
+                    return path;
+                home = account;
+            }
+        }
+        else
+        {
+            home = PasswdHome(path.Substring(1, end - 1));
+            if (home is null)
+                return path;
+        }
+        string expanded = home.TrimEnd('/') + path.Substring(end);
+        return expanded.Length > 0 ? expanded : "/";
+    }
+
+    /// <summary><c>ntpath.split</c>: the directory and the last component, the directory without trailing separators.</summary>
+    /// <param name="path">The path.</param>
+    /// <returns>The head and the tail.</returns>
+    private static (string Head, string Tail) NtSplit(string path)
+    {
+        (string drive, string root, string rest) = NtSplitRoot(path.Replace('/', '\\'));
+        // Slices of the original text, as Python takes them; only the separator test uses the normalized form.
+        string original = path.Substring(drive.Length + root.Length);
+        int i = rest.Length;
+        while (i > 0 && rest[i - 1] != '\\')
+            i--;
+        return (path.Substring(0, drive.Length + root.Length) + original.Substring(0, i).TrimEnd('\\', '/'), original.Substring(i));
+    }
+
+    /// <summary>The home directory <c>/etc/passwd</c> lists for a user, as <c>pwd.getpwnam(name).pw_dir</c> reads it.</summary>
+    /// <param name="name">The user name.</param>
+    /// <returns>The directory, or <see langword="null" /> when the user is not listed or the file cannot be read.</returns>
+    private static string? PasswdHome(string name)
+    {
+        try
+        {
+            foreach (string line in File.ReadLines("/etc/passwd"))
+            {
+                // name:password:uid:gid:gecos:home:shell
+                string[] fields = line.Split(':');
+                if (fields.Length >= 6 && fields[0] == name)
+                    return fields[5];
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // No readable password file: Python's lookup fails too, and expanduser leaves the path alone.
+        }
+        return null;
     }
 
     /// <summary><c>posixpath.join(a, b)</c> for a relative <paramref name="b" />.</summary>

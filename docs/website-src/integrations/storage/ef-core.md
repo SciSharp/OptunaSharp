@@ -45,11 +45,24 @@ What Python rejects is rejected with Python's error kind and message:
 
 - `postgres://` fails with `Can't load plugin: sqlalchemy.dialects:postgres`. SQLAlchemy dropped that name.
 - An unknown driver suffix fails the same way.
-- A bad libpq value fails with libpq's message, for example `invalid sslmode value: "bogus"`.
+- A bad libpq value fails with libpq's message, for example `invalid sslmode value: "bogus"`. libpq's checks run in libpq 18's order, and an explicit empty value (`PGSSLMODE` exported empty, `sslmode=''` in a dsn) is invalid, as in libpq.
 - A `?port=` reaches PyMySQL as text, so it fails with `port should be of type int`.
-- An unknown MySQL argument fails with the driver's `TypeError`.
+- An unknown MySQL argument fails with the driver's `TypeError`. For `mysql://` (MySQLdb), the arguments go through CPython's own argument parsing first: a repeated key is a tuple (`connect() argument 16 must be str, not tuple`), an integer beyond a C `int` raises the platform's `OverflowError`, and `ssl_mode` must be one of the five upper-case names (`Unknown ssl_mode specification` otherwise).
+- PyMySQL's own failures on text values carry PyMySQL's messages: `?ssl=…` (`'str' object has no attribute 'get'`), an unknown `charset` (`'NoneType' object has no attribute 'encoding'`, while `UTF8MB4` and `Utf8` work), `?conv=…`, a password outside Latin-1 (`UnicodeEncodeError`, as PyMySQL encodes it as Latin-1), and a missing `ssl_ca` or `ssl_cert` file (`FileNotFoundException`, Python's `FileNotFoundError`).
 
-An asyncio driver (`+asyncpg`, `+psycopg_async`, `+aiomysql`, `+asyncmy`) fails on SQLAlchemy's synchronous-engine greenlet error. Settings MySqlConnector or Npgsql cannot express raise `NotSupportedException` naming the argument: a MySQL character set other than UTF-8 (MySqlConnector always talks `utf8mb4`), `init_command`, `sql_mode`, libpq's `service` file, and so on. A PyMySQL password outside ASCII is sent as UTF-8, where PyMySQL sends Latin-1. SQLite URLs are rejected: use [the SQLite package](sqlite.md).
+PostgreSQL connection strings follow libpq end to end:
+
+- **Connection string arguments.** A `?dsn=` (psycopg2) or `?conninfo=` (psycopg) may use libpq's `keyword=value` form or its URI form (`postgresql://user@host:port,host2/db?sslmode=require`). It is merged with the URL's other arguments the way the driver merges them.
+- **Service files.** `?service=name`, or `PGSERVICE`, reads that group from `PGSERVICEFILE` or `~/.pg_service.conf` (`%APPDATA%/postgresql/.pg_service.conf` on Windows), then from `$PGSYSCONFDIR/pg_service.conf`. The group fills in what the URL leaves out, and libpq's errors apply to a missing group or a malformed file. libpq's compiled-in last resort, the `SYSCONFDIR` of each libpq build, is not read: set `PGSYSCONFDIR` to use a system-wide file.
+- **Defaults.** `PGREQUIRESSL=1` means `sslmode=require`, and `sslrootcert=system` without an `sslmode` means `verify-full`.
+- **Validation before refusal.** `require_auth`, the SCRAM keys, the TLS and protocol version ranges and `client_encoding` are validated as libpq validates them (every UTF-8 spelling of `client_encoding` is accepted). A NUL in a value is psycopg2's `embedded null character`.
+
+An asyncio driver (`+asyncpg`, `+psycopg_async`, `+aiomysql`, `+asyncmy`) fails on SQLAlchemy's synchronous-engine greenlet error. Settings MySqlConnector or Npgsql cannot express raise `NotSupportedException` naming the argument, but only after the Python driver's own checks have passed, so a URL Python rejects fails with Python's error. Examples:
+
+- PostgreSQL: `hostaddr`, `require_auth` (Npgsql cannot restrict authentication methods), the SCRAM keys, `keepalives_count`, `tcp_user_timeout`, a minimum protocol above 3.0.
+- MySQL: a character set other than UTF-8 (MySqlConnector always talks `utf8mb4`), `init_command`, `sql_mode`, `client_flag` bits that change how SQL parses, an option file PyMySQL would read (a missing one is skipped, as `configparser` skips it).
+
+A PyMySQL password with Latin-1 characters outside ASCII is sent as UTF-8, where PyMySQL sends Latin-1. SQLite URLs are rejected: use [the SQLite package](sqlite.md).
 
 MariaDB is routed through the MySQL provider, with provider version detection, but the repository's database interoperability fixtures target PostgreSQL 16 and MySQL 8.0. Those fixtures do not establish coverage of every MariaDB or server version.
 

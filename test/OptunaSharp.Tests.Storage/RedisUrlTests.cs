@@ -292,6 +292,8 @@ public class RedisUrlTests
     [DataRow("rediss://h?ssl_min_version=999", typeof(ValueError), "Unsupported TLS/SSL version 0x3e7")]
     [DataRow("rediss://h?ssl_min_version=-3", typeof(ValueError), "Unsupported TLS/SSL version 0xfffffffd")]
     [DataRow("rediss://h?ssl_validate_ocsp=1&ssl_validate_ocsp_stapled=1", typeof(ValueError), "Either an OCSP staple or pure OCSP connection must be validated - not both.")]
+    [DataRow("rediss://h?ssl_keyfile=k", typeof(TypeError), "certfile should be a valid filesystem path")]
+    [DataRow("rediss://h?ssl_keyfile=k&ssl_min_version=999", typeof(TypeError), "certfile should be a valid filesystem path")]
     public void RedisPyRejections_KeepTheirKindAndMessage(string url, Type kind, string message)
     {
         var act = () => RedisUrl.Parse(url);

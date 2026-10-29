@@ -176,10 +176,12 @@ internal static class SqliteUrl
         if (filename.Contains('\0'))
             throw new ValueError("embedded null character");
         CheckCInt(opts, "detect_types");
+        // get_isolation_level compares with sqlite3_stricmp, which folds ASCII letters only and compares every other
+        // byte as it is; Ascii.EqualsIgnoreCase is that comparison, OrdinalIgnoreCase folds non-ASCII letters too.
         if (opts.TryGetValue("isolation_level", out object? level) && level is string text
-            && text is not "" && !text.Equals("DEFERRED", StringComparison.OrdinalIgnoreCase)
-            && !text.Equals("IMMEDIATE", StringComparison.OrdinalIgnoreCase)
-            && !text.Equals("EXCLUSIVE", StringComparison.OrdinalIgnoreCase))
+            && text is not "" && !System.Text.Ascii.EqualsIgnoreCase(text, "DEFERRED")
+            && !System.Text.Ascii.EqualsIgnoreCase(text, "IMMEDIATE")
+            && !System.Text.Ascii.EqualsIgnoreCase(text, "EXCLUSIVE"))
             throw new ValueError("isolation_level string must be '', 'DEFERRED', 'IMMEDIATE', or 'EXCLUSIVE'");
         CheckCInt(opts, "cached_statements");
 

@@ -253,14 +253,23 @@ public class EFCoreRdbUrlTests
 
     /// <summary>
     ///     <c>ssl_ca</c> makes PyMySQL verify the server certificate and its host name, so MySqlConnector gets the CA
-    ///     and <see cref="MySqlSslMode.VerifyFull" />.
+    ///     and <see cref="MySqlSslMode.VerifyFull" />. PyMySQL loads the CA file before connecting (a missing one is a
+    ///     <c>FileNotFoundError</c>), so the test gives it a file that exists; its contents are MySqlConnector's to check.
     /// </summary>
     [TestMethod]
     public void Mysql_PyMySql_SslCa_VerifiesTheServer()
     {
-        var b = My("mysql+pymysql://u:p@h/db?ssl_ca=/x/ca.pem");
-        b.SslCa.Should().Be("/x/ca.pem");
-        b.SslMode.Should().Be(MySqlSslMode.VerifyFull);
+        string ca = System.IO.Path.GetTempFileName();
+        try
+        {
+            var b = My("mysql+pymysql://u:p@h/db?ssl_ca=" + Uri.EscapeDataString(ca));
+            b.SslCa.Should().Be(ca);
+            b.SslMode.Should().Be(MySqlSslMode.VerifyFull);
+        }
+        finally
+        {
+            System.IO.File.Delete(ca);
+        }
     }
 
     /// <summary>MySQLdb's integer <c>connect_timeout</c> and PyMySQL's <c>utf8mb4</c> character set are honored.</summary>

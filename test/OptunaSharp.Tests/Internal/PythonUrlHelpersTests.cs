@@ -150,8 +150,44 @@ public class PythonUrlHelpersTests
     [DataRow("{SCHEMA_VERSION:c}", "\x0c")]
     [DataRow("{SCHEMA_VERSION:x<4}", "12xx")]
     [DataRow("{SCHEMA_VERSION:#b}", "0b1100")]
+    [DataRow("{SCHEMA_VERSION:\U0001F600^5}", "\U0001F60012\U0001F600\U0001F600")]
+    [DataRow("{SCHEMA_VERSION!r:\U0001F600>5}", "\U0001F600\U0001F600\U0001F60012")]
+    [DataRow("{SCHEMA_VERSION:\U0001F600=+5}", "+\U0001F600\U0001F60012")]
+    [DataRow("{SCHEMA_VERSION:\U0001F600<4c}", "\x0c\U0001F600\U0001F600\U0001F600")]
+    [DataRow("{SCHEMA_VERSION!s:\U0001F600^6.1}", "\U0001F600\U0001F6001\U0001F600\U0001F600\U0001F600")]
+    [DataRow("{SCHEMA_VERSION!\x00:>4}", "  12")]
     public void TemplateFill_MatchesStrFormat(string template, string expected)
         => StorageUrlTemplate.Fill(template).Should().Be(expected);
+
+    /// <summary>
+    ///     A zero-padded, grouped width of three million characters renders as Python renders it (3,000,001 characters,
+    ///     <c>0,000,00…,000,012</c>) and in linear time: the grouping used to insert each group at the front, which made
+    ///     this width take minutes.
+    /// </summary>
+    [TestMethod]
+    public void TemplateFill_HugeGroupedWidthIsLinear()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        string filled = StorageUrlTemplate.Fill("{SCHEMA_VERSION:03000000,}");
+        watch.Stop();
+        filled.Length.Should().Be(3000001);
+        filled.Should().StartWith("0,000,00").And.EndWith(",000,012");
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
+    ///     A width past the longest .NET string (Python builds a 3 GB URL for <c>{SCHEMA_VERSION:3000000000}</c> when memory
+    ///     allows) fails with <see cref="OutOfMemoryException" /> before any allocation, not with an argument error from a
+    ///     negative count.
+    /// </summary>
+    [TestMethod]
+    public void TemplateFill_WidthBeyondDotNetStringsIsOutOfMemory()
+    {
+        Action padded = () => StorageUrlTemplate.Fill("{SCHEMA_VERSION:3000000000}");
+        padded.Should().Throw<OutOfMemoryException>();
+        Action grouped = () => StorageUrlTemplate.Fill("{SCHEMA_VERSION:03000000000,}");
+        grouped.Should().Throw<OutOfMemoryException>();
+    }
 
     /// <summary><c>str.format</c>'s refusals keep Python's exception kinds and messages.</summary>
     /// <param name="template">The storage URL template.</param>
@@ -166,6 +202,13 @@ public class PythonUrlHelpersTests
     [DataRow("{SCHEMA_VERSION.foo}", typeof(AttributeError), "'int' object has no attribute 'foo'")]
     [DataRow("{SCHEMA_VERSION:s}", typeof(ValueError), "Unknown format code 's' for object of type 'int'")]
     [DataRow("{SCHEMA_VERSION[0]}", typeof(TypeError), "'int' object is not subscriptable")]
+    [DataRow("{SCHEMA_VERSION:\U0001F600}", typeof(ValueError), "Unknown format code '\\x1f600' for object of type 'int'")]
+    [DataRow("{SCHEMA_VERSION!\U0001F600}", typeof(ValueError), "Unknown conversion specifier \\x1f600")]
+    [DataRow("{SCHEMA_VERSION!\U0001F600:>4}", typeof(ValueError), "Unknown conversion specifier \\x1f600")]
+    [DataRow("{SCHEMA_VERSION:,\U0001F600}", typeof(ValueError), "Cannot specify ',' with '\\x1f600'.")]
+    [DataRow("{SCHEMA_VERSION:\U0001F600\U0001F600}", typeof(ValueError), "Invalid format specifier '\U0001F600\U0001F600' for object of type 'int'")]
+    [DataRow("{\U0001F600}", typeof(KeyError), "'\U0001F600'")]
+    [DataRow("{\U000E0001}", typeof(KeyError), "'\\U000e0001'")]
     public void TemplateFill_RefusesLikeStrFormat(string template, Type kind, string message)
     {
         Action act = () => StorageUrlTemplate.Fill(template);
@@ -277,5 +320,160 @@ public class PythonUrlHelpersTests
         SqlAlchemyDriver driver = SqlAlchemyRegistry.Resolve(SqlAlchemyUrl.Parse("postgresql://h/db"), out _);
         (driver.Dialect, driver.Driver, driver.IsAsync).Should().Be(("postgresql", "psycopg2", false));
         SqlAlchemyRegistry.Resolve(SqlAlchemyUrl.Parse("mysql+asyncmy://h/db"), out _).IsAsync.Should().BeTrue();
+    }
+
+    /// <summary>
+    ///     Python's <c>str.lower()</c>: U+0130 becomes two code points, a word-final sigma becomes <c>ς</c> (case-ignorable
+    ///     characters such as <c>.</c>, <c>'</c> and combining marks are skipped on both sides), the rest maps as .NET's
+    ///     invariant lower case does. Each expectation is CPython 3.12's output.
+    /// </summary>
+    /// <param name="text">The input.</param>
+    /// <param name="expected">Python's <c>text.lower()</c>.</param>
+    [TestMethod]
+    [DataRow("\U00000130", "i\U00000307")]
+    [DataRow("\U00000391\U000003A3", "\U000003B1\U000003C2")]
+    [DataRow("\U00000391\U000003A3.", "\U000003B1\U000003C2.")]
+    [DataRow("\U00000391\U000003A3\U00000391", "\U000003B1\U000003C3\U000003B1")]
+    [DataRow("\U000003A3", "\U000003C3")]
+    [DataRow("A\U000003A3'B", "a\U000003C3'b")]
+    [DataRow("A\U000003A3\U00000345", "a\U000003C2\U00000345")]
+    [DataRow("\U000003A3\U000003A3", "\U000003C3\U000003C2")]
+    [DataRow("a\U00000130b", "ai\U00000307b")]
+    [DataRow("AB\U000003A3 C", "ab\U000003C2 c")]
+    [DataRow("\U0000212A", "k")]
+    [DataRow("\U00000391\U000003A3\U0001F600", "\U000003B1\U000003C2\U0001F600")]
+    [DataRow("MixedASCII", "mixedascii")]
+    public void Lower_MatchesPythonStrLower(string text, string expected) => PyStrings.Lower(text).Should().Be(expected);
+
+    /// <summary>A lone surrogate is a character of its own in Python: <c>lower()</c> keeps it and a sigma before it is not final.</summary>
+    [TestMethod]
+    public void Lower_KeepsALoneSurrogate()
+    {
+        string lone = new('\ud800', 1);
+        PyStrings.Lower(lone).Should().Be(lone);
+        PyStrings.Lower("A\U000003A3" + lone).Should().Be("a\U000003C2" + lone);
+    }
+
+    /// <summary>
+    ///     SQLAlchemy's <c>asbool</c> quotes the stripped, lower-cased text in its error, so the message carries Python's
+    ///     <c>lower()</c> (CPython: <c>String is not true/false: 'i̇'</c> for <c>İ</c>).
+    /// </summary>
+    [TestMethod]
+    public void AsBool_QuotesPythonsLowerCasedText()
+    {
+        foreach ((string text, string message) in new[]
+                 {
+                     ("\U00000130", "String is not true/false: 'i\U00000307'"),
+                     (" T\U00000130 ", "String is not true/false: 'ti\U00000307'"),
+                     ("\U00000391\U000003A3", "String is not true/false: '\U000003B1\U000003C2'"),
+                 })
+        {
+            Action act = () => PyValues.AsBool(text);
+            act.Should().Throw<ValueError>().Which.Message.Should().Be(message);
+        }
+        PyValues.AsBool(" Yes ").Should().BeTrue();
+    }
+
+    /// <summary>urllib's <c>.hostname</c> lower-cases with <c>str.lower()</c> before a <c>%</c> zone and leaves the zone alone.</summary>
+    [TestMethod]
+    public void Hostname_LowerCasesLikeUrllib()
+    {
+        PyUrllib.UrlSplit("redis://\U00000391\U000003A3:1/0").Hostname.Should().Be("\U000003B1\U000003C2");
+        PyUrllib.UrlSplit("redis://[FE80::1%25\U00000391\U000003A3]:1").Hostname.Should().Be("fe80::1%25\U00000391\U000003A3");
+    }
+
+    /// <summary>Code-point order keeps a lone surrogate's own value (U+D800 sorts before U+E000), not U+FFFD's.</summary>
+    [TestMethod]
+    public void CompareCodePoints_KeepsALoneSurrogatesValue()
+    {
+        PyStrings.CompareCodePoints(new string('\ud800', 1), "\U0000E000").Should().BeNegative();
+        PyStrings.CompareCodePoints("\U0001F600", "\U0000FFFF").Should().BePositive();
+    }
+
+    /// <summary>CPython's strict UTF-8 decoding: the same refusals with the same reason, byte and position.</summary>
+    /// <param name="bytes">The input.</param>
+    /// <param name="message">CPython's <c>UnicodeDecodeError</c> message.</param>
+    [TestMethod]
+    [DataRow(new byte[] { 0xff }, "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte")]
+    [DataRow(new byte[] { 0xe2, 0x82 }, "'utf-8' codec can't decode bytes in position 0-1: unexpected end of data")]
+    [DataRow(new byte[] { 0xe2, 0x41 }, "'utf-8' codec can't decode byte 0xe2 in position 0: invalid continuation byte")]
+    [DataRow(new byte[] { 0xed, 0xa0, 0x80 }, "'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte")]
+    [DataRow(new byte[] { 0xf0, 0x9f, 0x98 }, "'utf-8' codec can't decode bytes in position 0-2: unexpected end of data")]
+    [DataRow(new byte[] { 0xf0, 0x9f, 0x41 }, "'utf-8' codec can't decode bytes in position 0-1: invalid continuation byte")]
+    [DataRow(new byte[] { 0x61, 0xc0, 0x80 }, "'utf-8' codec can't decode byte 0xc0 in position 1: invalid start byte")]
+    [DataRow(new byte[] { 0xf4, 0x90, 0x80, 0x80 }, "'utf-8' codec can't decode byte 0xf4 in position 0: invalid continuation byte")]
+    [DataRow(new byte[] { 0xe0, 0x80, 0x80 }, "'utf-8' codec can't decode byte 0xe0 in position 0: invalid continuation byte")]
+    [DataRow(new byte[] { 0xf5 }, "'utf-8' codec can't decode byte 0xf5 in position 0: invalid start byte")]
+    [DataRow(new byte[] { 0xc2 }, "'utf-8' codec can't decode byte 0xc2 in position 0: unexpected end of data")]
+    public void Utf8Decode_RefusesWithCPythonsMessage(byte[] bytes, string message)
+    {
+        Action act = () => PyUtf8.DecodeStrict(bytes);
+        act.Should().Throw<UnicodeDecodeError>().Which.Message.Should().Be(message);
+    }
+
+    /// <summary>Well-formed UTF-8 decodes, and the error is a <see cref="ValueError" /> as Python's is.</summary>
+    [TestMethod]
+    public void Utf8Decode_AcceptsWellFormedText()
+    {
+        PyUtf8.DecodeStrict(new byte[] { 0xe2, 0x82, 0xac, 0xf0, 0x9f, 0x98, 0x80 }).Should().Be("\U000020AC\U0001F600");
+        Action act = () => PyUtf8.DecodeStrict(new byte[] { 0xff });
+        act.Should().Throw<ValueError>();
+    }
+
+    /// <summary><c>text.encode("latin1")</c>: CPython's message for the first run of characters above U+00FF.</summary>
+    /// <param name="text">The input.</param>
+    /// <param name="message">CPython's <c>UnicodeEncodeError</c> message.</param>
+    [TestMethod]
+    [DataRow("\U000020AC", "'latin-1' codec can't encode character '\\u20ac' in position 0: ordinal not in range(256)")]
+    [DataRow("a\U000020AC\U000020ACb", "'latin-1' codec can't encode characters in position 1-2: ordinal not in range(256)")]
+    [DataRow("\U0001F600", "'latin-1' codec can't encode character '\\U0001f600' in position 0: ordinal not in range(256)")]
+    [DataRow("ab\U00000100", "'latin-1' codec can't encode character '\\u0100' in position 2: ordinal not in range(256)")]
+    [DataRow("\U000000E9\U000020AC", "'latin-1' codec can't encode character '\\u20ac' in position 1: ordinal not in range(256)")]
+    public void Latin1Encode_RefusesLikeStrEncode(string text, string message)
+    {
+        Action act = () => PyLatin1.CheckEncodable(text);
+        act.Should().Throw<UnicodeEncodeError>().Which.Message.Should().Be(message);
+    }
+
+    /// <summary>Latin-1 text (ASCII, <c>é</c>, <c>ÿ</c>) encodes without error.</summary>
+    [TestMethod]
+    public void Latin1Encode_AcceptsLatin1Text()
+    {
+        Action act = () => PyLatin1.CheckEncodable("p\U000000E9\U000000FF");
+        act.Should().NotThrow();
+    }
+
+    /// <summary>
+    ///     <c>os.path.expanduser</c> as CPython 3.12 runs it on this platform: a path without a leading <c>~</c> is left
+    ///     alone; on Windows <c>~</c> is <c>USERPROFILE</c> and <c>~other</c> a sibling profile when the current
+    ///     profile's last component is <c>USERNAME</c> (Python here gave <c>C:\Users\bob\x</c> for <c>~bob\x</c>);
+    ///     elsewhere <c>~</c> is <c>HOME</c>.
+    /// </summary>
+    [TestMethod]
+    public void ExpandUser_MatchesOsPath()
+    {
+        PyOsPath.ExpandUser("x~").Should().Be("x~");
+        if (OperatingSystem.IsWindows())
+        {
+            string? profile = Environment.GetEnvironmentVariable("USERPROFILE");
+            if (profile is null)
+                return;
+            PyOsPath.ExpandUser("~").Should().Be(profile);
+            PyOsPath.ExpandUser("~\\my.cnf").Should().Be(profile + "\\my.cnf");
+            PyOsPath.ExpandUser("~/my.cnf").Should().Be(profile + "/my.cnf");
+            string? user = Environment.GetEnvironmentVariable("USERNAME");
+            string parent = System.IO.Path.GetDirectoryName(profile.TrimEnd('\\'))!;
+            if (user is not null && System.IO.Path.GetFileName(profile.TrimEnd('\\')) == user)
+                PyOsPath.ExpandUser("~bob\\x").Should().Be(parent + "\\bob\\x");
+            else
+                PyOsPath.ExpandUser("~bob\\x").Should().Be("~bob\\x");
+        }
+        else
+        {
+            string? home = Environment.GetEnvironmentVariable("HOME");
+            if (home is not null)
+                PyOsPath.ExpandUser("~/my.cnf").Should().Be(home.TrimEnd('/') + "/my.cnf");
+            PyOsPath.ExpandUser("~no-such-user-for-optunasharp/x").Should().Be("~no-such-user-for-optunasharp/x");
+        }
     }
 }
