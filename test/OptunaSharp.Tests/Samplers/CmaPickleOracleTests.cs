@@ -261,6 +261,18 @@ public class CmaPickleOracleTests
         FluentActions.Invoking(() => CmaPickle.Loads(stored[..^40])).Should().Throw<ValueError>().WithMessage("*ended before STOP*");
         FluentActions.Invoking(() => CmaPickle.Loads(PythonPickle.Dumps(1.5))).Should().Throw<ValueError>().WithMessage("*not a cmaes optimizer*");
         FluentActions.Invoking(() => CmaPickle.Loads(new byte[] { 0x80, 0x04, 0xff })).Should().Throw<ValueError>().WithMessage("*unsupported opcode 0xff*");
+
+        // A one-element array whose shape claims (2^31 - 1)^3 elements: the count would overflow 64 bits, so the
+        // reader must refuse it as malformed, neither wrapping into a size that matches nor allocating.
+        byte[] small = PythonPickle.Dumps(new NpArray(new NpDtype("f8"), new[] { 1 }, new[] { 0.0 }));
+        byte[] versionAndShape = { 0x4b, 0x01, 0x4b, 0x01, 0x85, 0x94 };  // BININT1 1, then (1,) as BININT1 1 TUPLE1
+        byte[] hugeShape = [0x4b, 0x01, 0x4a, 0xff, 0xff, 0xff, 0x7f, 0x4a, 0xff, 0xff, 0xff, 0x7f, 0x4a, 0xff, 0xff, 0xff, 0x7f, 0x87, 0x94];
+        int at = small.AsSpan().IndexOf(versionAndShape);
+        at.Should().BePositive("the array state starts with the version and the shape");
+        byte[] hostileShape = [.. small[..at], .. hugeShape, .. small[(at + versionAndShape.Length)..]];
+
+        PythonPickle.Loads(small).Should().BeOfType<NpArray>();
+        FluentActions.Invoking(() => PythonPickle.Loads(hostileShape)).Should().Throw<ValueError>().WithMessage("*does not match its shape*");
     }
 
     /// <summary>

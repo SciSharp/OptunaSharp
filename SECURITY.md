@@ -62,10 +62,16 @@ not sandbox the code it is given. These are the trust boundaries to keep in mind
 - **Storage URLs and connection strings are secrets.** They usually carry credentials: keep them out of
   source control, shared command lines, logs and crash reports, and pass them through environment
   variables or a secret store.
-- **Persisted data is JSON, never pickle.** Studies, trials, attributes and sampler state are stored as
-  JSON (journal, RDB, Redis); OptunaSharp uses no pickle or type-embedding serializer, so opening an
-  untrusted storage cannot run code. Its contents are still attacker-chosen data, such as oversized
-  attributes.
+- **Persisted data is JSON, plus one pickle that OptunaSharp reads without running it.** Studies, trials,
+  attributes and sampler state are stored as JSON (journal, RDB, Redis). The exception is `CmaEsSampler`.
+  It keeps its optimizer where Optuna does, as the hex of a Python pickle in a trial system attribute, so
+  C# and Python workers can share a study. OptunaSharp's reader is not Python's unpickler: it imports and
+  calls nothing, accepts only numpy's array, dtype and scalar forms and the cmaes optimizer classes, and
+  turns anything else into a `ValueError`. So opening an untrusted storage cannot run code in
+  OptunaSharp. A Python worker on the same storage does run Python's `pickle.loads` on that attribute,
+  as Optuna always has, so anyone who can write the storage can run code in Python workers. The contents
+  are still attacker-chosen data, such as oversized attributes, or a with-margin CMA-ES state that
+  declares a huge discrete grid, which OptunaSharp allocates at 8 bytes per point.
 - **Logs contain trial parameters and values.** At `INFO`, every finished trial is logged with its
   parameters and objective value, as in Optuna. If those are sensitive, lower the verbosity
   (`OptunaLogging.SetVerbosity(LogLevel.Warning)`) or route logging to a protected sink.

@@ -74,6 +74,7 @@ internal sealed class NpArray
     /// <param name="shape">The array's shape, outermost dimension first.</param>
     /// <param name="data">The elements in C (row-major) order; its length must be the product of <paramref name="shape" />.</param>
     /// <exception cref="ArgumentException">The dtype is not float64, or the data length does not match the shape.</exception>
+    /// <exception cref="OverflowException">The shape's element count does not fit 64 bits.</exception>
     internal NpArray(NpDtype dtype, int[] shape, double[] data)
     {
         if (dtype.Code != "f8")
@@ -89,6 +90,7 @@ internal sealed class NpArray
     /// <param name="shape">The array's shape, outermost dimension first.</param>
     /// <param name="data">The elements in C (row-major) order; its length must be the product of <paramref name="shape" />.</param>
     /// <exception cref="ArgumentException">The dtype is not int64, or the data length does not match the shape.</exception>
+    /// <exception cref="OverflowException">The shape's element count does not fit 64 bits.</exception>
     internal NpArray(NpDtype dtype, int[] shape, long[] data)
     {
         if (dtype.Code != "i8")
@@ -114,11 +116,13 @@ internal sealed class NpArray
     /// <summary>Rejects data whose length disagrees with the shape, which numpy could never have pickled.</summary>
     /// <param name="length">The element count of the data.</param>
     /// <exception cref="ArgumentException">The length is not the product of the shape.</exception>
+    /// <exception cref="OverflowException">The product does not fit 64 bits.</exception>
     private void CheckLength(int length)
     {
+        // checked: a product beyond 64 bits cannot describe any data, and must not wrap into one that does.
         long count = 1;
         foreach (int d in Shape)
-            count *= d;
+            count = checked(count * d);
         if (count != length)
             throw new ArgumentException($"An array of shape ({string.Join(", ", Shape)}) holds {count} elements, not {length}.");
     }
@@ -1139,9 +1143,16 @@ internal static class PythonPickle
         /// <exception cref="ValueError">The data length does not match the shape.</exception>
         private NpArray MakeArray(NpDtype dtype, int[] shape, byte[] raw)
         {
-            long count = 1;
-            foreach (int d in shape)
-                count *= d;
+            // The element count must equal the data's 8-byte words. The product is bounded by that count as it is
+            // formed, so a hostile shape (say three dimensions of 2^31 - 1) fails here instead of overflowing into
+            // a size that matches by accident or into a huge allocation. A zero dimension makes any other legal.
+            long count = 1, words = raw.Length / 8;
+            if (Array.IndexOf(shape, 0) >= 0)
+                count = 0;
+            else
+                foreach (int d in shape)
+                    if ((count *= d) > words)
+                        throw Error("an array's data does not match its shape");
             if (raw.Length != count * 8)
                 throw Error("an array's data does not match its shape");
             if (dtype.Code == "f8")
