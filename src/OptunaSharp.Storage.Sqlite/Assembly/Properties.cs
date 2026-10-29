@@ -4,6 +4,9 @@ using System.Runtime.CompilerServices;
 // the internal schema/enum helpers. Strong-named, so PublicKey= is required (Microsoft's published
 // open-source key, token cc7b13ffcd2ddd51 — shared across the SciSharp STACK; not an access control).
 [assembly: InternalsVisibleTo("OptunaSharp.Tests.Storage, PublicKey=" + OptunaSharpSqliteFriendKey.PublicKey)]
+// The live-Python parity suite reads the open connection's PRAGMAs (which file, which busy timeout) to compare a
+// storage URL's outcome with what Python's RDBStorage opens.
+[assembly: InternalsVisibleTo("OptunaSharp.Tests.Interop, PublicKey=" + OptunaSharpSqliteFriendKey.PublicKey)]
 
 /// <summary>Shares the signing identity used to grant the test assembly access to internal implementation details.</summary>
 internal static class OptunaSharpSqliteFriendKey

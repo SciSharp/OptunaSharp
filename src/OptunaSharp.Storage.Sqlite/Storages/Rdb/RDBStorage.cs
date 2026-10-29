@@ -65,9 +65,15 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     ///     (<c>optuna.storages.RDBStorage(url, …)</c>).
     /// </summary>
     /// <param name="url">
-    ///     A SQLite URL: <c>sqlite:///relative.db</c>, <c>sqlite:////absolute.db</c>,
-    ///     <c>sqlite:///C:/path.db</c> or <c>sqlite:///:memory:</c>. A driver suffix such as
-    ///     <c>sqlite+pysqlite:///relative.db</c> is accepted and ignored.
+    ///     A SQLAlchemy SQLite URL, read exactly as Optuna reads it: <c>sqlite:///relative.db</c> (relative to
+    ///     the current directory), <c>sqlite:////absolute.db</c>, <c>sqlite:///C:/path.db</c>,
+    ///     <c>sqlite:///:memory:</c> (or <c>sqlite://</c>), optionally with the <c>pysqlite</c> driver
+    ///     (<c>sqlite+pysqlite:///…</c>) and pysqlite's query arguments: <c>?timeout=</c> (seconds) sets the
+    ///     busy timeout, and <c>?uri=true</c> makes the path a SQLite URI filename (<c>file:…</c>) that receives
+    ///     the remaining arguments (<c>sqlite:///file:x.db?mode=ro&amp;uri=true</c>). Other query arguments are
+    ///     ignored, as pysqlite ignores them; they are never part of the file name. <c>{SCHEMA_VERSION}</c> is
+    ///     filled in with Python's <c>str.format</c>, so <c>{</c>/<c>}</c> elsewhere must be doubled. A bare
+    ///     path without <c>sqlite://</c> is refused, as SQLAlchemy refuses it. See <see cref="SqliteUrl" />.
     /// </param>
     /// <param name="skipCompatibilityCheck">Skip the alembic schema-compatibility check.</param>
     /// <param name="skipTableCreation">Skip creating the tables (assume they already exist).</param>
@@ -82,6 +88,17 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     ///     <c>failed_trial_callback</c>, deprecated in v4.9.0, removed in v6.0.0). Specify only one of
     ///     the two.
     /// </param>
+    /// <exception cref="ArgumentException">
+    ///     The URL is not a SQLAlchemy URL (a bare path), names an unknown dialect, driver or plugin, or has a host,
+    ///     user, password or port; SQLAlchemy's messages.
+    /// </exception>
+    /// <exception cref="ValueError">
+    ///     A malformed template or port, a URL of another dialect, an invalid query value, or an invalid heartbeat
+    ///     option; Python's messages where Python raises.
+    /// </exception>
+    /// <exception cref="NotSupportedException">A SQLite driver OptunaSharp has no counterpart for (<c>pysqlcipher</c>).</exception>
+    /// <exception cref="InvalidOperationException">An asyncio driver (<c>sqlite+aiosqlite</c>).</exception>
+    /// <exception cref="SqliteException">SQLite cannot open the file (for example a missing directory).</exception>
     public RDBStorage(
         string url,
         bool skipCompatibilityCheck = false,
@@ -118,15 +135,29 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     ///     Create an RDB storage from a URL with the full <see cref="SqliteRdbOptions" /> surface —
     ///     every connection-string option and load-bearing <c>PRAGMA</c>, beyond Optuna's own API.
     /// </summary>
-    /// <param name="url">The database connection URL to resolve.</param>
+    /// <param name="url">The SQLite storage URL, read as the Optuna-faithful constructor describes.</param>
     /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="url" /> or <paramref name="options" /> is null.</exception>
+    /// <exception cref="ArgumentException">See the Optuna-faithful constructor.</exception>
+    /// <exception cref="ValueError">See the Optuna-faithful constructor.</exception>
+    /// <exception cref="NotSupportedException">See the Optuna-faithful constructor.</exception>
+    /// <exception cref="InvalidOperationException">See the Optuna-faithful constructor.</exception>
+    /// <exception cref="SqliteException">SQLite cannot open the file.</exception>
+    /// <remarks>
+    ///     The URL's <c>?timeout=</c> applies to <see cref="SqliteRdbOptions.BusyTimeoutMs" /> and
+    ///     <see cref="SqliteRdbOptions.DefaultTimeoutSeconds" /> only where <paramref name="options" /> leaves them
+    ///     unset: an explicit option wins, as <c>connect_args</c> win over the URL query in SQLAlchemy.
+    /// </remarks>
     public RDBStorage(string url, SqliteRdbOptions options)
     {
         ArgumentNullException.ThrowIfNull(url);
         ArgumentNullException.ThrowIfNull(options);
-        string filled = FillStorageUrlTemplate(url);
-        string connectionString = BuildConnectionStringFromUrl(filled, options);
-        Initialize(new SqliteConnection(connectionString), ownsConnection: true, options, filled);
+        // RDBStorage.__init__ fills the template, validates the heartbeat arguments, then lets SQLAlchemy parse
+        // the URL: the hook keeps an invalid option and an invalid URL failing in that order.
+        (string filled, SqliteConnectArgs args) = SqliteUrl.Resolve(url, () => ValidateOptions(options));
+        string connectionString = BuildConnectionString(args, options);
+        Initialize(new SqliteConnection(connectionString), ownsConnection: true, options, filled,
+            optionsValidated: true, urlBusyTimeoutMs: args.BusyTimeoutMs);
     }
 
     /// <summary>
@@ -170,10 +201,23 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     /// <param name="connection">The database or Redis connection used by the backend.</param>
     /// <param name="ownsConnection">Whether the storage should dispose the supplied connection when it is disposed.</param>
     /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
-    /// <param name="url">The database connection URL to resolve.</param>
-    private void Initialize(SqliteConnection connection, bool ownsConnection, SqliteRdbOptions options, string url)
+    /// <param name="url">The filled storage URL, or the connection string for the non-URL constructors.</param>
+    /// <param name="optionsValidated">
+    ///     Whether the caller already ran <see cref="ValidateOptions" /> (the URL constructor does, between filling
+    ///     and parsing the URL); validating twice would emit the deprecation warning twice.
+    /// </param>
+    /// <param name="urlBusyTimeoutMs">
+    ///     The busy timeout a URL's <c>?timeout=</c> asks for, applied unless <paramref name="options" /> sets
+    ///     <see cref="SqliteRdbOptions.BusyTimeoutMs" /> explicitly; <see langword="null" /> for no URL timeout.
+    /// </param>
+    /// <exception cref="NumSharp.ValueError">A heartbeat option is invalid (when not validated by the caller).</exception>
+    /// <exception cref="SqliteException">The connection cannot be opened or the schema cannot be created.</exception>
+    /// <exception cref="NumSharp.RuntimeError">The database's schema version is incompatible.</exception>
+    private void Initialize(SqliteConnection connection, bool ownsConnection, SqliteRdbOptions options, string url,
+        bool optionsValidated = false, int? urlBusyTimeoutMs = null)
     {
-        ValidateOptions(options);
+        if (!optionsValidated)
+            ValidateOptions(options);
 
         Url = url;
         _heartbeatInterval = options.HeartbeatInterval;
@@ -187,7 +231,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         if (_conn.State != System.Data.ConnectionState.Open)
             _conn.Open();
 
-        ApplyPragmas(options);
+        // connect_args beat the URL query in SQLAlchemy; here an explicitly assigned BusyTimeoutMs beats ?timeout=.
+        int? busyTimeoutMs = urlBusyTimeoutMs is not null && !options.BusyTimeoutMsSpecified
+            ? urlBusyTimeoutMs
+            : options.BusyTimeoutMs;
+        ApplyPragmas(options, busyTimeoutMs);
 
         if (!options.SkipTableCreation)
             CreateSchema();
@@ -226,51 +274,67 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
                 WarningCategory.FutureWarning);
     }
 
-    /// <summary>Substitutes the supported schema version into an Optuna storage URL template.</summary>
-    /// <param name="template">A storage URL that may contain the schema-version placeholder.</param>
-    /// <returns>The URL with the schema-version placeholder replaced.</returns>
-    private static string FillStorageUrlTemplate(string template)
-        => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(CultureInfo.InvariantCulture));
-
     /// <summary>
-    ///     Extracts the SQLite file or in-memory target from an Optuna-style URL. A driver after the dialect
-    ///     (<c>sqlite+pysqlite:///study.db</c>, which SQLAlchemy accepts) names a Python module and is dropped,
-    ///     so it opens the same file as <c>sqlite:///study.db</c>.
+    ///     Builds the connection string for what a URL opens (<see cref="SqliteUrl" />) plus the typed options.
     /// </summary>
-    /// <param name="url">The database connection URL to resolve.</param>
-    /// <returns>The SQLite data-source name used to open the connection.</returns>
-    private static string ResolveDataSource(string url)
-    {
-        if (url.StartsWith("sqlite+", StringComparison.Ordinal))
-        {
-            // Without this the whole URL fell through to the bare-path case below and SQLite tried to open a
-            // file literally named "sqlite+pysqlite:///study.db". The driver is not validated, so any name works.
-            int schemeEnd = url.IndexOf("://", StringComparison.Ordinal);
-            if (schemeEnd >= 0)
-                url = "sqlite" + url.Substring(schemeEnd);
-        }
-
-        const string prefix = "sqlite:///";
-        if (url.StartsWith(prefix, StringComparison.Ordinal))
-            return url.Substring(prefix.Length);
-        if (url.StartsWith("sqlite://", StringComparison.Ordinal))
-            return url.Substring("sqlite://".Length);
-        return url; // tolerate a bare file path
-    }
-
-    /// <summary>Builds the SQLite connection string from the resolved URL and typed options.</summary>
-    /// <param name="filledUrl">The storage URL after schema-version template substitution.</param>
+    /// <param name="args">The file to open and the URL's pysqlite arguments.</param>
     /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
     /// <returns>The configured native SQLite connection string.</returns>
-    private static string BuildConnectionStringFromUrl(string filledUrl, SqliteRdbOptions options)
+    /// <remarks>
+    ///     A <c>file:</c> URI filename (from <c>?uri=true</c>) is passed through: Microsoft.Data.Sqlite opens a data
+    ///     source that starts with <c>file:</c> with SQLite's URI flag, as Python's <c>sqlite3.connect(..., uri=True)</c>
+    ///     does, and any other name is an ordinary file name in both. A file path is already absolute, so
+    ///     Microsoft.Data.Sqlite's <c>|DataDirectory|</c> substitution never applies to it.
+    /// </remarks>
+    private static string BuildConnectionString(SqliteConnectArgs args, SqliteRdbOptions options)
     {
-        string dataSource = ResolveDataSource(filledUrl);
-        var builder = new SqliteConnectionStringBuilder { DataSource = dataSource };
+        var builder = new SqliteConnectionStringBuilder { DataSource = args.Filename };
+        // DbConnectionStringBuilder quotes a value with a leading or trailing space or tab but not one with a
+        // trailing line break, which its parser then trims: "x.db\n" would silently open "x.db". A file path that
+        // does not survive the round trip is opened as a percent-encoded file: URI instead, which names exactly the
+        // same file (and fails exactly where Python fails, e.g. on Windows, which forbids line breaks in names).
+        if (new SqliteConnectionStringBuilder(builder.ConnectionString).DataSource != args.Filename)
+        {
+            if (args.Uri || args.Filename == ":memory:")
+                throw new NotSupportedException(
+                    $"Microsoft.Data.Sqlite cannot open the SQLite filename {PythonRepr.StringRepr(args.Filename)}: its " +
+                    "connection-string syntax trims the surrounding whitespace.");
+            builder.DataSource = ToFileUri(args.Filename);
+        }
         // A :memory: data source needs Memory mode unless the caller overrode it explicitly.
-        if (options.Mode is null && dataSource == ":memory:")
+        if (options.Mode is null && args.Filename == ":memory:")
             builder.Mode = SqliteOpenMode.Memory;
+        // Microsoft.Data.Sqlite retries a busy command until its command timeout, on top of SQLite's busy handler;
+        // bounding it by the URL's timeout keeps "?timeout=1" a one-second wait instead of the 30-second default.
+        // An explicit DefaultTimeoutSeconds (applied below) still wins.
+        if (args.CommandTimeoutSeconds is int seconds)
+            builder.DefaultTimeout = seconds;
         ApplyConnectionStringOptions(builder, options);
         return builder.ConnectionString;
+    }
+
+    /// <summary>
+    ///     A SQLite URI filename for an absolute path: <c>file:</c> followed by the path with forward slashes (a
+    ///     Windows drive path gets the <c>/C:/…</c> form SQLite expects) and every byte outside the unreserved set,
+    ///     <c>/</c> and <c>:</c> percent-encoded, so SQLite decodes it back to the exact path.
+    /// </summary>
+    /// <param name="absolutePath">An absolute file path from <c>os.path.abspath</c>.</param>
+    /// <returns>The URI filename.</returns>
+    private static string ToFileUri(string absolutePath)
+    {
+        string path = absolutePath.Replace('\\', '/');
+        if (!path.StartsWith('/'))
+            path = "/" + path;
+        var sb = new StringBuilder("file://");
+        foreach (byte b in Encoding.UTF8.GetBytes(path))
+        {
+            char c = (char)b;
+            if (b < 0x80 && (char.IsAsciiLetterOrDigit(c) || c is '-' or '.' or '_' or '~' or '/' or ':'))
+                sb.Append(c);
+            else
+                sb.Append('%').Append(b.ToString("X2", CultureInfo.InvariantCulture));
+        }
+        return sb.ToString();
     }
 
     /// <summary>Applies explicitly configured SQLite connection settings and the customization callback.</summary>
@@ -302,7 +366,12 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
     /// <summary>Applies opted-in SQLite runtime settings before schema initialization.</summary>
     /// <param name="o">The configured storage options; null-valued settings leave provider defaults unchanged.</param>
-    private void ApplyPragmas(SqliteRdbOptions o)
+    /// <param name="busyTimeoutMs">
+    ///     The effective <c>PRAGMA busy_timeout</c>: the options' value, or a URL's <c>?timeout=</c> when the options
+    ///     leave it at its default; <see langword="null" /> keeps the connection's setting. Zero or negative turns
+    ///     the busy handler off, as Python's <c>sqlite3</c> does for <c>timeout &lt;= 0</c>.
+    /// </param>
+    private void ApplyPragmas(SqliteRdbOptions o, int? busyTimeoutMs)
     {
         // page_size / auto_vacuum only take effect on a fresh database, so apply them before any table.
         if (o.PageSize is not null)
@@ -315,8 +384,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
             ExecPragma($"synchronous={o.Synchronous.Value.ToString().ToUpperInvariant()}");
         if (o.ForeignKeys is not null)
             ExecPragma($"foreign_keys={(o.ForeignKeys.Value ? "ON" : "OFF")}");
-        if (o.BusyTimeoutMs is not null)
-            ExecPragma($"busy_timeout={o.BusyTimeoutMs.Value}");
+        if (busyTimeoutMs is not null)
+            ExecPragma($"busy_timeout={busyTimeoutMs.Value.ToString(CultureInfo.InvariantCulture)}");
         if (o.CacheSize is not null)
             ExecPragma($"cache_size={o.CacheSize.Value}");
         if (o.MmapSize is not null)

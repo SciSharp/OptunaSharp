@@ -13,7 +13,8 @@ namespace OptunaSharp.Cli;
 ///     (or the <c>OPTUNA_STORAGE</c> environment variable) and an optional <c>--storage-class</c> hint
 ///     to a <see cref="BaseStorage" />. The <c>optuna</c> command can reach every storage class from the
 ///     one <c>optuna</c> package; OptunaSharp splits them into satellite packages, so the CLI references
-///     the two shipped ones: SQLite (<see cref="RDBStorage" />) and StackExchange.Redis
+///     the two shipped ones: SQLite (<see cref="RDBStorage" />, chosen by the URL's dialect as
+///     <c>get_storage</c> chooses it — see <see cref="CreateRdbStorage" />) and StackExchange.Redis
 ///     (<see cref="StackExchangeJournalRedisBackend" />). Journal-file storage is in Core.
 /// </summary>
 internal static class StorageResolver
@@ -75,7 +76,7 @@ internal static class StorageResolver
                 return new JournalStorage(new JournalFileStorage(url));
 #pragma warning restore CS0618
             if (storageClass == nameof(RDBStorage))
-                return new RDBStorage(url);
+                return CreateRdbStorage(url);
             throw new CLIUsageError("Unsupported storage class");
         }
 
@@ -85,11 +86,30 @@ internal static class StorageResolver
             return new JournalStorage(new JournalFileBackend(url));
         try
         {
-            return new RDBStorage(url);
+            return CreateRdbStorage(url);
         }
-        catch (Exception e) when (e is SqliteException or ArgumentException)
+        // Python catches sqlalchemy.exc.ArgumentError only (NoSuchModuleError, the unknown-dialect error, is its
+        // subclass); both are a plain ArgumentException in the port. Everything else propagates as in Python: a
+        // database error, Optuna's ImportError, and ValueError, which derives from ArgumentException.
+        catch (ArgumentException e) when (e.GetType() == typeof(ArgumentException))
         {
             throw new CLIUsageError("Failed to guess storage class from storage_url");
         }
     }
+
+    /// <summary>
+    ///     Opens the RDB storage a URL names. Python's one <c>RDBStorage</c> class serves every dialect; OptunaSharp
+    ///     splits them into packages, so the URL's dialect picks the package (as <c>optuna.storages.get_storage</c>
+    ///     does in Core): SQLite, which this tool references, or EF Core for PostgreSQL and MySQL, whose assembly
+    ///     the tool does not ship — such a URL fails with Optuna's <c>ImportError</c> text, as a Python install
+    ///     without the database driver does.
+    /// </summary>
+    /// <param name="url">The storage URL.</param>
+    /// <returns>The open storage, uncached as Python's <c>RDBStorage(url)</c> is.</returns>
+    /// <exception cref="ArgumentException">The URL does not parse, or names a dialect, driver or plugin SQLAlchemy does not know (SQLAlchemy's <c>ArgumentError</c>).</exception>
+    /// <exception cref="NumSharp.ValueError">A template, port or driver-argument error, with Python's message.</exception>
+    /// <exception cref="NotSupportedException">No package serves the URL's driver, or its assembly is not available.</exception>
+    /// <exception cref="SqliteException">SQLite cannot open the database the URL names.</exception>
+    internal static BaseStorage CreateRdbStorage(string url)
+        => StorageUrlResolver.CreateBackend(StorageUrlResolver.RdbBackendType(url), url);
 }

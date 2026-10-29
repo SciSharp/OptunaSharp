@@ -27,14 +27,15 @@ namespace OptunaSharp.Storages.Journal;
 ///     <see cref="RedisJournalProtocol" /> regardless of how you connect, so byte-compatibility holds
 ///     however you configure the client.</para>
 ///
-///     <para>ServiceStack specifics for the endpoint/callback paths (they build a
-///     <see cref="RedisManagerPool" /> from the endpoint's connection string): that string reliably
-///     carries routing and auth (host, port, <c>Ssl</c>, <c>Db</c>, <c>Password</c>, <c>Username</c>),
-///     but ServiceStack's pooled managers configure timeouts/retry through the process-wide
-///     <c>RedisConfig</c> defaults rather than a per-endpoint <c>ConnectTimeout</c>, and the endpoint's
-///     <c>NamespacePrefix</c> must be left unset (use this backend's <c>prefix</c> parameter — a
-///     namespace prefix would diverge from the shared key layout). For anything more, inject a
-///     fully-built <see cref="IRedisClientsManager" />.</para>
+///     <para>ServiceStack specifics for the URL/endpoint/callback paths (they build a
+///     <see cref="RedisManagerPool" /> that serves the endpoint object itself): every pooled client copies
+///     the endpoint's host, port, <c>Ssl</c>, <c>Db</c>, <c>Password</c>, <c>Username</c>, <c>Client</c>
+///     name and its connect/send/receive timeouts; a URL's timeouts default to redis-py's 5 seconds. The
+///     endpoint's <c>NamespacePrefix</c> must be left unset (use this backend's <c>prefix</c> parameter — a
+///     namespace prefix would diverge from the shared key layout). ServiceStack.Redis cannot honor some of
+///     a URL's settings per connection (RESP3, a user name without a password, certificate settings beyond
+///     the default check, a minimum TLS version); those raise <see cref="NotSupportedException" />. For
+///     anything more, inject a fully-built <see cref="IRedisClientsManager" />.</para>
 ///
 ///     <para><b>License:</b> ServiceStack.Redis is commercially licensed (its free tier is
 ///     request-quota-limited). Prefer the MIT <c>StackExchange</c>/<c>NRedisStack</c> backends unless
@@ -58,18 +59,22 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     // already built". The IRedisClientsManager overload is the full-control path — your choice of manager
     // (RedisManagerPool / PooledRedisClientManager / BasicRedisClientManager) with any pool config, and
     // any timeouts/retry via RedisConfig. The endpoint/callback overloads are a convenience over
-    // RedisManagerPool: they carry the endpoint's routing/auth (host/port/Ssl/Db/Password/Username), but
-    // ServiceStack's pooled managers take timeouts from RedisConfig, not the per-endpoint value (see the
-    // type-level remarks).
+    // RedisManagerPool: every pooled client copies the endpoint's routing, auth, client name and
+    // timeouts (see the type-level remarks).
 
     /// <summary>Connects from a <c>redis-py</c>-style URL — the Optuna-identical entry point.</summary>
     /// <param name="url">URL of the redis storage (ie: <c>redis://localhost:6379</c>); <c>redis://</c>
-    ///   and <c>rediss://</c> (TLS) are accepted (ServiceStack.Redis does not support unix sockets). Only
-    ///   the components <c>redis-py</c> puts on the URL are read; for ServiceStack.Redis-specific options
-    ///   use one of the other constructors.</param>
+    ///   and <c>rediss://</c> (TLS) are accepted (ServiceStack.Redis does not support unix sockets). It is
+    ///   read exactly as <c>redis-py</c>'s <c>Redis.from_url</c> reads it, query options included
+    ///   (<c>socket_timeout</c>, <c>client_name</c>, …; see <see cref="RedisUrl" />); for
+    ///   ServiceStack.Redis-specific options use one of the other constructors.</param>
     /// <param name="useCluster">If <c>false</c> (default), standalone + atomic Lua <c>EVAL</c>; if
     ///   <c>true</c>, cluster + non-atomic <c>INCR</c>+<c>SET</c>.</param>
     /// <param name="prefix">Prefix of the preserved keys.</param>
+    /// <exception cref="ValueError">A URL redis-py rejects, with redis-py's message (see <see cref="RedisUrl.Parse" />), or a <c>unix://</c> URL.</exception>
+    /// <exception cref="TypeError">A query argument redis-py's connection class does not take, with redis-py's message.</exception>
+    /// <exception cref="OverflowException">A timeout or TLS version too large for Python, with Python's message.</exception>
+    /// <exception cref="NotSupportedException">A query argument no .NET client can honor, or one ServiceStack.Redis cannot (see the type-level remarks).</exception>
     /// <remarks>The backend owns the client pool it builds here: <see cref="Dispose" /> closes it.</remarks>
     public ServiceStackJournalRedisBackend(string url, bool useCluster = false, string prefix = "")
         : this(CreateManager(RedisUrl.Parse(url)), url, useCluster, prefix, ownsManager: true)
@@ -79,10 +84,9 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// <summary>
     ///     Connects from a <c>redis-py</c>-style URL, then hands you the derived ServiceStack.Redis
     ///     <see cref="SsRedisEndpoint" /> to adjust before the client manager is built — the easy way to
-    ///     keep the familiar URL yet set endpoint settings it cannot express (<c>Ssl</c>, <c>Db</c>,
-    ///     <c>Client</c>, …). See the type-level remarks for what the pooled manager applies (routing/auth)
-    ///     versus what comes from <c>RedisConfig</c> (timeouts), and why <c>NamespacePrefix</c> must be
-    ///     left unset.
+    ///     keep the familiar URL yet set endpoint settings it cannot express (<c>SslProtocols</c>,
+    ///     <c>RetryTimeout</c>, <c>IdleTimeOutSecs</c>, …). See the type-level remarks for what every pooled
+    ///     client copies from the endpoint, and why <c>NamespacePrefix</c> must be left unset.
     /// </summary>
     /// <param name="url">The <c>redis-py</c>-style base URL (see the URL-only constructor).</param>
     /// <param name="configure">Invoked on the <see cref="SsRedisEndpoint" /> parsed from
@@ -342,14 +346,51 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
         return PoolFor(sep);
     }
 
-    /// <summary>Maps the neutral <see cref="RedisEndpoint" /> onto ServiceStack.Redis' own endpoint type.</summary>
+    /// <summary>
+    ///     Maps the neutral <see cref="RedisEndpoint" /> onto ServiceStack.Redis' own endpoint type: host, port, TLS,
+    ///     database, credentials, client name, and redis-py's timeouts (5 seconds by default) as the endpoint's
+    ///     connect, send and receive timeouts.
+    /// </summary>
     /// <param name="ep">The client-neutral, parsed Redis endpoint.</param>
     /// <returns>The ServiceStack endpoint matching the parsed TCP/TLS connection settings.</returns>
     /// <exception cref="NumSharp.ValueError">The URL selects a Unix-domain socket, which this backend does not support.</exception>
+    /// <exception cref="NotSupportedException">
+    ///     A setting ServiceStack.Redis cannot express per connection: <c>protocol=3</c> (it speaks RESP2 only); a user
+    ///     name without a password (redis-py authenticates with an empty password, ServiceStack.Redis not at all); and,
+    ///     for <c>rediss://</c>, any certificate setting other than the default check (<c>ssl_cert_reqs=none</c>,
+    ///     <c>ssl_check_hostname=false</c>, extra certificate authorities, a client certificate; ServiceStack.Redis takes
+    ///     certificate callbacks only process-wide) or an <c>ssl_min_version</c> (setting TLS versions makes
+    ///     ServiceStack.Redis check revocation, which redis-py never does).
+    /// </exception>
     private static SsRedisEndpoint ToServiceStackEndpoint(RedisEndpoint ep)
     {
         if (ep.UnixSocketPath is not null)
             throw new ValueError("ServiceStack.Redis does not support unix domain sockets; use redis:// or rediss://.");
+        if (ep.Protocol == 3)
+            throw new NotSupportedException("ServiceStack.Redis speaks RESP2 only, so it cannot honor the URL's protocol=3.");
+        if (ep.User is not null && ep.Password is null)
+            throw new NotSupportedException(
+                "ServiceStack.Redis authenticates only when a password is set, while redis-py authenticates the URL's user name " +
+                "with an empty password; give the URL a password, or use the StackExchange or NRedisStack backend.");
+        if (ep.Ssl)
+        {
+            string? setting = ep.SslCertReqs == "none" ? "ssl_cert_reqs=none"
+                : !ep.SslCheckHostname ? "ssl_check_hostname=false"
+                : ep.SslCaData is not null ? "ssl_ca_data"
+                : ep.SslCaCerts is not null ? "ssl_ca_certs"
+                : ep.SslCaPath is not null ? "ssl_ca_path"
+                : ep.SslCertFile is not null || ep.SslKeyFile is not null ? "ssl_certfile/ssl_keyfile"
+                : null;
+            if (setting is not null)
+                throw new NotSupportedException(
+                    $"ServiceStack.Redis takes certificate callbacks only process-wide (RedisConfig.CertificateValidationCallback / " +
+                    $"CertificateSelectionCallback), so it cannot honor the URL's {setting} for one connection; use the " +
+                    "StackExchange or NRedisStack backend, or set those callbacks yourself and drop the setting from the URL.");
+            if (ep.SslMinVersion is not (null or -2))
+                throw new NotSupportedException(
+                    "ServiceStack.Redis turns certificate revocation checking on whenever it is given TLS versions, which redis-py " +
+                    "never does, so it cannot honor the URL's ssl_min_version; use the StackExchange or NRedisStack backend.");
+        }
 
         return new SsRedisEndpoint(ep.Host, ep.Port <= 0 ? 6379 : ep.Port)
         {
@@ -357,19 +398,28 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
             Db = ep.Db ?? 0,
             Password = ep.Password,
             Username = ep.User,
+            Client = ep.ClientName,
+            ConnectTimeout = RedisEndpoint.ToMilliseconds(ep.SocketConnectTimeout),
+            SendTimeout = RedisEndpoint.ToMilliseconds(ep.SocketTimeout),
+            ReceiveTimeout = RedisEndpoint.ToMilliseconds(ep.SocketTimeout),
         };
     }
 
     /// <summary>
     ///     Builds the pooled client manager for a ServiceStack.Redis endpoint. <see cref="RedisManagerPool" />
-    ///     takes host <em>strings</em> (there is no <see cref="SsRedisEndpoint" />-object constructor), so
-    ///     the endpoint round-trips through its own connection-string form (<c>ToString()</c>). That string
-    ///     carries the endpoint's routing/auth (host, port, <c>Ssl</c>, <c>Db</c>, <c>Password</c>,
-    ///     <c>Username</c>); timeouts/retry are taken from the process-wide <c>RedisConfig</c> defaults, not
-    ///     the per-endpoint value (a ServiceStack pooled-manager behavior). See the type-level remarks.
+    ///     takes host <em>strings</em> (there is no <see cref="SsRedisEndpoint" />-object constructor), and an
+    ///     endpoint's connection-string form (<c>ToString()</c>) does not survive every value: its client name is
+    ///     not escaped, so a name holding <c>@</c> or <c>&amp;</c> corrupts the host or injects another setting. So the
+    ///     pool is given a resolver that serves the endpoint object itself; every client it creates copies the
+    ///     endpoint's host, port, TLS, database, credentials, client name and timeouts.
     /// </summary>
     /// <param name="sep">The configured ServiceStack Redis endpoint.</param>
     /// <returns>The newly created ServiceStack client pool.</returns>
     private static IRedisClientsManager PoolFor(SsRedisEndpoint sep)
-        => new RedisManagerPool(sep.ToString());
+        // The constructor demands at least one host string and parses it at once; the resolver set right after
+        // replaces it before any client exists, so this placeholder is never connected to.
+        => new RedisManagerPool("localhost")
+        {
+            RedisResolver = new RedisResolver(new[] { sep }, Array.Empty<SsRedisEndpoint>()),
+        };
 }

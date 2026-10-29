@@ -31,10 +31,17 @@ Console.WriteLine(study.BestValue);
 
 | URL | Meaning |
 |---|---|
-| `sqlite:///study.db` | File relative to the process's working directory |
+| `sqlite:///study.db` | File relative to the process's working directory (made absolute with Python's `os.path.abspath` rules) |
 | `sqlite:////data/study.db` | Absolute Unix path `/data/study.db` |
 | `sqlite:///C:/data/study.db` | Absolute Windows path |
-| `sqlite:///:memory:` | In-memory database kept alive by the storage's connection |
+| `sqlite:///:memory:` or `sqlite://` | In-memory database kept alive by the storage's connection |
+| `sqlite:///study.db?timeout=10` | `study.db` with a 10-second busy timeout |
+| `sqlite:///file:study.db?mode=ro&uri=true` | SQLite URI filename: `study.db`, read-only |
+| `sqlite:///study-v{SCHEMA_VERSION}.db` | Optuna's template, filled before parsing: `study-v12.db` |
+
+The URL is read exactly as Python Optuna reads it: Optuna's `{SCHEMA_VERSION}` template, then SQLAlchemy's URL grammar, then SQLAlchemy's pysqlite dialect. The query string is never part of the file name. pysqlite reads six query arguments and ignores every other one. `timeout` (seconds) is the busy timeout. `uri=true` treats the path as a SQLite URI filename and appends the remaining arguments as URI parameters. `isolation_level`, `detect_types`, `check_same_thread` and `cached_statements` are type-checked as Python checks them and otherwise have no effect. A bad value fails with Python's message, for example `could not convert string to float: 'abc'`.
+
+A bare path such as `study.db` is not a URL, so it fails with SQLAlchemy's `ArgumentError` text (`Could not parse SQLAlchemy URL from given URL string`), as an `ArgumentException`. A host in a SQLite URL (`sqlite://host/x.db`) fails pysqlite's `Invalid SQLite URL` check. Without `?timeout=`, the busy timeout is `SqliteRdbOptions.BusyTimeoutMs` (30 s by default, chosen for concurrent workers) instead of Python's 5 s. An explicitly assigned `BusyTimeoutMs` takes precedence over the URL's `?timeout=`, as SQLAlchemy's `connect_args` would.
 
 ## Configure SQLite
 

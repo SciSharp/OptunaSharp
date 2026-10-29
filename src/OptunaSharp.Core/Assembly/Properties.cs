@@ -28,6 +28,9 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.StackExchange.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.NRedisStack, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 [assembly: InternalsVisibleTo("OptunaSharp.Storage.ServiceStack.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+// The shared Redis package parses redis:// URLs exactly as redis-py's parse_url does, which needs Core's internal
+// ports of urllib.parse (urlsplit, parse_qs, unquote) and of Python's int()/float().
+[assembly: InternalsVisibleTo("OptunaSharp.Storage.Redis, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
 
 // The SQLite RDB storage (satellite package OptunaSharp.Storage.Sqlite, Phase 4.1) is an external
 // implementer of the ICachedStorageBackend seam (declared in CachedStorage.cs). Like InMemoryStorage

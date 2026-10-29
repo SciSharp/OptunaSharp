@@ -132,6 +132,12 @@ public sealed class SqliteRdbOptions
     ///     retries on a busy database. Distinct from <see cref="BusyTimeoutMs" /> (the SQLite-level
     ///     busy handler).
     /// </summary>
+    /// <remarks>
+    ///     A storage URL's <c>?timeout=</c> sets this too (rounded up to whole seconds, at least one) when it is
+    ///     left <see langword="null" /> here: Microsoft.Data.Sqlite retries a busy command until this timeout on top
+    ///     of SQLite's busy handler, so the URL's wait would otherwise stretch to the 30-second default. A value set
+    ///     here wins over the URL, as <c>connect_args</c> win over the URL query in SQLAlchemy.
+    /// </remarks>
     public int? DefaultTimeoutSeconds { get; set; }
 
     /// <summary>
@@ -164,7 +170,29 @@ public sealed class SqliteRdbOptions
     ///     <c>PRAGMA busy_timeout</c> in milliseconds — how long a locked database is retried before
     ///     giving up. Defaults to <c>30000</c>; set to <c>null</c> for the SQLite default (0).
     /// </summary>
-    public int? BusyTimeoutMs { get; set; } = 30_000;
+    /// <remarks>
+    ///     A storage URL's <c>?timeout=</c> (seconds, as Python's <c>sqlite3.connect(timeout=…)</c> takes it)
+    ///     replaces the default, unless this property was assigned: an explicit value wins over the URL, as
+    ///     <c>connect_args</c> win over the URL query in SQLAlchemy. Python's own default is 5 seconds; OptunaSharp
+    ///     keeps 30 so that concurrent writers wait rather than fail.
+    /// </remarks>
+    public int? BusyTimeoutMs
+    {
+        get => _busyTimeoutMs;
+        set
+        {
+            _busyTimeoutMs = value;
+            BusyTimeoutMsSpecified = true;
+        }
+    }
+
+    private int? _busyTimeoutMs = 30_000;
+
+    /// <summary>
+    ///     Whether <see cref="BusyTimeoutMs" /> was assigned (even to its default), which makes it take precedence
+    ///     over a storage URL's <c>?timeout=</c>.
+    /// </summary>
+    internal bool BusyTimeoutMsSpecified { get; private set; }
 
     /// <summary><c>PRAGMA cache_size</c> (pages if positive, kibibytes if negative).</summary>
     public int? CacheSize { get; set; }

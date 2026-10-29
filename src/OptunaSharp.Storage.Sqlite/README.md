@@ -88,7 +88,15 @@ the `PRAGMA`/escape-hatch options still apply.
 | `sqlite:///study.db` | file `study.db`, relative to the working directory |
 | `sqlite:////data/study.db` | file `/data/study.db` (absolute) |
 | `sqlite:///C:/data/study.db` | file `C:\data\study.db` (Windows absolute) |
-| `sqlite:///:memory:` | in-memory database (lives as long as the `RDBStorage` instance) |
+| `sqlite:///:memory:` or `sqlite://` | in-memory database (lives as long as the `RDBStorage` instance) |
+| `sqlite:///study.db?timeout=10` | file `study.db`, with a 10-second busy timeout |
+| `sqlite:///file:study.db?mode=ro&uri=true` | SQLite URI filename: `study.db`, read-only |
+
+The URL is read exactly as Python Optuna reads it (Optuna's `{SCHEMA_VERSION}` template, SQLAlchemy's
+URL grammar, SQLAlchemy's pysqlite dialect): the query string is never part of the file name; pysqlite's
+`timeout` and `uri` arguments apply, its other four are type-checked, every other key is ignored; a bare
+path such as `study.db` is not a URL and fails with SQLAlchemy's `ArgumentError` text. Without
+`?timeout=` the busy timeout is `SqliteRdbOptions.BusyTimeoutMs` (30 s) rather than Python's 5 s.
 
 ## Cross-language interoperability
 

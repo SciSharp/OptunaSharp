@@ -31,14 +31,25 @@ The alias makes the EF Core type unambiguous when the SQLite package is also ref
 
 ## URL and provider selection
 
-| URL scheme | .NET provider |
-|---|---|
-| `postgresql://`, `postgres://` | Npgsql |
-| `postgresql+psycopg2://` | Npgsql; the Python driver suffix is accepted and ignored |
-| `mysql://`, `mariadb://` | Pomelo with MySqlConnector |
-| `mysql+pymysql://` | Pomelo; the Python driver suffix is accepted and ignored |
+| URL scheme | .NET provider | Arguments read as |
+|---|---|---|
+| `postgresql://`, `postgresql+psycopg2://` | Npgsql | libpq connection parameters, as psycopg2 passes them |
+| `postgresql+pg8000://` | Npgsql | pg8000's `connect` arguments |
+| `mysql://`, `mariadb://`, `mysql+mysqldb://` | Pomelo with MySqlConnector | MySQLdb (`mysqlclient`) `connect` arguments |
+| `mysql+pymysql://` | Pomelo with MySqlConnector | PyMySQL `Connection` arguments |
+| `mysql+mysqlconnector://`, `mysql+mariadbconnector://`, `mysql+cymysql://` | Pomelo with MySqlConnector | the common arguments (charset, timeouts, socket, SSL files) |
 
-SQLite URLs are rejected: use [the SQLite package](sqlite.md). Credentials and database names are URL-decoded. URL query pairs are passed to the native .NET connection-string builder, so they must be valid keywords for that provider; this is not arbitrary SQLAlchemy `engine_kwargs` translation.
+A URL is read exactly as Python Optuna reads it: Optuna's `{SCHEMA_VERSION}` template, SQLAlchemy's URL grammar and driver registry, the driver's `create_connect_args`, then the driver's own handling of those arguments, expressed with Npgsql or MySqlConnector. Credentials and database names are URL-decoded. The query string carries the Python driver's arguments, not .NET connection-string keywords. `?sslmode=require&connect_timeout=7&application_name=optuna` works for PostgreSQL, and so does a repeated `?host=` (SQLAlchemy's multi-host form). `?ssl_ca=/path/ca.pem` works for PyMySQL. A native keyword such as `?SSL Mode=Require` or `?Pooling=false` fails as libpq fails, with psycopg2's `invalid dsn: …` message as a `FormatException`. Set native keywords with `ConfigureConnectionString` instead.
+
+What Python rejects is rejected with Python's error kind and message:
+
+- `postgres://` fails with `Can't load plugin: sqlalchemy.dialects:postgres`. SQLAlchemy dropped that name.
+- An unknown driver suffix fails the same way.
+- A bad libpq value fails with libpq's message, for example `invalid sslmode value: "bogus"`.
+- A `?port=` reaches PyMySQL as text, so it fails with `port should be of type int`.
+- An unknown MySQL argument fails with the driver's `TypeError`.
+
+An asyncio driver (`+asyncpg`, `+psycopg_async`, `+aiomysql`, `+asyncmy`) fails on SQLAlchemy's synchronous-engine greenlet error. Settings MySqlConnector or Npgsql cannot express raise `NotSupportedException` naming the argument: a MySQL character set other than UTF-8 (MySqlConnector always talks `utf8mb4`), `init_command`, `sql_mode`, libpq's `service` file, and so on. A PyMySQL password outside ASCII is sent as UTF-8, where PyMySQL sends Latin-1. SQLite URLs are rejected: use [the SQLite package](sqlite.md).
 
 MariaDB is routed through the MySQL provider, with provider version detection, but the repository's database interoperability fixtures target PostgreSQL 16 and MySQL 8.0. Those fixtures do not establish coverage of every MariaDB or server version.
 

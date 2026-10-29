@@ -99,16 +99,31 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     }
 
     /// <summary>Create an RDB storage from a URL with the full <see cref="EFCoreRdbOptions" /> surface.</summary>
-    /// <param name="url">The database connection URL to resolve.</param>
+    /// <param name="url">
+    ///     A SQLAlchemy PostgreSQL, MySQL or MariaDB URL, read as Python Optuna reads it (see <see cref="RdbUrl" />): the
+    ///     driver after <c>+</c> must be one SQLAlchemy ships, query arguments are the driver's connection parameters
+    ///     (libpq's for PostgreSQL, PyMySQL's or MySQLdb's for MySQL), and <c>{SCHEMA_VERSION}</c> is filled in with
+    ///     Python's <c>str.format</c>, so other braces must be doubled.
+    /// </param>
     /// <param name="options">The storage and provider configuration applied before schema initialization.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="url" /> or <paramref name="options" /> is null.</exception>
+    /// <exception cref="ArgumentException">The URL does not parse, or names an unknown dialect, driver or plugin.</exception>
+    /// <exception cref="ValueError">An invalid heartbeat option, a template or port error, or a driver value check.</exception>
+    /// <exception cref="TypeError">A connection argument the driver refuses by type or name.</exception>
+    /// <exception cref="FormatException">libpq refuses the PostgreSQL connection info or one of its values.</exception>
+    /// <exception cref="NotImplementedException">PyMySQL's refusal of <c>compress</c> and <c>named_pipe</c>.</exception>
+    /// <exception cref="NotSupportedException">A driver without an OptunaSharp counterpart, or an argument the .NET driver cannot express.</exception>
+    /// <exception cref="InvalidOperationException">An asyncio driver, or a server-side failure while the schema is checked.</exception>
     public RDBStorage(string url, EFCoreRdbOptions options)
     {
         ArgumentNullException.ThrowIfNull(url);
         ArgumentNullException.ThrowIfNull(options);
-        ValidateOptions(options);
-        var (provider, builder) = RdbUrl.Parse(FillStorageUrlTemplate(url));
-        // ConfigureConnectionString is applied once, in InitFromConnectionString, for every path.
-        InitFromConnectionString(provider, builder.ConnectionString, options, url);
+        // RDBStorage.__init__ fills the template, validates the heartbeat arguments, then lets SQLAlchemy parse the
+        // URL: the hook keeps an invalid option and an invalid URL failing in that order.
+        var (provider, builder) = RdbUrl.Parse(url, () => ValidateOptions(options));
+        // ConfigureConnectionString is applied once, in InitFromConnectionString, for every path. Url is the filled
+        // URL, as Python's RDBStorage.url is.
+        InitFromConnectionString(provider, builder.ConnectionString, options, RdbUrl.Filled(url));
     }
 
     /// <summary>
@@ -308,12 +323,6 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
                 "Use `heartbeat_stale_trial_callback` instead.",
                 WarningCategory.FutureWarning);
     }
-
-    /// <summary>Substitutes the supported schema version into an Optuna storage URL template.</summary>
-    /// <param name="template">A storage URL that may contain the schema-version placeholder.</param>
-    /// <returns>The URL with the schema-version placeholder replaced.</returns>
-    private static string FillStorageUrlTemplate(string template)
-        => template.Replace("{SCHEMA_VERSION}", RdbModels.SchemaVersion.ToString(RdbModels.Inv));
 
     private static readonly NpgsqlNullNameTranslator _verbatim = new();
 

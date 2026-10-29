@@ -6,9 +6,12 @@ port of Optuna) and the [SciSharp STACK](https://github.com/SciSharp).
 
 ## What's here
 
-- **`RedisEndpoint` + `RedisUrl.Parse(url)`** — parse a `redis-py`-style URL (`redis://`, `rediss://`
-  TLS, `unix://`, with `[user]:[pass]@`, `/db`, `?db=`/`?username=`/`?password=`) into a neutral
-  endpoint. Each backend builds its own client from this.
+- **`RedisEndpoint` + `RedisUrl.Parse(url)`** — parse a Redis URL (`redis://`, `rediss://` TLS,
+  `unix://`) exactly as redis-py 8's `Redis.from_url` parses it: user information, host, port, the
+  path or `?db=` database, and the connection options (`socket_timeout` / `socket_connect_timeout`,
+  5 seconds by default, `client_name`, `lib_name`, `protocol`, and the `ssl_*` TLS settings), with
+  redis-py's error kinds and messages for what it rejects. Each backend builds its own client from
+  this neutral endpoint.
 - **`RedisJournalProtocol`** — the Redis key layout (`{prefix}:log_number`, `{prefix}:log:{n}`,
   `{prefix}:snapshot`), the atomic-append Lua script, and the experimental-warning text.
 

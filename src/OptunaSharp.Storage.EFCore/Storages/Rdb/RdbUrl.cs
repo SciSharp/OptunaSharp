@@ -1,8 +1,7 @@
 using System;
 using System.Data.Common;
-using MySqlConnector;
-using Npgsql;
 using NumSharp;
+using OptunaSharp.Storages.SqlAlchemy;
 
 namespace OptunaSharp.Storages.EFCore;
 
@@ -12,173 +11,64 @@ public enum RdbProvider
     /// <summary>PostgreSQL, over Npgsql (<c>postgresql://</c>, <c>postgresql+psycopg2://</c>, …).</summary>
     PostgreSql,
 
-    /// <summary>MySQL / MariaDB, over MySqlConnector + Pomelo (<c>mysql://</c>, <c>mysql+pymysql://</c>, …).</summary>
+    /// <summary>MySQL / MariaDB, over MySqlConnector + Pomelo (<c>mysql://</c>, <c>mysql+pymysql://</c>, <c>mariadb://</c>, …).</summary>
     MySql,
 }
 
 /// <summary>
-///     Parses a SQLAlchemy-style storage URL — the same string Optuna's
-///     <c>optuna.storages.RDBStorage(url)</c> takes — into a provider and a native ADO.NET connection
-///     string. Handles the two server dialects EF Core targets:
-///     <c>postgresql[+driver]://user:pass@host:port/db</c> and <c>mysql[+driver]://…</c>.
-///
-///     <para>SQLite URLs (<c>sqlite:///…</c>) are intentionally rejected — they are served by the
-///     separate <c>OptunaSharp.Storage.Sqlite</c> package.</para>
+///     Parses a SQLAlchemy storage URL — the same string Optuna's <c>optuna.storages.RDBStorage(url)</c> takes —
+///     into a provider and a native ADO.NET connection string, with Python's semantics end to end: Optuna's
+///     <c>{SCHEMA_VERSION}</c> template, SQLAlchemy's URL grammar and driver registry, the driver's
+///     <c>create_connect_args</c>, and the driver's own handling of those arguments (libpq's for PostgreSQL, PyMySQL's
+///     or MySQLdb's for MySQL). See <see cref="PostgresUrl" /> and <see cref="MySqlUrl" /> for the rules.
 /// </summary>
+/// <remarks>
+///     SQLite URLs (<c>sqlite:///…</c>) are refused with a pointer to the <c>OptunaSharp.Storage.Sqlite</c> package,
+///     which serves them. Native Npgsql or MySqlConnector keywords do not belong in the URL — Python's drivers would
+///     reject them — and are set with <see cref="EFCoreRdbOptions.ConfigureConnectionString" /> instead.
+/// </remarks>
 internal static class RdbUrl
 {
     /// <summary>
     ///     Parse <paramref name="url" /> into its provider and a connection-string builder (an
-    ///     <see cref="NpgsqlConnectionStringBuilder" /> or <see cref="MySqlConnectionStringBuilder" />).
+    ///     <see cref="Npgsql.NpgsqlConnectionStringBuilder" /> or <see cref="MySqlConnector.MySqlConnectionStringBuilder" />).
     /// </summary>
-    /// <param name="url">The database connection URL to resolve.</param>
+    /// <param name="url">The storage URL as written.</param>
+    /// <param name="validateOptions">
+    ///     The storage's option checks, run after the template is filled and before the URL is parsed — where
+    ///     <c>RDBStorage.__init__</c> validates its heartbeat arguments. <see langword="null" /> runs nothing.
+    /// </param>
     /// <returns>The selected relational provider and its native connection-string builder.</returns>
-    /// <exception cref="NumSharp.ValueError">The URL is malformed or selects an unsupported relational dialect.</exception>
-    internal static (RdbProvider Provider, DbConnectionStringBuilder Builder) Parse(string url)
+    /// <exception cref="ArgumentNullException"><paramref name="url" /> is null.</exception>
+    /// <exception cref="ArgumentException">Not a SQLAlchemy URL, an unknown dialect/driver/plugin, or a SQLAlchemy multi-host error.</exception>
+    /// <exception cref="ValueError">A template or port error, a SQLite URL, or a driver value check; Python's messages.</exception>
+    /// <exception cref="KeyError">The template names a field other than <c>SCHEMA_VERSION</c>.</exception>
+    /// <exception cref="IndexError">The template has a positional field.</exception>
+    /// <exception cref="AttributeError">The template reads an attribute <c>int</c> lacks.</exception>
+    /// <exception cref="TypeError">An argument the driver refuses by type or name.</exception>
+    /// <exception cref="FormatException">libpq refuses the PostgreSQL connection info or one of its values.</exception>
+    /// <exception cref="NotImplementedException">PyMySQL's refusal of <c>compress</c> and <c>named_pipe</c>.</exception>
+    /// <exception cref="NotSupportedException">A dialect/driver without an OptunaSharp counterpart, or an argument the .NET driver cannot express.</exception>
+    /// <exception cref="InvalidOperationException">An asyncio driver.</exception>
+    internal static (RdbProvider Provider, DbConnectionStringBuilder Builder) Parse(string url, Action? validateOptions = null)
     {
         ArgumentNullException.ThrowIfNull(url);
-
-        int schemeEnd = url.IndexOf("://", StringComparison.Ordinal);
-        if (schemeEnd < 0)
-            throw new ValueError(
-                $"Could not parse rfc1738 URL from string '{url}'. Expected a scheme like " +
-                "'postgresql://user:pass@host:port/dbname' or 'mysql://…'.");
-
-        string scheme = url.Substring(0, schemeEnd).ToLowerInvariant();
-        string rest = url.Substring(schemeEnd + 3);
-        string dialect = scheme.Split('+')[0];
-
-        RdbProvider provider = dialect switch
+        PreparedStorageUrl prepared = StorageUrlResolver.Prepare(url, validateOptions);
+        return prepared.Driver.Dialect switch
         {
-            "postgresql" or "postgres" => RdbProvider.PostgreSql,
-            "mysql" or "mariadb" => RdbProvider.MySql,
-            "sqlite" => throw new ValueError(
-                "SQLite URLs are served by the OptunaSharp.Storage.Sqlite package, not " +
-                "OptunaSharp.Storage.EFCore. Use OptunaSharp.Storages.RDBStorage from that package."),
+            "postgresql" => (RdbProvider.PostgreSql, PostgresUrl.Build(prepared)),
+            "mysql" or "mariadb" => (RdbProvider.MySql, MySqlUrl.Build(prepared)),
             _ => throw new ValueError(
-                $"Unsupported RDB dialect '{dialect}'. OptunaSharp.Storage.EFCore supports " +
-                "'postgresql' and 'mysql'."),
+                "SQLite URLs are served by the OptunaSharp.Storage.Sqlite package, not " +
+                "OptunaSharp.Storage.EFCore. Use OptunaSharp.Storages.RDBStorage from that package, or " +
+                "StorageFunctions.GetStorage(url), which picks the package for the URL."),
         };
-
-        // rest = [user[:password]@]host[:port][/dbname][?query]
-        string query = "";
-        int q = rest.IndexOf('?');
-        if (q >= 0)
-        {
-            query = rest.Substring(q + 1);
-            rest = rest.Substring(0, q);
-        }
-
-        string authority = rest;
-        string database = "";
-        int slash = rest.IndexOf('/');
-        if (slash >= 0)
-        {
-            authority = rest.Substring(0, slash);
-            database = Uri.UnescapeDataString(rest.Substring(slash + 1));
-        }
-
-        string? user = null;
-        string? password = null;
-        string hostPort = authority;
-        int at = authority.LastIndexOf('@');
-        if (at >= 0)
-        {
-            string userInfo = authority.Substring(0, at);
-            hostPort = authority.Substring(at + 1);
-            int colon = userInfo.IndexOf(':');
-            if (colon >= 0)
-            {
-                user = Uri.UnescapeDataString(userInfo.Substring(0, colon));
-                password = Uri.UnescapeDataString(userInfo.Substring(colon + 1));
-            }
-            else
-            {
-                user = Uri.UnescapeDataString(userInfo);
-            }
-        }
-
-        string host = hostPort;
-        int? port = null;
-        int hostColon = hostPort.LastIndexOf(':');
-        if (hostColon >= 0 && int.TryParse(hostPort.Substring(hostColon + 1), out int parsedPort))
-        {
-            host = hostPort.Substring(0, hostColon);
-            port = parsedPort;
-        }
-        if (host.Length == 0)
-            host = "localhost";
-
-        return provider == RdbProvider.PostgreSql
-            ? (provider, BuildNpgsql(host, port, user, password, database, query))
-            : (provider, BuildMySql(host, port, user, password, database, query));
     }
 
-    /// <summary>Builds a PostgreSQL connection string from decoded URL components.</summary>
-    /// <param name="host">The server hostname or literal IP address.</param>
-    /// <param name="port">The server TCP port, or its provider default when nullable and omitted.</param>
-    /// <param name="user">The decoded username, or null when credentials are not supplied.</param>
-    /// <param name="password">The decoded password, or null when credentials are not supplied.</param>
-    /// <param name="database">The target database name.</param>
-    /// <param name="query">The URL query string whose decoded entries override connection options.</param>
-    /// <returns>The native PostgreSQL connection-string builder.</returns>
-    private static DbConnectionStringBuilder BuildNpgsql(
-        string host, int? port, string? user, string? password, string database, string query)
-    {
-        var b = new NpgsqlConnectionStringBuilder { Host = host };
-        if (port is not null)
-            b.Port = port.Value;
-        if (user is not null)
-            b.Username = user;
-        if (password is not null)
-            b.Password = password;
-        if (database.Length > 0)
-            b.Database = database;
-        ApplyQuery(b, query);
-        return b;
-    }
-
-    /// <summary>Builds a MySQL connection string from decoded URL components.</summary>
-    /// <param name="host">The server hostname or literal IP address.</param>
-    /// <param name="port">The server TCP port, or its provider default when nullable and omitted.</param>
-    /// <param name="user">The decoded username, or null when credentials are not supplied.</param>
-    /// <param name="password">The decoded password, or null when credentials are not supplied.</param>
-    /// <param name="database">The target database name.</param>
-    /// <param name="query">The URL query string whose decoded entries override connection options.</param>
-    /// <returns>The native MySQL connection-string builder.</returns>
-    private static DbConnectionStringBuilder BuildMySql(
-        string host, int? port, string? user, string? password, string database, string query)
-    {
-        var b = new MySqlConnectionStringBuilder { Server = host };
-        if (port is not null)
-            b.Port = (uint)port.Value;
-        if (user is not null)
-            b.UserID = user;
-        if (password is not null)
-            b.Password = password;
-        if (database.Length > 0)
-            b.Database = database;
-        ApplyQuery(b, query);
-        return b;
-    }
-
-    // Pass query-string pairs (e.g. ?SSL Mode=Require) straight through as connection-string keywords.
-    // Both builders derive from DbConnectionStringBuilder and validate keywords per provider.
-    /// <summary>Applies decoded query-string settings to the native connection-string builder.</summary>
-    /// <param name="builder">The native connection-string builder receiving the parsed options.</param>
-    /// <param name="query">The URL query string whose decoded entries override connection options.</param>
-    private static void ApplyQuery(DbConnectionStringBuilder builder, string query)
-    {
-        if (query.Length == 0)
-            return;
-        foreach (string pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
-        {
-            int eq = pair.IndexOf('=');
-            if (eq < 0)
-                continue;
-            string key = Uri.UnescapeDataString(pair.Substring(0, eq));
-            string value = Uri.UnescapeDataString(pair.Substring(eq + 1));
-            builder[key] = value;
-        }
-    }
+    /// <summary>
+    ///     The filled form of a storage URL — Python's <c>RDBStorage.url</c> — for a URL <see cref="Parse" /> accepted.
+    /// </summary>
+    /// <param name="url">The storage URL as written.</param>
+    /// <returns>The URL with <c>{SCHEMA_VERSION}</c> filled in.</returns>
+    internal static string Filled(string url) => StorageUrlTemplate.Fill(url);
 }

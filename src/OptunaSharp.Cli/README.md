@@ -41,10 +41,14 @@ Every command mirrors its Optuna counterpart, including the shared options
 | `tell` | Finish a trial created by `ask` *(experimental)* |
 
 The `--storage` URL is resolved exactly as Optuna resolves it: a `redis…` URL → a Redis journal
-backend; an existing file → a journal-file backend; otherwise → SQLite `RDBStorage`. `--storage-class`
-forces the class (`RDBStorage`, `JournalFileBackend`, `JournalRedisBackend`, and the deprecated
-`JournalFileStorage` / `JournalRedisStorage` aliases). The `OPTUNA_STORAGE` environment variable is
-honored as a fallback, like Optuna's.
+backend; an existing file → a journal-file backend; otherwise → `RDBStorage`, where only SQLAlchemy's
+`ArgumentError` (a string that is not a URL, an unknown dialect) becomes Optuna's
+`Failed to guess storage class from storage_url` usage error and every other error propagates.
+The URL's dialect picks the RDB package: SQLite is bundled; a PostgreSQL or MySQL URL needs the
+`OptunaSharp.Storage.EFCore` package, which the tool does not ship, and fails with Optuna's
+`ImportError` text. `--storage-class` forces the class (`RDBStorage`, `JournalFileBackend`,
+`JournalRedisBackend`, and the deprecated `JournalFileStorage` / `JournalRedisStorage` aliases). The
+`OPTUNA_STORAGE` environment variable is honored as a fallback, like Optuna's.
 
 ## Examples
 

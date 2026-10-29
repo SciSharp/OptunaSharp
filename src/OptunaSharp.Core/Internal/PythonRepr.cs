@@ -117,9 +117,20 @@ internal static class PythonRepr
         return sb.ToString();
     }
 
-    /// <summary>CPython <c>repr(str)</c>: single-quoted unless the text contains <c>'</c> but no <c>"</c>.</summary>
+    /// <summary>
+    ///     CPython <c>repr(str)</c>: single-quoted unless the text contains <c>'</c> but no <c>"</c>, with
+    ///     <c>\\</c>, <c>\n</c>, <c>\r</c>, <c>\t</c> and the quote escaped, and every character Python
+    ///     considers non-printable written as <c>\xNN</c>, <c>\uNNNN</c> or <c>\UNNNNNNNN</c>.
+    /// </summary>
     /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
     /// <returns>A quoted Python-style string literal with the required escapes.</returns>
+    /// <remarks>
+    ///     Non-ASCII characters follow <c>unicode_repr</c> in <c>Objects/unicodeobject.c</c>: printable ones
+    ///     are kept as they are, the others (format and control characters, separators other than the ASCII
+    ///     space, private-use, unassigned and lone surrogate code points) are escaped. A surrogate pair is one
+    ///     code point, as it is in a Python <c>str</c>. The verdict comes from .NET's Unicode tables, so a
+    ///     character assigned after the Unicode version of the running .NET can differ from CPython's.
+    /// </remarks>
     internal static string StringRepr(string value)
     {
         char quote = '\'';
@@ -128,41 +139,78 @@ internal static class PythonRepr
 
         var sb = new StringBuilder(value.Length + 2);
         sb.Append(quote);
-        foreach (char c in value)
+        for (int i = 0; i < value.Length; i++)
         {
+            char c = value[i];
             switch (c)
             {
                 case '\\':
                     sb.Append("\\\\");
-                    break;
+                    continue;
                 case '\n':
                     sb.Append("\\n");
-                    break;
+                    continue;
                 case '\r':
                     sb.Append("\\r");
-                    break;
+                    continue;
                 case '\t':
                     sb.Append("\\t");
-                    break;
-                default:
-                    if (c == quote)
-                    {
-                        sb.Append('\\').Append(c);
-                    }
-                    else if (c < 0x20 || c == 0x7f)
-                    {
-                        sb.Append("\\x").Append(((int)c).ToString("x2", CultureInfo.InvariantCulture));
-                    }
-                    else
-                    {
-                        sb.Append(c);
-                    }
-                    break;
+                    continue;
             }
+            if (c == quote)
+            {
+                sb.Append('\\').Append(c);
+                continue;
+            }
+            if (c < 0x20 || c == 0x7f)
+            {
+                sb.Append("\\x").Append(((int)c).ToString("x2", CultureInfo.InvariantCulture));
+                continue;
+            }
+            if (c < 0x7f)
+            {
+                sb.Append(c);
+                continue;
+            }
+
+            // Python strings hold code points, so a surrogate pair is one character there; a lone surrogate
+            // stays a code point of its own (category Cs) and is escaped below.
+            int codePoint = c;
+            int width = 1;
+            if (char.IsHighSurrogate(c) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+            {
+                codePoint = char.ConvertToUtf32(c, value[i + 1]);
+                width = 2;
+            }
+            if (IsPrintable(codePoint))
+                sb.Append(value, i, width);
+            else if (codePoint <= 0xff)
+                sb.Append("\\x").Append(codePoint.ToString("x2", CultureInfo.InvariantCulture));
+            else if (codePoint <= 0xffff)
+                sb.Append("\\u").Append(codePoint.ToString("x4", CultureInfo.InvariantCulture));
+            else
+                sb.Append("\\U").Append(codePoint.ToString("x8", CultureInfo.InvariantCulture));
+            i += width - 1;
         }
         sb.Append(quote);
         return sb.ToString();
     }
+
+    /// <summary>
+    ///     CPython's <c>Py_UNICODE_ISPRINTABLE</c> for a non-ASCII code point: everything except the
+    ///     "Other" (Cc, Cf, Cs, Co, Cn) and "Separator" (Zs, Zl, Zp) categories.
+    /// </summary>
+    /// <param name="codePoint">The Unicode code point to classify; ASCII is handled by the caller.</param>
+    /// <returns><see langword="true" /> when <c>repr()</c> writes the character as it is.</returns>
+    private static bool IsPrintable(int codePoint)
+        => CharUnicodeInfo.GetUnicodeCategory(codePoint) switch
+        {
+            UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.Surrogate
+                or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned
+                or UnicodeCategory.SpaceSeparator or UnicodeCategory.LineSeparator
+                or UnicodeCategory.ParagraphSeparator => false,
+            _ => true,
+        };
 
     /// <summary>CPython <c>repr(value)</c> for the JSON-ish object model OptunaSharp carries around.</summary>
     /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>

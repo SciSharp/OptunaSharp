@@ -61,7 +61,32 @@ rediss://user:password@redis.example.com:6380/1
 unix:///var/run/redis/redis.sock?db=1
 ```
 
-`rediss://` enables TLS. The Unix-socket form is supported by StackExchange.Redis and NRedisStack; ServiceStack rejects it. The shared parser handles username, password, and database; supported query values (`db`, `username`, `password`) override URL components. Other native client settings belong in the callback or native client configuration, not arbitrary URL query parameters.
+`rediss://` enables TLS. The Unix-socket form is supported by StackExchange.Redis and NRedisStack; ServiceStack rejects it.
+
+The shared parser reads a URL exactly as redis-py 8's `Redis.from_url` does:
+
+- **Scheme:** it must be exactly `redis://`, `rediss://` or `unix://`.
+- **User information:** split at its last `@`. It wins over `?username=`/`?password=`.
+- **Host:** lower-cased, then percent-decoded. `?host=` and `?port=` fill a host or port the URL leaves out.
+- **Database:** `?db=`, else the path with its slashes removed.
+- **Query values:** form-decoded (`+` is a space). The first of a repeated key wins. Typed keys use Python's `int`/`float` and redis-py's `to_bool`.
+
+redis-py's connection options map onto every client:
+
+- `socket_timeout` and `socket_connect_timeout`, which default to redis-py's 5 seconds
+- `client_name`, `lib_name` and `protocol`
+- the TLS settings `ssl_cert_reqs`, `ssl_check_hostname`, `ssl_ca_certs`, `ssl_ca_data`, `ssl_ca_path`, `ssl_certfile`, `ssl_keyfile`, `ssl_password` and `ssl_min_version`
+
+TLS follows Python's `ssl` module. The system's certificate authorities are trusted plus the URL's. The host name is checked unless turned off. Revocation is never checked. An argument redis-py's connection class does not take fails with redis-py's `TypeError` text, for example `AbstractConnection.__init__() got an unexpected keyword argument 'timeout'`. Other redis-py rejections keep redis-py's messages.
+
+Options that only tune redis-py's own pool, retries or decoding are accepted without effect, for example `max_connections`, `retry_on_timeout` and `decode_responses`. Options no .NET client can honor raise `NotSupportedException`:
+
+- arguments that take a Python object (`retry`, `credential_provider`, …)
+- a text encoding other than UTF-8
+- `ssl_ciphers`, the OpenSSL verification flags, and stapled OCSP
+- a zero timeout
+
+redis-py would only discover some values at the server, such as a client name with a space or a negative database index. Those are refused up front, with the server's message. ServiceStack.Redis also refuses what it cannot set per connection: RESP3, a user name without a password, certificate settings beyond the default check, and a minimum TLS version. Settings beyond the URL belong in the callback or the native client configuration.
 
 All three backends implement `IDisposable` and `IAsyncDisposable`, and ownership follows how you constructed them:
 

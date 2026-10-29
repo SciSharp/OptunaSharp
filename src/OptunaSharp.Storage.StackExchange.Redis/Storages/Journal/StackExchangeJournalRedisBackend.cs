@@ -50,12 +50,20 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
 
     /// <summary>Connects from a <c>redis-py</c>-style URL — the Optuna-identical entry point.</summary>
     /// <param name="url">URL of the redis storage (ie: <c>redis://localhost:6379</c>); <c>redis://</c>,
-    ///   <c>rediss://</c> (TLS), <c>unix://</c> accepted, password/db optional. Only the components
-    ///   <c>redis-py</c> puts on the URL are read; for StackExchange.Redis-specific options use one of
-    ///   the other constructors.</param>
+    ///   <c>rediss://</c> (TLS), <c>unix://</c> accepted, password/db optional. It is read exactly as
+    ///   <c>redis-py</c>'s <c>Redis.from_url</c> reads it, query options included (<c>socket_timeout</c>,
+    ///   <c>client_name</c>, <c>protocol</c>, <c>ssl_cert_reqs</c>, <c>ssl_ca_certs</c>, …; see
+    ///   <see cref="RedisUrl" />); for StackExchange.Redis-specific options use one of the other
+    ///   constructors.</param>
     /// <param name="useCluster">If <c>false</c> (default), a standalone server + one atomic Lua
     ///   <c>EVAL</c>; if <c>true</c>, a cluster + non-atomic <c>INCR</c>+<c>SET</c>.</param>
     /// <param name="prefix">Prefix of the preserved keys — useful when many users share one server.</param>
+    /// <exception cref="ValueError">A URL redis-py rejects, with redis-py's message (see <see cref="RedisUrl.Parse" />).</exception>
+    /// <exception cref="TypeError">A query argument redis-py's connection class does not take, with redis-py's message.</exception>
+    /// <exception cref="OverflowException">A timeout or TLS version too large for Python, with Python's message.</exception>
+    /// <exception cref="NotSupportedException">A query argument no .NET client can honor, or white-space-only credentials.</exception>
+    /// <exception cref="System.IO.FileNotFoundException">A TLS certificate, key or authority file that does not exist.</exception>
+    /// <exception cref="System.Security.Cryptography.CryptographicException">A malformed TLS certificate, key or authority file.</exception>
     /// <remarks>The backend owns the connection it opens here: <see cref="Dispose" /> closes it.</remarks>
     public StackExchangeJournalRedisBackend(string url, bool useCluster = false, string prefix = "")
         : this(ConnectionMultiplexer.Connect(ToConfiguration(RedisUrl.Parse(url))), url, useCluster, prefix, ownsConnection: true)
@@ -258,11 +266,30 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
         return snapshotBytes.IsNull ? null : (byte[]?)snapshotBytes;
     }
 
-    /// <summary>Maps the neutral <see cref="RedisEndpoint" /> onto StackExchange.Redis' options.</summary>
+    /// <summary>
+    ///     Maps the neutral <see cref="RedisEndpoint" /> onto StackExchange.Redis' options, so the connection behaves as
+    ///     redis-py's would for the same URL: its 5-second command and connect timeouts, its client name and protocol,
+    ///     and its TLS checks (the system's certificate authorities plus the URL's, the host name check unless the URL
+    ///     turns it off, a client certificate, a minimum TLS version, and no revocation check, which Python never does
+    ///     and StackExchange.Redis does by default).
+    /// </summary>
     /// <param name="ep">The client-neutral, parsed Redis endpoint.</param>
     /// <returns>Native StackExchange.Redis options representing the parsed endpoint.</returns>
+    /// <exception cref="NotSupportedException">
+    ///     A user name or password made only of white space: StackExchange.Redis skips authentication for it, where
+    ///     redis-py sends it as it is.
+    /// </exception>
+    /// <exception cref="TypeError">An <c>ssl_keyfile</c> without an <c>ssl_certfile</c>; Python's message.</exception>
+    /// <exception cref="System.IO.FileNotFoundException">A certificate, key or certificate-authority file that does not exist.</exception>
+    /// <exception cref="System.Security.Cryptography.CryptographicException">A malformed certificate, key or authority file, a key that does not match, or a wrong key password.</exception>
     internal static ConfigurationOptions ToConfiguration(RedisEndpoint ep)
     {
+        // StackExchange.Redis authenticates only for a user name or password that is not white space, where redis-py
+        // authenticates for any non-empty one; refuse the credentials the two would send differently.
+        if ((ep.User is not null && string.IsNullOrWhiteSpace(ep.User)) || (ep.User is null && ep.Password is not null && string.IsNullOrWhiteSpace(ep.Password)))
+            throw new NotSupportedException(
+                "StackExchange.Redis does not authenticate with a user name or password made only of white space, which " +
+                "redis-py sends as it is; use the configure callback to set ConfigurationOptions.User/Password explicitly.");
         // StackExchange.Redis defaults AbortOnConnectFail to true (Connect throws if no server is up);
         // we set false so construction succeeds without a live server, matching redis-py's lazy connect
         // (Optuna's `redis.Redis.from_url(url)` does not dial until the first command).
@@ -276,7 +303,15 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
             o.EndPoints.Add(ep.Host, ep.Port);
             o.Ssl = ep.Ssl;
             if (ep.Ssl)
+            {
                 o.SslHost = ep.Host;
+                o.CheckCertificateRevocation = false;
+                o.SslProtocols = RedisTls.Protocols(ep);
+                if (RedisTls.Validation(ep) is { } validate)
+                    o.CertificateValidation += validate;
+                if (RedisTls.ClientCertificate(ep) is { } certificate)
+                    o.CertificateSelection += (_, _, _, _, _) => certificate;
+            }
         }
         if (ep.User is not null)
             o.User = ep.User;
@@ -284,6 +319,16 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
             o.Password = ep.Password;
         if (ep.Db is not null)
             o.DefaultDatabase = ep.Db;
+        // Always explicit: StackExchange.Redis would otherwise derive the connect timeout from the command timeout.
+        o.SyncTimeout = RedisEndpoint.ToMilliseconds(ep.SocketTimeout);
+        o.AsyncTimeout = o.SyncTimeout;
+        o.ConnectTimeout = RedisEndpoint.ToMilliseconds(ep.SocketConnectTimeout);
+        if (ep.ClientName is not null)
+            o.ClientName = ep.ClientName;
+        if (ep.LibraryName is not null)
+            o.LibraryName = ep.LibraryName;
+        if (ep.Protocol is { } protocol)
+            o.Protocol = protocol == 3 ? RedisProtocol.Resp3 : RedisProtocol.Resp2;
         return o;
     }
 

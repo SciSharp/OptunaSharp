@@ -122,6 +122,107 @@ public class StorageUrlTests
         Optuna.LoadStudy("di", reopened).Trials.Should().HaveCount(3);
     }
 
+    /// <summary>The file and busy timeout an open SQLite storage is really using, read back from SQLite itself.</summary>
+    /// <param name="storage">The open storage.</param>
+    /// <returns>The main database's file (empty for an in-memory database) and <c>PRAGMA busy_timeout</c>.</returns>
+    private static (string File, long BusyTimeout) Opened(RDBStorage storage)
+    {
+        using SqliteCommand command = storage.Connection.CreateCommand();
+        command.CommandText = "SELECT file FROM pragma_database_list WHERE name = 'main'";
+        string file = command.ExecuteScalar() as string ?? "";
+        command.CommandText = "PRAGMA busy_timeout";
+        return (file, (long)command.ExecuteScalar()!);
+    }
+
+    /// <summary>
+    ///     Review item P3-3: the query string is never part of the file name. <c>sqlite:///x.db?timeout=10</c> opens
+    ///     <c>x.db</c> with a 10-second busy timeout, as pysqlite does; it used to open (on Linux, create) a file named
+    ///     <c>x.db?timeout=10</c>, and fail with SQLite error 14 on Windows.
+    /// </summary>
+    [TestMethod]
+    public void RdbStorage_QueryString_IsNotPartOfTheFileName()
+    {
+        using (var storage = new RDBStorage(Url + "?timeout=10"))
+        {
+            var (file, busy) = Opened(storage);
+            file.Should().Be(Path.GetFullPath(_path));
+            busy.Should().Be(10_000);
+            storage.Url.Should().Be(Url + "?timeout=10", "RDBStorage.url keeps the URL as written, as in Python");
+        }
+        File.Exists(_path).Should().BeTrue();
+    }
+
+    /// <summary>pysqlite reads six query arguments and ignores every other one, so an unknown key opens the same file.</summary>
+    [TestMethod]
+    public void RdbStorage_UnknownQueryArgument_IsIgnoredLikePysqlite()
+    {
+        using var storage = new RDBStorage(Url + "?foo=1&check_same_thread=false");
+        Opened(storage).File.Should().Be(Path.GetFullPath(_path));
+    }
+
+    /// <summary>A <c>?timeout=</c> that is not a Python float fails with Python's <c>float()</c> message, before any file is opened.</summary>
+    [TestMethod]
+    public void RdbStorage_BadTimeout_RaisesPythonsFloatError()
+    {
+        Action act = () => new RDBStorage(Url + "?timeout=abc");
+        act.Should().Throw<NumSharp.ValueError>().WithMessage("could not convert string to float: 'abc'");
+        File.Exists(_path).Should().BeFalse();
+    }
+
+    /// <summary><c>sqlite://</c> (no path) and <c>sqlite:///:memory:</c> open a private in-memory database, as pysqlite does.</summary>
+    [TestMethod]
+    public void RdbStorage_NoPath_IsAnInMemoryDatabase()
+    {
+        foreach (string url in new[] { "sqlite://", "sqlite:///:memory:" })
+        {
+            using var storage = new RDBStorage(url);
+            Opened(storage).File.Should().BeEmpty(url + " is in memory");
+        }
+    }
+
+    /// <summary>
+    ///     Optuna's <c>{SCHEMA_VERSION}</c> template is filled before the URL is parsed (<c>url.format(SCHEMA_VERSION=12)</c>),
+    ///     so the file name carries the schema version.
+    /// </summary>
+    [TestMethod]
+    public void RdbStorage_SchemaVersionTemplate_IsFilledFirst()
+    {
+        string templated = Path.Combine(Path.GetTempPath(), $"optunasharp-url-{Guid.NewGuid():N}");
+        using (var storage = new RDBStorage("sqlite:///" + templated.Replace('\\', '/') + "-v{SCHEMA_VERSION}.db"))
+            Opened(storage).File.Should().Be(Path.GetFullPath(templated + "-v12.db"));
+        SqliteConnection.ClearAllPools();
+        File.Delete(templated + "-v12.db");
+    }
+
+    /// <summary>
+    ///     Review item P2-3: a bare path is not a URL. Python's <c>RDBStorage("study.db")</c> fails in SQLAlchemy's URL
+    ///     parser, and so does the port, with the same <c>ArgumentError</c> text; a host in a SQLite URL fails pysqlite's
+    ///     check the same way.
+    /// </summary>
+    [TestMethod]
+    public void RdbStorage_BarePathOrHost_IsRefusedLikeSqlAlchemy()
+    {
+        Action bare = () => new RDBStorage("study.db");
+        bare.Should().Throw<ArgumentException>().WithMessage("Could not parse SQLAlchemy URL from given URL string");
+        Action host = () => new RDBStorage("sqlite://host/x.db");
+        host.Should().Throw<ArgumentException>().WithMessage("Invalid SQLite URL: sqlite://host/x.db*");
+    }
+
+    /// <summary>
+    ///     With <c>?uri=true</c> the path is a SQLite URI filename and the other query arguments are its parameters:
+    ///     <c>sqlite:///file:x.db?mode=ro&amp;uri=true</c> opens <c>x.db</c> read-only, so writing to it fails.
+    /// </summary>
+    [TestMethod]
+    public void RdbStorage_UriMode_PassesQueryArgumentsToSqlite()
+    {
+        using (var writable = new RDBStorage(Url))
+            writable.CreateNewStudy(new[] { StudyDirection.Minimize }, "uri");
+        using var readOnly = new RDBStorage("sqlite:///file:" + _path.Replace('\\', '/') + "?mode=ro&uri=true");
+        readOnly.GetAllStudies().Should().ContainSingle();
+        Action write = () => readOnly.CreateNewStudy(new[] { StudyDirection.Minimize }, "second");
+        write.Should().Throw<SqliteException>().Which.SqliteErrorCode.Should().Be(8, "SQLITE_READONLY");
+    }
+
     /// <summary>
     ///     A server URL is checked when it is registered, but nothing connects until the storage is resolved: the
     ///     registration finds the EF Core package by name and adds the concrete type plus the

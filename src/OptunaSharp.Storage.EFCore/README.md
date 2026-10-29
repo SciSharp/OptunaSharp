@@ -47,12 +47,18 @@ MySQL) — the same SQLAlchemy-style URL Python Optuna takes. `Optuna.CreateStud
 
 | URL | Backend |
 |-----|---------|
-| `postgresql://user:pass@host:5432/db` | PostgreSQL (Npgsql) |
-| `postgresql+psycopg2://user:pass@host/db` | PostgreSQL (the `+driver` suffix is accepted and ignored) |
-| `mysql://user:pass@host:3306/db` | MySQL (Pomelo) |
-| `mysql+pymysql://user:pass@host/db` | MySQL (the `+driver` suffix is accepted and ignored) |
+| `postgresql://user:pass@host:5432/db` | PostgreSQL (Npgsql); query = libpq parameters, as psycopg2 passes them |
+| `postgresql+psycopg2://user:pass@host/db?sslmode=require` | PostgreSQL, the same |
+| `postgresql+pg8000://user:pass@host/db` | PostgreSQL; query = pg8000's arguments |
+| `mysql://user:pass@host:3306/db` | MySQL (Pomelo); query = MySQLdb's arguments |
+| `mysql+pymysql://user:pass@host/db?ssl_ca=/ca.pem` | MySQL; query = PyMySQL's arguments |
 
-SQLite URLs (`sqlite:///…`) are rejected — use the `OptunaSharp.Storage.Sqlite` package for those.
+The URL is read exactly as Python Optuna reads it: Optuna's `{SCHEMA_VERSION}` template, SQLAlchemy's URL
+grammar and driver registry, the driver's `create_connect_args`, then the Python driver's own handling of
+those arguments, with Python's error kinds and messages (`postgres://` is refused as SQLAlchemy refuses it;
+a native .NET keyword such as `?Pooling=false` fails as libpq fails — set those with
+`ConfigureConnectionString`). SQLite URLs (`sqlite:///…`) are rejected — use the `OptunaSharp.Storage.Sqlite`
+package for those.
 
 ## Configuration — Optuna's API *and* the native EF Core / Npgsql / Pomelo surface
 

@@ -47,9 +47,9 @@ var backend = new ServiceStackJournalRedisBackend(
     prefix: "experiments");
 ```
 
-The endpoint and URL paths build a pool from the endpoint's `ToString()` connection representation. Host, port, TLS, database, username, and password flow through that representation. They do not expose a manager-configuration callback. Use an injected manager for pool selection, pool sizing, or application-managed connection behavior.
+The endpoint and URL paths build a `RedisManagerPool` whose resolver serves the endpoint object itself, so every pooled client copies its host, port, TLS, database, username, password, client name and connect/send/receive timeouts. A URL's timeouts default to redis-py's 5 seconds. These paths do not expose a manager-configuration callback. Use an injected manager for pool selection, pool sizing, or application-managed connection behavior.
 
-The implementation's documented ServiceStack caveat is that pooled-manager timeouts/retry use `RedisConfig` defaults rather than simply applying per-endpoint `ConnectTimeout`. Configure those settings where you manage ServiceStack. Leave the native endpoint's `NamespacePrefix` unset and use OptunaSharp's `prefix` argument to preserve the shared journal keys.
+ServiceStack.Redis takes certificate callbacks only process-wide (`RedisConfig.CertificateValidationCallback`), speaks RESP2 only, authenticates only when a password is set, and turns revocation checking on whenever TLS versions are given. So a URL's `ssl_cert_reqs=none`, `ssl_check_hostname=false`, extra certificate authorities, client certificate, `ssl_min_version`, `protocol=3`, or a user name without a password raises `NotSupportedException`. Use the StackExchange or NRedisStack backend for those, or configure ServiceStack yourself. Leave the native endpoint's `NamespacePrefix` unset and use OptunaSharp's `prefix` argument to preserve the shared journal keys.
 
 As with the other adapters, the backend is `IDisposable`. The URL and endpoint convenience constructors create an internal pool that the backend owns, and `Dispose()` closes it. An injected manager is never disposed by the backend.
 
