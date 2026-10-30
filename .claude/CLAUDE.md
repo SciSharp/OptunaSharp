@@ -75,7 +75,9 @@ Four load-bearing rules from the plan that infra must respect (full detail in
   is a **separate NuGet package** — the `NumSharp.Interop.OpenBLAS` pattern (see the plan's package
   map).
 - **Threading.** Trial-level parallelism (`n_jobs`, distributed workers) is supported and tested;
-  numeric kernels stay single-threaded (NumSharp house rule).
+  numeric kernels stay single-threaded (NumSharp house rule). The design (threads, locks and their
+  order, per-layer guarantees, the rules for objectives, samplers and storages) is
+  [`docs/THREADING.md`](../docs/THREADING.md).
 
 ---
 
@@ -97,6 +99,7 @@ OptunaSharp/
 │   └── OptunaSharp.Benchmark/       # BenchmarkDotNet harness (template; grows with the ops)
 ├── docs/
 │   ├── PORTING_PLAN.md              # the governing conversion roadmap
+│   ├── THREADING.md                 # the multithreading design: threads, lock order, guarantees, rules
 │   └── website-src/                 # DocFX site (docfx.json, conceptual docs, generated API ref)
 ├── .github/
 │   ├── workflows/                   # build-and-release · package-parity · docs · documentation · examples · benchmark
