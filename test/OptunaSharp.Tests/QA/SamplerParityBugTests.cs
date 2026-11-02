@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using AwesomeAssertions;
 using OptunaSharp.Collections;
@@ -126,5 +128,33 @@ public class SamplerParityBugTests
 
         study.Trials.Select(t => PythonRepr.FloatRepr((double)t.Params["x"]!))
             .Should().Equal("-1.668040973461563", "-3.0", "0.0", "1.5", "-1.5");
+    }
+
+    /// <summary>
+    ///     QA-34: CMA-ES must reject a mean outside the search-space bounds, as cmaes 0.13.1's <c>CMA.__init__</c> does
+    ///     with <c>assert ... _is_valid_bounds(bounds, mean), "invalid bounds"</c>; the port's <c>Cma</c> and
+    ///     <c>SepCma</c> constructors skip the check (only <c>CmaWm</c> has it) and optimize from the outside mean.
+    /// </summary>
+    /// <remarks>
+    ///     With <c>CmaEsSampler(seed=1, x0={"x": 5.0, "y": 0.0})</c> on <c>x, y ∈ [-1, 1]</c>, Optuna completes trial 0
+    ///     (the independent start-up trial) and fails every later trial with
+    ///     <c>AssertionError('invalid bounds')</c>, so <c>optimize</c> without <c>catch</c> stops at trial 1. The port
+    ///     completes all four trials, sampling around a mean the user could not have meant. <c>x0</c> is deprecated
+    ///     since 4.9, but still accepted.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void CmaEs_X0OutsideBounds_FailsTrialsLikeCmaes()
+    {
+#pragma warning disable CS0618 // x0 is deprecated in Optuna 4.9, as in the port; the test needs it.
+        var sampler = new CmaEsSampler(seed: 1, x0: new Dictionary<string, object?> { ["x"] = 5.0, ["y"] = 0.0 });
+#pragma warning restore CS0618
+        var study = Optuna.CreateStudy(sampler: sampler);
+        study.Optimize(
+            t => Math.Pow(t.SuggestFloat("x", -1, 1) - 0.2, 2) + Math.Pow(t.SuggestFloat("y", -1, 1), 2),
+            nTrials: 4, @catch: new[] { typeof(Exception) });
+
+        study.Trials.Select(t => t.State).Should().Equal(
+            TrialState.Complete, TrialState.Fail, TrialState.Fail, TrialState.Fail);
     }
 }
