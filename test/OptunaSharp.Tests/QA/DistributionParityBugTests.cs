@@ -194,6 +194,38 @@ public class DistributionParityBugTests
     }
 
     /// <summary>
+    ///     QA-27: mapping a transformed coordinate back to an int value must not overflow 64 bits for ranges
+    ///     whose span is 2^63 or more, as Python's unbounded ints do not. Latent behind the known catalog item
+    ///     19c (<c>Single()</c> overflows, so such a parameter never reaches a sampler): fixing 19c alone would
+    ///     expose this one.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_untransform_numerical_param</c> computes <c>step_index = floor((t - low) / step + 0.5)</c> and
+    ///     <c>step_index * step + low</c> in Python ints. The port converts the floor to <c>long</c>, which
+    ///     saturates at <c>long.MaxValue</c> on net10.0 (and gives <c>long.MinValue</c> on net8.0), then adds
+    ///     <c>low</c> with wrap-around. Over <c>[-2**63, 2**63 - 1]</c> every coordinate <c>t &gt;= 0</c> becomes
+    ///     <c>-1</c>: Optuna maps <c>9.004502142883758e17</c> (RandomSampler seed 0's first draw) to
+    ///     <c>900450214288375808</c>. At the top bound of <c>[-2**62, 2**62]</c> the port returns
+    ///     <c>4611686018427387903</c>, and of <c>[-10**18, 2**63 - 1]</c> it returns <c>8223372036854775807</c>.
+    ///     The 2026-11-02 transform fuzz found 240 of 376 such spaces affected and none of the 3,546 others.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void IntUntransform_SpanOf2Pow63OrMore_DoesNotOverflow()
+    {
+        static object? Untransform(long low, long high, double coordinate)
+        {
+            var space = new Collections.OrderedDict<string, BaseDistribution> { ["x"] = new IntDistribution(low, high) };
+            return new SearchSpaceTransform(space).Untransform(np.array(new[] { coordinate }))["x"];
+        }
+
+        Untransform(long.MinValue, long.MaxValue, 9.004502142883758e17).Should().Be(900450214288375808L);
+        Untransform(-(1L << 62), 1L << 62, 4.611686018427388e18).Should().Be(4611686018427387904L);
+        Untransform(-1000000000000000000L, long.MaxValue, 9.223372036854776e18).Should().Be(long.MaxValue);
+        Untransform(long.MinValue, 1000000000000000000L, 5e17).Should().Be(500000000000000000L);
+    }
+
+    /// <summary>
     ///     QA-5: converting a non-finite internal value of an int distribution must fail as Python's
     ///     <c>int(float)</c> does; the port saturates to <c>long.MaxValue</c> or returns <c>0</c> for NaN.
     /// </summary>
