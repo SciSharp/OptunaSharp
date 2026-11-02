@@ -68,4 +68,30 @@ public class SamplerParityBugTests
         NsgaiiConstraintsEvaluation.EvaluatePenalty(new[] { t0, t1 }).Select(PythonRepr.FloatRepr)
             .Should().Equal("0.6", "0.6000000000000001");
     }
+
+    /// <summary>
+    ///     QA-29: TPE must pick the candidate with <c>np.argmax</c>'s semantics, where the first NaN acquisition
+    ///     value wins; the port's <c>ArgMax</c> skips NaN (its comment assumes the values are finite).
+    /// </summary>
+    /// <remarks>
+    ///     The acquisition value is <c>log l(x) - log g(x)</c>. When a candidate's probability mass is zero under
+    ///     both mixtures it is <c>-inf - (-inf) = NaN</c>: for a log int above 2^53, <c>x - 0.5</c> and
+    ///     <c>x + 0.5</c> are the same double, and for linear ranges of ~1e16 or more grid steps the mass falls
+    ///     below the resolution of <c>1 - ndtr(a) - ndtr(-b)</c>. Optuna's <c>_compare</c> then returns the first
+    ///     NaN candidate; the port returns the largest finite one. With <c>suggest_int("v", 1, 2**62, log=True)</c>
+    ///     and TPE seed 3, 5 of the 24 candidates of the first TPE trial are NaN: Optuna picks index 5
+    ///     (<c>235956546695320384</c>), the port index 11 (<c>114</c>). Replacing <c>np.argmax</c> with the port's
+    ///     loop in Python reproduces <c>114</c>, which isolates the cause. Only the first six trials are compared,
+    ///     because later ones also carry the documented erf ULP tolerance.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Tpe_NanAcquisitionValues_PickFirstNanLikeNumpyArgmax()
+    {
+        var study = Optuna.CreateStudy(sampler: new TPESampler(seed: 3, nStartupTrials: 5));
+        study.Optimize(t => t.SuggestInt("v", 1, 1L << 62, log: true) % 1000, nTrials: 6);
+
+        study.Trials.Select(t => (long)t.Params["v"]!).Should().Equal(
+            13956981037L, 13455981166018L, 164417L, 2436459554L, 43014068803425816L, 235956546695320384L);
+    }
 }
