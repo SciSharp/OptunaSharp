@@ -226,6 +226,36 @@ public class DistributionParityBugTests
     }
 
     /// <summary>
+    ///     QA-30: clipping a sampled value to a bound must keep the value's own sign of zero, as
+    ///     <c>np.clip</c> does; <c>MathUtil.Clip</c> is <c>Math.Min(Math.Max(x, low), high)</c>, whose IEEE
+    ///     minimum and maximum order <c>-0.0</c> below <c>+0.0</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <c>np.clip(x, lo, hi)</c> returns <c>x</c> unless it lies strictly outside, so
+    ///     <c>np.clip(0.0, -1.0, -0.0)</c> is <c>+0.0</c> and <c>np.clip(-0.0, 0.0, 1.0)</c> is <c>-0.0</c>; the port
+    ///     returns <c>-0.0</c> and <c>+0.0</c>. Public path: a stepped float whose upper bound is <c>-0.0</c> (for
+    ///     example <c>-min_shift</c> with <c>min_shift = 0.0</c>). <c>_untransform_numerical_param</c> computes the top
+    ///     grid point as <c>4 * 0.25 + (-1.0) = +0.0</c> and clips it to <c>high = -0.0</c>: Optuna keeps
+    ///     <c>0.0</c> (RandomSampler seed 1: trials 13, 20, 21, 24, 25 and 29), the port stores <c>-0.0</c>. Random,
+    ///     QMC, CMA-ES and GP all go through this clip; TPE's discrete sampling and NSGA-II's mutation use the
+    ///     same helper. Unlike QA-1 the user has to pass a negative-zero bound, so it is rarer.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void SteppedFloat_NegativeZeroHigh_TopGridPointIsPositiveZero()
+    {
+        BitConverter.DoubleToInt64Bits(MathUtil.Clip(0.0, -1.0, -0.0)).Should().Be(0L, "np.clip keeps +0.0");
+        BitConverter.DoubleToInt64Bits(MathUtil.Clip(-0.0, 0.0, 1.0)).Should().Be(long.MinValue, "np.clip keeps -0.0");
+
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 1));
+        study.Optimize(t => t.SuggestFloat("x", -1.0, -0.0, step: 0.25), nTrials: 30);
+
+        var zeros = study.Trials.Where(t => (double)t.Params["x"]! == 0.0).ToList();
+        zeros.Select(t => t.Number).Should().Equal(13, 20, 21, 24, 25, 29);
+        zeros.Should().OnlyContain(t => !double.IsNegative((double)t.Params["x"]!));
+    }
+
+    /// <summary>
     ///     QA-5: converting a non-finite internal value of an int distribution must fail as Python's
     ///     <c>int(float)</c> does; the port saturates to <c>long.MaxValue</c> or returns <c>0</c> for NaN.
     /// </summary>
