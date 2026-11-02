@@ -124,6 +124,50 @@ public class ErrorContractParityBugTests
     }
 
     /// <summary>
+    ///     QA-39: constructing a deprecated class must emit Optuna's runtime <c>FutureWarning</c>; for
+    ///     <c>RetryFailedTrialCallback</c> and <c>JournalFileStorage</c> the port only carries a compile-time
+    ///     <see cref="ObsoleteAttribute" />, so code that is not recompiled, or that suppresses CS0618, is never told.
+    /// </summary>
+    /// <remarks>
+    ///     Optuna's <c>@deprecated_class</c> warns on every construction:
+    ///     "RetryFailedTrialCallback has been deprecated in v4.9.0. This feature will be removed in v6.0.0. See
+    ///     https://github.com/optuna/optuna/releases/tag/v4.9.0. Use `RetryHeartbeatStaleTrialCallback` instead." and
+    ///     "JournalFileStorage has been deprecated in v4.0.0. ... Use :class:`~optuna.storages.journal.JournalFileBackend`
+    ///     instead.". The port already does this at run time for the deprecated distribution classes, the
+    ///     <c>suggest_uniform</c> family, <c>get_failed_trial_callback</c> and the deprecated sampler arguments, so these
+    ///     two are the odd ones out.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void DeprecatedClasses_EmitRuntimeFutureWarningLikeOptuna()
+    {
+        var warnings = new List<string>();
+        void Handler(string message, global::OptunaSharp.Internal.WarningCategory category) => warnings.Add(message);
+        global::OptunaSharp.Internal.OptunaWarnings.WarningRaised += Handler;
+        string dir = Path.Combine(Path.GetTempPath(), "optunasharp-qa-deprecated-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+#pragma warning disable CS0618 // The point of the test is constructing the deprecated classes.
+            _ = new global::OptunaSharp.Storages.RetryFailedTrialCallback(maxRetry: 1);
+            _ = new global::OptunaSharp.Storages.Journal.JournalFileStorage(Path.Combine(dir, "a.log"));
+#pragma warning restore CS0618
+        }
+        finally
+        {
+            global::OptunaSharp.Internal.OptunaWarnings.WarningRaised -= Handler;
+            Directory.Delete(dir, recursive: true);
+        }
+
+        warnings.Should().Equal(
+            "RetryFailedTrialCallback has been deprecated in v4.9.0. This feature will be removed in v6.0.0. "
+            + "See https://github.com/optuna/optuna/releases/tag/v4.9.0. Use `RetryHeartbeatStaleTrialCallback` instead.",
+            "JournalFileStorage has been deprecated in v4.0.0. This feature will be removed in v6.0.0. "
+            + "See https://github.com/optuna/optuna/releases/tag/v4.0.0. "
+            + "Use :class:`~optuna.storages.journal.JournalFileBackend` instead.");
+    }
+
+    /// <summary>
     ///     QA-17: a CMA-ES <c>x0</c> that misses a parameter of the search space must fail with Python's
     ///     message; the port throws a <see cref="KeyNotFoundException" /> naming the key.
     /// </summary>
