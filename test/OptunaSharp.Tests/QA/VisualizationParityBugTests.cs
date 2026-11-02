@@ -49,4 +49,56 @@ public class VisualizationParityBugTests
         dim.Tickvals.Should().Equal(0.0, 1.0, 2.0);
         dim.Ticktext.Should().Equal("None", "a", "b");
     }
+
+    /// <summary>Collects the messages of every log record, so a test can assert on Optuna's warning text.</summary>
+    private sealed class CollectingHandler : Logging.ILogHandler
+    {
+        /// <summary>The messages received so far, oldest first.</summary>
+        public System.Collections.Generic.List<string> Messages { get; } = new();
+
+        /// <summary>Stores the record's message; never throws, so it cannot disturb the code under test.</summary>
+        /// <param name="record">The log record delivered by <see cref="Logging.OptunaLogging" />.</param>
+        public void Emit(in Logging.LogRecord record)
+        {
+            lock (Messages)
+                Messages.Add(record.Message);
+        }
+    }
+
+    /// <summary>
+    ///     QA-32: the timeline's reversed-times warning must print the datetimes the way Python's <c>str(datetime)</c>
+    ///     does; the port interpolates <see cref="System.DateTime" /> with the current culture's default format.
+    /// </summary>
+    /// <remarks>
+    ///     Optuna logs <c>f"... The start time is {datetime_start} and the end time is {datetime_complete}."</c>,
+    ///     which gives <c>2026-01-02 03:10:00</c> and <c>2026-01-02 03:09:59.500000</c> (microseconds only when non-zero).
+    ///     The port's <c>{datetimeStart}</c> gives <c>1/2/2026 3:10:00 AM</c> and <c>1/2/2026 3:09:59 AM</c> under en-US,
+    ///     <c>01/02/2026 03:10:00</c> under the invariant culture (day-first or dotted under others), and always drops
+    ///     the fraction, so two different reversed pairs can print the same text. The timeline bars themselves match
+    ///     Optuna exactly.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Timeline_ReversedTimesWarning_FormatsDatetimesLikePython()
+    {
+        var study = Optuna.CreateStudy();
+        study.AddTrial(new FrozenTrial(0, TrialState.Complete, 1.0,
+            new System.DateTime(2026, 1, 2, 3, 10, 0), new System.DateTime(2026, 1, 2, 3, 9, 59, 500),
+            new OrderedDict<string, object?>(), new OrderedDict<string, BaseDistribution>(),
+            new OrderedDict<string, object?>(), new OrderedDict<string, object?>(), new OrderedDict<long, double>(), 0));
+        var handler = new CollectingHandler();
+        Logging.OptunaLogging.AddHandler(handler);
+        try
+        {
+            Timeline.GetInfo(study);
+        }
+        finally
+        {
+            Logging.OptunaLogging.RemoveHandler(handler);
+        }
+
+        handler.Messages.Should().Contain(
+            "The start and end times for Trial 0 seem to be reversed. "
+            + "The start time is 2026-01-02 03:10:00 and the end time is 2026-01-02 03:09:59.500000.");
+    }
 }
