@@ -1,7 +1,9 @@
 using System.Linq;
 using AwesomeAssertions;
+using OptunaSharp.Collections;
 using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
+using OptunaSharp.Samplers.Nsgaii;
 
 namespace OptunaSharp.Tests.QA;
 
@@ -38,5 +40,32 @@ public class SamplerParityBugTests
         tried.Should().Equal(
             "10.607999463635718", "11.607999463635718", "3.6079994636357178", "4.607999463635718", "5.607999463635718",
             "6.607999463635718", "7.607999463635718", "8.607999463635718", "9.607999463635718");
+    }
+
+    /// <summary>
+    ///     QA-23: constraint-violation totals must use CPython's compensated <c>sum()</c>, as Optuna's
+    ///     <c>sum(v for v in trial.constraints.values() if v &gt; 0)</c> does; the port sums sequentially.
+    /// </summary>
+    /// <remarks>
+    ///     CPython 3.12+ <c>sum()</c> over Python floats is Neumaier-compensated, so violations
+    ///     <c>0.1, 0.2, 0.3</c> total <c>0.6</c>; the port's LINQ <c>Sum</c> gives <c>0.6000000000000001</c>. In
+    ///     NSGA-II's <c>_constrained_dominates</c> the trial with those violations therefore dominates a trial
+    ///     violating by <c>0.6000000000000001</c> in Python but not in the port, and <c>_evaluate_penalty</c>
+    ///     ranks the two infeasible trials differently. The same sequential sum is in TPE's
+    ///     <c>_get_infeasible_trial_score</c> (<c>TpeTrialSplit</c>), which orders infeasible trials for the
+    ///     below/above split. Same root cause as the known importance-normalization item (catalog M7).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void ConstraintViolationSums_UseCompensatedSumLikeCPython()
+    {
+        var t0 = FrozenTrial.CreateTrial(values: new[] { 1.0 },
+            constraints: new OrderedDict<string, double> { ["a"] = 0.1, ["b"] = 0.2, ["c"] = 0.3 });
+        var t1 = FrozenTrial.CreateTrial(values: new[] { 1.0 },
+            constraints: new OrderedDict<string, double> { ["a"] = 0.6000000000000001 });
+
+        NsgaiiConstraintsEvaluation.ConstrainedDominates(t0, t1, new[] { StudyDirection.Minimize }).Should().BeTrue();
+        NsgaiiConstraintsEvaluation.EvaluatePenalty(new[] { t0, t1 }).Select(PythonRepr.FloatRepr)
+            .Should().Equal("0.6", "0.6000000000000001");
     }
 }
