@@ -94,4 +94,37 @@ public class SamplerParityBugTests
         study.Trials.Select(t => (long)t.Params["v"]!).Should().Equal(
             13956981037L, 13455981166018L, 164417L, 2436459554L, 43014068803425816L, 235956546695320384L);
     }
+
+    /// <summary>
+    ///     QA-31: in a batch of asked trials, <c>QMCSampler</c> must take the search space from the trials of the same
+    ///     batch that already suggested their parameters, as Optuna does; the port samples the whole first batch
+    ///     independently, which also shifts the QMC sequence for the rest of the study.
+    /// </summary>
+    /// <remarks>
+    ///     With no finished trial, <c>infer_relative_search_space</c> unions the distributions of the RUNNING trials
+    ///     it reads from the study's per-ask trial cache. In Python that cache holds the storage's own trial objects,
+    ///     and <c>Trial._suggest</c> mutates the same objects through <c>_cached_frozen_trial</c>, so trial 1 sees trial
+    ///     0's <c>x</c> and gets Sobol point 0. The port's <see cref="Trial" /> keeps a detached copy (commit 3a75811,
+    ///     added against a data race) and the cache keeps the old snapshot, so trials 1-3 see no distribution and are
+    ///     sampled at random; QMC starts at trial 4 with sample id 0, so every later trial is Optuna's trial
+    ///     <c>n - 3</c>. Optuna (seed 5, four asks, then four suggests and tells, then one more trial):
+    ///     <c>-1.668040973461563, -3.0, 0.0, 1.5, -1.5</c>. The other samplers that read the cache (TPE, CMA-ES, GP,
+    ///     the GA base) only look at finished trials, which do not change between two asks, so only QMC is affected.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Qmc_BatchedAsk_UsesSearchSpaceOfRunningTrialsLikeOptuna()
+    {
+        var study = Optuna.CreateStudy(sampler: new QMCSampler(seed: 5));
+        var batch = Enumerable.Range(0, 4).Select(_ => study.Ask()).ToList();
+        var xs = batch.Select(t => t.SuggestFloat("x", -3, 3)).ToList();
+        for (int k = 0; k < batch.Count; k++)
+            study.Tell(batch[k], xs[k] * xs[k]);
+        var last = study.Ask();
+        double xl = last.SuggestFloat("x", -3, 3);
+        study.Tell(last, xl * xl);
+
+        study.Trials.Select(t => PythonRepr.FloatRepr((double)t.Params["x"]!))
+            .Should().Equal("-1.668040973461563", "-3.0", "0.0", "1.5", "-1.5");
+    }
 }
