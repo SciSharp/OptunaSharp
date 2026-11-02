@@ -65,4 +65,36 @@ public class ImportanceParityBugTests
         BitConverter.DoubleToInt64Bits(importances["s"]).Should().Be(unchecked((long)0x3fb6597929467605UL));
         BitConverter.DoubleToInt64Bits(importances["x"]).Should().Be(unchecked((long)0x3fb5587cf06ff61dUL));
     }
+
+    /// <summary>
+    ///     QA-28: PED-ANOVA, the default evaluator of <c>get_param_importances</c>, must handle a numerical parameter
+    ///     whose grid has 2^31 - 1 or more steps; the port's grid-size arithmetic overflows <see cref="int" /> and
+    ///     the evaluation throws <see cref="OverflowException" />.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_count_numerical_param_in_grid</c> computes <c>min(round((high - low) / step) + 1, n_steps)</c> in
+    ///     Python ints, which is just <c>n_steps</c> (50) for a wide range. The port writes
+    ///     <c>Math.Min((int)Math.Round(...) + 1, nSteps)</c>: the cast saturates at <see cref="int.MaxValue" />
+    ///     (net10.0; <see cref="int.MinValue" /> on net8.0), the <c>+ 1</c> wraps negative, and allocating the
+    ///     negative-length count array throws "Arithmetic operation resulted in an overflow." The common
+    ///     <c>suggest_int("random_state", 0, 2**31 - 1)</c> and <c>suggest_int("seed", 0, 2**32 - 1)</c> trigger it,
+    ///     as do <c>suggest_int("n", 0, 10**10)</c> and <c>suggest_float("x", 0, 1, step=1e-10)</c>; so does
+    ///     <c>plot_param_importances</c>, which uses the same evaluator. With high <c>2**31 - 2</c> the port
+    ///     agrees with Python within the documented PED-ANOVA tolerance (about 10 ULP), so the comparison here
+    ///     uses that tolerance instead of bits. Python (Random seed 0, 40 trials): <c>y=0.9953777359648283,
+    ///     seed=0.004622264035171709</c>.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void PedAnova_IntRangeOf2Pow31Steps_DoesNotOverflow()
+    {
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 0));
+        study.Optimize(t => t.SuggestInt("seed", 0, int.MaxValue) * 1e-12 + t.SuggestFloat("y", 0, 1), nTrials: 40);
+
+        var importances = ImportanceFunctions.GetParamImportances(study);
+
+        importances.Keys.Should().Equal("y", "seed");
+        importances["y"].Should().BeApproximately(0.9953777359648283, 1e-12);
+        importances["seed"].Should().BeApproximately(0.004622264035171709, 1e-12);
+    }
 }
