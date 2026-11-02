@@ -92,6 +92,38 @@ public class ErrorContractParityBugTests
     }
 
     /// <summary>
+    ///     QA-16 (third instance): multi-objective TPE must fail a trial whose <c>gamma</c> asks for a negative number
+    ///     of "below" trials, as Optuna's <c>assert 0 &lt; n_below &lt; len(trials)</c> does; the port's
+    ///     <c>Debug.Assert</c> is compiled out and the split carries on with <c>nBelow = -1</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_split_complete_trials_multi_objective</c> returns early for <c>n_below == 0</c> and
+    ///     <c>n_below == len(trials)</c> and asserts the open interval otherwise. With
+    ///     <c>TPESampler(seed=1, n_startup_trials=2, gamma=lambda n: -1)</c> on a two-objective study, Optuna fails
+    ///     trials 2-4 with <c>AssertionError()</c> (logged as "Trial 2 failed with parameters: {} because of the
+    ///     following error: AssertionError()."); the port completes them. <c>gamma</c> is deprecated since 4.9, so this
+    ///     only bites custom callables. Same class: <c>CrossValidationErrorEvaluator.evaluate([])</c> raises
+    ///     <c>AssertionError</c> in Python and <see cref="ArgumentOutOfRangeException" /> here.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void TpeMultiObjective_NegativeGamma_FailsTrialsLikePythonAssert()
+    {
+#pragma warning disable CS0618 // gamma is deprecated in Optuna 4.9, as in the port; the test needs it.
+        var sampler = new TPESampler(seed: 1, nStartupTrials: 2, gamma: n => -1);
+#pragma warning restore CS0618
+        var study = Optuna.CreateStudy(sampler: sampler, directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+        study.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", 0, 1), y = t.SuggestFloat("y", 0, 1);
+            return (IReadOnlyList<double>)new[] { x, 1 - x + y };
+        }, nTrials: 5, @catch: new[] { typeof(Exception) });
+
+        study.Trials.ConvertAll(t => t.State).Should().Equal(
+            TrialState.Complete, TrialState.Complete, TrialState.Fail, TrialState.Fail, TrialState.Fail);
+    }
+
+    /// <summary>
     ///     QA-17: a CMA-ES <c>x0</c> that misses a parameter of the search space must fail with Python's
     ///     message; the port throws a <see cref="KeyNotFoundException" /> naming the key.
     /// </summary>
