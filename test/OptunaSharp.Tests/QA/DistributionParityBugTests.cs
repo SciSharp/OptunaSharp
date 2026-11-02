@@ -214,6 +214,28 @@ public class DistributionParityBugTests
     }
 
     /// <summary>
+    ///     QA-5 (public path): an enqueued infinite value for an int parameter must make <c>suggest_int</c>
+    ///     raise, as Python's <c>int(float('inf'))</c> does; the port returns <c>long.MaxValue</c> and stores it.
+    /// </summary>
+    /// <remarks>
+    ///     Python 5.0.0: <c>study.enqueue_trial({"i": float("inf")})</c> then <c>trial.suggest_int("i", 0,
+    ///     10)</c> raises <c>OverflowError: cannot convert float infinity to integer</c> (a warning first reports
+    ///     the value as out of range). The port warns the same way, then returns and stores
+    ///     <c>9223372036854775807</c>; <c>-inf</c> gives <c>long.MinValue</c>, and <c>1e30</c> (an exact Python
+    ///     int) is clamped to <c>long.MaxValue</c>.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void SuggestInt_EnqueuedInfinity_RaisesLikePython()
+    {
+        var study = Optuna.CreateStudy();
+        study.EnqueueTrial(new Collections.OrderedDict<string, object?> { ["i"] = double.PositiveInfinity });
+        var trial = study.Ask();
+
+        ((Action)(() => trial.SuggestInt("i", 0, 10))).Should().Throw<OverflowException>();
+    }
+
+    /// <summary>
     ///     QA-6: the numeric-string conversion behind <c>to_internal_repr</c> must accept what Python's
     ///     <c>float()</c> accepts, including digit-group underscores.
     /// </summary>
