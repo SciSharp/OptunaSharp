@@ -175,4 +175,33 @@ public class StudyParityBugTests
             "distributions={'x': FloatDistribution(high=1.0, log=False, low=0.0, step=None), " +
             "'c': CategoricalDistribution(choices=(None, 'a'))}, trial_id=7, value=None)");
     }
+
+    /// <summary>
+    ///     QA-43 (dataframe): <c>trials_dataframe</c> must order nested columns by Python's string order, which
+    ///     compares code points; the port compares UTF-16 code units, so a name with a character above U+FFFF sorts
+    ///     before one with a character in U+E000–U+FFFF.
+    /// </summary>
+    /// <remarks>
+    ///     A surrogate pair starts with a code unit in U+D800–U+DBFF, below every code unit from U+E000 on, while its
+    ///     code point is above U+FFFF. With parameters <c>b</c>, <c>ｘ</c> (U+FF58, FULLWIDTH LATIN SMALL LETTER X) and
+    ///     <c>😀</c> (U+1F600), Optuna 5.0.0 gives the columns <c>params_b, params_ｘ, params_😀</c>; the port gives
+    ///     <c>params_b, params_😀, params_ｘ</c>. Every <c>sorted()</c> port that uses <c>StringComparer.Ordinal</c>
+    ///     shares the root cause (GridSampler, the importance evaluators' parameter order, the contour / slice / rank /
+    ///     parallel-coordinate parameter order).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void TrialsDataframe_AstralCharacterNames_SortByCodePointLikePython()
+    {
+        string fullwidthX = "ｘ", grinning = char.ConvertFromUtf32(0x1F600);
+        var study = Optuna.CreateStudy();
+        var distribution = new FloatDistribution(0.0, 1.0);
+        study.AddTrial(FrozenTrial.CreateTrial(value: 1.0,
+            @params: new OrderedDict<string, object?> { [grinning] = 0.5, [fullwidthX] = 0.25, ["b"] = 0.75 },
+            distributions: new OrderedDict<string, BaseDistribution> { [grinning] = distribution, [fullwidthX] = distribution, ["b"] = distribution }));
+
+        study.TrialsDataframe().Columns.Should().Equal(
+            "number", "value", "datetime_start", "datetime_complete", "duration",
+            "params_b", "params_" + fullwidthX, "params_" + grinning, "state");
+    }
 }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using AwesomeAssertions;
 using OptunaSharp.Collections;
+using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
 using OptunaSharp.Samplers;
 using OptunaSharp.Samplers.Nsgaii;
@@ -240,5 +241,36 @@ public class SamplerParityBugTests
             .Should().Equal("0.0976270078546495", "0.20552675214328775", "0.20552675214328775", "0.20552675214328775");
         study.Trials.Skip(2).Select(t => PythonRepr.FloatRepr((double)t.Params["y"]!))
             .Should().Equal("0.43037873274483895", "0.43037873274483895", "0.43037873274483895", "0.43037873274483895");
+    }
+
+    /// <summary>
+    ///     QA-43 (GridSampler): the grid must be enumerated over the parameter names in Python's <c>sorted()</c> order,
+    ///     which compares code points; the port sorts with <see cref="StringComparer.Ordinal" /> (UTF-16 code units), so
+    ///     the same seed visits the grid in a different order when one name has a character above U+FFFF and another one
+    ///     in U+E000–U+FFFF.
+    /// </summary>
+    /// <remarks>
+    ///     <c>GridSampler.__init__</c> keeps <c>sorted(search_space.items())</c> and builds
+    ///     <c>itertools.product</c> over it, so the order decides which combination each grid id means. With
+    ///     <c>ｘ</c> (U+FF58) and <c>😀</c> (U+1F600) Python sorts <c>ｘ</c> first and the port <c>😀</c> first (its leading
+    ///     code unit U+D83D is below U+FF58). Optuna 5.0.0, seed 0, six trials, as <c>(ｘ, 😀)</c>:
+    ///     <c>(2,5) (1,5) (1,4) (2,3) (1,3) (2,4)</c>; the port visits <c>(2,5) (1,4) (2,3) (2,4) (1,3) (1,5)</c>.
+    ///     Found by the D85 sort-order probe; see the dataframe test for the other sites.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void GridSampler_AstralCharacterNames_EnumerateGridLikePython()
+    {
+        string fullwidthX = "ｘ", grinning = char.ConvertFromUtf32(0x1F600);
+        var sampler = new GridSampler(new Dictionary<string, IReadOnlyList<CategoricalChoice>>
+        {
+            [fullwidthX] = new CategoricalChoice[] { 1L, 2L },
+            [grinning] = new CategoricalChoice[] { 3L, 4L, 5L },
+        }, seed: 0);
+        var study = Optuna.CreateStudy(sampler: sampler);
+        study.Optimize(t => t.SuggestInt(fullwidthX, 1, 2) * 10 + t.SuggestInt(grinning, 3, 5), nTrials: 6);
+
+        study.Trials.Select(t => $"({t.Params[fullwidthX]},{t.Params[grinning]})")
+            .Should().Equal("(2,5)", "(1,5)", "(1,4)", "(2,3)", "(1,3)", "(2,4)");
     }
 }
