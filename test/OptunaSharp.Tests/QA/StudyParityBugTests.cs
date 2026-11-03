@@ -237,4 +237,28 @@ public class StudyParityBugTests
             TrialsAfter(double.PositiveInfinity, 0.5),
         }.Should().Equal(1, 2, 2);
     }
+
+    /// <summary>
+    ///     QA-51: <c>create_study</c> rejecting a <c>NOT_SET</c> direction must print the directions list the way
+    ///     Python's f-string does, with each enum member's <c>repr</c> (<c>&lt;StudyDirection.NOT_SET: 0&gt;</c>); the port
+    ///     prints <c>StudyDirection.NOT_SET</c>, the member's <c>str</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_create_study</c> raises <c>f"... but got {directions}. ..."</c>, and a list formats its items with
+    ///     <c>repr()</c>; members passed as enums (the only way a C# caller can pass them) therefore appear as
+    ///     <c>&lt;StudyDirection.MINIMIZE: 1&gt;</c>. <c>Optuna.CreateStudy</c> joins <c>"StudyDirection." + PythonName()</c>.
+    ///     Found by the D96 argument probe; every other <c>create_study</c> / <c>optimize</c> argument error there
+    ///     (both directions given, empty directions, <c>n_jobs</c> 0 or -2, negative <c>n_trials</c> / <c>timeout</c>)
+    ///     matches Optuna 5.0.0.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void CreateStudy_NotSetDirection_MessageListsEnumReprsLikePython()
+    {
+        ((Action)(() => Optuna.CreateStudy(directions: new[] { StudyDirection.Minimize, StudyDirection.NotSet })))
+            .Should().Throw<NumSharp.ValueError>().Which.Message.Should().Be(
+                "`directions` must be a list of `minimize` or `maximize`, but got " +
+                "[<StudyDirection.MINIMIZE: 1>, <StudyDirection.NOT_SET: 0>]. " +
+                "For single-objective optimization, please use `direction` instead of `directions`.");
+    }
 }
