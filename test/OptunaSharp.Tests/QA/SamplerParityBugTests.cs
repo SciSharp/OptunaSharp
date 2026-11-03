@@ -456,4 +456,28 @@ public class SamplerParityBugTests
         ((Action)(() => trial.SuggestInt("x", 0, 20))).Should().Throw<ArgumentException>().WithMessage(
             "Bracketing values (xa, xb, xc) do not fulfill this requirement: (f(xb) < f(xa)) and (f(xb) < f(xc))");
     }
+
+    /// <summary>
+    ///     QA-55: a <see cref="GridSampler" /> whose search space has an empty value list must fail the first trial with
+    ///     NumPy's <c>choice</c> error, <c>'a' cannot be empty unless no samples are taken</c>; the port's shortcut
+    ///     <c>target_grids[randint(0, len)]</c> fails with NumSharp's <c>randint</c> message <c>low &gt;= high</c> instead.
+    /// </summary>
+    /// <remarks>
+    ///     Optuna validates no grid's length, so <c>{"x": []}</c> builds an empty grid; <c>sample_relative</c> finds no
+    ///     unvisited grid id, falls back to <c>list(range(len(self._all_grids)))</c> (also empty) and calls
+    ///     <c>self._rng.rng.choice(target_grids)</c>. <c>GridSampler.SampleRelative</c> replaces <c>choice</c> with an
+    ///     equivalent <c>randint</c> draw (same stream for non-empty lists), so only this error text differs. Both raise
+    ///     <c>ValueError</c>. Found by the D112 grid probe; the other cases there (empty space, duplicate values, NaN, None,
+    ///     unused and missing parameters, <c>True</c> / <c>1</c> choices) match Optuna 5.0.0.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void GridSampler_EmptyValueList_FailsWithNumpyChoiceMessage()
+    {
+        var study = Optuna.CreateStudy(sampler: new GridSampler(
+            new Dictionary<string, IReadOnlyList<CategoricalChoice>> { ["x"] = System.Array.Empty<CategoricalChoice>() }, seed: 0));
+
+        ((Action)(() => study.Optimize(_ => 0.0, nTrials: 1))).Should().Throw<NumSharp.ValueError>()
+            .Which.Message.Should().Be("'a' cannot be empty unless no samples are taken");
+    }
 }
