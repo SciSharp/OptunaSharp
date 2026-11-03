@@ -138,10 +138,10 @@ public class ImportanceParityBugTests
     }
 
     /// <summary>
-    ///     QA-52: <c>get_param_importances</c> must normalize PED-ANOVA's importances with CPython's builtin
-    ///     <c>sum()</c>, which adds plain Python floats with Neumaier compensation since 3.12; the port adds them one by
-    ///     one, so the normalized importances differ by an ULP in about a third of studies even where the raw ones
-    ///     match bit for bit.
+    ///     Catalog M7 (known before this run; this is its executable repro): <c>get_param_importances</c> must
+    ///     normalize PED-ANOVA's importances with CPython's builtin <c>sum()</c>, which adds plain Python floats with
+    ///     Neumaier compensation since 3.12; the port adds them one by one, so the normalized importances differ by an
+    ///     ULP in about a third of studies even where the raw ones match bit for bit.
     /// </summary>
     /// <remarks>
     ///     <c>importance/__init__.py</c> computes <c>s = sum(res.values())</c>. PED-ANOVA returns <c>float</c>s, so the
@@ -149,9 +149,8 @@ public class ImportanceParityBugTests
     ///     takes the generic, sequential loop — the port's sequential sum is right for those two only. On 60 random
     ///     categorical-only studies (no <c>erf</c>, so PED-ANOVA's raw values are bit-identical) the normalized values
     ///     differ in exactly the 22 where Neumaier and sequential sums disagree. This study is the first of them:
-    ///     Optuna 5.0.0 normalizes to the bits below, the port to <c>…34f9</c> and <c>…6eaa</c>. The same builtin
-    ///     <c>sum()</c> is ported sequentially elsewhere (constraint violations in NSGA-II and TPE, Wilcoxon averages);
-    ///     found by the D100 probe.
+    ///     Optuna 5.0.0 normalizes to the bits below, the port to <c>…34f9</c> and <c>…6eaa</c>. The constraint-violation
+    ///     sums of NSGA-II and TPE have the same root cause (QA-23); measured by the D100 probe.
     /// </remarks>
     [TestMethod]
     [OpenBugs]

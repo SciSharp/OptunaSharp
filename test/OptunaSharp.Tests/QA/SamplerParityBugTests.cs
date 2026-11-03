@@ -423,31 +423,4 @@ public class SamplerParityBugTests
         study.Trials.Select(t => PythonRepr.FloatRepr((double)t.Params["x"]!))
             .Should().Equal("0.7", "0.7", "0.1", "1.0", "0.39999999999999997", "0.7", "0.7", "0.7");
     }
-
-    /// <summary>
-    ///     QA-52 (constraints): NSGA-II's constraint-violation totals must be CPython builtin <c>sum()</c>s, which
-    ///     compensate since 3.12; the port's sequential <c>Sum()</c> makes <c>0.1 + 0.2 + 0.3</c> exceed <c>0.6</c>, so a
-    ///     trial violating by <c>0.6</c> constrained-dominates one violating by <c>0.1, 0.2, 0.3</c> — a tie in Optuna.
-    /// </summary>
-    /// <remarks>
-    ///     <c>_constrained_dominates</c> (binary tournament parent selection) and <c>_evaluate_penalty</c> (the penalty
-    ///     that ranks infeasible trials in elite selection) both compute <c>sum(v for v in constraints.values() if v &gt; 0)</c>
-    ///     over plain floats: <c>0.6</c> in CPython 3.12, <c>0.6000000000000001</c> left to right. Optuna 5.0.0 answers
-    ///     <c>False</c> both ways for the pair below and penalizes both with <c>0.6</c>. TPE's
-    ///     <c>_get_infeasible_trial_score</c> sums the same way (<c>TpeTrialSplit.GetInfeasibleTrialScore</c>), so the
-    ///     order of infeasible trials in its below/above split can differ too.
-    /// </remarks>
-    [TestMethod]
-    [OpenBugs]
-    public void NsgaII_ConstraintViolationTotals_SumLikeCPythonBuiltinSum()
-    {
-        var directions = new[] { StudyDirection.Minimize, StudyDirection.Minimize };
-        var spread = FrozenTrial.CreateTrial(values: new[] { 1.0, 1.0 },
-            constraints: new OrderedDict<string, double> { ["c1"] = 0.1, ["c2"] = 0.2, ["c3"] = 0.3 });
-        var single = FrozenTrial.CreateTrial(values: new[] { 1.0, 1.0 },
-            constraints: new OrderedDict<string, double> { ["c1"] = 0.6, ["c2"] = 0.0, ["c3"] = 0.0 });
-
-        NsgaiiConstraintsEvaluation.ConstrainedDominates(single, spread, directions).Should().BeFalse();
-        NsgaiiConstraintsEvaluation.EvaluatePenalty(new[] { spread, single }).Should().Equal(0.6, 0.6);
-    }
 }
