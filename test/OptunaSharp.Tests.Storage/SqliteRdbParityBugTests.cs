@@ -70,4 +70,32 @@ public class SqliteRdbParityBugTests
 
         trial.UserAttrs.Keys.Should().Equal("e", "err", "o");
     }
+
+    /// <summary>
+    ///     QA-38 (study attributes): study user attributes read from SQLite must come in Optuna's order, the key order
+    ///     of the <c>(study_id, key)</c> unique index; the port returns them in insertion order.
+    /// </summary>
+    /// <remarks>
+    ///     <c>get_study_user_attrs</c> queries <c>study_user_attributes</c> without <c>ORDER BY</c>, which SQLite answers
+    ///     through <c>sqlite_autoindex_study_user_attributes_1 (study_id, key)</c>; Optuna's RDB storage does not cache
+    ///     study attributes, so even the writing process sees the index order. Attributes set as <c>u, s, a</c> read
+    ///     back as <c>['a', 's', 'u']</c> in Optuna 5.0.0 (study system attributes likewise: <c>zz, b</c> read as
+    ///     <c>['b', 'zz']</c>); the port returns <c>u, s, a</c>. Found by the D81 storage-backed API fuzz (7 of 300
+    ///     programs).
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void StudyUserAttrs_ReadBackInIndexOrderLikeOptuna()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"optunasharp-rdb-qa-{Guid.NewGuid():N}.db");
+        _tempFiles.Add(path);
+        string url = "sqlite:///" + path.Replace('\\', '/');
+        using var storage = new RDBStorage(url);
+        var study = Optuna.CreateStudy(studyName: "s", storage: storage);
+        study.SetUserAttr("u", 1L);
+        study.SetUserAttr("s", 2L);
+        study.SetUserAttr("a", 3L);
+
+        study.UserAttrs.Keys.Should().Equal("a", "s", "u");
+    }
 }
