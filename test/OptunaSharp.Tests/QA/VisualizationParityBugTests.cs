@@ -132,4 +132,32 @@ public class VisualizationParityBugTests
             "The start and end times for Trial 0 seem to be reversed. "
             + "The start time is 2026-01-02 03:10:00 and the end time is 2026-01-02 03:09:59.500000.");
     }
+
+    /// <summary>
+    ///     QA-54: the EDF grid must be NumPy's <c>np.linspace</c>, which switches to <c>(i / div) * delta + start</c> when
+    ///     the step <c>delta / div</c> underflows to zero; the port's <c>MathUtil.Linspace</c> always computes
+    ///     <c>i * step + start</c>, so over a subnormal range every point but the last collapses onto <c>start</c>.
+    /// </summary>
+    /// <remarks>
+    ///     NumPy's linspace keeps a "denormal" branch (gh-5437): with objective values <c>0.0</c> and <c>5e-324</c> the
+    ///     100-point step <c>5e-324 / 99</c> is zero, so it scales <c>arange(100) / 99</c> by <c>delta</c> instead, and points
+    ///     50–99 are <c>5e-324</c>. Optuna 5.0.0's <c>_get_edf_info</c> therefore reports the cumulative fraction <c>1.0</c>
+    ///     from point 50 on; the port's grid is <c>0.0</c> up to point 98, so its curve stays at <c>0.5</c> until the last
+    ///     point. The same helper builds the parallel-coordinate ticks (<c>linspace(0, 1e-323, 5)</c>: NumPy
+    ///     <c>[0, 0, 5e-324, 1e-323, 1e-323]</c>, the port <c>[0, 0, 0, 0, 1e-323]</c>) and TPE's default weights ramp.
+    ///     Exotic input (a whole study inside the subnormal range).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Edf_SubnormalValueRange_GridFollowsNumpyLinspace()
+    {
+        var study = Optuna.CreateStudy();
+        study.AddTrial(FrozenTrial.CreateTrial(value: 0.0));
+        study.AddTrial(FrozenTrial.CreateTrial(value: 5e-324));
+
+        var info = Edf.GetInfo(study);
+
+        info.XValues[50].Should().Be(5e-324);
+        info.Lines[0].YValues[50].Should().Be(1.0);
+    }
 }
