@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using AwesomeAssertions;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -134,5 +135,41 @@ public class ImportanceParityBugTests
 
         importances.Keys.Should().BeEquivalentTo("a", "b");
         importances.Values.Should().OnlyContain(v => double.IsNaN(v));
+    }
+
+    /// <summary>
+    ///     QA-52: <c>get_param_importances</c> must normalize PED-ANOVA's importances with CPython's builtin
+    ///     <c>sum()</c>, which adds plain Python floats with Neumaier compensation since 3.12; the port adds them one by
+    ///     one, so the normalized importances differ by an ULP in about a third of studies even where the raw ones
+    ///     match bit for bit.
+    /// </summary>
+    /// <remarks>
+    ///     <c>importance/__init__.py</c> computes <c>s = sum(res.values())</c>. PED-ANOVA returns <c>float</c>s, so the
+    ///     sum takes CPython's compensated float loop; fANOVA and MDI return <c>np.float64</c> (a float subclass), which
+    ///     takes the generic, sequential loop — the port's sequential sum is right for those two only. On 60 random
+    ///     categorical-only studies (no <c>erf</c>, so PED-ANOVA's raw values are bit-identical) the normalized values
+    ///     differ in exactly the 22 where Neumaier and sequential sums disagree. This study is the first of them:
+    ///     Optuna 5.0.0 normalizes to the bits below, the port to <c>…34f9</c> and <c>…6eaa</c>. The same builtin
+    ///     <c>sum()</c> is ported sequentially elsewhere (constraint violations in NSGA-II and TPE, Wilcoxon averages);
+    ///     found by the D100 probe.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void PedAnova_NormalizedImportances_SumLikeCPythonBuiltinSum()
+    {
+        var choices = new[] { "a", "b", "c", "d" };
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 0));
+        study.Optimize(t =>
+        {
+            double s = 0.0;
+            for (int i = 0; i < 3; i++)
+                s += (1 + i) * Array.IndexOf(choices, t.SuggestCategorical($"p{i}", choices));
+            return s;
+        }, nTrials: 40);
+
+        var importances = ImportanceFunctions.GetParamImportances(study, new OptunaSharp.Importance.PedAnova.PedAnovaImportanceEvaluator());
+
+        importances.Select(kv => $"{kv.Key}={BitConverter.DoubleToInt64Bits(kv.Value):x16}")
+            .Should().Equal("p1=3fe017a96f8a34fa", "p2=3fd5484746ab5eb8", "p0=3fc510cbb4806eab");
     }
 }
