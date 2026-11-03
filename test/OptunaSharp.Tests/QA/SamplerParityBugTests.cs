@@ -189,4 +189,56 @@ public class SamplerParityBugTests
             .WithMessage("Range exceeds valid bounds");
         BitConverter.DoubleToInt64Bits(trial.SuggestFloat("y", 0, 1)).Should().Be(0x3fe18fe1565f12a8);
     }
+
+    /// <summary>
+    ///     QA-42 (root cause): <c>randint(low, low + 1)</c> must return <c>low</c> without consuming the stream, as
+    ///     numpy's bounded-integer generator does (<c>random_bounded_uint64_fill</c> returns <c>off</c> when the range
+    ///     is 0); NumSharp's <c>MT19937.Next(1)</c> draws a 32-bit word and masks it to 0.
+    /// </summary>
+    /// <remarks>
+    ///     numpy 2.4.2, <c>RandomState(0)</c>: after <c>randint(0, 1)</c> (or <c>choice(1)</c>) the next
+    ///     <c>random_sample()</c> is <c>0x3fe18fe1565f12a8</c>, the stream's first double; NumSharp returns
+    ///     <c>0x3fe2f89546dc5a99</c>, the value numpy gives only after a draw that consumed one word (such as
+    ///     <c>randint(0, 2)</c>). Every OptunaSharp call of <c>randint</c> / <c>choice</c> over a single candidate shifts
+    ///     the rest of its sampler's stream. The fix belongs in NumSharp (<c>RandomSampling/MT19937.cs</c>,
+    ///     <c>Next(int)</c> / <c>NextLong(long)</c>), or in the call sites.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void RandInt_SingleValueRange_DrawsNothingLikeNumpy()
+    {
+        var rng = new LazyRandomState(0).Rng;
+
+        ((long)rng.randint(0, 1)).Should().Be(0);
+        BitConverter.DoubleToInt64Bits((double)rng.random_sample()).Should().Be(0x3fe18fe1565f12a8);
+    }
+
+    /// <summary>
+    ///     QA-42: NSGA-II's parent tournament over a single remaining candidate must leave the random stream
+    ///     untouched, as Optuna's <c>_select_parent</c> does (<c>rng.choice(1)</c> draws nothing); the port consumes a
+    ///     word per call, so with <c>population_size=2</c> every child after the first generation differs.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_select_parents</c> excludes the parents already chosen, so with a population of 2 the second parent is
+    ///     drawn from one candidate with two <c>choice(1)</c> calls; the same happens with a population of 3 under the
+    ///     three-parent SPX / UNDX crossovers, in NSGA-III, and whenever failed trials leave a parent population of that
+    ///     size. A one-parameter study hides it because the default mutation hands every parameter to the independent
+    ///     sampler, whose stream is separate, so the reproduction uses two parameters and <c>mutation_prob=0.0</c>.
+    ///     Optuna 5.0.0 (seed 0, trials 2–5): <c>x = 0.0976270078546495, 0.20552675214328775 ×3</c>,
+    ///     <c>y = 0.43037873274483895 ×4</c>; the port gives <c>y = 0.08976636599379373</c>. Found by the D82
+    ///     sampler-option fuzz (20 of 600 programs, all with population 2 or 3).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void NsgaII_PopulationOfTwo_SecondParentDrawLeavesStreamLikeOptuna()
+    {
+        var study = Optuna.CreateStudy(sampler: new NSGAIISampler(populationSize: 2, mutationProb: 0.0, seed: 0));
+        study.Optimize(
+            t => Math.Pow(t.SuggestFloat("x", -1, 1) - 0.25, 2) + Math.Pow(t.SuggestFloat("y", -1, 1), 2), nTrials: 6);
+
+        study.Trials.Skip(2).Select(t => PythonRepr.FloatRepr((double)t.Params["x"]!))
+            .Should().Equal("0.0976270078546495", "0.20552675214328775", "0.20552675214328775", "0.20552675214328775");
+        study.Trials.Skip(2).Select(t => PythonRepr.FloatRepr((double)t.Params["y"]!))
+            .Should().Equal("0.43037873274483895", "0.43037873274483895", "0.43037873274483895", "0.43037873274483895");
+    }
 }
