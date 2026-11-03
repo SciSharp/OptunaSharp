@@ -423,4 +423,37 @@ public class SamplerParityBugTests
         study.Trials.Select(t => PythonRepr.FloatRepr((double)t.Params["x"]!))
             .Should().Equal("0.7", "0.7", "0.1", "1.0", "0.39999999999999997", "0.7", "0.7", "0.7");
     }
+
+    /// <summary>
+    ///     QA-53: when every GP acquisition value is NaN, Optuna's discrete line search hands scipy's Brent minimizer
+    ///     the bracket <c>(inf, NaN, inf)</c> and fails the suggestion with scipy's bracket <c>ValueError</c>; the port
+    ///     returns a parameter value (<c>16</c> here) instead.
+    /// </summary>
+    /// <remarks>
+    ///     Objective values <c>1.7e308, 1.7e308, -1.7e308</c> overflow <c>_standardize_values</c> (the mean is
+    ///     <c>inf</c>, every standardized value NaN), so the acquisition is NaN at every candidate (instrumented in
+    ///     Optuna: 2 of 2 start points NaN). For an <c>IntDistribution(0, 20)</c> (21 grid points, more than the 16 of
+    ///     the exhaustive search) <c>_discrete_line_search</c> calls <c>minimize_scalar(method="brent")</c>, whose bracket
+    ///     check raises the message below — its own comment says the bracket is valid only "if fval is finite". The
+    ///     port's <c>BrentMinimizer.MinimizeScalar</c> has the same check, so a NaN does not reach it the same way; the
+    ///     divergence's root cause in the port was not located during the run. With a float parameter both sides return
+    ///     the same point (<c>0.7903830111026764</c>). Exotic input (values near the float maximum); found by the D94
+    ///     probe.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void GpSampler_AllNaNAcquisition_IntLineSearchRaisesBracketErrorLikeScipy()
+    {
+        var study = Optuna.CreateStudy(sampler: new GPSampler(seed: 0, nStartupTrials: 3));
+        var distribution = new IntDistribution(0, 20);
+        var xs = new[] { 1L, 10L, 19L };
+        var values = new[] { 1.7e308, 1.7e308, -1.7e308 };
+        for (int i = 0; i < 3; i++)
+            study.AddTrial(FrozenTrial.CreateTrial(@params: new OrderedDict<string, object?> { ["x"] = xs[i] },
+                distributions: new OrderedDict<string, BaseDistribution> { ["x"] = distribution }, value: values[i]));
+
+        var trial = study.Ask();
+        ((Action)(() => trial.SuggestInt("x", 0, 20))).Should().Throw<ArgumentException>().WithMessage(
+            "Bracketing values (xa, xb, xc) do not fulfill this requirement: (f(xb) < f(xa)) and (f(xb) < f(xc))");
+    }
 }
