@@ -157,4 +157,36 @@ public class SamplerParityBugTests
         study.Trials.Select(t => t.State).Should().Equal(
             TrialState.Complete, TrialState.Fail, TrialState.Fail, TrialState.Fail);
     }
+
+    /// <summary>
+    ///     QA-41: sampling a float range whose span is not finite must fail without consuming the random stream, as
+    ///     numpy's <c>RandomState.uniform</c> does with <c>OverflowError('Range exceeds valid bounds')</c>; the port
+    ///     draws anyway, returns <c>inf</c> for <c>[1e-3, inf)</c> and shifts every later random value of the study.
+    /// </summary>
+    /// <remarks>
+    ///     <c>FloatDistribution</c> accepts infinite bounds in both languages, so the failure comes from the sampler:
+    ///     <c>RandomSampler.sample_independent</c> calls <c>rng.uniform(bounds[:, 0], bounds[:, 1])</c>, and numpy checks
+    ///     <c>np.all(np.isfinite(high - low))</c> before drawing. NumSharp's <c>NumPyRandom.uniform(NDArray, NDArray)</c>
+    ///     computes <c>low + rand * (high - low)</c> without the check, so the port stores <c>inf</c> as the parameter,
+    ///     <c>(-inf, 1)</c> ends in <c>ValueError: `nan` is invalid value.</c>, and a span that overflows such as
+    ///     <c>(-1e308, 1e308)</c> is sampled too. Every sampler's independent path goes through it (TPE start-up, QMC,
+    ///     NSGA-II, CMA-ES all raise <c>OverflowError</c> in Optuna), and on a finished trial Optuna reports the
+    ///     <c>OverflowError</c> before <c>UpdateFinishedTrialError</c> because it samples first. Python (Random seed 0):
+    ///     the failed suggestion leaves the stream untouched, so the next <c>suggest_float("y", 0, 1)</c> is
+    ///     <c>0x3fe18fe1565f12a8</c>; the port returns <c>0x3fe6e2d4cf608733</c>, the second draw. Found by the D79 API
+    ///     state-machine fuzz.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void RandomSampler_InfiniteRange_RaisesOverflowWithoutDrawingLikeNumpyUniform()
+    {
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 0));
+        var trial = study.Ask();
+
+        ((Action)(() => trial.SuggestFloat("x", 1e-3, double.PositiveInfinity))).Should().Throw<OverflowException>()
+            .WithMessage("Range exceeds valid bounds");
+        ((Action)(() => trial.SuggestFloat("w", -1e308, 1e308))).Should().Throw<OverflowException>()
+            .WithMessage("Range exceeds valid bounds");
+        BitConverter.DoubleToInt64Bits(trial.SuggestFloat("y", 0, 1)).Should().Be(0x3fe18fe1565f12a8);
+    }
 }
