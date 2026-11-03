@@ -1,5 +1,7 @@
 using System;
 using AwesomeAssertions;
+using OptunaSharp.Collections;
+using OptunaSharp.Distributions;
 using OptunaSharp.Importance;
 using OptunaSharp.Importance.Shap;
 using OptunaSharp.Samplers;
@@ -96,5 +98,41 @@ public class ImportanceParityBugTests
         importances.Keys.Should().Equal("y", "seed");
         importances["y"].Should().BeApproximately(0.9953777359648283, 1e-12);
         importances["seed"].Should().BeApproximately(0.004622264035171709, 1e-12);
+    }
+
+    /// <summary>
+    ///     QA-40: the MDI evaluator must return NaN importances when the forest's trees split but their impurity
+    ///     decreases sum to zero, as scikit-learn's <c>RandomForestRegressor.feature_importances_</c> does
+    ///     (<c>all_importances / np.sum(all_importances)</c> with no guard); the port returns zeros, which
+    ///     <c>get_param_importances</c> then normalizes to a uniform <c>1 / n</c>.
+    /// </summary>
+    /// <remarks>
+    ///     With objective values near <c>-1e12</c> and a spread of about 29, the MSE criterion's
+    ///     <c>sq_sum / n - mean^2</c> cancels: sklearn stores root impurity <c>2^27</c> and leaf impurities <c>0</c> and
+    ///     <c>2^28</c>, so each splitting tree's decrease <c>2 * 2^27 - 0 - 2^28</c> is exactly 0. The port's CART
+    ///     reproduces those trees bit for bit; only <c>Mdi.FeatureImportances</c> differs, through its
+    ///     <c>if (sum != 0.0)</c> guard. Optuna 5.0.0 + scikit-learn 1.8.0 return
+    ///     <c>{'b': nan, 'a': nan}</c> (normalized or not); the port returns <c>{b: 0.5, a: 0.5}</c>
+    ///     (<c>0.0</c> each unnormalized). Found by the D75 random-study fuzz (1 of 600 studies).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Mdi_ZeroTotalImpurityDecrease_ReturnsNaNLikeSklearn()
+    {
+        var study = Optuna.CreateStudy();
+        var distributions = new OrderedDict<string, BaseDistribution>
+        {
+            ["a"] = new IntDistribution(1, 7),
+            ["b"] = new IntDistribution(3, 5),
+        };
+        study.AddTrial(FrozenTrial.CreateTrial(value: -999995999937.6326,
+            @params: new OrderedDict<string, object?> { ["a"] = 4L, ["b"] = 5L }, distributions: distributions));
+        study.AddTrial(FrozenTrial.CreateTrial(value: -999995999966.4989,
+            @params: new OrderedDict<string, object?> { ["a"] = 2L, ["b"] = 3L }, distributions: distributions));
+
+        var importances = ImportanceFunctions.GetParamImportances(study, new MeanDecreaseImpurityImportanceEvaluator(seed: 0));
+
+        importances.Keys.Should().BeEquivalentTo("a", "b");
+        importances.Values.Should().OnlyContain(v => double.IsNaN(v));
     }
 }
