@@ -273,4 +273,103 @@ public class SamplerParityBugTests
         study.Trials.Select(t => $"({t.Params[fullwidthX]},{t.Params[grinning]})")
             .Should().Equal("(2,5)", "(1,5)", "(1,4)", "(2,3)", "(1,3)", "(2,4)");
     }
+
+    /// <summary>
+    ///     QA-48 (a): the TPE <c>weights</c> validation errors must print the rejected array the way NumPy's
+    ///     <c>str(ndarray)</c> does (<c>[ 0.5  -0.25]</c>, <c>[0.]</c>); the port joins Python float reprs with one
+    ///     space (<c>[0.5 -0.25]</c>, <c>[0.0]</c>), so the exception text differs.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_ParzenEstimator._call_weights_func</c> formats the array with an f-string, i.e. NumPy's array printer:
+    ///     a common field width, a sign column when any element is negative, and <c>1.</c> rather than <c>1.0</c>.
+    ///     The port's <c>CallWeightsFunc</c> says in a comment that it formats "approximately"; nothing records the
+    ///     divergence as <c>[Misaligned]</c>. Only the deprecated custom <c>weights</c> argument reaches it. With two
+    ///     startup trials the first below group has one observation and the first rejected above group two, so
+    ///     Optuna 5.0.0 raises the two messages below (found by the D92 TPE option probe).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Tpe_InvalidWeights_MessagePrintsArrayLikeNumpy()
+    {
+        static double Objective(Trial t) =>
+            new Dictionary<string, double> { ["a"] = 1.0, ["b"] = 2.0, ["c"] = 3.0 }[t.SuggestCategorical("x", new[] { "a", "b", "c" })];
+
+        var mixed = Optuna.CreateStudy(sampler: new TPESampler(seed: 0, nStartupTrials: 2,
+            weights: n => n <= 5 ? new[] { 0.5, -0.25, 1e-7, 3.0, 12345.678 }[..n] : Enumerable.Repeat(-1.0, n).ToArray()));
+        ((Action)(() => mixed.Optimize(Objective, nTrials: 5))).Should().Throw<NumSharp.ValueError>().Which.Message.Should().Be(
+            "The `weights` function is not allowed to return negative values [ 0.5  -0.25]. The argument of the `weights` function is 2.");
+
+        var zeros = Optuna.CreateStudy(sampler: new TPESampler(seed: 0, nStartupTrials: 2, weights: n => new double[n]));
+        ((Action)(() => zeros.Optimize(Objective, nTrials: 5))).Should().Throw<NumSharp.ValueError>().Which.Message.Should().Be(
+            "The `weight` function is not allowed to return all-zero values [0.]. The argument of the `weights` function is 1.");
+    }
+
+    /// <summary>
+    ///     QA-48 (b): a TPE <c>weights</c> function that returns fewer values than observations must fail the first
+    ///     TPE trial with a <c>ValueError</c>, as NumPy's broadcasting does in Optuna; the port pads nothing and
+    ///     silently drops the prior kernel from the mixture.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_call_weights_func</c> truncates a longer array (<c>[:n]</c>) but accepts a shorter one; Optuna then fails
+    ///     in <c>_MixtureOfProductDistribution</c> with <c>ValueError: non-broadcastable output operand with shape (24,1)
+    ///     doesn't match the broadcast shape (24,2)</c>. The port appends the prior weight to the short array, so the
+    ///     weight vector has one entry fewer than the kernels and the last kernel (the prior) is never drawn nor
+    ///     scored. The NumPy message itself is not asserted; any <c>ValueError</c> would match Optuna's outcome.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Tpe_ShortWeights_RaisesLikeNumpyBroadcast()
+    {
+        var study = Optuna.CreateStudy(sampler: new TPESampler(seed: 0, nStartupTrials: 2,
+            weights: n => Enumerable.Repeat(1.0, Math.Max(n - 1, 0)).ToArray()));
+        ((Action)(() => study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 5))).Should().Throw<NumSharp.ValueError>();
+    }
+
+    /// <summary>
+    ///     QA-48 (c): a NaN <c>prior_weight</c> must raise NumPy's <c>ValueError("probabilities contain NaN")</c> at the
+    ///     first TPE sample; the port's hand-written <c>rng.choice</c> skips NumPy's <c>p</c> validation and walks off
+    ///     the end of its CDF with an <see cref="IndexOutOfRangeException" />, which <c>optimize(catch: ValueError)</c>
+    ///     does not catch.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_ParzenEstimator</c> only rejects <c>prior_weight &lt; 0</c>, which NaN passes; the normalized weights are
+    ///     then all NaN and <c>RandomState.choice(p=weights)</c> raises before drawing. The port's
+    ///     <c>MixtureOfProductDistribution.Choice</c> (replicated because NumSharp's <c>choice</c> uses
+    ///     <c>side='left'</c>) bisects a NaN CDF and indexes one past its end. The same missing validation turns
+    ///     <c>prior_weight=inf</c> (all weights <c>0 / inf</c> and <c>inf / inf</c>) into the same crash.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Tpe_NaNPriorWeight_RaisesProbabilitiesContainNaNLikeNumpy()
+    {
+        var study = Optuna.CreateStudy(sampler: new TPESampler(seed: 0, nStartupTrials: 2, priorWeight: double.NaN));
+        ((Action)(() => study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 5)))
+            .Should().Throw<NumSharp.ValueError>().WithMessage("probabilities contain NaN");
+    }
+
+    /// <summary>
+    ///     QA-48 (d): with a <c>gamma</c> that returns a negative count, a single-objective TPE must split the trials
+    ///     with Python slice semantics (<c>sorted[:-1]</c> keeps every trial but the worst below); the port's
+    ///     <c>Take(-1)</c> keeps none, so the trajectories part at the first TPE trial.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_split_complete_trials</c> clamps only from above (<c>min(n_below, len(trials))</c>) and slices, and the
+    ///     later <c>max(0, …)</c> clamps apply to the pruned and infeasible groups only. The multi-objective path
+    ///     raises <c>AssertionError</c> instead (QA-16). Only the deprecated custom <c>gamma</c> argument reaches it.
+    ///     Optuna 5.0.0, seed 0, two startup trials, <c>gamma = lambda n: -1</c>: the TPE trials all exploit
+    ///     <c>(b, d)</c>; the port behaves as <c>gamma = 0</c> (<c>da cc ca dc …</c>). Found by the D92 option fuzz:
+    ///     the 8 programs with a negative gamma are the only divergences in 600.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Tpe_NegativeGammaSingleObjective_SplitsWithPythonSliceSemantics()
+    {
+        var val = new Dictionary<string, double> { ["a"] = 1.0, ["b"] = 2.0, ["c"] = 3.0, ["d"] = 0.5 };
+        var choices = new[] { "a", "b", "c", "d" };
+        var study = Optuna.CreateStudy(sampler: new TPESampler(seed: 0, nStartupTrials: 2, multivariate: true, gamma: _ => -1));
+        study.Optimize(t => val[t.SuggestCategorical("x", choices)] + val[t.SuggestCategorical("y", choices)], nTrials: 12);
+
+        study.Trials.Select(t => (string)t.Params["x"]! + (string)t.Params["y"]!)
+            .Should().Equal("bd", "ab", "bd", "bd", "bd", "bd", "bd", "bd", "bd", "bd", "bd", "bd");
+    }
 }
