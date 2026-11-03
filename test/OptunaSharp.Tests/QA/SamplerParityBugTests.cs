@@ -372,4 +372,55 @@ public class SamplerParityBugTests
         study.Trials.Select(t => (string)t.Params["x"]! + (string)t.Params["y"]!)
             .Should().Equal("bd", "ab", "bd", "bd", "bd", "bd", "bd", "bd", "bd", "bd", "bd", "bd");
     }
+
+    /// <summary>
+    ///     QA-49: the GP search space must build a stepped parameter's grid exactly as <c>np.arange(low, high + step / 2,
+    ///     step)</c> does — every value <c>low + i * ((low + step) - low)</c> — but the port's <c>GpSearchSpace.Arange</c>
+    ///     computes <c>low + i * step</c>, so the normalized grid differs in its last bits whenever
+    ///     <c>(low + step) - low != step</c>.
+    /// </summary>
+    /// <remarks>
+    ///     NumPy's <c>arange</c> stores <c>start</c> and <c>start + step</c> and fills the rest with
+    ///     <c>start + i * delta</c>, <c>delta = buffer[1] - buffer[0]</c>; for <c>FloatDistribution(0.1, 1.0, step=0.3)</c>
+    ///     that is <c>[0.1, 0.4, 0.7000000000000001, 1.0000000000000002]</c>, against the port's
+    ///     <c>[0.1, 0.4, 0.7, 0.9999999999999999]</c>. The two differ in 9,641 of 20,000 random GP-style ranges. The CMA-ES
+    ///     port already copies this step (<c>CmaWm</c>: "with its actual step (low + step) - low"); the GP one does not.
+    ///     Optuna 5.0.0's <c>get_choices_of_discrete_params()</c> for that distribution is the grid asserted below.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void GpSearchSpace_SteppedFloatGrid_UsesNumpyArangeStep()
+    {
+        var space = new OptunaSharp.Gp.GpSearchSpace(new Dictionary<string, BaseDistribution>
+        {
+            ["x"] = new FloatDistribution(0.1, 1.0, step: 0.3),
+        });
+
+        space.GetChoicesOfDiscreteParams()[0].Select(PythonRepr.FloatRepr)
+            .Should().Equal("0.125", "0.375", "0.625", "0.8750000000000002");
+    }
+
+    /// <summary>
+    ///     QA-49, the user-visible effect: <see cref="GPSampler" /> suggests a stepped float by unnormalizing the
+    ///     grid point it picked, without rounding it again, so the port's <c>low + i * step</c> grid reaches
+    ///     <c>trial.params</c> — <c>0.9999999999999998</c> where Optuna suggests <c>1.0</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_get_unnormalized_param</c> only clips a float to <c>[low, high]</c>; the grid value
+    ///     <c>1.0000000000000002</c> clips to <c>1.0</c> in Optuna, while the port's <c>0.9999999999999999</c> comes back
+    ///     from the normalize / unnormalize round trip as <c>0.9999999999999998</c>. Optuna 5.0.0, seed 0, two startup
+    ///     trials, <c>(x - 0.7) ** 2</c> over <c>[0.1, 1.0]</c> step <c>0.3</c>; the port matches every trial but the fourth.
+    ///     (With <c>[0.1, 2.5]</c> the same run suggests <c>1.9000000000000004</c> in Optuna and <c>1.9000000000000001</c> in
+    ///     the port.)
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void GpSampler_SteppedFloat_SuggestsNumpyGridValues()
+    {
+        var study = Optuna.CreateStudy(sampler: new GPSampler(seed: 0, nStartupTrials: 2));
+        study.Optimize(t => Math.Pow(t.SuggestFloat("x", 0.1, 1.0, step: 0.3) - 0.7, 2), nTrials: 8);
+
+        study.Trials.Select(t => PythonRepr.FloatRepr((double)t.Params["x"]!))
+            .Should().Equal("0.7", "0.7", "0.1", "1.0", "0.39999999999999997", "0.7", "0.7", "0.7");
+    }
 }
