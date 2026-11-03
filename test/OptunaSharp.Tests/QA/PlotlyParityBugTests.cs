@@ -85,4 +85,64 @@ public class PlotlyParityBugTests
 
         annotations.Should().Equal("1", "1.5", "2", "2.5", "3", "0", "250", "500", "750", "1e+03", "10", "15", "20", "25", "30");
     }
+
+    /// <summary>
+    ///     QA-46: the slice plot draws no infeasible trials on a categorical parameter's subplot in Optuna, because of
+    ///     an Optuna defect the port does not reproduce; the port draws them (an extra <c>Infeasible Trial</c> trace).
+    /// </summary>
+    /// <remarks>
+    ///     <c>_generate_slice_subplot</c> appends only <c>x</c> and <c>y</c> for an infeasible trial, never its trial
+    ///     number, and for a categorical subplot <c>_get_categorical_plot_values</c> iterates
+    ///     <c>zip(values.x, values.y, values.trial_numbers)</c> — empty for the infeasible values — so the infeasible
+    ///     list comes back empty and its trace is skipped. Numerical subplots are unaffected. With a feasible trial
+    ///     <c>(c='a', x=0.25)</c> and an infeasible one <c>(c='b', x=0.75)</c>, Optuna 5.0.0 draws
+    ///     <c>Feasible Trial</c> on <c>x</c> (<c>["'a'"]</c>), then <c>Feasible Trial</c> and <c>Infeasible Trial</c> on
+    ///     <c>x2</c>; the port adds an <c>Infeasible Trial</c> trace on <c>x</c>. Copying the defect or keeping the
+    ///     port's behaviour (and marking it <c>[Misaligned]</c>) is the owner's decision; this test states Optuna's
+    ///     output. Found by the D90 figure fuzz (4 of 60 random studies).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void PlotSlice_InfeasibleCategoricalTrials_OmittedLikeOptuna()
+    {
+        var study = Optuna.CreateStudy();
+        var categorical = new CategoricalDistribution("a", "b");
+        var numerical = new FloatDistribution(0, 1);
+        foreach (var (c, x, v, g) in new[] { ("a", 0.25, 1.0, -1.0), ("b", 0.75, 2.0, 1.0) })
+        {
+            study.AddTrial(FrozenTrial.CreateTrial(value: v,
+                @params: new OrderedDict<string, object?> { ["c"] = c, ["x"] = x },
+                distributions: new OrderedDict<string, BaseDistribution> { ["c"] = categorical, ["x"] = numerical },
+                constraints: new OrderedDict<string, double> { ["g"] = g }));
+        }
+
+        var figure = JObject.Parse(GenericChart.toJson(PlotlyVisualization.PlotSlice(study)));
+
+        figure["data"]!.Children().Select(t => $"{(string)t["name"]!}@{(string)t["xaxis"]!}")
+            .Should().Equal("Feasible Trial@x", "Feasible Trial@x2", "Infeasible Trial@x2");
+    }
+
+    /// <summary>
+    ///     QA-47: subplot grids must place the bottom row at exactly <c>0.0</c>, as plotly.py's <c>make_subplots</c>
+    ///     does; the port's grid arithmetic leaves a rounding residue such as <c>8.326672684688674e-17</c>.
+    /// </summary>
+    /// <remarks>
+    ///     A four-parameter <c>plot_contour</c> (and <c>plot_rank</c>) has a 4×4 grid; plotly.py gives the bottom row
+    ///     <c>yaxis13.domain = [0.0, 0.19375]</c>. The port's <c>SubplotGrid</c> produces <c>8.3e-17</c> there (5×5
+    ///     grids: <c>2.8e-17</c> / <c>5.6e-17</c>). Invisible in a rendered figure, but the figure JSON is no longer
+    ///     equal to plotly.py's, which is what the interop render-parity tests compare. Found by the D90 figure fuzz
+    ///     (every contour and rank figure with four or more parameters).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void PlotContour_FourParameterGrid_BottomRowDomainStartsAtZeroLikePlotly()
+    {
+        var study = Optuna.CreateStudy(sampler: new OptunaSharp.Samplers.RandomSampler(seed: 0));
+        study.Optimize(t => t.SuggestFloat("p0", 0, 1) + t.SuggestFloat("p1", 0, 1) + t.SuggestFloat("p2", 0, 1) + t.SuggestFloat("p3", 0, 1), nTrials: 10);
+
+        var figure = JObject.Parse(GenericChart.toJson(PlotlyVisualization.PlotContour(study)));
+
+        ((double)figure.SelectToken("layout.yaxis13.domain[0]")!).Should().Be(0.0);
+        ((double)figure.SelectToken("layout.yaxis13.domain[1]")!).Should().Be(0.19375);
+    }
 }
