@@ -50,6 +50,37 @@ public class VisualizationParityBugTests
         dim.Ticktext.Should().Equal("None", "a", "b");
     }
 
+    /// <summary>
+    ///     QA-44 (labels): parallel-coordinate labels must be truncated by Python's <c>len()</c>, which counts code
+    ///     points; <c>TruncateLabel</c> counts UTF-16 code units, so a name with characters above U+FFFF is shortened
+    ///     when Python keeps it whole, and the 17-unit cut can split a surrogate pair.
+    /// </summary>
+    /// <remarks>
+    ///     <c>_truncate_label(label)</c> is <c>label if len(label) &lt; 20 else f"{label[:17]}..."</c>. A name of ten
+    ///     U+1F600 characters is 10 code points (kept whole by Optuna 5.0.0) but 20 code units, so the port returns
+    ///     its first 17 units — eight emoji and a lone high surrogate — followed by <c>...</c>, a string that is not
+    ///     valid UTF-16 and renders as a replacement character. Found by the D86 string-semantics check.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void ParallelCoordinate_AstralCharacterLabel_TruncatedByCodePointLikePython()
+    {
+        string name = string.Concat(Enumerable.Repeat(char.ConvertFromUtf32(0x1F600), 10));
+        var study = Optuna.CreateStudy();
+        var fd = new FloatDistribution(0, 1);
+        foreach (var (x, v) in new[] { (0.1, 1.0), (0.7, 2.0) })
+        {
+            study.AddTrial(FrozenTrial.CreateTrial(
+                value: v,
+                @params: new OrderedDict<string, object?> { [name] = x },
+                distributions: new OrderedDict<string, BaseDistribution> { [name] = fd }));
+        }
+
+        var info = ParallelCoordinate.GetInfo(study);
+
+        info.DimsParams.Single().Label.Should().Be(name);
+    }
+
     /// <summary>Collects the messages of every log record, so a test can assert on Optuna's warning text.</summary>
     private sealed class CollectingHandler : Logging.ILogHandler
     {

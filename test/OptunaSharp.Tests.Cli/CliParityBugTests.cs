@@ -147,4 +147,41 @@ public class CliParityBugTests
 
         exitCode.Should().Be(2);
     }
+
+    /// <summary>
+    ///     QA-44 (CLI tables): table column widths must count code points, as Python's <c>len(str(value))</c> and
+    ///     f-string alignment do; the port measures and pads with UTF-16 lengths, so a cell holding characters above
+    ///     U+FFFF widens its column by one per such character.
+    /// </summary>
+    /// <remarks>
+    ///     Optuna 5.0.0's <c>trials -f table</c> for a categorical parameter <c>c😀</c> with values <c>😀😀</c> and
+    ///     <c>ab</c> sizes the <c>params</c> column to <c>{'c😀': '😀😀'}</c>, 12 code points, so its separator is
+    ///     <c>+--------------+</c>; the port counts 15 code units (<c>+-----------------+</c>) and pads the other rows to
+    ///     match. Only the separator line is compared; the datetime columns have a fixed width of 19.
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void TrialsTable_AstralCharacters_ColumnWidthsCountCodePointsLikePython()
+    {
+        string url = FreshDbUrl();
+        string emoji = char.ConvertFromUtf32(0x1F600);
+        string name = "c" + emoji;
+        using (var storage = new RDBStorage(url))
+        {
+            var study = Optuna.CreateStudy(studyName: "e", storage: storage);
+            var distribution = new OptunaSharp.Distributions.CategoricalDistribution(emoji + emoji, "ab");
+            foreach (var (value, choice) in new[] { (1.5, emoji + emoji), (2.0, "ab") })
+            {
+                study.AddTrial(FrozenTrial.CreateTrial(value: value,
+                    @params: new OptunaSharp.Collections.OrderedDict<string, object?> { [name] = choice },
+                    distributions: new OptunaSharp.Collections.OrderedDict<string, OptunaSharp.Distributions.BaseDistribution> { [name] = distribution }));
+            }
+        }
+
+        string table = Run(out int exitCode, "trials", "--study-name", "e", "--storage", url, "-f", "table");
+
+        exitCode.Should().Be(0);
+        table.Split('\n')[0].TrimEnd('\r').Should().Be(
+            "+--------+-------+---------------------+---------------------+----------+--------------+----------+");
+    }
 }
