@@ -204,4 +204,37 @@ public class StudyParityBugTests
             "number", "value", "datetime_start", "datetime_complete", "duration",
             "params_b", "params_" + fullwidthX, "params_" + grinning, "state");
     }
+
+    /// <summary>
+    ///     QA-50: <c>enqueue_trial(..., skip_if_exists=True)</c> must compare infinite parameter values the way
+    ///     <c>np.isclose</c> does — equal infinities are duplicates, nothing else is close to an infinity — but the
+    ///     port evaluates <c>|a - b| &lt;= 1e-5 * |b|</c> on them, which inverts both cases.
+    /// </summary>
+    /// <remarks>
+    ///     <c>Study._should_skip_enqueue</c> calls <c>np.isclose(new, existing, atol=0.0, equal_nan=True)</c>; NumPy only
+    ///     applies the tolerance formula to finite pairs and compares the rest with <c>==</c>. In the port's
+    ///     <c>ShouldSkipEnqueue</c>, <c>inf - inf</c> is NaN (never within tolerance), so a repeated <c>inf</c> is enqueued
+    ///     twice, while <c>|x - inf| = inf &lt;= 1e-5 * inf</c> holds for every <c>x</c>, so <c>-inf</c> or any finite value
+    ///     enqueued over a trial whose parameter is <c>inf</c> is dropped as a duplicate. Optuna 5.0.0 keeps 1, 2 and 2
+    ///     trials in the three studies below; the port keeps 2, 1 and 1. Found by the D95 probe of the duplicate check.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void EnqueueTrial_SkipIfExists_ComparesInfinitiesLikeNumpyIsclose()
+    {
+        int TrialsAfter(double existing, double enqueued)
+        {
+            var study = Optuna.CreateStudy();
+            study.EnqueueTrial(new OrderedDict<string, object?> { ["x"] = existing });
+            study.EnqueueTrial(new OrderedDict<string, object?> { ["x"] = enqueued }, skipIfExists: true);
+            return study.Trials.Count;
+        }
+
+        new[]
+        {
+            TrialsAfter(double.PositiveInfinity, double.PositiveInfinity),
+            TrialsAfter(double.PositiveInfinity, double.NegativeInfinity),
+            TrialsAfter(double.PositiveInfinity, 0.5),
+        }.Should().Equal(1, 2, 2);
+    }
 }
