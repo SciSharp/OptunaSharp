@@ -14,14 +14,29 @@ packaged Redis journal backend) round-trips a study through **real Redis**.
   (`NuGet.config` source-maps `OptunaSharp*` → `feed/`), so the tests bind to the shipped assemblies + each
   package's declared deps (from nuget.org) — there is no compile path to `src/`. The 20th package,
   `OptunaSharp.Cli`, is a `dotnet tool` (no `lib/` to reference), so it is installed from the feed and run.
+- **The repo-root `NuGet.Config` mirrors that feed + mapping** (same `local-feed` key, same patterns).
+  Rider and Visual Studio restore with their own NuGet engine, which reads only the solution folder's
+  config, never this folder's. Without the mirror every OptunaSharp reference fails in the IDE with
+  `NU1101 … in source(s): …library-packs, nuget.org`. The CLI still uses this folder's `NuGet.config`,
+  whose `<clear/>` replaces the root's sources with the same two. Change both files together.
 - **Its own `Directory.Build.props`** stops MSBuild's upward search, so the repo-root props (package
   versions, references, strong-naming) never apply here — the packaged third-party deps restore from nuget.org.
 - **`OptunaSharp.Storage.Grpc`** carries a `FrameworkReference` to `Microsoft.AspNetCore.App` (its server
   rides Kestrel), so the project supplies that shared framework — exactly what a consumer of it must do.
 - **Local convenience:** the `_PackAllOptunaSharpPackagesIntoLocalFeed` MSBuild target (in the `.csproj`,
-  hooked `BeforeTargets=Restore`) packs every `src/*` package into `feed/` on first build / any src change,
-  so a clean checkout builds with no manual step and no cryptic `NU1301`/`NU1101`. It self-disables where
-  there is no `src/` (the CI container), which consumes the pipeline-deployed feed instead.
+  hooked `BeforeTargets=Restore;CollectPackageReferences`) packs every `src/*` package into `feed/` on first
+  build / any src change, so a clean checkout builds with no manual step and no cryptic `NU1301`/`NU1101`.
+  It runs **only while MSBuild restores** (`$(MSBuildIsRestoring)`: a CLI restore/build/test of this
+  project or of the solution), the one point where it can precede the restore that consumes it. Plain
+  builds and IDE project loads reach the same hook once per target framework, in parallel. Packing there
+  collided (two `dotnet pack` runs of one src project, `MSB3073`). It also evicted cached packages that an
+  already-finished restore had handed to the compiler. It self-disables where there is no `src/` (the CI
+  container), which consumes the pipeline-deployed feed instead.
+- **In an IDE** (Rider, Visual Studio) the restore is the IDE's own and never runs that target, so the
+  project consumes `feed/` as last packed. When the feed is missing or older than `src/`, an IDE build
+  warns `OSPP0001`. Refresh it with `dotnet build test/OptunaSharp.Tests.PackageParity` from a terminal; the
+  IDE then picks up the rewritten `obj/project.assets.json`. The stamp `feed/.packed-all.stamp` carries the
+  time packing **started**, so a src edit made during the ~3-minute pack still counts as newer.
 - **Container build context is this directory only** (`Dockerfile` + `.dockerignore`), so `src/` is not
   present anywhere in the image. CI additionally sparse-checks-out only this folder.
 
@@ -59,9 +74,10 @@ the SciSharp strong-name key.
 ## Run it
 
 ```bash
-# Local — the build AUTO-PACKS every src/ package into feed/ on first build / whenever any src changes
-# (the _PackAllOptunaSharpPackagesIntoLocalFeed MSBuild target in the .csproj, hooked BeforeTargets=Restore),
-# so no manual `cp` of a .nupkg is needed (first build packs all 20 — a one-time cost; warm builds skip).
+# Local — the build's restore AUTO-PACKS every src/ package into feed/ on first build / whenever any src
+# changes (the _PackAllOptunaSharpPackagesIntoLocalFeed MSBuild target in the .csproj, run only while MSBuild
+# restores), so no manual `cp` of a .nupkg is needed (first build packs all 20 — a one-time cost; warm builds
+# skip). With --no-restore, or from an IDE, it does not pack: a stale feed raises warning OSPP0001 instead.
 # The smoke + Cli-tool tests then need nothing else — no python, no oracle (the Redis test self-skips):
 dotnet test -c Release -f net10.0 --filter "TestCategory!=RequiresOracle"
 

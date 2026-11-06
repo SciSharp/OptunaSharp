@@ -27,7 +27,8 @@
 
   <!--
     THE ISOLATION BOUNDARY: every OptunaSharp package we ship arrives as a PACKAGE from the local feed
-    (NuGet.config source-maps OptunaSharp* -> feed), never a ProjectReference — there is no compile path
+    (NuGet.config source-maps OptunaSharp* -> feed; the repo-root NuGet.Config mirrors that mapping, because
+    IDE restores read only the solution folder's config), never a ProjectReference — there is no compile path
     from here to src/. Referencing ALL the LIBRARY packages makes this gate prove that each shipped .nupkg
     restores against its real declared dependency graph (its third-party deps come from nuget.org) and
     loads standalone carrying the SciSharp strong-name identity — the exact class of failure that once
@@ -74,20 +75,47 @@
       restore, so the very build that would have failed instead produces the packages it needs and
       succeeds. The isolation model is unchanged (each package is still consumed as a PACKAGE).
 
-    WHY IT HOOKS Restore (and not a normal build target)
+    WHY IT HOOKS Restore + CollectPackageReferences, AND RUNS ONLY WHILE MSBUILD RESTORES
       A PackageReference is resolved during RESTORE, which runs before every ordinary build target — so a
-      build-phase target would be far too late (restore already failed). BeforeTargets="Restore" is the
-      only point early enough to drop the .nupkgs in first; CollectPackageReferences is listed too as a
-      belt-and-suspenders for SDK/restore variants. MSBuild runs the target at most once per invocation.
+      build-phase target would be far too late (restore already failed). The two hooks cover the two ways
+      MSBuild restores this project:
+        - BeforeTargets="Restore" fires when THIS project is restored (dotnet restore/build/test of it).
+        - BeforeTargets="CollectPackageReferences" fires when a SOLUTION is restored: that never runs the
+          project's Restore target and reaches the project only through NuGet's restore-graph walk, which
+          calls CollectPackageReferences on it.
+      In both cases the outer, framework-less instance runs first. The later per-framework calls in the same
+      restore find the stamp fresh and skip (probed on SDK 10.0.101). Note that MSBuild runs a target
+      at most once per PROJECT INSTANCE, not per invocation: this multi-targeting project has an outer
+      instance plus one per framework.
+      CollectPackageReferences ALSO runs outside any restore: every plain build and every IDE design-time
+      load reaches it (EnableIntermediateOutputPathMismatchWarning -> _GetRestoreProjectStyle), once per
+      target framework, in parallel. Packing there is wrong twice over, so the target is conditioned on
+      $(MSBuildIsRestoring), which MSBuild sets on every instance of a restore and never otherwise:
+        - Two framework instances pack at once, two `dotnet pack` builds of the same src project in the
+          same obj/ folder: Rider's project load failed this way with MSB3073 ("Error writing to source
+          link file ...sourcelink.json: being used by another process").
+        - The eviction below deletes cached packages that the restore ALREADY DONE for this build (by the
+          IDE, or an earlier one reused by a build run with the no-restore switch) has handed to the
+          compiler, so that build fails (missing package files) until the next restore.
+      Outside a restore the sibling target _WarnLocalFeedOlderThanSources reports a stale feed instead.
+
+    IDEs (Rider, Visual Studio)
+      They restore with their own NuGet engine (Rider logs "RestoreEngine = Embedded"), which never runs the
+      Restore target, so no pack can be ordered before an IDE restore. An IDE restore therefore consumes
+      the feed as last packed, finding it through the repo-root NuGet.Config, which mirrors this folder's
+      NuGet.config (the IDE ignores a project folder's config). To refresh it, run
+      `dotnet build test/OptunaSharp.Tests.PackageParity` from a terminal: that restore packs, and the IDE
+      picks up the rewritten obj/project.assets.json.
 
     WHAT IT PACKS / NO RECURSION
       It packs $(_SrcDir)\*\*.csproj — every project under src/ (all are packable, Cli included). The
       parity project lives under test/, so it is NEVER in that list: packing cannot re-enter this target.
       First build is a one-time cost (~one `dotnet pack` per package); warm builds skip entirely.
 
-    FRESHNESS (behaves like ProjectReferences would)
+    FRESHNESS (behaves like ProjectReferences would, on the CLI)
       Inputs/Outputs skip the whole target once feed/.packed-all.stamp is newer than every src source
-      (warm builds pay nothing) and rerun it when any src changes. All packages share the fixed version
+      (warm builds pay nothing) and rerun it on the next MSBuild restore after any src change (in an IDE,
+      OSPP0001 asks for that restore instead). All packages share the fixed version
       (0.1.0), and NuGet's global cache would otherwise keep serving the FIRST 0.1.0 of each it ever
       extracted (the local-feed + fixed-version + cache trap), silently testing stale bits — so a repack
       first evicts exactly our extractions (every optunasharp* id at this version) to force re-extraction.
@@ -97,7 +125,8 @@
       Everything is Condition'd on src/ existing. The isolated CI container has the feed pre-dropped and
       NO src/ tree, so the target self-disables there — CI keeps consuming exactly the artifacts it deployed.
 
-    TO FORCE A CLEAN REPACK: delete feed/  (or just feed/.packed-all.stamp).
+    TO FORCE A CLEAN REPACK: delete feed/  (or just feed/.packed-all.stamp), then restore or build this
+    project from the CLI.
     ================================================================================================
   -->
   <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj')">
@@ -135,11 +164,23 @@
     <_OurCachedPkgVersionDir Include="@(_OurCachedPkgRoot->'%(Identity)/$(OptunaSharpPackageVersion)')" />
   </ItemGroup>
 
+  <!-- Restore-only (see "WHY IT HOOKS ..." above): MSBuildIsRestoring is the global property MSBuild sets on
+       every instance of a restore; plain builds, no-restore builds and IDE design-time loads lack it. -->
   <Target Name="_PackAllOptunaSharpPackagesIntoLocalFeed"
           BeforeTargets="Restore;CollectPackageReferences"
-          Condition="Exists('$(_SrcDir)')"
+          Condition="Exists('$(_SrcDir)') and '$(MSBuildIsRestoring)' == 'true'"
           Inputs="@(_PackInputs)"
           Outputs="$(_FeedStamp)">
+    <!-- Capture the start time FIRST. The stamp must mean "packed from src/ as it was when packing STARTED".
+         The ~3 minutes of packing leave a window in which the IDE or another session can edit a src file
+         after its project was already packed. A stamp carrying the FINISH time would be newer than that edit
+         and mark the feed fresh while it lacks the edit. This happened on 2026-11-06: Core was packed at
+         18:36:08, FloatDistribution.cs was edited at 18:36:35, and the stamp landed at 18:37:29. Stamped
+         with the start time, such an edit stays newer than the stamp, so the next restore repacks.
+         DateTime 'o' (round-trip, with offset) is a format the Touch task's Time parameter parses losslessly. -->
+    <PropertyGroup>
+      <_PackStartTime>$([System.DateTime]::Now.ToString('o'))</_PackStartTime>
+    </PropertyGroup>
     <Message Importance="high"
              Text="OptunaSharp.Tests.PackageParity: packing ALL OptunaSharp packages from src/ into the local isolation feed (first build / on any src change; one-time cost)..." />
     <!-- Evict our fixed-version extractions so restore cannot serve stale bits from a prior pack. Batches
@@ -148,8 +189,26 @@
     <!-- Pack each packable src project into the feed (one dotnet pack per project, batched over the item).
          PackageVersion pins identity so each feed file name equals the requested version even under CI override. -->
     <Exec Command="dotnet pack &quot;%(_SrcPackable.FullPath)&quot; --configuration $(_CorePackConfiguration) -p:PackageVersion=$(OptunaSharpPackageVersion) --output &quot;$(_LocalFeedDir)&quot; --nologo -clp:ErrorsOnly" />
-    <!-- Stamp AFTER a successful pack so a failed pack does not mark the feed fresh. -->
-    <Touch Files="$(_FeedStamp)" AlwaysCreate="true" />
+    <!-- Stamp AFTER a successful pack so a failed pack does not mark the feed fresh, but date it to the
+         START of the pack (see _PackStartTime above) so a src edit made while packing still reads as newer. -->
+    <Touch Files="$(_FeedStamp)" AlwaysCreate="true" Time="$(_PackStartTime)" />
+  </Target>
+
+  <!-- The non-restore half of the auto-pack. A plain build, a no-restore build or an IDE design-time load
+       must not pack (see "WHY IT HOOKS ..." above), so instead it SAYS when the feed it compiles against is
+       stale; otherwise those builds would silently test packages older than the source.
+       It uses the same Inputs/Outputs as the pack target, so MSBuild runs it only when feed/.packed-all.stamp
+       is missing (fresh clone: the restore also failed, NU1301) or older than a src input.
+       Every framework instance reaches CollectPackageReferences, so the warning appears once per target
+       framework. It never fails a build unless warnings are treated as errors.
+       Self-disables where there is no src/ (the CI container), like the pack target. -->
+  <Target Name="_WarnLocalFeedOlderThanSources"
+          BeforeTargets="CollectPackageReferences"
+          Condition="Exists('$(_SrcDir)') and '$(MSBuildIsRestoring)' != 'true'"
+          Inputs="@(_PackInputs)"
+          Outputs="$(_FeedStamp)">
+    <Warning Code="OSPP0001"
+             Text="The local package feed '$(_LocalFeedDir)' is missing or older than src/, so OptunaSharp.Tests.PackageParity restores and tests the OptunaSharp packages as last packed, not the current source. Only an MSBuild restore repacks it (an IDE restore or a no-restore build cannot): run 'dotnet build test/OptunaSharp.Tests.PackageParity' from a terminal, then let the IDE reload the project." />
   </Target>
 
 </Project>

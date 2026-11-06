@@ -107,7 +107,7 @@ OptunaSharp/
 │   ├── ISSUE_TEMPLATE/ · PULL_REQUEST_TEMPLATE.md · FUNDING.yml · dependabot.yml
 ├── Directory.Build.props            # strong-naming + shared package metadata + version
 ├── Open.snk                         # Microsoft's published OSS key (shared across the SciSharp STACK)
-├── NuGet.Config                     # nuget.org only (reproducible restore)
+├── NuGet.Config                     # nuget.org for every id; OptunaSharp* source-mapped to the package-parity feed/ (IDEs read only this file)
 ├── .editorconfig / .gitattributes / .gitignore / .git-blame-ignore-revs
 ├── LICENSE (MIT) · SECURITY.md · CITATION.cff · CONTRIBUTING.md · CODE_OF_CONDUCT.md
 ├── README.md
