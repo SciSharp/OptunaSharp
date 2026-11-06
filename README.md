@@ -40,8 +40,16 @@
   <a href="src/OptunaSharp.Storage.EFCore/README.md">PostgreSQL</a> ·
   <a href="src/OptunaSharp.Storage.EFCore/README.md">MySQL</a> ·
   <a href="src/OptunaSharp.Storage.Redis/README.md">Redis</a> ·
-  <a href="src/OptunaSharp.Storage.Grpc/README.md">gRPC storage proxy</a><br>
-  Workers on many machines share one study, Python Optuna workers included.
+  <a href="src/OptunaSharp.Storage.Grpc/README.md">gRPC storage proxy</a>
+</p>
+
+<p align="center">
+  OptunaSharp is <a href="docs/THREADING.md"><strong>thread-safe and truly parallel</strong></a>:
+  <code>nJobs</code> runs trials on all your cores at once, with no GIL in the way, and workers on many
+  machines share one study, Python Optuna workers included.<br>
+  Its <code>nJobs</code> workers are dedicated threads, reused across trials and <code>Optimize</code> calls
+  instead of taken from the .NET ThreadPool, which stays free for your app; <code>Ask</code> and
+  <code>Tell</code> work from any thread, ThreadPool threads included.
 </p>
 
 ---
@@ -69,6 +77,12 @@ In place today:
   / gRPC / Redis storage, cloud artifact stores (S3 / GCS / Azure Blob / R2), Plotly visualization,
   LightGBM / ML.NET integration, an `optunasharp` CLI tool, and pythonnet interop bridges (OptunaHub,
   BoTorch, PyCma, Pymoo).
+
+`Optimize(nJobs: n)` runs objectives truly in parallel. Measured on 32 logical CPUs, 64 trials of a ~50 ms
+CPU-bound objective finished 6.7× faster at `nJobs: 8` and 9.2× faster at `nJobs: 16` than at `nJobs: 1`;
+Python Optuna 5.0 gains about 1.1× at any `n_jobs`, because the GIL runs one Python thread at a time.
+Sampling stays serial per sampler, so the gain is in the objective. [`docs/THREADING.md`](docs/THREADING.md)
+has the design, its guarantees and its limits.
 
 Reproducibility under a fixed seed is **bit-identical to Python** wherever the path is deterministic,
 enforced by a live-Optuna parity harness (pythonnet) that asks real Optuna to compute answers
