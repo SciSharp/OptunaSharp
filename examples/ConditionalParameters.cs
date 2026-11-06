@@ -126,7 +126,9 @@ static IReadOnlyList<double> Objective(Trial t)
     return new[] { 1.0 + shared, shared + Math.Pow(momentum - MomentumOpt, 2.0) };
 }
 
-static int Generation(FrozenTrial t) => Convert.ToInt32(t.SystemAttrs["NSGAIIISampler:generation"]);   // set by the sampler
+// the GA samplers key the generation by their own class name, as Optuna does (`f"{cls.__name__}:generation"`),
+// so this study's trials carry "NSGAIIICptSampler:generation", not the plain NSGA-III sampler's key.
+static int Generation(FrozenTrial t) => Convert.ToInt32(t.SystemAttrs[$"{nameof(NSGAIIICptSampler)}:generation"]);
 static List<FrozenTrial> Gen(Study s, int g) => s.Trials.Where(t => Generation(t) == g).ToList();
 static List<FrozenTrial> Late(Study s) => s.Trials.Where(t => Generation(t) >= LateFrom).ToList();
 static int Count(IEnumerable<FrozenTrial> ts, string name) => ts.Count(t => t.Params.ContainsKey(name));
