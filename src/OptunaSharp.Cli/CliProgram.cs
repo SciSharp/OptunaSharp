@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.CommandLine;
+using System.CommandLine.Help;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -28,6 +29,19 @@ using Column = OutputFormat.Column;
 /// </summary>
 public static class CliProgram
 {
+    /// <summary>
+    ///     The command name users type, the tool's <c>ToolCommandName</c> in <c>OptunaSharp.Cli.csproj</c>. Every
+    ///     usage line in <c>--help</c> starts with it, as Python's starts with <c>optuna</c>.
+    /// </summary>
+    /// <remarks>
+    ///     The root is a plain command carrying this name because System.CommandLine's <c>RootCommand</c> takes its
+    ///     name from the entry assembly and has no setter. The assembly stays <c>OptunaSharp.Cli</c> (the
+    ///     InternalsVisibleTo friend key names it), so the installed tool's help printed <c>Usage: OptunaSharp.Cli
+    ///     …</c>, a command nobody can type, and an in-process host printed its own name (<c>testhost</c>).
+    ///     Keep it equal to <c>ToolCommandName</c>.
+    /// </remarks>
+    internal const string CommandName = "optunasharp";
+
     private static readonly Logger Log = OptunaLogging.GetLogger("optuna.cli");
 
     // ---- common (recursive) options — Optuna's _add_common_arguments ---------------------------
@@ -81,7 +95,7 @@ public static class CliProgram
     /// <returns>The process exit code: zero on success and nonzero on parser or command failure.</returns>
     public static int Run(string[] args)
     {
-        RootCommand root = BuildRoot();
+        Command root = BuildRoot();
         ParseResult parseResult = root.Parse(args);
         SetVerbosity(parseResult);
         SetLogFile(parseResult);
@@ -112,12 +126,19 @@ public static class CliProgram
 
     // ---- root/parser assembly — Optuna's _get_parser / _add_commands ---------------------------
 
-    /// <summary>Builds the root command and global options with its options and deferred action handlers.</summary>
-    /// <returns>The configured command; its action runs only when invoked by the parser.</returns>
-    private static RootCommand BuildRoot()
+    /// <summary>
+    ///     Builds the root command, named <see cref="CommandName" />, with the global options, every subcommand and
+    ///     the deferred action handlers.
+    /// </summary>
+    /// <returns>The configured root command; its action runs only when invoked by the parser.</returns>
+    private static Command BuildRoot()
     {
-        var root = new RootCommand(
-            "OptunaSharp — the .NET port of Optuna. Hyperparameter optimization from the command line.");
+        var root = new Command(
+            CommandName, "OptunaSharp — the .NET port of Optuna. Hyperparameter optimization from the command line.");
+        // RootCommand would have added these two itself; a plain Command needs them explicitly. RootCommand's third
+        // default, the [suggest] directive for dotnet-suggest completion, has no Command equivalent and is not used.
+        root.Add(new HelpOption());
+        root.Add(new VersionOption());
         foreach (var opt in new Option[] { StorageOpt, StorageClassOpt, VerboseOpt, QuietOpt, LogFileOpt, DebugOpt })
             root.Add(opt);
 
