@@ -198,7 +198,11 @@ public class StorageUrlStandardParityTests : OptunaInteropTestBase
         for (int i = 0; i < SqliteCases.Length; i++)
         {
             // The port's default busy timeout is 30 s where Python's is 5 s; compare it only when the URL sets one.
-            bool timed = SqliteCases[i].Contains("timeout=", StringComparison.Ordinal);
+            // CPython computes `(int)(timeout * 1000)` in C, which is undefined beyond the 32-bit range: x86-64
+            // yields INT_MIN (busy handler off, 0) and arm64 saturates to INT_MAX. The port gives x86-64's answer on
+            // every host by design (PyNumbers.CTruncateToInt32), so `timeout=1e9` is compared on x64 hosts only.
+            bool cUndefinedOnThisHost = !PythonSession.BitExactHost && SqliteCases[i].Contains("timeout=1e9", StringComparison.Ordinal);
+            bool timed = SqliteCases[i].Contains("timeout=", StringComparison.Ordinal) && !cUndefinedOnThisHost;
             string Shape(string outcome) => !timed && outcome.StartsWith("OK|", StringComparison.Ordinal)
                 ? outcome[..outcome.LastIndexOf('|')]
                 : outcome;

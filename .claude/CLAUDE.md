@@ -378,6 +378,8 @@ Rules every workflow follows:
     - `redis`, plus a compose Redis server;
     - the vendored `optunahub` + `refs/optunahub-registry`;
     - the JANUS reference: `hongyuanyu/JANUS` @ `53e372f`, via `JANUS_REF_PATH`.
+  - On every OS, `sqlalchemy==2.0.45`: the storage-URL port reproduces that release's driver registry
+    (a bare `postgresql://` means psycopg2; SQLAlchemy 2.1 switched it to psycopg 3).
   - Before this, ~60 cases per TFM were Inconclusive in CI.
 - **`package`** — runs on **every push, PR and tag** (it replaced `verify-signing`, which packed a
   throwaway Core only). It checks that `Open.snk` is intact, then `pack_all.sh` packs all 20 packages at

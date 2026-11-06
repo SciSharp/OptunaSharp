@@ -73,17 +73,33 @@ public class OptimizeEdgeCaseTests
     ///     a trial afterwards (Optuna 5.0: stop in trial 10 at <c>n_jobs=4</c>: 14 trials, all COMPLETE). At most
     ///     three other workers can hold a trial when trial 10 stops, so no trial numbered above 13 may exist.
     /// </summary>
+    /// <remarks>
+    ///     Trials numbered above 10 wait until trial 10 has called <c>Stop()</c>. Without that gate the bound was a
+    ///     race: on an oversubscribed runner (macOS, 3 cores) the worker of trial 10 was preempted during its sleep,
+    ///     the other three finished trials 11–13 and started 14–15 before the stop existed, and the test saw 16
+    ///     trials. With it, no trial above 10 can finish before the stop, so each other worker holds at most one
+    ///     trial, and 14 is an exact upper bound on any host.
+    /// </remarks>
     [TestMethod]
     public void NJobs_StopFromTheObjective_LetsTheTrialsInFlightFinish_AndStartsNoMore()
     {
         var study = Optuna.CreateStudy(sampler: new RandomSampler(22));
+        using var stopped = new ManualResetEventSlim();
 
         study.Optimize(t =>
         {
             double x = t.SuggestFloat("x", 0, 1);
             Thread.Sleep(20);
             if (t.Number == 10)
+            {
                 t.Study.Stop();
+                stopped.Set();
+            }
+            else if (t.Number > 10)
+            {
+                // Bounded so a regression that never runs trial 10 fails the assertions instead of hanging.
+                stopped.Wait(TimeSpan.FromSeconds(30));
+            }
             return x;
         }, nTrials: 200, nJobs: 4);
 
@@ -95,21 +111,32 @@ public class OptimizeEdgeCaseTests
     ///     The same from a callback, which runs on the worker's thread after its trial is stored (Optuna 5.0: stop in
     ///     the callback of trial 10 at <c>n_jobs=4</c>: 14 trials).
     /// </summary>
+    /// <remarks>
+    ///     Trials numbered above 10 wait until trial 10's callback has called <c>Stop()</c>, for the reason given on
+    ///     <see cref="NJobs_StopFromTheObjective_LetsTheTrialsInFlightFinish_AndStartsNoMore" />: it turns the
+    ///     timing-dependent bound of 14 into an exact one.
+    /// </remarks>
     [TestMethod]
     public void NJobs_StopFromACallback_LetsTheTrialsInFlightFinish_AndStartsNoMore()
     {
         var study = Optuna.CreateStudy(sampler: new RandomSampler(23));
+        using var stopped = new ManualResetEventSlim();
 
         study.Optimize(t =>
         {
             Thread.Sleep(20);
+            if (t.Number > 10)
+                stopped.Wait(TimeSpan.FromSeconds(30));   // bounded: a regression fails instead of hanging
             return t.SuggestFloat("x", 0, 1);
         }, nTrials: 200, nJobs: 4, callbacks: new Action<Study, FrozenTrial>[]
         {
             (s, frozen) =>
             {
                 if (frozen.Number == 10)
+                {
                     s.Stop();
+                    stopped.Set();
+                }
             },
         });
 

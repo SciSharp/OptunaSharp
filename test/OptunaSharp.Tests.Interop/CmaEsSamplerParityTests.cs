@@ -129,7 +129,7 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
     [DataRow(5, 13, 26)]
     public void FloatSphere_FullState_IsBitIdentical(int dim, int seed, int nTrials)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(
             storage: new InMemoryStorage(), studyName: "cma",
@@ -148,7 +148,7 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
     [DataRow(4, 9)]
     public void LrAdapt_FullState_IsBitIdentical(int dim, int seed)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(
             storage: new InMemoryStorage(), studyName: "cma",
@@ -167,7 +167,7 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
     [DataRow(20)]
     public void ExplicitPopsize_FullState_IsBitIdentical(int popsize)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(
             storage: new InMemoryStorage(), studyName: "cma",
@@ -209,7 +209,7 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
     [DataRow(5, 2, 8)]
     public void WarmStart_FullState_IsBitIdentical(int dim, int srcSeed, int tgtSeed)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         // Warm-Starting: a source study (independent RandomSampler → bit-exact) primes the target
         // CMA-ES via get_warm_start_mgd. Both source and target trajectories are byte-identical.
@@ -245,7 +245,7 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
     [DataRow(true, false)]
     public void InfiniteObjectiveValues_FullState_IsBitIdentical(bool separable, bool maximize)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var sphere = SphereCs(3);
         var csStudy = Optuna.CreateStudy(
@@ -281,7 +281,7 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void MixedSpace_FullState_IsBitIdentical()
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         // float (relative CMA) + int (relative CMA) + categorical (independent RandomSampler).
         var csStudy = Optuna.CreateStudy(

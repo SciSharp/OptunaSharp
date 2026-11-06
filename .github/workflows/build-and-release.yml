@@ -403,6 +403,11 @@ jobs:
         # mirror, so BLAS-backed oracles (np.linalg / CMA-ES eigh) stay byte-identical to C#.
         python -m pip install "numpy==2.4.2"
         python -m pip install -e refs/optuna
+        # Pin SQLAlchemy to 2.0.45, the release the storage-URL port reproduces (StorageUrlStandardParityTests):
+        # its driver registry maps a bare postgresql:// to psycopg2. SQLAlchemy 2.1 maps it to psycopg 3, which
+        # is not installed here, so with the unpinned 2.1 every bare PostgreSQL URL failed on the Python side
+        # with "No module named 'psycopg'" (dispatch 42258298264, ubuntu interop).
+        python -m pip install "sqlalchemy==2.0.45"
         # Backends the parity tests drive LIVE: torch (GPSampler), cmaes (CmaEsSampler), scikit-learn
         # (fANOVA / importance), matplotlib (visualization). Use the CPU-only PyTorch wheels on Linux AND
         # Windows: the runners have no GPU, GPSampler parity is CPU-deterministic, and the default Windows

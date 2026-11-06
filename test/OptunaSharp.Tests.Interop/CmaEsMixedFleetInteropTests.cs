@@ -75,7 +75,7 @@ public class CmaEsMixedFleetInteropTests
     [DataRow("lr_adapt", false)]
     public void CSharpAndPythonWorkers_TakingTurns_RunTheStudyPythonRunsAlone(string variant, bool csharpFirst)
     {
-        PythonSession.EnsureOrInconclusive();
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var reference = RunFleet(variant, "reference", firstIsCSharp: false, secondIsCSharp: false);
         var mixed = RunFleet(variant, "mixed", firstIsCSharp: csharpFirst, secondIsCSharp: !csharpFirst);

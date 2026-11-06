@@ -144,6 +144,7 @@ public class CmaPickleOracleTests
     [DataRow("cma_30d")]
     public void CSharpStudy_StoresTheStatesOptunaStores(string variant)
     {
+        RequireOracleHost(variant);
         var (pyStates, csStates) = RunVariant(variant);
 
         csStates.Select(s => s.Trial).Take(pyStates.Count).Should().Equal(pyStates.Select(s => s.Trial),
@@ -313,6 +314,34 @@ public class CmaPickleOracleTests
         using var raw = new MemoryStream();
         gz.CopyTo(raw);
         return raw.ToArray();
+    }
+
+    /// <summary>
+    ///     Skips (Inconclusive) a variant on a host that cannot reproduce the committed oracle bit for bit. The oracle
+    ///     was captured on Windows x64, and its states hold every eigendecomposition and libm result of the run.
+    /// </summary>
+    /// <remarks>
+    ///     First run on the full CI matrix (dispatch 42258298264, 2026-11-06):
+    ///     <list type="bullet">
+    ///         <item>macOS arm64 failed 6 of the 9 variants: .NET ships its own libm there and the arm64 OpenBLAS
+    ///         kernels differ, both by about 1 ULP;</item>
+    ///         <item>ubuntu x64 failed only <c>cma_30d</c>: a 30-dimensional run does enough eigendecompositions
+    ///         and transcendental calls for glibc/OpenBLAS-on-Linux to leave a last-bit trace where the 2-D variants
+    ///         do not.</item>
+    ///     </list>
+    ///     The same pinning rule as <c>AgeMoea2OperatorParityTests</c> and the NES digest tests. Cross-language
+    ///     storage of the state is checked live by the interop suite on every host where it is bit-exact.
+    /// </remarks>
+    /// <param name="variant">The oracle variant about to run.</param>
+    /// <exception cref="AssertInconclusiveException">The host cannot reproduce this variant's oracle bit for bit.</exception>
+    private static void RequireOracleHost(string variant)
+    {
+        if (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture != System.Runtime.InteropServices.Architecture.X64)
+            Assert.Inconclusive(
+                "The CMA-ES state oracle was captured on Windows x64; arm64's libm and OpenBLAS kernels differ in the last bit.");
+        if (variant == "cma_30d" && !OperatingSystem.IsWindows())
+            Assert.Inconclusive(
+                "The 30-dimensional CMA-ES state oracle was captured on Windows x64; Linux's libm/OpenBLAS differ in its last bits.");
     }
 
     /// <summary>

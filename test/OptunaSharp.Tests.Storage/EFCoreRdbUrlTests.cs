@@ -59,13 +59,36 @@ public class EFCoreRdbUrlTests
         act.Should().Throw<ArgumentException>().WithMessage("Can't load plugin: sqlalchemy.dialects:postgres");
     }
 
+    /// <summary>
+    ///     A URL without port or password leaves both to the driver's defaults: the parser itself adds no password.
+    /// </summary>
+    /// <remarks>
+    ///     libpq, and so the port, fills a missing password from <c>PGPASSWORD</c> or the password file. GitHub's
+    ///     Windows runner image presets <c>PGPASSWORD=root</c>, so on that runner this test saw <c>"root"</c>
+    ///     (dispatch 42258298264). It asserts what the URL alone yields, so it switches both sources off for its
+    ///     duration and restores them after (the suite runs its tests one at a time).
+    /// </remarks>
     [TestMethod]
     public void Postgres_NoPortNoPassword_LeavesDefaults()
     {
-        var b = Pg("postgresql://someuser@localhost/optuna");
-        b.Username.Should().Be("someuser");
-        b.Password.Should().BeNull();
-        b.Host.Should().Be("localhost");
+        string? password = Environment.GetEnvironmentVariable("PGPASSWORD");
+        string? passfile = Environment.GetEnvironmentVariable("PGPASSFILE");
+        try
+        {
+            Environment.SetEnvironmentVariable("PGPASSWORD", null);
+            Environment.SetEnvironmentVariable(
+                "PGPASSFILE", System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"optunasharp-no-pgpass-{Guid.NewGuid():N}"));
+
+            var b = Pg("postgresql://someuser@localhost/optuna");
+            b.Username.Should().Be("someuser");
+            b.Password.Should().BeNull();
+            b.Host.Should().Be("localhost");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PGPASSWORD", password);
+            Environment.SetEnvironmentVariable("PGPASSFILE", passfile);
+        }
     }
 
     [TestMethod]
