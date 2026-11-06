@@ -29,6 +29,21 @@
   behavior differ, Optuna is treated as the source of truth and OptunaSharp aligns to it.
 </p>
 
+<p align="center">
+  OptunaSharp is <strong>cloud-ready</strong>, with supported integrations for:<br>
+  <strong>Artifact storage</strong> —
+  <a href="src/OptunaSharp.Artifacts.S3/README.md">Amazon S3</a> ·
+  <a href="src/OptunaSharp.Artifacts.AzureBlob/README.md">Azure Blob Storage</a> ·
+  <a href="src/OptunaSharp.Artifacts.Gcs/README.md">Google Cloud Storage</a> ·
+  <a href="src/OptunaSharp.Artifacts.R2/README.md">Cloudflare R2</a><br>
+  <strong>Study storage</strong> —
+  <a href="src/OptunaSharp.Storage.EFCore/README.md">PostgreSQL</a> ·
+  <a href="src/OptunaSharp.Storage.EFCore/README.md">MySQL</a> ·
+  <a href="src/OptunaSharp.Storage.Redis/README.md">Redis</a> ·
+  <a href="src/OptunaSharp.Storage.Grpc/README.md">gRPC storage proxy</a><br>
+  Workers on many machines share one study, Python Optuna workers included.
+</p>
+
 ---
 
 ## Status
