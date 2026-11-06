@@ -43,8 +43,18 @@ public class OptunaError : Exception
 /// </example>
 public class TrialPruned : OptunaError
 {
-    /// <summary>Creates a TrialPruned carrying the supplied failure details, if any.</summary>
-    public TrialPruned() { }
+    /// <summary>
+    ///     Creates a TrialPruned with an empty <see cref="Exception.Message" />, as Python's
+    ///     <c>str(TrialPruned())</c> is <c>''</c>.
+    /// </summary>
+    /// <remarks>
+    ///     The message is not cosmetic: <c>Optimize</c> logs every pruned trial as
+    ///     <c>"Trial {number} pruned. {message}"</c>, the port of Optuna's <c>f"... pruned. {str(func_err)}"</c>.
+    ///     Left to the BCL default, the bare <c>throw new TrialPruned();</c> every prune loop ends with would log
+    ///     <c>Exception of type 'OptunaSharp.TrialPruned' was thrown.</c> on each pruned trial where Optuna logs
+    ///     nothing after the period.
+    /// </remarks>
+    public TrialPruned() : base(string.Empty) { }
 
     /// <summary>Creates a TrialPruned carrying the supplied failure details, if any.</summary>
     /// <param name="message">Error message explaining the failure.</param>

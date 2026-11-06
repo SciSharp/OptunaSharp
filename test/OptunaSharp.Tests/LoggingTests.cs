@@ -105,6 +105,59 @@ public class LoggingTests
     }
 
     /// <summary>
+    ///     The INFO line of a pruned trial matches Optuna's <c>f"Trial {number} pruned. {str(func_err)}"</c>. Live
+    ///     Optuna 5.0.0 logs <c>"Trial 0 pruned. "</c> for <c>raise TrialPruned()</c> (an empty <c>str()</c>) and
+    ///     <c>"Trial 1 pruned. custom"</c> for <c>raise TrialPruned("custom")</c>. Before the fix the bare
+    ///     constructor logged the BCL default <c>"Exception of type 'OptunaSharp.TrialPruned' was thrown."</c>.
+    /// </summary>
+    /// <exception cref="TrialPruned">
+    ///     Escapes only if <c>Optimize</c> stopped catching the objectives' prune signal, which fails the test;
+    ///     normally <c>Optimize</c> catches it and records the trial as pruned.
+    /// </exception>
+    [TestMethod]
+    public void PrunedTrialLogLine_MatchesOptuna_ForBareAndMessagedTrialPruned()
+    {
+        new TrialPruned().Message.Should().BeEmpty("Python's str(TrialPruned()) is ''");
+
+        int verbosity = OptunaLogging.GetVerbosity();
+        var messages = new System.Collections.Generic.List<string>();
+        var handler = new CollectingHandler(messages);
+        try
+        {
+            OptunaLogging.SetVerbosity(LogLevel.Info);
+            OptunaLogging.AddHandler(handler);
+
+            // Typed as single-objective explicitly: a throw-only lambda has no return type to pick an overload by.
+            Func<Trial, double> bare = _ => throw new TrialPruned();
+            Func<Trial, double> messaged = _ => throw new TrialPruned("custom");
+            var study = Optuna.CreateStudy();
+            study.Optimize(bare, nTrials: 1);
+            study.Optimize(messaged, nTrials: 1);
+        }
+        finally
+        {
+            OptunaLogging.RemoveHandler(handler);
+            OptunaLogging.SetVerbosity(verbosity);
+        }
+
+        messages.Should().Contain("Trial 0 pruned. ").And.Contain("Trial 1 pruned. custom");
+        messages.Should().NotContain(m => m.Contains("was thrown"));
+    }
+
+    /// <summary>Collects the message of every record it receives, so a test can assert exact log text.</summary>
+    /// <param name="sink">List that receives each record's message, in emission order.</param>
+    private sealed class CollectingHandler(System.Collections.Generic.List<string> sink) : ILogHandler
+    {
+        /// <summary>Appends the record's message under a lock, because Optimize may log from worker threads.</summary>
+        /// <param name="record">Log record whose message is collected.</param>
+        public void Emit(in LogRecord record)
+        {
+            lock (sink)
+                sink.Add(record.Message);
+        }
+    }
+
+    /// <summary>
     ///     Runs <paramref name="action" /> with <see cref="Console.Error" /> redirected and returns what it
     ///     wrote. The library logger is configured first so this redirect can never become its default stream.
     /// </summary>
