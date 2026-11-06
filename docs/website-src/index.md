@@ -28,7 +28,6 @@
       <pre><code class="lang-bash">dotnet add package OptunaSharp</code></pre>
       <pre><code class="lang-csharp">using OptunaSharp;
 using OptunaSharp.Samplers;
-
 var study = Optuna.CreateStudy(sampler: new TPESampler(seed: 42));
 study.Optimize(trial =>
 {
