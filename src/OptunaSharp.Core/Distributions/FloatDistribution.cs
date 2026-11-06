@@ -172,7 +172,14 @@ public class FloatDistribution : BaseDistribution
             {
                 double oldHigh = high;
                 // Python: float((d_r // d_step) * d_step + d_low); Decimal floor division.
-                high = (double)(decimal.Floor(dR / dStep) * dStep + dLow);
+                decimal adjusted = decimal.Floor(dR / dStep) * dStep + dLow;
+                // A sum of opposite signs that is exactly zero is +0 in Python's Decimal (default rounding), but
+                // .NET's decimal keeps the sign: 0.50m + -0.5m is -0.00, and (double) of it is -0.0. Without this,
+                // suggest_float("x", -0.5, 0.2, step=0.25) stored high = -0.0 and every sampler returned -0.0 for
+                // the top grid point, into the objective, storage, logs and best_params (QA-1).
+                if (adjusted == 0m)
+                    adjusted = 0m;
+                high = (double)adjusted;
                 OptunaWarnings.Warn(
                     $"The distribution is specified by [{PythonRepr.FloatRepr(low)}, {PythonRepr.FloatRepr(oldHigh)}] " +
                     $"and step={PythonRepr.FloatRepr(step)}, but the range is " +

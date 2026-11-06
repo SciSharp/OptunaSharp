@@ -28,8 +28,9 @@ namespace OptunaSharp.Tests.QA;
 public class DistributionParityBugTests
 {
     /// <summary>
-    ///     QA-1: a stepped float range whose adjusted upper end is zero must store <c>+0.0</c>, as Python does;
-    ///     the port stores <c>-0.0</c>, which then flows into every sampled parameter value.
+    ///     QA-1 (fixed 2026-11-06): a stepped float range whose adjusted upper end is zero must store <c>+0.0</c>,
+    ///     as Python does; the port stored <c>-0.0</c>, which then flowed into every sampled parameter value.
+    ///     <c>AdjustDiscreteUniformHigh</c> now normalizes a zero decimal sum to positive zero.
     /// </summary>
     /// <remarks>
     ///     Python: <c>FloatDistribution(-0.5, 0.2, step=0.25).high</c> is <c>0.0</c>: <c>Decimal('0.50') +
@@ -39,7 +40,6 @@ public class DistributionParityBugTests
     ///     step tests. Python prints <c>{'x': 0.0}</c> in the trial log where the port prints <c>-0.0</c>.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void SteppedHigh_AdjustedToZero_IsPositiveZero()
     {
         var dist = new FloatDistribution(-0.5, 0.2, step: 0.25);
@@ -50,9 +50,9 @@ public class DistributionParityBugTests
     }
 
     /// <summary>
-    ///     QA-1 (sampling side): every sampler's top grid point for <c>suggest_float("x", -0.5, 0.2,
-    ///     step=0.25)</c> is <c>+0.0</c> in Python and <c>-0.0</c> in the port, so the objective, the stored
-    ///     parameter and <c>best_params</c> all carry the wrong zero sign.
+    ///     QA-1 (sampling side, fixed 2026-11-06): every sampler's top grid point for <c>suggest_float("x", -0.5,
+    ///     0.2, step=0.25)</c> is <c>+0.0</c> in Python and was <c>-0.0</c> in the port, so the objective, the stored
+    ///     parameter and <c>best_params</c> all carried the wrong zero sign.
     /// </summary>
     /// <remarks>
     ///     Measured with seed 1 over 40 trials: Random, TPE (independent and multivariate), QMC, CMA-ES and
@@ -60,7 +60,6 @@ public class DistributionParityBugTests
     ///     negative. Seed 1, Random: Python's <c>study.best_params</c> is <c>{'x': 0.0, ...}</c>.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void SteppedHigh_AdjustedToZero_SamplersReturnPositiveZero()
     {
         var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 1));
