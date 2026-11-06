@@ -26,13 +26,24 @@
     </div>
     <div class="ns-code-grid">
       <pre><code class="lang-bash">dotnet add package OptunaSharp</code></pre>
-      <pre><code class="lang-python"># The Optuna API OptunaSharp targets (Python)
+      <pre><code class="lang-csharp">using OptunaSharp;
+using OptunaSharp.Samplers;
+
+var study = Optuna.CreateStudy(sampler: new TPESampler(seed: 42));
+study.Optimize(trial =>
+{
+    double x = trial.SuggestFloat("x", -10, 10);
+    return (x - 2) * (x - 2);
+}, nTrials: 20);
+Console.WriteLine(study.BestValue);   // 0.0004973004749973951</code></pre>
+      <pre><code class="lang-python"># The same study in Optuna (Python) prints the same value
 import optuna
 def objective(trial):
     x = trial.suggest_float("x", -10, 10)
     return (x - 2) ** 2
-study = optuna.create_study()
-study.optimize(objective, n_trials=100)</code></pre>
+study = optuna.create_study(sampler=optuna.samplers.TPESampler(seed=42))
+study.optimize(objective, n_trials=20)
+print(study.best_value)   # 0.0004973004749973951</code></pre>
     </div>
   </section>
 

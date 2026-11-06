@@ -500,8 +500,9 @@ the equivalent Optuna Python snippet + output as the source of truth).
   reference.
 - Follow `.editorconfig` (the SciSharp house style); match the naming/comment density of surrounding
   code. Name public types after their Optuna counterparts so the two cross-reference.
-- **Nothing is pushed to any remote yet** — the repo is local-only (`git init` on `master`, no
-  remote) until it's published.
+- **Remotes:** the canonical public repository is `github.com/SciSharp/OptunaSharp` (what
+  `RepositoryUrl` names, and the only place a release may publish from); CI also runs on a private
+  mirror, from which `publish-nuget` refuses to push (`verify_packages.cs` reports it non-publishable).
 
 ---
 

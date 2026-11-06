@@ -1,8 +1,11 @@
 # Contributing to OptunaSharp
 
 Thanks for your interest! OptunaSharp is a **.NET port of [Optuna](https://github.com/optuna/optuna)**.
-The project is early — right now it is scaffolding, and the biggest way to help is porting Optuna's
-surface, one module at a time.
+The core surface of Optuna 5.x is ported ([`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md) has the
+phase-by-phase status; the `optuna.visualization.matplotlib` backend is still planned, in
+[`docs/VISUALIZATION_MATPLOTLIB_PLAN.md`](docs/VISUALIZATION_MATPLOTLIB_PLAN.md)). The most useful
+help now is closing parity gaps:
+a behavior where OptunaSharp and Optuna disagree, reproduced as a test that asserts what Optuna does.
 
 ## The one rule: Optuna is the source of truth
 
@@ -23,7 +26,8 @@ This mirrors how [NumSharp](https://github.com/SciSharp/NumSharp) treats NumPy a
 ## Prerequisites
 
 - .NET SDK **8.0** and **10.0** (the repo multi-targets both).
-- For interop tests: a Python with `pip install optuna` (optional — those tests self-skip otherwise).
+- For interop tests: a Python with the vendored Optuna installed (`git submodule update --init
+  refs/optuna`, then `pip install -e refs/optuna`); optional, those tests self-skip otherwise.
 - NumSharp + NumSharp.Interop.OpenBLAS come from **NuGet** (restored automatically); nothing extra to
   set up. The NumSharp source is vendored reference-only at `refs/NumSharp` — see the README,
   "The NumSharp reference".
@@ -33,11 +37,11 @@ This mirrors how [NumSharp](https://github.com/SciSharp/NumSharp) treats NumPy a
 ```bash
 dotnet build SciSharp.OptunaSharp.sln -c Release
 
-# Unit tests (what CI runs)
+# Unit tests (what per-push CI runs; drop `&TestCategory!=Slow` for the full run)
 dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj -c Release \
-  --filter "TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython"
+  --filter "TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython&TestCategory!=Slow"
 
-# Live-Optuna parity (needs Python + optuna)
+# Live-Optuna parity (needs Python + the vendored optuna)
 dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj -c Release
 ```
 
@@ -52,6 +56,7 @@ Use the typed attributes in `test/OptunaSharp.Tests/TestCategory.cs`:
 | `[RequiresPython]` | Needs live Optuna via pythonnet; self-skips when absent. | interop job only |
 | `[HighMemory]` | Resource-heavy. | excluded |
 | `[WindowsOnly]` | Windows-only API. | excluded off-Windows |
+| `[Slow]` | ~10 s or more each. Runtime only, never to hide a failure. | excluded on push/PR; runs on `v*` tags and manual dispatch |
 
 ## Coding style
 

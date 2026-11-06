@@ -1,6 +1,6 @@
 # OptunaSharp examples
 
-Runnable OptunaSharp programs — [.NET 10 file-based apps](../.claude/CLAUDE.md) you launch with
+Runnable OptunaSharp programs — [.NET 10 file-based apps](https://learn.microsoft.com/en-us/dotnet/core/sdk/file-based-apps) you launch with
 `dotnet run examples/<Name>.cs`. Two kinds: **ports of battle-tested public gists** (the most-starred
 public Optuna usage, harvested with the [`interop-test-porting`](../.claude/skills/interop-test-porting/SKILL.md)
 skill), and **feature showcases** of canonical Optuna capabilities.

@@ -34,7 +34,7 @@
 ## Status
 
 OptunaSharp has ported the **core algorithm surface** of Optuna 5.x and much of its ecosystem. The
-build/test/package/release pipeline has been green since day one, and the port grows against it
+build/test/package/release pipeline gates every push, and the port grows against it
 module-by-module — [`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md) is the governing roadmap.
 
 In place today:
@@ -42,8 +42,10 @@ In place today:
 - **Core (pure-managed)** — Study / Trial / FrozenTrial (`suggest_*`, `optimize`, multi-objective
   directions), float/int/categorical distributions, search-space inference, in-memory + journal
   storage, exceptions and logging.
-- **Samplers** — Random, Grid, TPE, CMA-ES, GP, QMC, BruteForce, PartialFixed, NSGA-II, NSGA-III
-  (plus beyond-Optuna extensions: AGE-MOEA-2, SMS-EMOA, LM-CMA, JANUS).
+- **Samplers** — Random, Grid, TPE, CMA-ES, GP, QMC, BruteForce, PartialFixed, NSGA-II, NSGA-III,
+  plus samplers Optuna does not have: AGE-MOEA-2, SMS-EMOA, MOEA/D, RVEA, LM-CMA, VkD-CMA,
+  differential evolution, PSO, the natural evolution strategies (OpenAI-ES, SNES, xNES), TuRBO,
+  REMBO, SAASBO and JANUS.
 - **Pruners** — Median, Percentile, SuccessiveHalving, Hyperband, Threshold, Patient, Wilcoxon, Nop.
 - **Importance** — fANOVA, MeanDecreaseImpurity, PED-ANOVA, SHAP (pure-managed, byte-exact) — plus a
   scikit-learn-style `OptunaSearchCV`.
@@ -51,7 +53,7 @@ In place today:
 - **Satellite packages** (foreign-runtime, opt-in like `NumSharp.Interop.OpenBLAS`): SQLite / EF Core
   / gRPC / Redis storage, cloud artifact stores (S3 / GCS / Azure Blob / R2), Plotly visualization,
   LightGBM / ML.NET integration, an `optunasharp` CLI tool, and pythonnet interop bridges (OptunaHub,
-  BoTorch, PyCma).
+  BoTorch, PyCma, Pymoo).
 
 Reproducibility under a fixed seed is **bit-identical to Python** wherever the path is deterministic,
 enforced by a live-Optuna parity harness (pythonnet) that asks real Optuna to compute answers
@@ -64,6 +66,30 @@ release of all 20 packages.
 ```bash
 dotnet add package OptunaSharp
 ```
+
+The package targets **.NET 8** and **.NET 10**. Storages, cloud artifact stores, Plotly figures, the
+CLI and the Python bridges are separate `OptunaSharp.*` packages (listed in
+[the package README](src/OptunaSharp.Core/README.md#companion-packages)).
+
+## Quick start
+
+```csharp
+using OptunaSharp;
+using OptunaSharp.Samplers;
+
+var study = Optuna.CreateStudy(sampler: new TPESampler(seed: 42));
+
+study.Optimize(trial =>
+{
+    double x = trial.SuggestFloat("x", -10, 10);
+    return (x - 2) * (x - 2);
+}, nTrials: 20);
+
+Console.WriteLine(study.BestValue);        // 0.0004973004749973951
+Console.WriteLine(study.BestParams["x"]);  // 2.0223002348641756
+```
+
+Those two numbers are exactly what Python Optuna 5.0.0 prints for the same seeded study.
 
 ## What is Optuna?
 
@@ -81,12 +107,14 @@ def objective(trial):
     x = trial.suggest_float("x", -10, 10)
     return (x - 2) ** 2
 
-study = optuna.create_study()
-study.optimize(objective, n_trials=100)
-print(study.best_params)
+study = optuna.create_study(sampler=optuna.samplers.TPESampler(seed=42))
+study.optimize(objective, n_trials=20)
+print(study.best_value, study.best_params)
 ```
 
-The C# surface will mirror this define-by-run shape as the port lands.
+The C# quick start above is the same study, written against the same define-by-run shape:
+`snake_case` names become `PascalCase` (`suggest_float` → `SuggestFloat`, `n_trials` → `nTrials`),
+while parameter order, defaults and error messages are kept as Optuna has them.
 
 ## Repository layout
 
@@ -98,8 +126,12 @@ OptunaSharp/
 ├── test/
 │   ├── OptunaSharp.Tests/           # unit tests (MSTest v3 + AwesomeAssertions)
 │   ├── OptunaSharp.Tests.Interop/   # live-Optuna parity harness (pythonnet)
+│   ├── OptunaSharp.Tests.*/         # satellite suites (Storage, Artifacts, Cli, Integration.*, PackageParity, …)
 │   └── OptunaSharp.Benchmark/       # BenchmarkDotNet harness (template; grows with the ops)
+├── examples/                        # runnable .NET 10 file-based apps (see examples/README.md)
+├── refs/                            # reference-only pinned submodules (Optuna v5.0.0, NumSharp, …) — never built
 ├── docs/
+│   ├── PORTING_PLAN.md · THREADING.md
 │   └── website-src/                 # DocFX site (docfx.json, conceptual docs, generated API ref)
 ├── .github/
 │   ├── workflows/                   # build-and-release · package-parity · docs · documentation · examples · benchmark
@@ -142,18 +174,21 @@ The matching NumSharp source is vendored **reference-only** as a pinned git subm
 # Build everything
 dotnet build SciSharp.OptunaSharp.sln -c Release
 
-# Unit tests (both TFMs), excluding known-failing/heavy categories as CI does
+# Unit tests (both TFMs), excluding known-failing/heavy/slow categories as per-push CI does
+# (drop `&TestCategory!=Slow` for the full run)
 dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj -c Release \
-  --filter "TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython"
+  --filter "TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython&TestCategory!=Slow"
 
-# Live-Optuna interop (needs a discoverable Python with `pip install optuna`)
+# Live-Optuna interop: needs a discoverable Python with the vendored Optuna installed, which is what
+# the parity is measured against (`git submodule update --init refs/optuna`, then
+# `pip install -e refs/optuna`)
 dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj -c Release
 
 # Pack the OptunaSharp package
 dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj -c Release -o packages
 ```
 
-Test categories (`OpenBugs`, `Misaligned`, `RequiresPython`, `HighMemory`, `WindowsOnly`) are typed
+Test categories (`OpenBugs`, `Misaligned`, `RequiresPython`, `HighMemory`, `WindowsOnly`, `Slow`) are typed
 attributes in `test/OptunaSharp.Tests/TestCategory.cs`, so CI filter strings stay stable as the
 suite grows.
 
@@ -185,10 +220,11 @@ friend (see `src/OptunaSharp.Core/Assembly/Properties.cs`). A script **under the
 properties itself:
 
 ```csharp
-#:project src/OptunaSharp.Core/OptunaSharp.Core.csproj
+#:project <path-to-your-clone>/src/OptunaSharp.Core/OptunaSharp.Core.csproj
 #:property AssemblyName=OptunaSharp.DotNetRunScript
+#:property PublishAot=false
 #:property SignAssembly=true
-#:property AssemblyOriginatorKeyFile=K:/source/OptunaSharp/Open.snk
+#:property AssemblyOriginatorKeyFile=<path-to-your-clone>/Open.snk
 ```
 
 ## License
