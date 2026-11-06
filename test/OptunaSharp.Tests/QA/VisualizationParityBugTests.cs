@@ -16,19 +16,18 @@ namespace OptunaSharp.Tests.QA;
 public class VisualizationParityBugTests
 {
     /// <summary>
-    ///     QA-26: the parallel-coordinate data must handle a categorical parameter whose choices include
-    ///     <c>None</c>, as Optuna's <c>_get_parallel_coordinate_info</c> does; the port throws
-    ///     <see cref="System.ArgumentNullException" /> ("Value cannot be null. (Parameter 'key')").
+    ///     QA-26 (fixed 2026-11-06): the parallel-coordinate data must handle a categorical parameter whose
+    ///     choices include <c>None</c>, as Optuna's <c>_get_parallel_coordinate_info</c> does. The port used to
+    ///     throw <see cref="System.ArgumentNullException" /> ("Value cannot be null. (Parameter 'key')").
     /// </summary>
     /// <remarks>
-    ///     The port collects the categorical vocabulary in a dictionary keyed by the raw choice value, and a .NET
-    ///     dictionary rejects a null key. So <c>plot_parallel_coordinate</c> fails for any study with a
-    ///     <c>suggest_categorical(..., [None, ...])</c> parameter, a common way to make an option optional.
-    ///     Optuna 5.0.0 for these four trials: the <c>c</c> dimension has values <c>(0, 1, 2, 0)</c>, tickvals
-    ///     <c>[0, 1, 2]</c> and ticktext <c>['None', 'a', 'b']</c>.
+    ///     The port collected the categorical vocabulary in a dictionary keyed by the raw choice value, and a .NET
+    ///     dictionary rejects a null key. So <c>plot_parallel_coordinate</c> failed for any study with a
+    ///     <c>suggest_categorical(..., [None, ...])</c> parameter, a common way to make an option optional. The
+    ///     vocabulary now keys a None choice through a sentinel. Optuna 5.0.0 for these four trials: the <c>c</c>
+    ///     dimension has values <c>(0, 1, 2, 0)</c>, tickvals <c>[0, 1, 2]</c> and ticktext <c>['None', 'a', 'b']</c>.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void ParallelCoordinate_NoneCategoricalChoice_HandledLikePython()
     {
         var study = Optuna.CreateStudy();

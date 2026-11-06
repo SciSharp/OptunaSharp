@@ -261,26 +261,28 @@ public static class ParallelCoordinate
         int dimIndex, List<int> numericCatParamsIndices)
     {
         var validValues = values.Where(v => !ReferenceEquals(v, Missing)).ToList();
-        var vocab = new Dictionary<object?, int>();
+        // Keyed through VocabKey: a None choice is a null value, which Python's dict accepts as a key and a
+        // .NET dictionary rejects with ArgumentNullException (QA-26).
+        var vocab = new Dictionary<object, int>();
         List<string> ticktext;
 
         if (VisualizationUtils.IsNumerical(trials, pName))
         {
             foreach (var v in validValues.OrderBy(ToDouble))
                 VocabId(vocab, v);
-            ticktext = vocab.Keys.OrderBy(ToDouble).Select(PythonRepr.Str).ToList();
+            ticktext = vocab.Keys.Select(VocabChoice).OrderBy(ToDouble).Select(PythonRepr.Str).ToList();
             numericCatParamsIndices.Add(dimIndex);
         }
         else
         {
             foreach (var v in validValues)
                 VocabId(vocab, v);
-            ticktext = vocab.Keys.OrderBy(k => vocab[k]).Select(PythonRepr.Str).ToList();
+            ticktext = vocab.Keys.OrderBy(k => vocab[k]).Select(VocabChoice).Select(PythonRepr.Str).ToList();
         }
 
         int offset = hasMissing ? 1 : 0;
         var categoricalValues = values
-            .Select(v => ReferenceEquals(v, Missing) ? 0.0 : vocab[v] + offset)
+            .Select(v => ReferenceEquals(v, Missing) ? 0.0 : vocab[VocabKey(v)] + offset)
             .ToList();
         if (hasMissing)
             ticktext = ticktext.Select(text => text == MissingLabel ? $"{text} (value)" : text).ToList();
@@ -363,12 +365,33 @@ public static class ParallelCoordinate
     private static string TruncateLabel(string label)
         => label.Length < 20 ? label : $"{label.Substring(0, 17)}...";
 
+    /// <summary>
+    ///     Stands in for a <c>None</c> choice as a vocabulary key. Python's dict takes <c>None</c> as a key; a .NET
+    ///     dictionary throws on a null key. Without this, every study with a <c>suggest_categorical(..., [None, ...])</c>
+    ///     parameter (a common optional-parameter pattern) crashed <c>plot_parallel_coordinate</c> (QA-26).
+    /// </summary>
+    private static readonly object NoneKey = new();
+
+    /// <summary>Maps a raw categorical choice to its vocabulary key, substituting <see cref="NoneKey" /> for null.</summary>
+    /// <param name="choice">The raw choice value; null is Python's <c>None</c>.</param>
+    /// <returns>The choice itself, or <see cref="NoneKey" /> when it is null.</returns>
+    private static object VocabKey(object? choice) => choice ?? NoneKey;
+
+    /// <summary>
+    ///     Maps a vocabulary key back to the choice it stands for. Tick labels and numeric ordering must see the
+    ///     real choice, so <see cref="NoneKey" /> turns back into null (rendered <c>None</c>).
+    /// </summary>
+    /// <param name="key">A key produced by <see cref="VocabKey" />.</param>
+    /// <returns>The original choice; null when <paramref name="key" /> is <see cref="NoneKey" />.</returns>
+    private static object? VocabChoice(object key) => ReferenceEquals(key, NoneKey) ? null : key;
+
     /// <summary>Returns the category's existing or newly assigned numeric position.</summary>
-    /// <param name="vocab">The category-to-axis-position mapping populated in first-appearance order.</param>
-    /// <param name="key">The key whose associated entry is requested.</param>
+    /// <param name="vocab">The category-to-axis-position mapping populated in first-appearance order, keyed by <see cref="VocabKey" />.</param>
+    /// <param name="choice">The raw choice whose position is requested; null (Python <c>None</c>) is allowed.</param>
     /// <returns>The category's existing or newly assigned numeric position.</returns>
-    private static int VocabId(Dictionary<object?, int> vocab, object? key)
+    private static int VocabId(Dictionary<object, int> vocab, object? choice)
     {
+        object key = VocabKey(choice);
         if (!vocab.TryGetValue(key, out int id))
         {
             id = vocab.Count;
