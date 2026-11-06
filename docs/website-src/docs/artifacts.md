@@ -31,6 +31,13 @@ public static List<ArtifactMeta> GetAllArtifactMeta(object studyOrTrial, BaseSto
 `studyOrTrial` accepts a `Trial`, `FrozenTrial`, or `Study`; `UploadArtifact` returns the generated
 artifact id and records an `ArtifactMeta` (id, filename, MIME type, encoding) on the target.
 
+When `mimetype` or `encoding` is omitted (or empty), it is guessed from the file name with CPython 3.12's
+built-in `mimetypes` table, as Optuna's `mimetypes.guess_type` does: `model.tar.gz` is `application/x-tar`
+with encoding `gzip`, and an unknown suffix such as `.yaml` is stored as `application/octet-stream`. The
+guess is the same on every machine. Python's module-level lookup also reads the Windows registry or
+`/etc/mime.types`, so an artifact uploaded from a desktop Python can carry a different type for the same
+name (`.csv` is `application/vnd.ms-excel` on Windows). Pass `mimetype` explicitly when it matters.
+
 > **Removal is store-level.** Matching Optuna, `ArtifactFunctions` provides no user-facing removal
 > function — only upload, download, and metadata listing. To delete an artifact call the store's own
 > `Remove(artifactId)`; that erases the blob but leaves the trial/study `ArtifactMeta` in place. See

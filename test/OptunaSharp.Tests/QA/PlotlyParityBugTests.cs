@@ -9,10 +9,11 @@ using Plotly.NET;
 namespace OptunaSharp.Tests.QA;
 
 /// <summary>
-///     Open parity bugs in the Plotly satellite's figures (not the info layer, which <c>VisualizationParityBugTests</c>
+///     Parity bugs in the Plotly satellite's figures (not the info layer, which <c>VisualizationParityBugTests</c>
 ///     covers), found by the 2026-11-02 parity QA run (<c>docs/qa/PARITY_QA_2026-11-02.md</c>, D89). Expected values
-///     are Optuna 5.0.0 + plotly figures for the same study; each test fails today and passes once fixed, at which
-///     point its <c>[OpenBugs]</c> attribute should be removed.
+///     are Optuna 5.0.0 + plotly figures for the same study. A test marked <c>[OpenBugs]</c> fails until its divergence
+///     is fixed; the attribute is removed with the fix, and the test then guards against a regression. QA-46 is fixed
+///     (2026-11-06, owner decision: copy Optuna's categorical slice behavior).
 /// </summary>
 [TestClass]
 public class PlotlyParityBugTests
@@ -87,8 +88,9 @@ public class PlotlyParityBugTests
     }
 
     /// <summary>
-    ///     QA-46: the slice plot draws no infeasible trials on a categorical parameter's subplot in Optuna, because of
-    ///     an Optuna defect the port does not reproduce; the port draws them (an extra <c>Infeasible Trial</c> trace).
+    ///     QA-46 (fixed 2026-11-06, owner decision: copy Optuna): the slice plot draws no infeasible trials on a
+    ///     categorical parameter's subplot in Optuna, because of an Optuna defect; the port drew them (an extra
+    ///     <c>Infeasible Trial</c> trace) and now omits them too.
     /// </summary>
     /// <remarks>
     ///     <c>_generate_slice_subplot</c> appends only <c>x</c> and <c>y</c> for an infeasible trial, never its trial
@@ -97,12 +99,11 @@ public class PlotlyParityBugTests
     ///     list comes back empty and its trace is skipped. Numerical subplots are unaffected. With a feasible trial
     ///     <c>(c='a', x=0.25)</c> and an infeasible one <c>(c='b', x=0.75)</c>, Optuna 5.0.0 draws
     ///     <c>Feasible Trial</c> on <c>x</c> (<c>["'a'"]</c>), then <c>Feasible Trial</c> and <c>Infeasible Trial</c> on
-    ///     <c>x2</c>; the port adds an <c>Infeasible Trial</c> trace on <c>x</c>. Copying the defect or keeping the
-    ///     port's behaviour (and marking it <c>[Misaligned]</c>) is the owner's decision; this test states Optuna's
-    ///     output. Found by the D90 figure fuzz (4 of 60 random studies).
+    ///     <c>x2</c>; the port added an <c>Infeasible Trial</c> trace on <c>x</c>. The owner chose to copy the defect
+    ///     (2026-11-06) so the figure JSON equals plotly.py's: <c>SlicePlotRenderer</c> keeps the infeasible trial
+    ///     numbers empty and iterates like <c>zip</c>. Found by the D90 figure fuzz (4 of 60 random studies).
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void PlotSlice_InfeasibleCategoricalTrials_OmittedLikeOptuna()
     {
         var study = Optuna.CreateStudy();

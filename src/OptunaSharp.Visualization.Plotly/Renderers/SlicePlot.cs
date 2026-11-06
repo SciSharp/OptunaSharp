@@ -97,6 +97,9 @@ internal static class SlicePlotRenderer
         var fnum = new List<int>();
         var ix = new List<object?>();
         var iy = new List<double>();
+        // Optuna's infeasible _PlotValues never receives trial numbers: only x and y are appended below, as in
+        // _generate_slice_subplot. It stays empty on purpose (QA-46, owner decision: copy Optuna).
+        var inum = new List<int>();
 
         for (int i = 0; i < sub.X.Count; i++)
         {
@@ -121,7 +124,10 @@ internal static class SlicePlotRenderer
         else
         {
             (feasibleX, feasibleY, feasibleC) = CategoricalPlotValues(sub, fx, fy, fnum);
-            (infeasibleX, infeasibleY, _) = CategoricalPlotValues(sub, ix, iy, new List<int>(new int[ix.Count]));
+            // QA-46 (owner decision 2026-11-06: copy Optuna). Optuna zips the infeasible x, y and the EMPTY trial-number
+            // list, so a categorical subplot never draws its infeasible trials; numerical subplots do. The port used
+            // to pad the numbers and drew an extra "Infeasible Trial" trace that plotly.py's figure does not have.
+            (infeasibleX, infeasibleY, _) = CategoricalPlotValues(sub, ix, iy, inum);
         }
 
         var feasibleMarker = Fig.Obj(
@@ -163,11 +169,16 @@ internal static class SlicePlotRenderer
     /// <param name="nums">Trial numbers aligned with xs.</param>
     /// <returns>Aligned category labels, objective values, and trial-number colors.</returns>
     /// <exception cref="NumSharp.TypeError">A category is not a supported categorical scalar.</exception>
+    /// <remarks>
+    ///     Iterates like Python's <c>zip(values.x, values.y, values.trial_numbers)</c>: it stops at the shortest list.
+    ///     That is load-bearing: the infeasible values carry no trial numbers, so they yield no points (QA-46).
+    /// </remarks>
     private static (object?[] X, double[] Y, int[] C) CategoricalPlotValues(
         SliceSubplotInfo sub, List<object?> xs, List<double> ys, List<int> nums)
     {
         var pointsDict = new Dictionary<CategoricalChoice, List<(double Y, int Num)>>();
-        for (int i = 0; i < xs.Count; i++)
+        int zipped = Math.Min(xs.Count, Math.Min(ys.Count, nums.Count));
+        for (int i = 0; i < zipped; i++)
         {
             var key = CategoricalChoice.From(xs[i]);
             if (!pointsDict.TryGetValue(key, out var list))
