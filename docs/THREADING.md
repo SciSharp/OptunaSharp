@@ -1,9 +1,9 @@
 # OptunaSharp — Threading Design
 
-**Status:** describes the code at `f39763d` (2026-10-30); the commits after it changed documentation only.
-Five items are open. Each is marked where it applies, and §12 lists them all:
+**Status:** describes the code at `f39763d` (2026-10-30), plus the `nJobs` executor of 2026-11-06, which
+reuses its worker threads (review item P3-4, §3.5–3.6). Four items are open. Each is marked where it applies,
+and §12 lists them all:
 
-- the cost of the `nJobs` executor for cheap trials (review item P3-4, §3.6);
 - a deadlock between the Python GIL and the sampler monitor (review item P3-1, §8);
 - `PymooSampler` driven from more than one thread (review item 19b, §8);
 - the 32 bits of entropy behind the samplers' seeds from the operating system (§6.3);
@@ -184,7 +184,7 @@ How a raised exception travels under `nJobs`:
   - To let the trials in flight finish instead, handle `Console.CancelKeyPress`: set `e.Cancel = true`
     and the flag your callback checks.
 
-### 3.5 Why each trial gets a dedicated thread
+### 3.5 Why workers run on dedicated threads
 
 Until `3a75811` the workers ran on the .NET thread pool (`Task.Run`). That caused two failures:
 
@@ -198,18 +198,33 @@ Until `3a75811` the workers ran on the .NET thread pool (`Task.Run`). That cause
   with a false "Nested invocation" error. Workers now restore the flag (`restoreLoopFlag`), whatever
   thread runs them.
 
-`StartWorker` therefore passes `TaskCreationOptions.LongRunning`, which makes the default scheduler
-create a new thread for each task. `NJobs_WorkersRunOnDedicatedThreads_NotOnTheThreadPool` pins this.
+`3a75811` then gave every trial a new thread (`TaskCreationOptions.LongRunning`). Since 2026-11-06,
+`StartWorker` queues each worker on `TrialWorkerScheduler.Shared` instead: OptunaSharp's own dedicated
+threads, never pool threads. They are created on demand, reused by later trials and later `Optimize` calls,
+and retired after 30 s idle (background threads, so they never keep the process alive).
+- **No inlining:** a trial is never run on the thread that waits for it.
+- **No stale state:** each worker restores `InOptimizeLoop` and drops its `CachedAllTrials` snapshot when it
+  finishes.
+- **Pinned by tests:** `NJobs_WorkersRunOnDedicatedThreads_NotOnTheThreadPool`, and `TrialWorkerSchedulerTests`
+  (reuse, `nJobs` really in flight, no inlining, retirement).
 
-### 3.6 Open: the executor's throughput (P3-4)
+### 3.6 The executor's throughput (P3-4, fixed 2026-11-06)
 
-Python's `ThreadPoolExecutor` creates up to `n_jobs` threads and reuses them for the whole call. That
-reuse was not ported. Creating a thread costs about 100 µs, serialized on the submit loop, which caps
-`nJobs` near 10,000 trials/s whatever the trials do. Cheap trials at `nJobs: 8` are slower than
-sequential ones (Random sampler, in memory: 4.4k–6.2k trials/s against 22k–26k at `nJobs: 1`). Trials
-that take a millisecond or more do not notice it.
+Python's `ThreadPoolExecutor` creates up to `n_jobs` threads and reuses them for the whole call. Until
+2026-11-06 that reuse was not ported. Creating a thread costs about 100 µs, serialized on the submit loop,
+which capped `nJobs` near 10,000 trials/s whatever the trials did. Cheap trials at `nJobs: 8` were slower
+than sequential ones (Random sampler, in memory: 4.4k–6.2k trials/s against 22k–26k at `nJobs: 1`).
+Trials that take a millisecond or more did not notice it.
 
-A replacement executor must keep five properties. Each one is a measured failure of an alternative:
+The fix is the "OptunaSharp threads, reused across calls" column below. Measured on 2026-11-06, the same
+benchmark against the previous commit and the fix, in the same session:
+
+| | Thread per trial (before) | Reused threads (now) |
+|---|---|---|
+| 5,000 cheap Random trials, `nJobs: 8` | 3.1k–5.0k trials/s | 8.2k–12.1k trials/s |
+| 200 × `Optimize(nTrials: 8, nJobs: 8)` | 338–392 calls/s | 1,180–1,875 calls/s |
+
+A replacement executor had to keep five properties. Each one is a measured failure of an alternative:
 
 1. **Python's loop semantics** (§3.1–3.4).
 2. **Clean per-thread state for every trial** (§4). A reused thread must leave `InOptimizeLoop` as it
@@ -239,7 +254,9 @@ waiting at most 3 ms.
 Throughput for cheap trials (in memory, `nJobs: 8`): the pool and reused threads tie at 7.8k–8.7k and
 7.9k–8.6k trials/s, against 1.9k–6.0k for a thread per trial. For 200 calls of
 `Optimize(nTrials: 8, nJobs: 8)`: threads reused across calls 813 calls/s, the pool 789, a thread per
-trial 443, threads created per call 81. The choice is pending.
+trial 443, threads created per call 81. Threads reused across calls were chosen (2026-11-06): they are the
+only option that keeps all five properties and matches the pool's throughput. The pool fails properties 4
+and 5, so it can only ever be an opt-in; whether to expose one, and how, is the owner's open decision.
 
 ## 4. Per-thread state
 
@@ -686,7 +703,6 @@ holds the GIL while it suggests, and the error a trial failed under its objectiv
 
 ## 12. Known limits and open items
 
-- **P3-4:** a thread per `nJobs` trial; the executor decision is pending (§3.6).
 - **P3-1:** the GIL is taken after the sampler monitor. Never hold it while calling OptunaSharp code
   that locks (§8).
 - **19b:** `PymooSampler` is bound to the thread that created it, which rules out `nJobs` above 1 (§8).
@@ -712,7 +728,7 @@ holds the GIL while it suggests, and the error a trial failed under its objectiv
 |---|---|
 | The GIL serializes Python code | Monitors: sampler, pruner, trial, tell stripes, storages |
 | numpy's `RandomState` locks each draw | The sampler monitor; MT19937 itself takes no lock |
-| `ThreadPoolExecutor(max_workers=n_jobs)`, threads reused within the call | A dedicated thread per trial (P3-4) |
+| `ThreadPoolExecutor(max_workers=n_jobs)`, threads reused within the call | OptunaSharp's own dedicated threads, reused across trials and calls (P3-4, fixed 2026-11-06) |
 | `wait(FIRST_COMPLETED)`, then `f.result()` | `Task.WhenAny`, then the first failure's original exception |
 | The `with ThreadPoolExecutor(...)` exit | `WaitForAllWithoutRaising` |
 | Executor threads start without the caller's `contextvars`; the locale is process-wide | Workers inherit the caller's `ExecutionContext`: its culture and `AsyncLocal` values |

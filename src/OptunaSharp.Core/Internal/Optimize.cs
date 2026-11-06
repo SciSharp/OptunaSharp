@@ -178,12 +178,16 @@ internal static class OptimizeLoop
         }
         finally
         {
-            // Python's executor threads end with the executor, taking their flag with them. Workers used to run on
-            // thread-pool threads, which outlive this call: a stale `true` made 61 of 64 later Optimize calls of
-            // this study on pool threads fail with a false "Nested invocation" error. Workers now get dedicated
-            // threads (StartWorker); restoring the flag keeps any thread that runs a worker clean regardless.
+            // Python's executor threads end with the executor, taking their flag with them. Worker threads here are
+            // reused across trials and calls (StartWorker), as pool threads were before 3a75811: a stale `true` then
+            // made 61 of 64 later Optimize calls of this study on those threads fail with a false "Nested invocation"
+            // error. So a worker restores the flag, and drops its trial-history snapshot: the next Ask on this thread
+            // clears it anyway, and holding it until then would keep a reused thread pointing at a finished study.
             if (restoreLoopFlag)
+            {
                 study.ThreadLocal.InOptimizeLoop = wasInOptimizeLoop;
+                study.ThreadLocal.CachedAllTrials = null;
+            }
         }
     }
 
@@ -261,21 +265,23 @@ internal static class OptimizeLoop
     }
 
     /// <summary>
-    ///     Starts one n_jobs worker on a dedicated thread, as Python's <c>ThreadPoolExecutor</c> runs its work on
-    ///     threads of its own.
+    ///     Starts one n_jobs worker on one of OptunaSharp's dedicated, reused worker threads
+    ///     (<see cref="TrialWorkerScheduler" />), as Python's <c>ThreadPoolExecutor</c> runs its work on threads of its
+    ///     own and reuses them.
     /// </summary>
     /// <param name="work">One <c>_optimize_sequential(n_trials=1)</c> call.</param>
     /// <returns>The worker's task; it completes when the trial and its callbacks are done.</returns>
     /// <remarks>
-    ///     A worker spends most of its time blocked: on the storage's lock, on file or network I/O, on the
-    ///     objective. Run on the .NET thread pool, n_jobs above the pool's minimum thread count blocked every pool
-    ///     thread, and StackExchange.Redis (which completes even synchronous calls on the pool) then timed out:
-    ///     <c>Optimize(nJobs: 96)</c> on a Redis journal died after 88 trials. A dedicated thread per trial costs
-    ///     microseconds against a trial's milliseconds, and it starts with fresh thread-local state, as a new
-    ///     executor thread does.
+    ///     A worker spends most of its time blocked: on the storage's lock, on file or network I/O, on the objective.
+    ///     Run on the .NET thread pool, n_jobs above the pool's minimum thread count blocked every pool thread, and
+    ///     StackExchange.Redis (which completes even synchronous calls on the pool) then timed out:
+    ///     <c>Optimize(nJobs: 96)</c> on a Redis journal died after 88 trials. A new thread per trial (3a75811 until
+    ///     2026-11-06) fixed that but cost about 100 µs per trial on the submit loop, which capped cheap studies near
+    ///     10,000 trials/s (P3-4). The dedicated threads are reused across trials and calls instead, and the worker
+    ///     leaves its thread-local state clean (see <see cref="OptimizeSequential" />).
     /// </remarks>
     private static Task StartWorker(Action work)
-        => Task.Factory.StartNew(work, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        => Task.Factory.StartNew(work, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TrialWorkerScheduler.Shared);
 
     /// <summary>
     ///     Blocks until every worker task has finished, observing (not raising) their failures: the exit of
