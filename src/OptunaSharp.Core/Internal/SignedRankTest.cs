@@ -5,11 +5,12 @@ namespace OptunaSharp.Internal;
 
 /// <summary>
 ///     The Wilcoxon signed-rank test as <c>scipy.stats.wilcoxon(d, alternative=...,
-///     zero_method="zsplit")</c> computes it (scipy 1.16 semantics: <c>method="auto"</c> picks
-///     exact when there are no ties/zeros, an exhaustive sign-flip permutation test when ties or
-///     zeros exist and <c>n &lt;= 13</c>, and the normal approximation otherwise;
-///     <c>correction=False</c>). This is the self-contained port the plan's item 2.3 calls for —
-///     no scipy dependency; verified differentially against scipy in tests.
+///     zero_method="zsplit")</c> computes it (scipy 1.16 semantics: <c>method="auto"</c> takes the
+///     normal approximation for every <c>n &gt; 50</c>, decided before ties are looked at; for
+///     <c>n &lt;= 50</c> it picks exact when there are no ties/zeros, an exhaustive sign-flip
+///     permutation test when ties or zeros exist and <c>n &lt;= 13</c>, and the normal approximation
+///     otherwise; <c>correction=False</c>). This is the self-contained port the plan's item 2.3 calls
+///     for — no scipy dependency; verified differentially against scipy in tests.
 /// </summary>
 internal static class SignedRankTest
 {
@@ -45,7 +46,13 @@ internal static class SignedRankTest
         // The "zero-split" method: add half the zeros' contribution to r_plus (and half to r_minus).
         rPlus += rZero / 2;
 
-        // Method selection (scipy method="auto").
+        // Method selection (scipy method="auto"). scipy's input validation (`_wilcoxon_iv`) switches to
+        // "asymptotic" for `d.shape[-1] > 50` BEFORE it knows about ties, so a long tie-free sequence never
+        // reaches the exact distribution. Taking the exact path there instead gave p-values off from the 3rd
+        // significant digit (prune decisions flipped near p_threshold), and from ~1,024 steps 2^n overflowed
+        // to a NaN p-value (the pruner never pruned) at O(n^3) cost per ShouldPrune (QA-14).
+        if (n > 50)
+            return AsymptoticPValue(n, rPlus, tieCounts, alternative);
         if (!hasTies && nZero == 0)
             return ExactPValue(n, rPlus, alternative);
         if (n <= 13)

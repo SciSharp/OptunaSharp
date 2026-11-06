@@ -9,10 +9,12 @@ using OptunaSharp.Pruners;
 namespace OptunaSharp.Tests.QA;
 
 /// <summary>
-///     Open parity bugs in the pruners, found by the 2026-11-02 parity QA run
+///     Parity bugs in the pruners, found by the 2026-11-02 parity QA run
 ///     (<c>docs/qa/PARITY_QA_2026-11-02.md</c>). Expected values come from Optuna 5.0.0 with scipy 1.16.3 on
-///     CPython 3.12; each test fails today and passes once the divergence is fixed, at which point its
-///     <c>[OpenBugs]</c> attribute should be removed.
+///     CPython 3.12. A test marked <c>[OpenBugs]</c> fails until its divergence is fixed; the attribute is
+///     removed with the fix, and the test then guards against a regression. All three QA-14 tests here are
+///     fixed (2026-11-06): <c>SignedRankTest.PValueZsplit</c> now takes scipy's normal approximation for
+///     every <c>n &gt; 50</c>.
 /// </summary>
 [TestClass]
 public class PrunerParityBugTests
@@ -38,18 +40,18 @@ public class PrunerParityBugTests
 
     /// <summary>
     ///     QA-14: with more than 50 paired steps scipy's <c>method="auto"</c> switches to the normal
-    ///     approximation before it even looks for ties; the port keeps using the exact distribution, so its
-    ///     p-values differ from the third significant digit on.
+    ///     approximation before it even looks for ties. The port used to keep the exact distribution there,
+    ///     so its p-values differed from the third significant digit on.
     /// </summary>
     /// <remarks>
     ///     scipy 1.16.3, <c>_wilcoxon_iv</c>: <c>if method == "auto" and d.shape[-1] &gt; 50: method =
-    ///     "asymptotic"</c>. <c>SignedRankTest.PValueZsplit</c> only checks "no ties and no zeros" and goes exact
-    ///     at any length. Measured: n = 60 distinct differences give scipy <c>0.0012107564896459532</c>, the
-    ///     port <c>0.0010342998730745664</c>; for this test's sequence scipy gives <c>0.14123347510360462</c>.
-    ///     Continuous losses rarely tie, so every Wilcoxon-pruned run longer than 50 steps is affected.
+    ///     "asymptotic"</c>. <c>SignedRankTest.PValueZsplit</c> only checked "no ties and no zeros" and went exact
+    ///     at any length. Measured before the fix: n = 60 distinct differences gave scipy
+    ///     <c>0.0012107564896459532</c>, the port <c>0.0010342998730745664</c>; for this test's sequence scipy
+    ///     gives <c>0.14123347510360462</c>. Continuous losses rarely tie, so every Wilcoxon-pruned run longer
+    ///     than 50 steps was affected.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void Wilcoxon_MoreThan50Steps_UsesScipyNormalApproximation()
     {
         double p = SignedRankTest.PValueZsplit(DistinctDiffs(60), SignedRankTest.Alternative.Greater);
@@ -58,16 +60,15 @@ public class PrunerParityBugTests
     }
 
     /// <summary>
-    ///     QA-14 (overflow): from about 1,024 steps the port's exact distribution overflows <c>2^n</c> in
-    ///     doubles and returns NaN, so the pruner never prunes; scipy returns a normal-approximation p-value.
+    ///     QA-14 (overflow): from about 1,024 steps the port's exact distribution overflowed <c>2^n</c> in
+    ///     doubles and returned NaN, so the pruner never pruned; scipy returns a normal-approximation p-value.
     /// </summary>
     /// <remarks>
-    ///     For 1,100 distinct differences scipy gives <c>4.571585047815242e-08</c> (a certain prune) and the port
-    ///     NaN (<c>p &lt; threshold</c> is false). The exact path is also O(n³): about 0.7 s per
-    ///     <c>should_prune</c> at this length, paid at every step of every trial.
+    ///     For 1,100 distinct differences scipy gives <c>4.571585047815242e-08</c> (a certain prune); before the
+    ///     fix the port gave NaN (<c>p &lt; threshold</c> is false). The exact path was also O(n³): about 0.7 s
+    ///     per <c>should_prune</c> at this length, paid at every step of every trial.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void Wilcoxon_1100Steps_PValueIsFiniteLikeScipy()
     {
         double p = SignedRankTest.PValueZsplit(DistinctDiffs(1100), SignedRankTest.Alternative.Greater);
@@ -78,15 +79,15 @@ public class PrunerParityBugTests
 
     /// <summary>
     ///     QA-14 (decision level): the same study must prune at the same steps as Optuna's
-    ///     <c>WilcoxonPruner</c>; past 50 steps the port's exact p-values flip decisions near the threshold.
+    ///     <c>WilcoxonPruner</c>; past 50 steps the port's former exact p-values flipped decisions near the
+    ///     threshold.
     /// </summary>
     /// <remarks>
     ///     A best trial reports 1.0 at steps 0–59; the current trial reports <c>1.0 + d[i]</c> at step
     ///     <c>i</c> and asks <c>should_prune()</c> after each report. Optuna 5.0.0 prunes at the steps marked
-    ///     <c>P</c>; at step 59 scipy's p is 0.0988 (prune) where the exact p the port computes is 0.1002.
+    ///     <c>P</c>; at step 59 scipy's p is 0.0988 (prune) where the exact p the port used to compute is 0.1002.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void WilcoxonPruner_60Steps_PrunesAtPythonsSteps()
     {
         var study = Optuna.CreateStudy(pruner: new WilcoxonPruner(pThreshold: 0.1));
