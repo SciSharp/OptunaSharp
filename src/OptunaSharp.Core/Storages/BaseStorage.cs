@@ -59,14 +59,41 @@ public abstract class BaseStorage
     ///     </para>
     ///     <para>
     ///         Lock order: this monitor is taken before the sampler's monitor and the storage's own locks, and no code
-    ///         holding those takes it. Footgun: a Python-bridged sampler takes the GIL inside its <c>AfterTrial</c>, so
-    ///         that order continues to the GIL, and code that holds the GIL while it calls <c>Tell</c> can deadlock
-    ///         against a concurrent tell, as it already can around <c>Suggest</c> against the sampler's monitor. Tells
-    ///         through two storage instances, or from two processes, are not covered: the storage arbitrates them, as
-    ///         Python's does, and the loser gets <see cref="UpdateFinishedTrialError" />.
+    ///         holding those takes it. A Python-bridged sampler takes the GIL inside its <c>AfterTrial</c>, so code
+    ///         that holds the GIL while it calls <c>Tell</c> used to deadlock against a concurrent tell (P3-1). Every
+    ///         caller therefore enters this monitor through <see cref="TellLocked{T}" />, i.e. through
+    ///         <c>MonitorGate</c>, which releases the GIL while it waits. Tells through two storage instances, or from
+    ///         two processes, are not covered: the storage arbitrates them, as Python's does, and the loser gets
+    ///         <see cref="UpdateFinishedTrialError" />.
     ///     </para>
     /// </remarks>
     internal object TellLockFor(int trialId) => _tellLocks[(int)((uint)trialId % TellLockStripes)];
+
+    /// <summary>
+    ///     Runs <paramref name="body" /> under the tell monitor of <paramref name="trialId" />
+    ///     (<see cref="TellLockFor" />), entered through <c>MonitorGate</c>, so a thread holding the Python GIL never
+    ///     blocks on it with the GIL held.
+    /// </summary>
+    /// <typeparam name="T">The tell's result type.</typeparam>
+    /// <param name="trialId">The storage identifier of the trial being told.</param>
+    /// <param name="body">The read-check-write of the tell.</param>
+    /// <returns>What <paramref name="body" /> returned.</returns>
+    /// <exception cref="Exception">Whatever <paramref name="body" /> throws; the monitor is released first.</exception>
+    internal T TellLocked<T>(int trialId, Func<T> body)
+    {
+        object monitor = TellLockFor(trialId);
+        bool taken = false;
+        try
+        {
+            OptunaSharp.Internal.MonitorGate.Enter(monitor, ref taken);
+            return body();
+        }
+        finally
+        {
+            if (taken)
+                System.Threading.Monitor.Exit(monitor);
+        }
+    }
 
     // ------------------------------------------------------------------ study manipulation
 

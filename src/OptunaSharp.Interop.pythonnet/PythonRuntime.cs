@@ -50,6 +50,8 @@ public static class PythonRuntime
         {
             if (PythonEngine.IsInitialized)
             {
+                // A host-started engine still needs the hook: objectives may hold the GIL while calling Trial (P3-1).
+                GilAwareMonitor.Install();
                 Volatile.Write(ref _initialized, 1);
                 return;
             }
@@ -60,6 +62,9 @@ public static class PythonRuntime
                 PythonEngine.Initialize();
                 PythonEngine.BeginAllowThreads();
                 InjectSitePackages();   // add the probed interpreter's site-packages to sys.path
+                // From now on a thread holding the GIL releases it while it waits for an OptunaSharp sampler, pruner
+                // or tell monitor; without this an objective inside Py.GIL() deadlocked at nJobs > 1 (P3-1).
+                GilAwareMonitor.Install();
             }
             catch (Exception ex) when (ex is not PythonInteropException)
             {

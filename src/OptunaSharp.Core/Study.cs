@@ -537,8 +537,8 @@ public class Study
         // The snapshot is read, checked and written under the trial's tell monitor: one read before it could predate
         // another thread's tell of this trial, and both tells would pass the "still running" check
         // (see BaseStorage.TellLockFor).
-        lock (Storage.TellLockFor(trial.TrialId))
-            TellHelpers.TellWithWarning(this, TellHelpers.GetFrozenTrial(this, trial), values, state, skipIfFinished);
+        Storage.TellLocked(trial.TrialId,
+            () => TellHelpers.TellWithWarning(this, TellHelpers.GetFrozenTrial(this, trial), values, state, skipIfFinished));
         return TellHelpers.GetFrozenTrial(this, trial).DeepCopy();
     }
 
@@ -556,8 +556,8 @@ public class Study
         // The monitor is keyed by storage identifier, so the number is resolved first: a tell by number and a tell of
         // the same trial's Trial object then exclude each other (see BaseStorage.TellLockFor).
         int trialId = TellHelpers.GetTrialId(this, trialNumber);
-        lock (Storage.TellLockFor(trialId))
-            TellHelpers.TellWithWarning(this, Storage.GetTrial(trialId), values, state, skipIfFinished);
+        Storage.TellLocked(trialId,
+            () => TellHelpers.TellWithWarning(this, Storage.GetTrial(trialId), values, state, skipIfFinished));
         return Storage.GetTrial(trialId).DeepCopy();
     }
 

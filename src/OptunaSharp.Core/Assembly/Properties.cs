@@ -86,6 +86,12 @@ using System.Runtime.CompilerServices;
 // (The scikit-learn port — namespace OptunaSharp.Integration.Sklearn, in Core alongside OptunaSearchCV —
 // needs no dedicated friend: its tests live in OptunaSharp.Tests, already granted above.)
 
+// The generic pythonnet runtime (satellite package OptunaSharp.Interop.pythonnet), which every Python bridge
+// builds on, installs the internal MonitorGate.Hook when it starts or adopts CPython. The hook makes a thread that
+// holds the GIL release it while it waits for a tell, trial, sampler or pruner monitor; without it an objective calling
+// Trial methods inside Py.GIL() deadlocked against a bridged sampler at nJobs > 1 (review item P3-1).
+[assembly: InternalsVisibleTo("OptunaSharp.Interop.pythonnet, PublicKey=" + OptunaSharpFriendKey.PublicKey)]
+
 // The BoTorch bridge (satellite package OptunaSharp.Interop.BoTorch) is a native OptunaSharp
 // BaseSampler that drives the real BoTorch library via pythonnet — a port of optuna_integration's
 // BoTorchSampler glue. Like GPSampler it encodes params with the bit-exact one-hot SearchSpaceTransform

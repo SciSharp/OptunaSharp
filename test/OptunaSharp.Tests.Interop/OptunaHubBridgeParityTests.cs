@@ -123,6 +123,82 @@ public class OptunaHubBridgeParityTests
         Assert.IsTrue(study.Trials.All(t => t.State == TrialState.Complete), "every trial must complete");
     }
 
+    /// <summary>
+    ///     A hub sampler still completes every trial when the objective itself holds the GIL around its suggest calls
+    ///     (review item P3-1). The objective's thread used to block on the sampler's monitor with the GIL held, while the
+    ///     monitor's holder, inside the bridge, waited for that GIL; the old runs hung after 6 trials. The bridge now
+    ///     installs a <c>MonitorGate</c> hook that releases the GIL while a thread waits for the monitor.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void SamplerBridge_ObjectiveHoldsTheGil_NJobs4_DoesNotDeadlock()
+    {
+        RequireOptunaHubOrInconclusive();
+        string registry = SubmoduleRegistryOrInconclusive();
+
+        using var module = OptunaHub.LoadLocalModule("samplers/random_search", registry);
+        using var sampler = module.CreateSampler("RandomSampler", new() { ["seed"] = 0 });
+        var study = Optuna.CreateStudy(sampler: sampler);
+
+        RunWithin(TimeSpan.FromSeconds(180), "Optimize(nJobs: 4) with a GIL-holding objective over a hub sampler", () =>
+            study.Optimize(t =>
+            {
+                using (Py.GIL())
+                {
+                    PythonEngine.Exec("s = 0\nfor i in range(100000): s += i");
+                    double x = t.SuggestFloat("x", -10, 10);
+                    double y = t.SuggestFloat("y", -10, 10);
+                    return x * x + y * y;
+                }
+            }, nTrials: 60, nJobs: 4));
+
+        Assert.AreEqual(60, study.Trials.Count);
+        Assert.IsTrue(study.Trials.All(t => t.State == TrialState.Complete), "every trial must complete");
+    }
+
+    /// <summary>
+    ///     The hub median pruner completes a run whose objective reports and asks <c>ShouldPrune</c> while it holds the
+    ///     GIL, at <c>nJobs = 4</c> (review item P3-1: the pruner's monitor deadlocked against its GIL the same way).
+    /// </summary>
+    /// <exception cref="TrialPruned">
+    ///     Thrown only inside the objective, for a pruned trial; <c>Optimize</c> records it and never lets it escape.
+    /// </exception>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void PrunerBridge_ObjectiveHoldsTheGil_NJobs4_DoesNotDeadlock()
+    {
+        RequireOptunaHubOrInconclusive();
+        string registry = SubmoduleRegistryOrInconclusive();
+
+        using var module = OptunaHub.LoadLocalModule("pruners/median", registry);
+        using var pruner = module.CreatePruner("MedianPruner", new() { ["n_startup_trials"] = 3, ["n_warmup_steps"] = 1 });
+        var study = Optuna.CreateStudy(sampler: new TPESampler(seed: 0), pruner: pruner, direction: StudyDirection.Minimize);
+
+        RunWithin(TimeSpan.FromSeconds(180), "Optimize(nJobs: 4) with a GIL-holding objective over the hub median pruner", () =>
+            study.Optimize(t =>
+            {
+                using (Py.GIL())
+                {
+                    double x = t.SuggestFloat("x", -10, 10);
+                    double target = (x - 2) * (x - 2);
+                    double loss = 0;
+                    for (int step = 0; step < 5; step++)
+                    {
+                        PythonEngine.Exec("s = 0\nfor i in range(20000): s += i");
+                        loss = target + (50 - target) * Math.Exp(-0.5 * (step + 1));
+                        t.Report(loss, step);
+                        if (t.ShouldPrune())                        // the real Python MedianPruner, under its monitor
+                            throw new TrialPruned();
+                    }
+                    return loss;
+                }
+            }, nTrials: 40, nJobs: 4));
+
+        Assert.AreEqual(40, study.Trials.Count);
+        Assert.IsTrue(study.Trials.All(t => t.State is TrialState.Complete or TrialState.Pruned),
+            "every trial must finish as complete or pruned");
+    }
+
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void PrunerBridge_HubMedianPruner_PrunesLaggards()
@@ -157,6 +233,38 @@ public class OptunaHubBridgeParityTests
     }
 
     // ---- helpers --------------------------------------------------------------------------------
+
+    /// <summary>
+    ///     Runs <paramref name="run" /> on a background thread and fails the test if it is not done within
+    ///     <paramref name="limit" />, so a deadlock fails instead of hanging the test run.
+    /// </summary>
+    /// <param name="limit">How long the run may take.</param>
+    /// <param name="what">The scenario, for the failure message.</param>
+    /// <param name="run">The run to watch.</param>
+    /// <exception cref="AssertFailedException">The run threw, or did not finish in time.</exception>
+    /// <remarks>
+    ///     A deadlocked worker that holds the GIL cannot be released from outside, so later Python tests in the process
+    ///     may hang as well; the failure message still names the scenario that started it.
+    /// </remarks>
+    private static void RunWithin(TimeSpan limit, string what, Action run)
+    {
+        Exception? failure = null;
+        var worker = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                run();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+        }) { IsBackground = true };
+        worker.Start();
+
+        Assert.IsTrue(worker.Join(limit), $"{what}: deadlocked");
+        Assert.IsNull(failure, $"{what}: threw {failure}");
+    }
 
     private static void RequireOptunaHubOrInconclusive()
     {

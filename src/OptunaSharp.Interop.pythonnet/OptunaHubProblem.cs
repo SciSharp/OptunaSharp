@@ -210,7 +210,8 @@ public sealed class OptunaHubProblem : IDisposable
     {
         try
         {
-            using PyFloat converted = PyFloat.AsFloat(value);
+            // Qualified: Core's internal OptunaSharp.Distributions.PyFloat is visible to this friend assembly too.
+            using global::Python.Runtime.PyFloat converted = global::Python.Runtime.PyFloat.AsFloat(value);
             return converted.As<double>();
         }
         catch (PythonException ex) when (IsTypeOrValueError(ex))

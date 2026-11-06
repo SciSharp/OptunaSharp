@@ -1,10 +1,10 @@
 # OptunaSharp — Threading Design
 
-**Status:** describes the code at `f39763d` (2026-10-30), plus the `nJobs` executor of 2026-11-06, which
-reuses its worker threads (review item P3-4, §3.5–3.6). Four items are open. Each is marked where it applies,
-and §12 lists them all:
+**Status:** describes the code at `f39763d` (2026-10-30), plus two changes of 2026-11-06: the `nJobs` executor,
+which reuses its worker threads (review item P3-4, §3.5–3.6), and the GIL-aware monitor entry, which lets code
+that holds the Python GIL call OptunaSharp (review item P3-1, §8). Three items are open. Each is marked where
+it applies, and §12 lists them all:
 
-- a deadlock between the Python GIL and the sampler monitor (review item P3-1, §8);
 - `PymooSampler` driven from more than one thread (review item 19b, §8);
 - the 32 bits of entropy behind the samplers' seeds from the operating system (§6.3);
 - the terminator callback's unguarded random generators (§6.6).
@@ -289,7 +289,7 @@ trial, and the others skip it.
 | Sampler monitor | `BaseSampler.SyncRoot`, one per sampler instance | every call the study makes into the sampler, and its random generator | yes, samplers read the study |
 | Pruner monitor | `BasePruner.SyncRoot`, one per pruner instance | `Prune` and `FilterStudy` | yes |
 | Sampler-private locks | `BaseGASampler`, `JanusSampler`, `JanusDeSampler`, `MoeaDSampler`, `SmsEmoaSampler`, `RandomEmbeddingSampler`, `OptunaHubSampler` | per-study caches | taken inside the sampler monitor; `OptunaHubSampler`'s inside the GIL too |
-| The GIL | CPython | Python objects | taken by the bridges inside the sampler or pruner monitor |
+| The GIL | CPython | Python objects | taken by the bridges inside the sampler or pruner monitor; released by a thread that holds it while it waits for any lock above (§8) |
 | Storage monitors | `InMemoryStorage`, `JournalStorage`, `CachedStorage`, the SQLite `RDBStorage`, the gRPC client's trial cache | the storage's in-memory state | all but `InMemoryStorage`'s: the journal's spans every round trip of an operation, SQLite's every database call, and `CachedStorage`'s and the gRPC cache's the read of new and unfinished trials |
 | Journal file locks | `JournalFileBackend`'s offset-cache lock (short), and the lock file (`JournalFileSymlinkLock` or `JournalFileOpenLock`) around each append | the offset cache; one append at a time across processes | the lock file spans the write and its `fsync` |
 | Database locks | EF Core: `SELECT … FOR UPDATE` row locks and a PostgreSQL advisory lock for schema creation; SQLite's database lock | arbitration between storage instances and processes | yes |
@@ -297,7 +297,11 @@ trial, and the others skip it.
 | Logging configuration | `OptunaLogging._lock` | the level and the handler list | no: handlers run outside it |
 | Python start-up | `PythonRuntime._gate` | starting the engine | once |
 
-Every monitor is a C# `lock`, so a thread can re-enter a monitor it already holds.
+Every monitor is a .NET monitor, so a thread can re-enter a monitor it already holds. The four that come
+before the GIL in the lock order (§5.2) are entered through `MonitorGate` instead of a C# `lock`: the tell
+stripes, the trial monitor, and the sampler and pruner monitors. Without a Python bridge that is a plain
+`Monitor.Enter`; with one, a thread that holds the GIL releases it while it waits (§8). The others stay
+plain `lock`s, because no holder of theirs ever waits for the GIL.
 
 **Shared state without a lock.** A few fields are shared across threads by design, each safe on its own
 terms:
@@ -346,8 +350,13 @@ study from inside its monitor.
   stripe, which comes before the sampler monitor, so a hook that tells can deadlock against a worker
   that is telling. A wrapper that drives private shadow studies may tell those: their storages and
   stripes are its own.
-- **While holding the GIL, never take a lock that comes before it** (§8). In practice: no suggest,
-  report, prune, ask, tell or optimize inside `using (Py.GIL())`.
+- **Code that holds the GIL never blocks on a lock that comes before it** (§8). OptunaSharp keeps this
+  rule itself: the tell stripes, the trial monitor and the sampler and pruner monitors are entered through
+  `MonitorGate`, and `Optimize(nJobs > 1)` waits for its workers through it too. Once a Python bridge has
+  started (`PythonRuntime.Initialize`), a thread that holds the GIL releases it while it waits. Suggest,
+  report, should-prune, ask, tell and optimize are therefore safe inside `using (Py.GIL())`. A lock of your
+  own that a GIL-taking sampler or pruner holds while it takes the GIL must never be waited for by code that
+  holds the GIL.
 - **A sampler that wraps another calls it directly.** The outer monitor already covers the inner
   sampler.
 - **Log handlers must not throw, call OptunaSharp, or take the GIL.** They can run under any lock
@@ -591,22 +600,40 @@ timeouts; with `DedicatedThreads`, 640 of 640 in 11 s.
 - `OptunaHubSampler` goes on under the GIL: it takes its private `_gate` and reads the C# study through
   the storage to rebuild its Python shadow study. Storage calls take only storage locks, which come
   after the GIL (§5.2).
-- **Rule: while holding the GIL, never call OptunaSharp code that takes a tell stripe, a trial monitor,
-  or a sampler or pruner monitor.**
-  - That is every suggest, report, should-prune, ask, tell and optimize. An objective that calls one of
-    them inside `using (Py.GIL())` takes the locks in the opposite order, and at `nJobs` above 1 it
-    deadlocks against a worker that is inside a bridged sampler.
-  - This is review item P3-1, open. Hangs were measured with the OptunaHub sampler and pruner and with
-    BoTorch. The pruner case worked before `3a75811` added the monitors.
-  - Release the GIL, call OptunaSharp, then take the GIL again.
-  - Reads of the study (`Trials`, `GetTrials`, `BestTrial`) take only storage locks and are safe under
-    the GIL.
+- **Code that holds the GIL may call OptunaSharp** (review item P3-1, fixed 2026-11-06).
+  - The problem: an objective that called suggest, report, should-prune, ask or tell inside
+    `using (Py.GIL())` took the locks in the opposite order. It blocked on a monitor with the GIL held,
+    while the monitor's holder, inside a bridged sampler or pruner, waited for that GIL; CPython even drops
+    the GIL from a thread running Python every switch interval, so the holder could lose it mid-call. At
+    `nJobs` above 1 both threads waited forever. Hangs were measured with the OptunaHub sampler (after 6
+    trials) and pruner and with BoTorch; the pruner case worked before `3a75811` added the monitors.
+    `Optimize(nJobs > 1)` called inside `Py.GIL()` hung the same way: its caller waited for the workers
+    with the GIL held, and the workers needed it.
+  - The fix is the rule CPython's C extensions follow: never block on a lock while holding the GIL. Core
+    enters the four locks that come before the GIL (tell stripe, trial, sampler, pruner) through
+    `Internal/MonitorGate`, and runs the `nJobs` waits for its workers through `MonitorGate.Wait`.
+    `PythonRuntime.Initialize` installs `GilAwareMonitor` as the gate's hooks, also when the host started
+    CPython itself. The hook tries the monitor first, so an uncontended call costs one `TryEnter`. Only
+    when the monitor is contended and the thread holds the GIL (CPython's `PyGILState_Check`) does it
+    release the GIL around the wait, as `Py_BEGIN_ALLOW_THREADS` does, and take it back once the monitor
+    is held. The wait hook releases the GIL around the whole wait, as Python's own
+    `concurrent.futures.wait` does. Without a bridge both hooks are absent and Core behaves as before.
+  - Measured with a scratch probe of the shapes `GilAwareMonitorTests` pins: an objective inside
+    `Py.GIL()` at `nJobs: 4` over a GIL-taking sampler, or pruner, hung after 4 of 60 trials without the
+    hooks and finished all 60 in about 3 s with them; `Optimize(nJobs: 4)` called inside `Py.GIL()` hung
+    after 4 of 40 trials without them and finished in 0.6 s with them. The three deterministic two-thread
+    scenarios (sampler, trial and pruner monitor) deadlock by construction without the hooks; a probe of
+    each hung, and finished in under 0.1 s with them.
+  - Reads of the study (`Trials`, `GetTrials`, `BestTrial`) take only storage locks, which come after the
+    GIL, and were always safe under it.
+  - Holding the GIL across OptunaSharp calls is now safe, not useful: it still serializes the threads
+    that want it, so take it only around the Python work itself.
 - Python still runs one thread at a time, so bridged sampling gains nothing from `nJobs`. The OptunaHub
   bridges target `nJobs: 1`.
 - **`PymooSampler`** driven from a thread other than the one that created it crashed in pymoo's
   `Algorithm.ask` with an access violation in 2 of 4 runs (review item 19b, open). Create and drive it
-  on one thread. That rules out `nJobs` above 1, whose workers are new threads, and an `Optimize` called
-  from a thread other than the one that built the sampler.
+  on one thread. That rules out `nJobs` above 1, whose workers run on other threads, and an `Optimize`
+  called from a thread other than the one that built the sampler.
 
 ## 9. Numeric kernels and random generators
 
@@ -652,8 +679,9 @@ timeouts; with `DedicatedThreads`, 640 of 640 in 11 s.
   - Avoid static mutable state, and keep per-study state keyed by the storage object and the study id:
     study ids repeat across in-memory storages.
   - Do not tell trials of the served study from a hook (§5.3).
-  - A Python-backed implementation takes the GIL inside each method and never calls OptunaSharp code
-    that locks while holding it (§8).
+  - A Python-backed implementation takes the GIL inside each method (`PythonRuntime.Run`). Calls into
+    OptunaSharp under the GIL are safe (§8). What stays unsafe is a lock of its own that it holds while
+    it takes the GIL, if code holding the GIL can wait for that lock.
 - **Custom storages.** Every operation must be safe for concurrent calls on one instance: the workers,
   the heartbeat thread and readers all call it. `TellLockFor` comes from `BaseStorage`. Make `Dispose`
   idempotent.
@@ -697,14 +725,14 @@ timeouts; with `DedicatedThreads`, 640 of 640 in 11 s.
 | `StorageDisposalEdgeTests` (Storage suite) | a scoped SQLite storage, gRPC proxy or EF Core storage, disposed through both of its DI registrations, synchronously or asynchronously, closes its connection, channel or owned data source |
 | `JournalMixedFleetInteropTests` (Interop suite) | C# and Python workers on one journal file (both lock protocols), on Redis, and with CMA-ES, compared with a Python-only fleet |
 | `CmaEsMixedFleetInteropTests` (Interop suite) | C# and Python workers taking turns on one CMA-ES study, with and without margin, run the study Python runs alone |
+| `GilAwareMonitorTests` (Interop suite) | P3-1: `PythonRuntime.Initialize` installs the gate's hooks; three deterministic two-thread deadlocks (a GIL holder against a sampler, trial or pruner monitor held by a thread that needs the GIL), recovered by `Thread.Interrupt` if they regress; an objective inside `Py.GIL()` at `nJobs: 4` over a GIL-taking sampler and pruner; `Optimize(nJobs: 4)` called inside `Py.GIL()`; four ask-and-tell threads holding the GIL |
+| `OptunaHubBridgeParityTests` (Interop suite) | the real hub sampler at `nJobs: 8`; the real hub sampler and median pruner with an objective inside `Py.GIL()` at `nJobs: 4` |
 
-No test pins these yet: the reseed's entropy, `TerminatorCallback` under `nJobs`, an objective that
-holds the GIL while it suggests, and the error a trial failed under its objective raises (§3.3).
+No test pins these yet: the reseed's entropy, `TerminatorCallback` under `nJobs`, and the error a trial
+failed under its objective raises (§3.3).
 
 ## 12. Known limits and open items
 
-- **P3-1:** the GIL is taken after the sampler monitor. Never hold it while calling OptunaSharp code
-  that locks (§8).
 - **19b:** `PymooSampler` is bound to the thread that created it, which rules out `nJobs` above 1 (§8).
 - **The 32-bit seeds** (§6.3): long `nJobs` runs and large fleets can repeat a random stream. The fix is
   to seed from at least 128 bits through `RandomState.seed(uint[])`.
@@ -727,6 +755,7 @@ holds the GIL while it suggests, and the error a trial failed under its objectiv
 | Optuna (Python) | OptunaSharp |
 |---|---|
 | The GIL serializes Python code | Monitors: sampler, pruner, trial, tell stripes, storages |
+| A thread blocked on a lock or in `wait()` has released the GIL | `MonitorGate`: with a Python bridge loaded, a thread holding the GIL releases it while it waits for a tell stripe, trial, sampler or pruner monitor, or for its `nJobs` workers (P3-1, fixed 2026-11-06) |
 | numpy's `RandomState` locks each draw | The sampler monitor; MT19937 itself takes no lock |
 | `ThreadPoolExecutor(max_workers=n_jobs)`, threads reused within the call | OptunaSharp's own dedicated threads, reused across trials and calls (P3-4, fixed 2026-11-06) |
 | `wait(FIRST_COMPLETED)`, then `f.result()` | `Task.WhenAny`, then the first failure's original exception |

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -59,6 +60,47 @@ public abstract class BaseSampler
     ///     </para>
     /// </remarks>
     internal object SyncRoot { get; } = new();
+
+    /// <summary>
+    ///     Runs <paramref name="body" /> under <see cref="SyncRoot" />, entered through <see cref="MonitorGate" />. A thread
+    ///     holding the Python GIL therefore never blocks on the monitor with the GIL held (P3-1).
+    /// </summary>
+    /// <param name="body">The study-driven sampler call.</param>
+    /// <exception cref="Exception">Whatever <paramref name="body" /> throws; the monitor is released first.</exception>
+    internal void Locked(Action body)
+    {
+        bool taken = false;
+        try
+        {
+            MonitorGate.Enter(SyncRoot, ref taken);
+            body();
+        }
+        finally
+        {
+            if (taken)
+                Monitor.Exit(SyncRoot);
+        }
+    }
+
+    /// <summary>Runs <paramref name="body" /> under <see cref="SyncRoot" />, entered through <see cref="MonitorGate" />, and returns its result.</summary>
+    /// <typeparam name="T">The call's result type.</typeparam>
+    /// <param name="body">The study-driven sampler call.</param>
+    /// <returns>What <paramref name="body" /> returned.</returns>
+    /// <exception cref="Exception">Whatever <paramref name="body" /> throws; the monitor is released first.</exception>
+    internal T Locked<T>(Func<T> body)
+    {
+        bool taken = false;
+        try
+        {
+            MonitorGate.Enter(SyncRoot, ref taken);
+            return body();
+        }
+        finally
+        {
+            if (taken)
+                Monitor.Exit(SyncRoot);
+        }
+    }
 
     /// <summary>
     ///     Infer the search space that will be used by relative sampling in the target trial.

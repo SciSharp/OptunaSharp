@@ -199,8 +199,7 @@ internal static class TellHelpers
             // trials (see BaseSampler.SyncRoot).
             var filteredStudy = PrunerHelpers.FilterStudy(study, frozenTrial);
             var sampler = study.Sampler;
-            lock (sampler.SyncRoot)
-                sampler.AfterTrial(filteredStudy, frozenTrial, state!.Value, finalValues);
+            sampler.Locked(() => sampler.AfterTrial(filteredStudy, frozenTrial, state!.Value, finalValues));
         }
         finally
         {

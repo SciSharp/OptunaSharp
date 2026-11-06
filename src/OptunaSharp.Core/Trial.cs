@@ -43,6 +43,9 @@ public class Trial : BaseTrial
     // (5-23% of contended steps here, 63% in Python 5.0), and the cache dictionaries were written concurrently.
     // Uncontended in the usual one-thread-per-trial use, so single-threaded behavior is unchanged.
     // Lock order: this monitor, then the pruner's or sampler's SyncRoot, then the storage's own lock.
+    // Always entered through MonitorGate.Scope, never a plain lock: it comes before the Python GIL in that order, so a
+    // thread holding the GIL must release it while it waits here, or a second thread driving this Trial could hold
+    // this monitor while it waits for a sampler whose holder needs the GIL (P3-1).
     private readonly object _syncRoot = new();
 
     // The record the current thread's study trial cache may hold for this trial, for MirrorIntoThreadCache: first
@@ -78,9 +81,10 @@ public class Trial : BaseTrial
         _cacheAlias = stored;
         var filteredStudy = PrunerHelpers.FilterStudy(Study, _cachedFrozenTrial);
 
+        // Sampler monitors are entered through the sampler's EnterMonitor, so a Python-bridged sampler can release the
+        // GIL while it waits: an objective that holds Py.GIL() must never block on the monitor (P3-1).
         var sampler = Study.Sampler;
-        lock (sampler.SyncRoot)
-            sampler.BeforeTrial(filteredStudy, _cachedFrozenTrial);
+        sampler.Locked(() => sampler.BeforeTrial(filteredStudy, _cachedFrozenTrial));
 
         // NOTE(not522): Evaluate it lazily to get as latest search as possible.
         _relativeSearchSpace = null;
@@ -98,7 +102,7 @@ public class Trial : BaseTrial
     {
         get
         {
-            lock (_syncRoot)
+            using (MonitorGate.Scope(_syncRoot))
             {
                 if (_relativeParams is null)
                 {
@@ -106,11 +110,11 @@ public class Trial : BaseTrial
                     // Inference and sampling form one sampler call, as in Python: a concurrent trial must not
                     // change the sampler's state between the two.
                     var sampler = Study.Sampler;
-                    lock (sampler.SyncRoot)
+                    sampler.Locked(() =>
                     {
                         _relativeSearchSpace = sampler.InferRelativeSearchSpace(study, _cachedFrozenTrial);
                         _relativeParams = sampler.SampleRelative(study, _cachedFrozenTrial, _relativeSearchSpace);
-                    }
+                    });
                 }
                 return _relativeParams;
             }
@@ -260,7 +264,7 @@ public class Trial : BaseTrial
 
         // The check and the write form one step under this trial's monitor, so the first report of a step wins
         // even when several threads report it at once (Optuna documents first-wins but races here).
-        lock (_syncRoot)
+        using (MonitorGate.Scope(_syncRoot))
         {
             if (_cachedFrozenTrial.IntermediateValues.ContainsKey(step))
             {
@@ -296,12 +300,11 @@ public class Trial : BaseTrial
 
         // The latest-trial view shares this trial's dictionaries, so a concurrent Report on this trial waits until
         // the pruner is done reading them. The pruner's monitor keeps its own state whole across trials.
-        lock (_syncRoot)
+        using (MonitorGate.Scope(_syncRoot))
         {
             var trial = GetLatestTrial();
             var pruner = Study.Pruner;
-            lock (pruner.SyncRoot)
-                return pruner.Prune(Study, trial);
+            return pruner.Locked(() => pruner.Prune(Study, trial));
         }
     }
 
@@ -315,7 +318,7 @@ public class Trial : BaseTrial
     /// <exception cref="System.Exception">A configured storage or sampler implementation fails; its exception propagates.</exception>
     public override void SetUserAttr(string key, object? value)
     {
-        lock (_syncRoot)
+        using (MonitorGate.Scope(_syncRoot))
         {
             Storage.SetTrialUserAttr(TrialId, key, value);
             _cachedFrozenTrial.UserAttrsDict[key] = value;
@@ -338,7 +341,7 @@ public class Trial : BaseTrial
         int trialId = TrialId;
 
         // One suggestion is one step: two threads suggesting the same name on this trial must not both sample it.
-        lock (_syncRoot)
+        using (MonitorGate.Scope(_syncRoot))
         {
             var trial = GetLatestTrial();
 
@@ -370,8 +373,7 @@ public class Trial : BaseTrial
                     var study = PrunerHelpers.FilterStudy(Study, trial);
                     // Concurrent trials share this sampler and its random generator (see BaseSampler.SyncRoot).
                     var sampler = Study.Sampler;
-                    lock (sampler.SyncRoot)
-                        paramValue = sampler.SampleIndependent(study, trial, name, distribution);
+                    paramValue = sampler.Locked(() => sampler.SampleIndependent(study, trial, name, distribution));
                 }
 
                 // `paramValue` is validated here (invalid value like NaN raises ValueError).
@@ -446,7 +448,7 @@ public class Trial : BaseTrial
     private void CheckDistribution(string name, BaseDistribution distribution)
     {
         BaseDistribution oldDistribution;
-        lock (_syncRoot)
+        using (MonitorGate.Scope(_syncRoot))
             oldDistribution = _cachedFrozenTrial.DistributionsDict.GetValueOrDefault(name, distribution)!;
         if (!oldDistribution.Equals(distribution))
         {
@@ -470,7 +472,7 @@ public class Trial : BaseTrial
     /// </remarks>
     internal FrozenTrial GetLatestTrial()
     {
-        lock (_syncRoot)
+        using (MonitorGate.Scope(_syncRoot))
         {
             var latestTrial = _cachedFrozenTrial.ShallowCopy();
             latestTrial.SetLazySystemAttrs(() => Storage.GetTrialSystemAttrs(TrialId) is OrderedDict<string, object?> d
@@ -485,7 +487,7 @@ public class Trial : BaseTrial
     {
         get
         {
-            lock (_syncRoot)
+            using (MonitorGate.Scope(_syncRoot))
                 return _cachedFrozenTrial.DeepCopy().ParamsDict;
         }
     }
@@ -495,7 +497,7 @@ public class Trial : BaseTrial
     {
         get
         {
-            lock (_syncRoot)
+            using (MonitorGate.Scope(_syncRoot))
                 return _cachedFrozenTrial.DistributionsDict.ShallowClone();
         }
     }
@@ -505,7 +507,7 @@ public class Trial : BaseTrial
     {
         get
         {
-            lock (_syncRoot)
+            using (MonitorGate.Scope(_syncRoot))
                 return _cachedFrozenTrial.DeepCopy().UserAttrsDict;
         }
     }
@@ -554,7 +556,7 @@ public class Trial : BaseTrial
         string constraintKey = $"{ConstrainedOptimization.ConstraintsKey}:{key}";
 
         // First-set-wins, like Report: the existence check and the write must not interleave with another thread's.
-        lock (_syncRoot)
+        using (MonitorGate.Scope(_syncRoot))
         {
             var systemAttrs = Storage.GetTrialSystemAttrs(TrialId);
             if (systemAttrs.ContainsKey(constraintKey))

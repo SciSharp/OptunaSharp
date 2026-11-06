@@ -93,7 +93,9 @@ internal static class OptimizeLoop
 
                         if (futures.Count >= nJobs)
                         {
-                            Task.WhenAny(futures).GetAwaiter().GetResult();
+                            // Through MonitorGate.Wait: a caller holding the Python GIL releases it while it waits, as
+                            // Python's wait(FIRST_COMPLETED) does, or workers that need the GIL never finish (P3-1).
+                            MonitorGate.Wait(() => Task.WhenAny(futures).GetAwaiter().GetResult());
                             // Python's wait(FIRST_COMPLETED) returns every future finished by then, removes them
                             // all, and raises the first failure among them; GetResult rethrows that original
                             // exception (not an AggregateException).
@@ -170,8 +172,7 @@ internal static class OptimizeLoop
                 // Workers reseed the one shared sampler concurrently with each other's draws; the sampler's
                 // monitor keeps the generator state whole (numpy's RandomState locks every call).
                 var sampler = study.Sampler;
-                lock (sampler.SyncRoot)
-                    sampler.ReseedRng();
+                sampler.Locked(sampler.ReseedRng);
             }
 
             RunTrials(study, func, nTrials, timeout, catchTypes, callbacks, gcAfterTrial, timeStart, progressBar);
@@ -299,7 +300,8 @@ internal static class OptimizeLoop
             return;
         try
         {
-            Task.WaitAll(futures.ToArray());
+            // Through MonitorGate.Wait, so a caller holding the Python GIL releases it for the wait (P3-1).
+            MonitorGate.Wait(() => Task.WaitAll(futures.ToArray()));
         }
         catch (AggregateException)
         {
@@ -360,16 +362,16 @@ internal static class OptimizeLoop
             // Under the trial's tell monitor, as Study.Tell: an application thread telling this trial at the same
             // time (a reaper failing slow trials, say) acts wholly before or after this tell, so exactly one of the
             // two passes the "still running" check and reaches the sampler's AfterTrial (see BaseStorage.TellLockFor).
-            lock (study.Storage.TellLockFor(trial.TrialId))
+            (updatedState, values, warningMessage) = study.Storage.TellLocked(trial.TrialId, () =>
             {
                 var frozen = TellHelpers.GetFrozenTrial(study, trial);
-                (updatedState, values, warningMessage) = TellHelpers.TellWithWarning(
+                return TellHelpers.TellWithWarning(
                     study: study,
                     frozenTrial: frozen,
                     valueOrValues: valueOrValues,
                     state: state,
                     suppressWarning: true);
-            }
+            });
         }
         catch (Exception)
         {

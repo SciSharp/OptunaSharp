@@ -1,3 +1,6 @@
+using System;
+using System.Threading;
+
 namespace OptunaSharp.Pruners;
 
 /// <summary>
@@ -16,6 +19,30 @@ public abstract class BasePruner
     ///     serial per pruner. A wrapping pruner calls its inner pruner directly under this monitor.
     /// </remarks>
     internal object SyncRoot { get; } = new();
+
+    /// <summary>
+    ///     Runs <paramref name="body" /> under <see cref="SyncRoot" />, entered through <c>MonitorGate</c>. An objective
+    ///     calling <c>Report</c>/<c>ShouldPrune</c> inside <c>Py.GIL()</c> therefore never blocks on the monitor with the
+    ///     GIL held (P3-1; the hub median pruner pattern hung at <c>nJobs &gt; 1</c>).
+    /// </summary>
+    /// <typeparam name="T">The call's result type.</typeparam>
+    /// <param name="body">The study-driven pruner call.</param>
+    /// <returns>What <paramref name="body" /> returned.</returns>
+    /// <exception cref="Exception">Whatever <paramref name="body" /> throws; the monitor is released first.</exception>
+    internal T Locked<T>(Func<T> body)
+    {
+        bool taken = false;
+        try
+        {
+            OptunaSharp.Internal.MonitorGate.Enter(SyncRoot, ref taken);
+            return body();
+        }
+        finally
+        {
+            if (taken)
+                Monitor.Exit(SyncRoot);
+        }
+    }
 
     /// <summary>
     ///     Judge whether the trial should be pruned based on the reported values.
@@ -53,8 +80,8 @@ internal static class PrunerHelpers
     internal static Study FilterStudy(Study study, FrozenTrial trial)
     {
         // Read the property once: Study.Pruner is settable, and the monitor must belong to the pruner that runs.
+        // Entered through MonitorGate (Locked), so a thread holding the Python GIL releases it while it waits (P3-1).
         var pruner = study.Pruner;
-        lock (pruner.SyncRoot)
-            return pruner.FilterStudy(study, trial);
+        return pruner.Locked(() => pruner.FilterStudy(study, trial));
     }
 }
