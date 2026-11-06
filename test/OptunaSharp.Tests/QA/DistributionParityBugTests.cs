@@ -79,9 +79,10 @@ public class DistributionParityBugTests
     }
 
     /// <summary>
-    ///     QA-2: the adjusted upper end of a stepped float range must be Python's correctly rounded
-    ///     <c>float(Decimal)</c>; the port's <c>(double)decimal</c> is one ULP off for about 8.6% of
-    ///     realistic ranges whose bounds are not short decimals.
+    ///     QA-2 (fixed 2026-11-06): the adjusted upper end of a stepped float range must be Python's correctly
+    ///     rounded <c>float(Decimal)</c>; the port's <c>(double)decimal</c> was one ULP off for about 8.6% of
+    ///     realistic ranges whose bounds are not short decimals. It now converts through
+    ///     <c>PyNumbers.DecimalToDouble</c>.
     /// </summary>
     /// <remarks>
     ///     A 20,000-case fuzz (random lows and highs, common steps) differs in 1,726 cases by one ULP. The
@@ -90,7 +91,6 @@ public class DistributionParityBugTests
     ///     lose a whole step of its range in C# where it does not in Python, or the other way round.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void SteppedHigh_Adjustment_IsCorrectlyRounded()
     {
         var cases = new (double Low, double High, double Step, double PythonHigh)[]
@@ -110,8 +110,8 @@ public class DistributionParityBugTests
     }
 
     /// <summary>
-    ///     QA-2 (cross-language read): C# must read a distribution that Python wrote to storage exactly as
-    ///     Python reads it back; it differs in about 7% of stepped ranges with non-short bounds.
+    ///     QA-2 (cross-language read, fixed 2026-11-06): C# must read a distribution that Python wrote to storage
+    ///     exactly as Python reads it back; it differed in about 7% of stepped ranges with non-short bounds.
     /// </summary>
     /// <remarks>
     ///     Optuna's <c>json_to_distribution</c> re-runs the step adjustment on every read, and so does
@@ -121,7 +121,6 @@ public class DistributionParityBugTests
     ///     <c>IntersectionSearchSpace</c> (which compares distributions with <c>==</c>) drops it.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void FromJson_PythonWrittenSteppedDistribution_ReadsLikePython()
     {
         const string pythonWritten =

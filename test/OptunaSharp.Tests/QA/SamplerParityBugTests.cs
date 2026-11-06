@@ -20,9 +20,10 @@ namespace OptunaSharp.Tests.QA;
 public class SamplerParityBugTests
 {
     /// <summary>
-    ///     QA-11: <see cref="BruteForceSampler" /> must enumerate a stepped float range with Python's correctly
-    ///     rounded <c>float(Decimal)</c>; the port's <c>(double)decimal</c> puts 7% of candidate values one ULP
-    ///     off whenever the lower bound is not a short decimal.
+    ///     QA-11 (fixed 2026-11-06): <see cref="BruteForceSampler" /> must enumerate a stepped float range with
+    ///     Python's correctly rounded <c>float(Decimal)</c>; the port's <c>(double)decimal</c> put 7% of candidate
+    ///     values one ULP off whenever the lower bound is not a short decimal. It now converts through
+    ///     <c>PyNumbers.DecimalToDouble</c>.
     /// </summary>
     /// <remarks>
     ///     Optuna's <c>_enumerate_candidates</c> walks <c>Decimal(str(low)) + k * Decimal(str(step))</c> and
@@ -33,7 +34,6 @@ public class SamplerParityBugTests
     ///     place of <c>7.607999463635718</c>.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void BruteForce_SteppedFloatCandidates_MatchPythonDecimalEnumeration()
     {
         var study = Optuna.CreateStudy(sampler: new BruteForceSampler(seed: 0));
@@ -99,9 +99,10 @@ public class SamplerParityBugTests
     }
 
     /// <summary>
-    ///     QA-31: in a batch of asked trials, <c>QMCSampler</c> must take the search space from the trials of the same
-    ///     batch that already suggested their parameters, as Optuna does; the port samples the whole first batch
-    ///     independently, which also shifts the QMC sequence for the rest of the study.
+    ///     QA-31 (fixed 2026-11-06): in a batch of asked trials, <c>QMCSampler</c> must take the search space from the
+    ///     trials of the same batch that already suggested their parameters, as Optuna does; the port sampled the
+    ///     whole first batch independently, which also shifted the QMC sequence for the rest of the study. The
+    ///     trial now mirrors its writes into the current thread's trial cache (<c>Trial.MirrorIntoThreadCache</c>).
     /// </summary>
     /// <remarks>
     ///     With no finished trial, <c>infer_relative_search_space</c> unions the distributions of the RUNNING trials
@@ -115,7 +116,6 @@ public class SamplerParityBugTests
     ///     the GA base) only look at finished trials, which do not change between two asks, so only QMC is affected.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void Qmc_BatchedAsk_UsesSearchSpaceOfRunningTrialsLikeOptuna()
     {
         var study = Optuna.CreateStudy(sampler: new QMCSampler(seed: 5));

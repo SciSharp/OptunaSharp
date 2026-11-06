@@ -45,6 +45,16 @@ public class Trial : BaseTrial
     // Lock order: this monitor, then the pruner's or sampler's SyncRoot, then the storage's own lock.
     private readonly object _syncRoot = new();
 
+    // The record the current thread's study trial cache may hold for this trial, for MirrorIntoThreadCache: first
+    // the storage's own object as of construction, then this trial's private copy once it replaced that object in
+    // the cache. Python's Trial mutates the storage object it was created from; the port mutates a detached copy
+    // (see the constructor) and mirrors the visibility through this alias instead.
+    private FrozenTrial _cacheAlias;
+
+    // True once _cacheAlias is this trial's private copy in the current thread's cache (written only here and safe
+    // to mutate in place); false while it is still the shared storage object, which must never be mutated.
+    private bool _cacheAliasIsOwnCopy;
+
     /// <param name="study">Study whose history and storage are used by the operation.</param>
     /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
     /// <summary>Binds to an existing trial record and invokes the sampler's BeforeTrial hook.</summary>
@@ -63,7 +73,9 @@ public class Trial : BaseTrial
 
         Storage = study.Storage;
 
-        _cachedFrozenTrial = DetachedCopy(Storage.GetTrial(TrialId));
+        FrozenTrial stored = Storage.GetTrial(TrialId);
+        _cachedFrozenTrial = DetachedCopy(stored);
+        _cacheAlias = stored;
         var filteredStudy = PrunerHelpers.FilterStudy(Study, _cachedFrozenTrial);
 
         var sampler = Study.Sampler;
@@ -262,6 +274,7 @@ public class Trial : BaseTrial
             // to the objective or to a later pruning decision on this Trial instance.
             Storage.SetTrialIntermediateValue(TrialId, step, value);
             _cachedFrozenTrial.IntermediateValues[step] = value;
+            MirrorIntoThreadCache(t => t.IntermediateValues[step] = value);
         }
     }
 
@@ -306,6 +319,7 @@ public class Trial : BaseTrial
         {
             Storage.SetTrialUserAttr(TrialId, key, value);
             _cachedFrozenTrial.UserAttrsDict[key] = value;
+            MirrorIntoThreadCache(t => t.UserAttrsDict[key] = value);
         }
     }
 
@@ -364,8 +378,14 @@ public class Trial : BaseTrial
                 double paramValueInInternalRepr = distribution.ToInternalRepr(paramValue);
                 storage.SetTrialParam(trialId, name, paramValueInInternalRepr, distribution);
 
+                object? externalValue = paramValue is CategoricalChoice choice ? choice.Value : paramValue;
                 _cachedFrozenTrial.DistributionsDict[name] = distribution;
-                _cachedFrozenTrial.ParamsDict[name] = paramValue is CategoricalChoice choice ? choice.Value : paramValue;
+                _cachedFrozenTrial.ParamsDict[name] = externalValue;
+                MirrorIntoThreadCache(t =>
+                {
+                    t.DistributionsDict[name] = distribution;
+                    t.ParamsDict[name] = externalValue;
+                });
             }
             return paramValue is CategoricalChoice c ? c.Value : paramValue;
         }
@@ -547,6 +567,50 @@ public class Trial : BaseTrial
 
             Storage.SetTrialSystemAttr(TrialId, constraintKey, value);
             _cachedFrozenTrial.SystemAttrsDict[constraintKey] = value;
+            MirrorIntoThreadCache(t => t.SystemAttrsDict[constraintKey] = value);
         }
+    }
+
+    /// <summary>
+    ///     Makes the current thread's study trial cache show this trial's latest write whenever Python's cache would,
+    ///     because it holds the very object Python's <c>Trial</c> mutates. Called after every write that Python also
+    ///     applies to <c>_cached_frozen_trial</c>: suggestions, reports, user attributes and constraints.
+    /// </summary>
+    /// <remarks>
+    ///     <para>Python: <c>Study._thread_local.cached_all_trials</c> (reset by every <c>ask</c>) holds the storage's
+    ///     objects as of its fetch. <c>Trial</c> mutates the object the in-memory storage held when the trial was
+    ///     created, while the storage itself replaces it copy-on-write. So the cache sees this trial's writes exactly
+    ///     when it was fetched before the trial's first storage write. <c>QMCSampler.infer_relative_search_space</c>
+    ///     reads RUNNING trials' distributions from that cache. In a batch of asks, trial 1's first suggestion
+    ///     therefore sees trial 0's parameter and takes Sobol point 0. Without this, the port sampled trials
+    ///     1…k-1 of the first batch at random and shifted the whole QMC sequence (QA-31).</para>
+    ///     <para>Thread-safety: the shared storage object is never mutated (that was the data race the detached
+    ///     <c>_cachedFrozenTrial</c> fixed). The cache list belongs to the calling thread alone (<c>GetAllTrials</c>
+    ///     returns a fresh list), so the first matching write puts a private copy of this trial in place of the
+    ///     storage object, and later writes mutate that copy, as Python mutates its shared one. Caches of other
+    ///     threads are not touched: in Python their view depends on fetch timing, which no test can pin. Only the
+    ///     slot of this trial's number is examined, since <c>GetAllTrials</c> lists trials in number order; a storage
+    ///     that hands out copies never matches, which keeps its behavior as it was.</para>
+    /// </remarks>
+    /// <param name="apply">The write just applied to <see cref="_cachedFrozenTrial" />, re-applied to the private copy.</param>
+    private void MirrorIntoThreadCache(Action<FrozenTrial> apply)
+    {
+        var cache = Study.ThreadLocal.CachedAllTrials;
+        int number = _cachedFrozenTrial.Number;
+        if (cache is null || number < 0 || number >= cache.Count || !ReferenceEquals(cache[number], _cacheAlias))
+            return;
+
+        if (_cacheAliasIsOwnCopy)
+        {
+            apply(_cacheAlias);
+            return;
+        }
+
+        // First write the cache can see: replace the shared storage object with a private copy that already
+        // carries every write so far (this one included), then keep mutating that copy.
+        var copy = DetachedCopy(_cachedFrozenTrial);
+        cache[number] = copy;
+        _cacheAlias = copy;
+        _cacheAliasIsOwnCopy = true;
     }
 }

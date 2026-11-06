@@ -179,7 +179,8 @@ public class FloatDistribution : BaseDistribution
                 // the top grid point, into the objective, storage, logs and best_params (QA-1).
                 if (adjusted == 0m)
                     adjusted = 0m;
-                high = (double)adjusted;
+                // Python's float(Decimal) is correctly rounded; (double)decimal is not (QA-2).
+                high = PyNumbers.DecimalToDouble(adjusted);
                 OptunaWarnings.Warn(
                     $"The distribution is specified by [{PythonRepr.FloatRepr(low)}, {PythonRepr.FloatRepr(oldHigh)}] " +
                     $"and step={PythonRepr.FloatRepr(step)}, but the range is " +
@@ -307,7 +308,8 @@ internal static class PyFloat
                 result = ul;
                 return true;
             case decimal m:
-                result = (double)m;
+                // Python's float(Decimal) is correctly rounded; (double)decimal is not.
+                result = PyNumbers.DecimalToDouble(m);
                 return true;
             case CategoricalChoice choice:
                 return TryConvert(choice.Value, out result);

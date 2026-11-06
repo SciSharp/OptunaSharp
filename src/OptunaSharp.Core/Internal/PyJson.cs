@@ -249,7 +249,8 @@ internal static class PyJson
                 sb.Append(ul.ToString(CultureInfo.InvariantCulture));
                 break;
             case decimal m:
-                WriteDouble(sb, (double)m);
+                // Correctly rounded, as Python's float(Decimal); (double)decimal can be one ULP off.
+                WriteDouble(sb, PyNumbers.DecimalToDouble(m));
                 break;
             case Enum e:
                 // Python IntEnum members (TrialState, StudyDirection, JournalOperation)

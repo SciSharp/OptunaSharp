@@ -346,8 +346,10 @@ public class BruteForceSampler : BaseSampler
                 // Python's `Decimal` yields +0.0 at a zero crossing, but .NET's `decimal` keeps a
                 // negative sign there (`-0.5m + 0.5m` -> -0.0 on cast). `+ 0.0` maps -0.0 to +0.0
                 // and is a no-op for every other value, restoring bit-parity (and consistent
-                // double keys, since .NET treats -0.0 and +0.0 as distinct dictionary keys).
-                result.Add((double)low + 0.0);
+                // double keys, since .NET treats -0.0 and +0.0 as distinct dictionary keys). The conversion itself
+                // must be correctly rounded like Python's float(Decimal); (double)decimal put 7% of candidates one
+                // ULP off (QA-11).
+                result.Add(PyNumbers.DecimalToDouble(low) + 0.0);
                 low += step;
             }
         }

@@ -33,6 +33,25 @@ internal static class PyNumbers
         RegexOptions.CultureInvariant);
 
     /// <summary>
+    ///     Python's <c>float(Decimal)</c>: the double nearest to the decimal's exact value, ties to even. Every port of
+    ///     Python <c>Decimal</c> arithmetic converts its result through here instead of <c>(double)decimal</c>.
+    /// </summary>
+    /// <remarks>
+    ///     .NET's explicit <c>(double)decimal</c> conversion is not correctly rounded and can land one ULP off. It did
+    ///     for 8.6% of realistic stepped float ranges (the adjusted <c>high</c>, so C# and Python workers held
+    ///     different distributions for one parameter, QA-2) and for 7% of BruteForce float candidates (QA-11).
+    ///     <see cref="decimal.ToString(IFormatProvider)" /> prints every stored digit with no exponent, and
+    ///     <see cref="double.Parse(string, NumberStyles, IFormatProvider)" /> is IEEE correctly rounded since .NET Core
+    ///     3.0, so the round trip through the exact digits is the correctly rounded conversion. A negative zero stays
+    ///     negative, as Python's conversion keeps the sign; callers that model Python's sign of a zero sum normalize
+    ///     before converting (QA-1).
+    /// </remarks>
+    /// <param name="value">The decimal to convert; every decimal is finite, so the result is always finite.</param>
+    /// <returns>The correctly rounded double, with the decimal's sign.</returns>
+    internal static double DecimalToDouble(decimal value)
+        => double.Parse(value.ToString(CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture);
+
+    /// <summary>
     ///     Python <c>int(text)</c> in base 10: optional whitespace and sign, decimal digits (any Unicode decimal
     ///     digit counts) with single underscores allowed only between two digits.
     /// </summary>
