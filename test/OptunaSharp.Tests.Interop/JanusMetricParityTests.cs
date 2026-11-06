@@ -31,7 +31,8 @@ namespace OptunaSharp.Tests.Interop;
 ///     <c>LinAlgParityTests</c>.</para>
 ///
 ///     <para>Self-skips (Inconclusive) when Python/Optuna or the JANUS reference clone is unavailable.
-///     The reference is expected at <c>K:/source/JANUS</c> (override with <c>JANUS_REF_PATH</c>).</para>
+///     The reference is a clone of <c>https://github.com/hongyuanyu/JANUS</c> in a <c>JANUS</c> folder beside the
+///     repository (override with <c>JANUS_REF_PATH</c>; see <see cref="JanusReference.Folder" />).</para>
 /// </summary>
 [TestClass]
 public class JanusMetricParityTests : OptunaInteropTestBase
@@ -44,7 +45,7 @@ public class JanusMetricParityTests : OptunaInteropTestBase
     /// <summary>Add the reference clone to sys.path and import it; Inconclusive if it isn't present.</summary>
     private void ImportJanusReferenceOrInconclusive()
     {
-        string refPath = Environment.GetEnvironmentVariable("JANUS_REF_PATH") ?? "K:/source/JANUS";
+        string refPath = JanusReference.Folder();
         try
         {
             PyExec(

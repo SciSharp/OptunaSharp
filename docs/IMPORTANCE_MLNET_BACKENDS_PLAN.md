@@ -1,7 +1,7 @@
 # Plan — ML.NET importance backends (Forests / Boosters) + LightGBM integration
 
-> **Audience:** the next engineer picking up the Phase 5.1 forest work in the worktree
-> `K:/source/OptunaSharp-phase51` (branch `feat/phase-5.1-importance-forests`).
+> **Audience:** the next engineer picking up the Phase 5.1 forest work on the branch
+> `feat/phase-5.1-importance-forests` (since merged into `master`).
 > **Governs:** how the ML.NET-backed importance evaluators are split across packages/namespaces,
 > and how LightGBM is scoped. Read `docs/PORTING_PLAN.md` §5.1 first for the phase context.
 

@@ -1,5 +1,5 @@
-// AGE-MOEA-2-CPT — AGE-MOEA-2 environmental selection + the "Categorical Parameter Trees" (CPT /
-// DCPARA) conditional-parameter machinery. The AGE-MOEA-2 counterpart of NSGAIIICptSampler.
+// AGE-MOEA-2-CPT — AGE-MOEA-2 environmental selection + the "Categorical Parameter Trees" (CPT)
+// conditional-parameter machinery. The AGE-MOEA-2 counterpart of NSGAIIICptSampler.
 //
 // The design fact this file leans on: CPT is entirely a *child-generation / search-space* concern
 // (which parameters stay in the relative space, how they are crossed / mutated / inherited when only

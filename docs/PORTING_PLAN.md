@@ -4,7 +4,7 @@
 2026-10-17 from the pre-release `f6898da` 5.0.0.dev snapshot the port was built against — the delta was #6799 log-float clamp,
 #6804 `qLogCEHVI`, #6834 `system_attrs` removal, all ported) — 24,474 core SLOC at the original pin
 (tokenizer-counted, comments/docstrings excluded). Secondary reference: `optuna/rustuna` @ `8acb2dd`
-(`K:/source/rustuna`) — used ONLY where it accelerates (SQLite schema, Sobol tables, static-type designs);
+([github.com/optuna/rustuna](https://github.com/optuna/rustuna)) — used ONLY where it accelerates (SQLite schema, Sobol tables, static-type designs);
 Optuna's Python behavior always wins on conflict.
 
 **Ordering directives (two, composed):**
@@ -411,7 +411,7 @@ moment OptunaSharp.Core loads. Keep it.
 | 4 — External storage (Tier X) | ✅ | **COMPLETE — 4.1 SQLite RDB + 4.2 EF Core (PostgreSQL/MySQL) + 4.3 Redis journal (feat `aa23800`) + 4.4 gRPC proxy + 4.5 cloud artifacts (feat `3923fcd`) all DONE**; `ICachedStorageBackend` seam for 4.1 declared in 1.2, implemented by both RDB backends (`RDBStorage`, wrapped in `CachedStorage` via `get_storage`); 4.2 `OptunaSharp.Storage.EFCore` reproduces SQLAlchemy's exact PostgreSQL/MySQL schema over Npgsql/Pomelo (Python↔C# same-DB round-trip both directions); 4.4 `GrpcStorageProxy`/`GrpcProxyServer` speak Optuna's verbatim `api.proto` (wire-compat vs Python both directions) |
 | 4.9 — Native convenience gaps (Tier N) | ✅ | **DONE** — `MaxTrialsCallback` ported now (feat `a224e5a`); `show_progress_bar` (`Internal/ProgressBar.cs`, tqdm analog) + `FixedTrial` already landed as Phase-0 byproducts, tests backfilled. Pure managed, no external deps |
 | 5 — External integrations (Tier X) | 🟩 | **5.1 fANOVA + MDI importance DONE** — native bit-exact scikit-learn CART in Core (Tier N, value-parity vs Optuna, feat `13dc596`) + 3 ML.NET backends across 2 satellite packages: `OptunaSharp.Integration.ML.NET` — faithful FastForest (feat `47717b7`) + experimental/off-label gradient boosters FastTree/FastTreeTweedie (feat `599bf3f`) — and LightGBM (`.Integration.LightGbm`, feat `c7d9af9`), all ranking-only; **the LightGBM tuner landed in Phase 6.1** (the Optuna-justified `optuna.integration.lightgbm` — see the Phase 6 row). **5.3 CLI DONE** — the `optunasharp` .NET global tool (`OptunaSharp.Cli`, System.CommandLine + YamlDotNet), a faithful port of `optuna/cli.py`; byte-identical `value`/`json`/`table` stdout vs the live `optuna` command (6 differential-parity tests + 15 unit); bundles the SQLite + StackExchange.Redis backends. 5.2 (Plotly rendering) · 5.4 (M.E.L/Data.Analysis adapters) · 5.5 (OpenBLAS byte-exactness — mooted) · 5.6 (Torch GP contingency) pending |
-| 6 — Framework integration adapters (Tier X) | 🟩 | **THE LAST PHASE**; the `optuna.integration` analog. **6.1 LightGBM tuner DONE** — `LightGBMTuner`/`LightGBMTunerCV`/`Train` in `.Integration.LightGbm`: the stepwise search is a faithful, committed-oracle-validated port over OptunaSharp's GridSampler/TPESampler (bit-exact for grid/int params, erf-tolerance for TPE floats), with training bridged to ML.NET's native LightGBM behind the `ILightGbmTrainer` seam (an adapter — no bit-parity). **6.2 pruning callbacks DONE** (`PruningCallback` in `.Integration.ML.NET` + the faithful `LightGBMPruningCallback` in `.Integration.LightGbm`; ML.NET has no managed per-iteration hook, so caller-driven) + **6.3 `OptunaSearchCV` DONE** (moved to Core with the `ICrossValidationEstimator` seam; now **end-to-end byte-exact** via a pure-managed native scikit-learn port in Core (ns `OptunaSharp.Integration.Sklearn`) — `RandomForestRegressor`/`KFold`/`cross_validate`/`r2` over Core's bit-exact CART — reproduced trial-for-trial vs `optuna_integration.OptunaSearchCV`; the `MLNetEstimator` backend stays the usage-validated ML.NET adapter). 6.4–6.6 (tracking + BoTorch/SHAP + Dask) pending; **adapters, not behavior-parity ports** (usage-validated) except 6.3's native scikit-learn path which IS byte-exact; source is the separate `optuna/optuna-integration` repo (cloned to `K:/source/optuna-integration`, not vendored); per-framework, post-v1 |
+| 6 — Framework integration adapters (Tier X) | 🟩 | **THE LAST PHASE**; the `optuna.integration` analog. **6.1 LightGBM tuner DONE** — `LightGBMTuner`/`LightGBMTunerCV`/`Train` in `.Integration.LightGbm`: the stepwise search is a faithful, committed-oracle-validated port over OptunaSharp's GridSampler/TPESampler (bit-exact for grid/int params, erf-tolerance for TPE floats), with training bridged to ML.NET's native LightGBM behind the `ILightGbmTrainer` seam (an adapter — no bit-parity). **6.2 pruning callbacks DONE** (`PruningCallback` in `.Integration.ML.NET` + the faithful `LightGBMPruningCallback` in `.Integration.LightGbm`; ML.NET has no managed per-iteration hook, so caller-driven) + **6.3 `OptunaSearchCV` DONE** (moved to Core with the `ICrossValidationEstimator` seam; now **end-to-end byte-exact** via a pure-managed native scikit-learn port in Core (ns `OptunaSharp.Integration.Sklearn`) — `RandomForestRegressor`/`KFold`/`cross_validate`/`r2` over Core's bit-exact CART — reproduced trial-for-trial vs `optuna_integration.OptunaSearchCV`; the `MLNetEstimator` backend stays the usage-validated ML.NET adapter). 6.4–6.6 (tracking + BoTorch/SHAP + Dask) pending; **adapters, not behavior-parity ports** (usage-validated) except 6.3's native scikit-learn path which IS byte-exact; source is the separate [`optuna/optuna-integration`](https://github.com/optuna/optuna-integration) repo (vendored since 2026-10-18 as the pinned submodule `refs/optuna-integration`, v5.0.0); per-framework, post-v1 |
 
 ### Done work items (with the commit that landed them)
 
@@ -744,10 +744,7 @@ moment OptunaSharp.Core loads. Keep it.
   already 0. `ConditionalParamsMathNeutralityTests` asserts 0 for those five. Documented residual: the
   conditional crossover's out-of-box reject-and-redraw lets a box-overshooting operator (**vSBX**, 5/264)
   couple via a param that is *active on a rejected attempt* — not a deactivated-param effect; the default
-  UniformCrossover never overshoots and is exactly neutral. **Design note / paper seed:**
-  `docs/NSGA-III-DCPARA.md` (DCPARA — Dynamic Conditional PARAmeterization) writes all of the above up in
-  paper form (motivation, the activation algebra, the three seams, the math-neutrality theorem-to-be, the
-  dynamic dormant-memory mode, evidence, and open questions).
+  UniformCrossover never overshoots and is exactly neutral.
   **Consolidation into NSGA-III-CPT (later):** the whole feature was extracted into a single standalone
   sampler `NSGAIIICptSampler` ("NSGA-III with Categorical Parameter Trees", `Samplers/NsgaiiiCpt/`), which
   owns copies of the conditional seams (`NsgaiiiCptSearchSpace`, `NsgaiiiCptCrossover`,
@@ -1335,9 +1332,10 @@ from the rest of the plan.
 
 > **Source is a *different* repo.** In Optuna 5.x, `optuna.integration.*` inside the pinned `refs/optuna`
 > submodule is only 20 deprecation shims (`FutureWarning`, removal targeted Optuna 6.0.0) that re-export
-> the separate **`optuna/optuna-integration`** distribution (`pip install optuna-integration`). That repo
-> is **not vendored** — Phase 6 requires cloning it as an additional reference (**cloned to
-> `K:/source/optuna-integration`** for 6.1; HEAD `5.1.0.dev`, matching optuna 5.x). Its one algorithmic
+> the separate **`optuna/optuna-integration`** distribution (`pip install optuna-integration`). Phase 6
+> started from a clone of [github.com/optuna/optuna-integration](https://github.com/optuna/optuna-integration)
+> (HEAD `5.1.0.dev` for 6.1, matching optuna 5.x); since 2026-10-18 it is vendored as the pinned submodule
+> `refs/optuna-integration` (v5.0.0). Its one algorithmic
 > member with a native OptunaSharp equivalent, `cma.PyCmaSampler`, is already **superseded by the native
 > `CmaEsSampler` (2.16)** and drops out. The LightGBM **importance** backend already shipped early (in 5.1,
 > `OptunaSharp.Integration.LightGbm`); the LightGBM **tuner** — LightGBM's actual Optuna role — **landed

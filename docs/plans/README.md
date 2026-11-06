@@ -1,7 +1,7 @@
 # OptunaSharp — JANUS-adjacent porting plans
 
 > **Status: DESIGN (not started).** These plans grew out of the 2026-09-10 JANUS port (arXiv:2608.22862;
-> reference `K:/source/JANUS`, Apache-2.0). JANUS Phase 1 (the single-objective CMA-ES–hosted sampler)
+> reference [github.com/hongyuanyu/JANUS](https://github.com/hongyuanyu/JANUS) @ `53e372f`, Apache-2.0). JANUS Phase 1 (the single-objective CMA-ES–hosted sampler)
 > is implemented and byte-parity-tested; see the [`janus-port`](../../) memory and
 > `src/OptunaSharp.Core/Samplers/Janus/`. Each plan here is either **required to finish JANUS** or
 > **unlocked / made newly worthwhile by it**, and every one obeys the governing

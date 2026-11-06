@@ -11,7 +11,7 @@ namespace OptunaSharp.Samplers.NsgaiiiCpt;
 ///     The conditional-parameter search space of <see cref="NSGAIIICptSampler" /> — an OptunaSharp
 ///     extension with no Optuna analog, extracted here so that <see cref="IntersectionSearchSpace" /> and
 ///     every other sampler stay a bit-exact Optuna port. It is the sole home of the "Categorical Parameter
-///     Trees" (CPT / DCPARA) search-space fold.
+///     Trees" (CPT) search-space fold.
 ///
 ///     <para>Unconditional parameters intersect exactly as Optuna's <see cref="IntersectionSearchSpace" />
 ///     does (this class delegates to the shared parity fold <see cref="SearchSpaceFunctions.Calculate" />

@@ -28,7 +28,8 @@ namespace OptunaSharp.Samplers;
 ///     the relative search space (<see cref="NsgaiiiCptSearchSpace" />), are crossed over, mutated and inherited
 ///     whenever active (<see cref="NsgaiiiCptChildGenerationStrategy" /> /
 ///     <see cref="NsgaiiiCptCrossover" />), and are simply absent whenever not. This is the tree of
-///     categorically-gated parameters the "CPT" name denotes. See <c>docs/NSGA-III-DCPARA.md</c>.</para>
+///     categorically-gated parameters the "CPT" name denotes. See the NSGA-III-CPT documentation page
+///     (<c>docs/website-src/docs/our-methods/nsga-iii-cpt.md</c>).</para>
 ///
 ///     <para><b>Relationship to NSGA-III.</b> Constructed with <c>conditionalParams: null</c> this sampler is
 ///     behaviorally identical to <see cref="NSGAIIISampler" /> (the CPT search space and child generation both

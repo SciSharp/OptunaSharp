@@ -22,8 +22,9 @@ namespace OptunaSharp.Tests.Interop;
 ///     <para><b>Tolerance.</b> ~1 ULP (gated at 1e-11·(1+scale)), the same float64-determinism tier as
 ///     <c>JanusMetricParityTests</c> / the fANOVA-SHAP ports; the only residual is numpy's pairwise vs the
 ///     port's sequential reductions in <c>std</c>/<c>mean</c>. Host-pinned to x64. Self-skips (Inconclusive)
-///     when Python/Optuna or the JANUS reference clone is unavailable (expected at <c>K:/source/JANUS</c>,
-///     override with <c>JANUS_REF_PATH</c>).</para>
+///     when Python/Optuna or the JANUS reference clone is unavailable (a clone of
+///     <c>https://github.com/hongyuanyu/JANUS</c> in a <c>JANUS</c> folder beside the repository; override with
+///     <c>JANUS_REF_PATH</c>, see <see cref="JanusReference.Folder" />).</para>
 /// </summary>
 [TestClass]
 public class JanusMooMetricParityTests : OptunaInteropTestBase
@@ -32,7 +33,7 @@ public class JanusMooMetricParityTests : OptunaInteropTestBase
 
     private void ImportMooReferenceOrInconclusive()
     {
-        string refPath = Environment.GetEnvironmentVariable("JANUS_REF_PATH") ?? "K:/source/JANUS";
+        string refPath = JanusReference.Folder();
         try
         {
             PyExec(
