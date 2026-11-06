@@ -80,8 +80,11 @@ public sealed class ShapleyImportanceEvaluator : BaseImportanceEvaluator
         SklearnLikeTree[] forest = CartRandomForest.Fit(x, targetValues, nEncoded, _nTrees, _maxDepth, _seed);
 
         // explainer = TreeExplainer(forest); feature_shap_values = explainer.shap_values(trans_params).
-        // SHAP evaluates paths against the ORIGINAL float64 X (not the float32 the forest was built on).
-        double[][] featureShapValues = TreeShap.ShapValues(forest, transParams, nEncoded);
+        // shap traverses the trees on X cast to the model's input_dtype, which is float32 for scikit-learn forests
+        // (TreeEnsemble sets input_dtype = np.float32; _validate_inputs does X.astype before _cext.dense_tree_shap).
+        // Traversing the float64 values instead sent a value whose float32 rounding sits exactly on a split
+        // threshold down the other branch: stepped floats such as 0.35000000000000003 hit it (QA-24).
+        double[][] featureShapValues = TreeShap.ShapValues(forest, WidenFloat32(x, trials.Count, nEncoded), nEncoded);
 
         // np.add.at(param_shap_values.T, trans.encoded_column_to_column, feature_shap_values.T):
         // add up the (one-hot) encoded columns belonging to each parameter, per trial, in column order.
@@ -109,6 +112,26 @@ public sealed class ShapleyImportanceEvaluator : BaseImportanceEvaluator
 
         return ImportanceBase.SortDictByImportance(
             ImportanceBase.ParamImportancesToDict(paramList, meanAbsShapValues));
+    }
+
+    /// <summary>
+    ///     shap's traversal input for a scikit-learn forest: the float32 feature matrix widened back to double, so each
+    ///     value is exactly the float32 shap compares against the float64 thresholds.
+    /// </summary>
+    /// <param name="x">The float32 feature matrix the forest was fit on (scikit-learn's DTYPE cast).</param>
+    /// <param name="nRows">Number of trial rows in <paramref name="x" />.</param>
+    /// <param name="nCols">Number of encoded feature columns in <paramref name="x" />.</param>
+    /// <returns>Row-major double rows holding the float32 values; NaN stays NaN, so shap's missing-value mask is unchanged.</returns>
+    private static double[][] WidenFloat32(float[,] x, int nRows, int nCols)
+    {
+        var rows = new double[nRows][];
+        for (int i = 0; i < nRows; i++)
+        {
+            rows[i] = new double[nCols];
+            for (int j = 0; j < nCols; j++)
+                rows[i][j] = x[i, j];
+        }
+        return rows;
     }
 
     /// <summary>scikit-learn casts X to float32 (DTYPE) before fitting the forest.</summary>

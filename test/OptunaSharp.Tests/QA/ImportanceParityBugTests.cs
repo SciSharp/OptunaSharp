@@ -39,9 +39,9 @@ public class ImportanceParityBugTests
     }
 
     /// <summary>
-    ///     QA-24: SHAP importances must evaluate tree paths on <c>float32(X)</c>, as shap's <c>TreeExplainer</c>
-    ///     does for scikit-learn forests; the port traverses with the original float64 values, so a parameter
-    ///     whose float32 rounding lands on a split threshold takes the other branch.
+    ///     QA-24 (fixed 2026-11-06): SHAP importances must evaluate tree paths on <c>float32(X)</c>, as shap's
+    ///     <c>TreeExplainer</c> does for scikit-learn forests; the port traversed with the original float64 values,
+    ///     so a parameter whose float32 rounding lands on a split threshold took the other branch.
     /// </summary>
     /// <remarks>
     ///     shap sets <c>input_dtype = np.float32</c> for scikit-learn trees and casts <c>X</c> before the C
@@ -55,7 +55,6 @@ public class ImportanceParityBugTests
     ///     traversal.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void Shapley_SteppedFloatOnSplitThreshold_TraversesFloat32LikeShap()
     {
         var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 42));
@@ -70,9 +69,9 @@ public class ImportanceParityBugTests
     }
 
     /// <summary>
-    ///     QA-28: PED-ANOVA, the default evaluator of <c>get_param_importances</c>, must handle a numerical parameter
-    ///     whose grid has 2^31 - 1 or more steps; the port's grid-size arithmetic overflows <see cref="int" /> and
-    ///     the evaluation throws <see cref="OverflowException" />.
+    ///     QA-28 (fixed 2026-11-06): PED-ANOVA, the default evaluator of <c>get_param_importances</c>, must handle a
+    ///     numerical parameter whose grid has 2^31 - 1 or more steps; the port's grid-size arithmetic overflowed
+    ///     <see cref="int" /> and the evaluation threw <see cref="OverflowException" />.
     /// </summary>
     /// <remarks>
     ///     <c>_count_numerical_param_in_grid</c> computes <c>min(round((high - low) / step) + 1, n_steps)</c> in
@@ -88,7 +87,6 @@ public class ImportanceParityBugTests
     ///     seed=0.004622264035171709</c>.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void PedAnova_IntRangeOf2Pow31Steps_DoesNotOverflow()
     {
         var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 0));

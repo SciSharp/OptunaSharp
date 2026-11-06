@@ -240,14 +240,15 @@ internal static class ScottParzenEstimatorFunctions
             log = intDist.Log;
             if (log)
             {
-                int log2DomainSize = (int)Math.Ceiling(Math.Log(intDist.High - intDist.Low + 1) / Math.Log(2)) + 1;
+                // Int128: Python's `dist.high - dist.low + 1` never overflows; a long span over 2^63 would.
+                int log2DomainSize = (int)Math.Ceiling(Math.Log((double)((Int128)intDist.High - intDist.Low + 1)) / Math.Log(2)) + 1;
                 nSteps = Math.Min(log2DomainSize, nSteps);
             }
             else
             {
                 // dist.step is not None for IntDistribution (always an integer step).
-                nSteps = Math.Min((int)Math.Round((double)(intDist.High - intDist.Low) / intDist.Step,
-                    MidpointRounding.ToEven) + 1, nSteps);
+                nSteps = MinGridSteps(
+                    Math.Round((double)((Int128)intDist.High - intDist.Low) / intDist.Step, MidpointRounding.ToEven), nSteps);
             }
         }
         else
@@ -259,8 +260,8 @@ internal static class ScottParzenEstimatorFunctions
             if (floatDist.Step is not null)
             {
                 System.Diagnostics.Debug.Assert(!log);
-                nSteps = Math.Min((int)Math.Round((floatDist.High - floatDist.Low) / floatDist.Step.Value,
-                    MidpointRounding.ToEven) + 1, nSteps);
+                nSteps = MinGridSteps(
+                    Math.Round((floatDist.High - floatDist.Low) / floatDist.Step.Value, MidpointRounding.ToEven), nSteps);
             }
         }
 
@@ -287,6 +288,25 @@ internal static class ScottParzenEstimatorFunctions
             counts[index] += 1;
         }
         return counts;
+    }
+
+    /// <summary>
+    ///     Python's <c>min(round((high - low) / step) + 1, n_steps)</c> with Python's unbounded ints: the grid gets
+    ///     one cell per step of a short range, and at most <paramref name="nSteps" /> cells.
+    /// </summary>
+    /// <remarks>
+    ///     The comparison happens in <see cref="double" />, before any narrowing. Casting the rounded quotient to
+    ///     <see cref="int" /> first saturated (net10.0) or wrapped to <see cref="int.MinValue" /> (net8.0) for 2^31 - 1
+    ///     or more steps, the <c>+ 1</c> went negative, and allocating the count array threw
+    ///     <see cref="OverflowException" /> for ranges as ordinary as <c>suggest_int("seed", 0, 2**31 - 1)</c> (QA-28).
+    /// </remarks>
+    /// <param name="roundedSteps">The step count <c>round((high - low) / step)</c>, already rounded half to even.</param>
+    /// <param name="nSteps">The grid size cap requested by the evaluator.</param>
+    /// <returns><c>roundedSteps + 1</c> when that is smaller than <paramref name="nSteps" />; otherwise <paramref name="nSteps" />.</returns>
+    private static int MinGridSteps(double roundedSteps, int nSteps)
+    {
+        double cells = roundedSteps + 1;
+        return cells < nSteps ? (int)cells : nSteps;
     }
 
     /// <summary>Python <c>_count_categorical_param_in_grid(param_name, dist, trials)</c>.</summary>
