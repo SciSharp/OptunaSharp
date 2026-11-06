@@ -108,6 +108,12 @@
     <!-- net8.0 -> latest 8.0.x; everything else (net10.0 + the outer multi-target build) -> latest 10.0.x. -->
     <MicrosoftExtensionsDIVersion Condition="'$(MicrosoftExtensionsDIVersion)' == '' and '$(TargetFramework)' == 'net8.0'">8.0.2</MicrosoftExtensionsDIVersion>
     <MicrosoftExtensionsDIVersion Condition="'$(MicrosoftExtensionsDIVersion)' == ''">10.0.12</MicrosoftExtensionsDIVersion>
+    <!-- The DI IMPLEMENTATION package (Microsoft.Extensions.DependencyInjection, referenced by test projects only)
+         never had an 8.0.2: its last 8.0.x is 8.0.1, the servicing release that depends on Abstractions 8.0.2.
+         Asking it for $(MicrosoftExtensionsDIVersion) on net8.0 made NuGet resolve 9.0.0 (NU1603), so the net8.0
+         tests ran on a newer DI than the floor every package declares. -->
+    <MicrosoftExtensionsDIImplementationVersion Condition="'$(MicrosoftExtensionsDIImplementationVersion)' == '' and '$(TargetFramework)' == 'net8.0'">8.0.1</MicrosoftExtensionsDIImplementationVersion>
+    <MicrosoftExtensionsDIImplementationVersion Condition="'$(MicrosoftExtensionsDIImplementationVersion)' == ''">$(MicrosoftExtensionsDIVersion)</MicrosoftExtensionsDIImplementationVersion>
   </PropertyGroup>
 
 </Project>

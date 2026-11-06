@@ -18,7 +18,7 @@
     <!-- The DI CONTAINER implementation (ServiceCollection + BuildServiceProvider), needed to exercise
          the OptunaSharp.Extensions / *.Extensions DI wire-up end-to-end. Core ships only the
          abstractions; this brings the concrete container. Version single-sourced in Directory.Build.props. -->
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(MicrosoftExtensionsDIVersion)" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(MicrosoftExtensionsDIImplementationVersion)" />
   </ItemGroup>
 
   <ItemGroup>

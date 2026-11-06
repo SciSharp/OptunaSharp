@@ -16,7 +16,7 @@
     <!-- The DI CONTAINER implementation (ServiceCollection + BuildServiceProvider). The packages under
          test ship only the DI ABSTRACTIONS, so the concrete container is needed to actually register and
          resolve. Version single-sourced (8.0.x on net8.0, 10.0.x on net10.0) in ../../Directory.Build.props. -->
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(MicrosoftExtensionsDIVersion)" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="$(MicrosoftExtensionsDIImplementationVersion)" />
   </ItemGroup>
 
   <!-- THIS PROJECT'S REASON TO EXIST: reference EVERY DI-enabled OptunaSharp package at once so a single
