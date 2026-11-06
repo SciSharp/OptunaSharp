@@ -13,6 +13,8 @@ with a distribution compatible across all of them. It is the safe common ground 
 model jointly.
 
 ```csharp
+using OptunaSharp.Collections;     // OrderedDict
+using OptunaSharp.Distributions;   // BaseDistribution
 using OptunaSharp.SearchSpace;
 
 var searchSpace = new IntersectionSearchSpace();

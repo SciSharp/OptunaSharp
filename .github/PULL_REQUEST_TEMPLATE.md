@@ -16,7 +16,7 @@
 ## Testing
 
 - [ ] `dotnet build SciSharp.OptunaSharp.sln -c Release` is green
-- [ ] Unit tests pass: `dotnet test test/OptunaSharp.Tests/... --filter "TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython"`
+- [ ] Unit tests pass: `dotnet test test/OptunaSharp.Tests/... --filter "TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython&TestCategory!=Slow"`
 - [ ] Added/updated tests derived from real Optuna behavior (live interop where practical)
 - [ ] N/A — infra/docs only
 

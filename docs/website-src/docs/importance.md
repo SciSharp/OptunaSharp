@@ -8,6 +8,7 @@ OptunaSharp ports `optuna.importance` into **`OptunaSharp.Importance`**.
 
 ```csharp
 using OptunaSharp;
+using OptunaSharp.Collections;   // OrderedDict
 using OptunaSharp.Importance;
 
 OrderedDict<string, double> importances = ImportanceFunctions.GetParamImportances(study);

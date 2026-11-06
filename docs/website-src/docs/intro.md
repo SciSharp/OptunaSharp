@@ -31,6 +31,22 @@ study.optimize(objective, n_trials=100)
 print(study.best_params)   # -> {'x': ~2.0}
 ```
 
+The same study in OptunaSharp: names take .NET casing, everything else keeps Optuna's shape.
+
+```csharp
+using OptunaSharp;
+
+var study = Optuna.CreateStudy(direction: StudyDirection.Minimize);
+
+study.Optimize(trial =>
+{
+    double x = trial.SuggestFloat("x", -10, 10);
+    return (x - 2) * (x - 2);
+}, nTrials: 100);
+
+Console.WriteLine(study.BestParams["x"]);   // -> ~2.0
+```
+
 ## Why a .NET port
 
 - Use Optuna's ergonomics from C#/F# without embedding CPython in production.
