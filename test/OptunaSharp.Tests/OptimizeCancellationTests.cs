@@ -57,6 +57,15 @@ public class OptimizeCancellationTests
     ///     ignore the token here) finish COMPLETE, and only then does <c>Optimize</c> throw. At <c>nJobs: 1</c> the
     ///     callback of trial 5 cancels, so exactly trials 0–5 run, as Python's sequential loop would.
     /// </summary>
+    /// <remarks>
+    ///     With several workers the upper bound is taken from the trials that exist once the token is cancelled, not from
+    ///     trial 5's number. Until trial 5's callback runs, the other workers keep finishing trials and starting new ones,
+    ///     and trial 5's worker can fall several 10 ms trials behind them on a small or busy runner: a 3-core macOS arm64
+    ///     runner ended a run with 18 trials where a bound of <c>6 + nJobs</c> allowed 14 (dispatch 42393897318). What the
+    ///     code guarantees is relative to the cancellation: each worker checks the token right before it asks for a
+    ///     trial, so after <c>Cancel()</c> only a worker already past that check can still add one, at most one per
+    ///     worker other than the cancelling one.
+    /// </remarks>
     /// <param name="nJobs">The worker count.</param>
     /// <param name="kind">The executor of the workers.</param>
     [TestMethod]
@@ -67,10 +76,18 @@ public class OptimizeCancellationTests
     {
         var study = NewStudy();
         using var cts = new CancellationTokenSource();
+        // Trials that exist right after the cancel; written once by the cancelling callback, read after Optimize, which
+        // waits for every worker first.
+        int existingAfterCancel = -1;
         void CancelAfterTrialFive(Study s, FrozenTrial t)
         {
-            if (t.Number == 5)
-                cts.Cancel();
+            if (t.Number != 5)
+                return;
+            cts.Cancel();
+            // Counted after Cancel(), not before: from here on a worker that checks the token sees it cancelled, so the
+            // count can only be exceeded by workers that were already between their check and their Ask(). Counting
+            // first would let this thread be preempted between the two calls while the others keep adding trials.
+            existingAfterCancel = s.GetTrials(deepcopy: false).Count;
         }
 
         var act = () => study.Optimize(t =>
@@ -86,7 +103,8 @@ public class OptimizeCancellationTests
         if (nJobs == 1)
             trials.Select(t => t.Number).Should().Equal(Enumerable.Range(0, 6));
         else
-            trials.Count.Should().BeInRange(6, 6 + nJobs, "at most one more trial per worker was already running");
+            trials.Count.Should().BeInRange(6, existingAfterCancel + nJobs - 1,
+                "after the cancel only a worker already past its token check can start a trial, at most one per other worker");
     }
 
     /// <summary>
