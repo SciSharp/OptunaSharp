@@ -8,7 +8,10 @@
 - 2026-11-07: the executor can be chosen at four levels, OptunaSharp's dedicated threads (the default) or the
   .NET thread pool ([plan 10](plans/10-threading.md), Phase 1, §3.5);
 - 2026-11-07: OS seeds take numpy's 128-bit construction (§6.3), `TerminatorCallback` serializes its calls
-  (§6.6), and the stale-trial error divergence is pinned (§3.3) (plan 10, item 2.1).
+  (§6.6), and the stale-trial error divergence is pinned (§3.3) (plan 10, item 2.1);
+- 2026-11-07: the Redis journal reads in batches, seeds its counter inside the append script, keeps
+  OptunaSharp's snapshot under a key of its own at an interval chosen by read mode (§7.3), and its
+  StackExchange.Redis connections get dedicated threads by default (§7.2) (plan 10, items 2.2 and 2.3).
 
 One item is open: `PymooSampler` driven from more than one thread (review item 19b, §8). §12 lists it with
 the known limits.
@@ -642,7 +645,7 @@ study from inside its monitor.
 |---|---|---|
 | `InMemoryStorage` | one monitor; every operation is short; records are replaced on update, never changed (§6.1) | — (one process only) |
 | `JournalStorage` over `JournalFileBackend` | one monitor, held across each operation's sync and append, as in Python | the lock file around each append, on the same path and protocol as Python's, so C# and Python workers exclude each other. Reads take no lock. More in the notes below the table. |
-| `JournalStorage` over a Redis backend | the same monitor | on a standalone server, Redis's atomic Lua append (`INCR` then `SET` in one script). With `useCluster: true` the two are separate commands, as in Python (see below the table). |
+| `JournalStorage` over a Redis backend | the same monitor | on a standalone server, Redis's atomic Lua append (the counter's `SETNX`, then `INCR` and `SET`, in one script). With `useCluster: true` the commands are separate, as in Python (see below the table). |
 | SQLite `RDBStorage` (inside `CachedStorage`) | one connection under one lock | SQLite's database lock. A writer waits up to the busy timeout, 30 s by default (`SqliteRdbOptions.BusyTimeoutMs`, or the URL's `?timeout=`). |
 | EF Core `RDBStorage` (PostgreSQL, MySQL) | a `DbContext` per operation and no instance lock. PostgreSQL storages built from a URL or a connection string share one `NpgsqlDataSource` (one connection pool) per connection string for the life of the process; it is never disposed. MySQL storages use MySqlConnector's pool, also one per connection string. | the database: `SELECT … FOR UPDATE` where Optuna locks rows (trial creation holds the study's row), and PostgreSQL schema creation under an advisory lock |
 | `GrpcStorageProxy` | the client's trial cache under one lock, held across its remote read | the server's storage. Each call runs synchronously and holds a Kestrel pool thread until the storage returns. |
@@ -671,7 +674,7 @@ container disposes a scoped or transient storage twice.
 ### 7.2 Clients that complete synchronous calls on the thread pool
 
 - **StackExchange.Redis 3.x**, used by the `net10.0` builds of the StackExchange.Redis and NRedisStack
-  backends (`net8.0` uses StackExchange.Redis 2.13.17, where this was not measured):
+  backends (`net8.0` uses StackExchange.Redis 2.x; see below):
   - a synchronous call queues the command and parks the calling thread in `Monitor.Wait`;
   - the socket writer (`Task.Run(CopyOutAsync)`) and the reader (`Task.Run(ReadAllAsync)`) are
     thread-pool tasks.
@@ -686,6 +689,28 @@ container disposes a scoped or transient storage twice.
     `ConnectionMultiplexer.SetFeatureFlag("DedicatedThreads", true)`, set before connecting. It has nothing
     to do with OptunaSharp's executor of the same name. The flag is process-wide, its own documentation
     reserves it for support guidance, and it adds a reader and a writer thread per connection.
+
+  **The backends set the flag by default** (plan 10, item 2.3). The URL and `ConfigurationOptions`
+  constructors of the StackExchange.Redis and NRedisStack backends, and the DI `Add…JournalStorage(url, …)`
+  methods, take `dedicatedThreads: true` and set the flag before they connect. `false` leaves the flag as
+  it is (it never turns it off), and a multiplexer the caller passes in is never touched. Because the flag
+  is process-wide, every StackExchange.Redis connection the process opens afterwards, the host's own
+  included, gets its two threads too. The Redis integration page, `storage.md` and the backends' XML
+  remarks say so.
+
+  **StackExchange.Redis 2.x**, the `net8.0` builds' client (2.13.17 for the StackExchange.Redis backend,
+  2.12.14 under NRedisStack 1.5.0; a process loads one), has no such flag and silently ignores the name.
+  It does not time out under the same load, but it is slow until the pool grows.
+
+  Measured 2026-11-07 on 32 cores, pool minimum 32, each caller asking and telling 10 trials on one
+  journal from `Task.Run`:
+
+  | Callers | `net10.0`, no flag | `net10.0`, flag (the default) | `net8.0` (2.x) |
+  |---|---|---|---|
+  | 24 | 648 of 648 in 12.6 s | 648 of 648 in 7.3 s | 648 of 648 in 8.8 s |
+  | 64 | 634 of 640 in 37.0 s; 6 failed calls (4 `RedisTimeoutException`, a `RedisConnectionException`, a `TaskCanceledException`) | 640 of 640 in 7.0 s | 640 of 640 in 37.6 s |
+  | 64, pool minimum 200 | 640 of 640 in 7.6 s | — | 640 of 640 in 8.2 s |
+  | 96 | — | 960 of 960 in 10.8 s | 960 of 960 in 66.6 s |
 - **Grpc.Net.Client** makes its synchronous calls over asynchronous HTTP/2 loops and starves the same
   way. It has no default deadline, so a starved call waits instead of failing: 400 trials took 54–57 s at
   96 parked workers.
@@ -705,15 +730,47 @@ above is in use, keep the default `DedicatedThreads` executor, or raise the pool
 plus the host's own need with `ThreadPool.SetMinThreads`.
 
 The same applies without `nJobs`. A host that calls `Ask`/`Tell` from many pool threads at once starves
-too: 64 concurrent `Task.Run` callers on a Redis journal finished 624 of 640 trials in 92 s, with
-timeouts; with StackExchange.Redis's `DedicatedThreads` flag, 640 of 640 in 11 s.
+too: on 2026-10-29, 64 concurrent `Task.Run` callers on a Redis journal finished 624 of 640 trials in
+92 s, with timeouts, and 640 of 640 in 11 s with StackExchange.Redis's `DedicatedThreads` flag. The
+table above repeats the measurement on 2026-11-07, after the flag became the backends' default.
 
 ### 7.3 Throughput
 
 - The journal holds its monitor across every round trip of an operation, as Python's `JournalStorage`
-  does. A trial with two parameters costs 19 Redis round trips (11 `GET`, 4 `SETNX`, 4 `EVALSHA`), all
-  serialized. At a 1.1 ms round trip a Redis journal ran 47–49 trials/s at `nJobs` 1 and 8, and 23 at 16.
-  One `JournalStorage` per worker thread (separate monitors, one journal) reached 138–153 trials/s.
+  does, so a storage's round trips are serialized. Plan 10's item 2.2 cut how many there are on a
+  standalone Redis server (keys, record bytes and numbering stay Python's):
+  - a sync is one call of a read-only Lua script that returns the counter and up to 1,000 records, where
+    Python sends one `GET` for the counter and one per record;
+  - the append script seeds the counter itself, where Python sends a `SETNX` before every append.
+
+  A trial with two parameters, asked and told, now costs 12 client commands, every one a script call
+  (8 syncs, 4 appends), against 20 before (12 `GET`, 4 `SETNX`, 4 appends), counted with
+  StackExchange.Redis's profiler. Against a local Redis (0.66 ms median `PING`), a journal ran 92–127
+  trials/s at `nJobs` 1 and 8, against 62–69 before, and a new storage over 400 trials started in
+  24–49 ms instead of 312–391 ms. Cluster mode still reads key by key, as Python does, because the keys
+  sit in different hash slots. On 2026-10-29, at a 1.1 ms round trip, the old code ran 47–49 trials/s at
+  `nJobs` 1 and 8 and 23 at 16, and one `JournalStorage` per worker thread (separate monitors, one
+  journal) reached 138–153 trials/s.
+- **Snapshots.** A Redis journal storage saves OptunaSharp's replay snapshot under its own key,
+  `{prefix}:snapshot:optunasharp`. Python's pickle stays alone in `{prefix}:snapshot`, so a new worker of
+  either language restores its own latest snapshot. A snapshot is saved by the worker that creates a
+  study or trial whose id is a multiple of the interval. It serializes the whole study under the storage's
+  monitor, so it stalls that process's other operations and grows with the study. The interval follows
+  the backend's read mode (`IJournalSnapshotInterval`, the owner's choice on 2026-11-07): 1000 on a
+  standalone server and Optuna's 100 in cluster mode. `JournalStorage(…, snapshotInterval:)` overrides
+  it. Measured at 20,000 two-parameter trials:
+
+  | Interval | Writer, ms per trial | Cold start, standalone | Cold start, cluster mode |
+  |---|---|---|---|
+  | 100 | 12.87 (+48%) | 1.19 s | 1.17 s |
+  | 1000 | 9.23 (+6%) | 1.22 s | 4.03 s |
+  | none | 8.69 | 1.30 s | 53.8 s |
+
+  At 4,000 trials, intervals of 25, 100, 500 and 2000 and no snapshot gave the writer 11.37, 9.27, 8.39,
+  8.06 and 8.48 ms per trial, and cold starts of 236, 240, 248, 288 and 304 ms. With batched reads a
+  snapshot buys a standalone cold start little because its JSON is slow. Restoring the 10.6 MB snapshot of
+  20,000 trials took 0.75–0.95 s: `PyJson.Loads` alone took 0.48–0.58 s, where `JsonDocument.Parse` takes
+  0.05 s. Saving it took 0.49–0.61 s. Plan 10's item 2.7 addresses that.
 - The file journal syncs every append to disk. 16 contending workers sustained about 80–150 appends per
   second on an SSD.
 - Sampling is serial per sampler (§6.3).
@@ -852,8 +909,10 @@ timeouts; with StackExchange.Redis's `DedicatedThreads` flag, 640 of 640 in 11 s
   the storage client needs the pool (§7.2). A derived `TrialExecutorOptions` may compute its values; each
   call reads them once.
 - **Host applications.** Do not run many studies or Ask/Tell calls on pool threads at once when the
-  storage client needs the pool (§7.2). Use `nJobs` or threads of your own, raise
-  `ThreadPool.SetMinThreads`, or turn on StackExchange.Redis's `DedicatedThreads` flag for Redis.
+  storage client needs the pool (§7.2). Use `nJobs` or threads of your own, or raise
+  `ThreadPool.SetMinThreads`. For Redis, the StackExchange.Redis and NRedisStack backends turn on
+  StackExchange.Redis's process-wide `DedicatedThreads` flag by default; keep that default
+  (`dedicatedThreads: true`) unless the host manages the flag itself.
 - **Dependency injection.** Samplers and pruners are registered transient by default, so every study
   gets its own instance. Storages are singletons by default: one instance is thread-safe and shares its
   connection.
@@ -877,6 +936,10 @@ timeouts; with StackExchange.Redis's `DedicatedThreads` flag, 640 of 640 in 11 s
 | `MLNetEstimatorNJobsTests` (Integration.ML.NET suite) | `OptunaSearchCV(nJobs: 4)` over one `MLNetEstimator`: 16 trials that overlap in time, every fold score equal to a sequential evaluation and none NaN |
 | `StorageConcurrencyTestsBase` and its SQLite, PostgreSQL, MySQL and gRPC subclasses (Storage suite) | one storage under `nJobs: 8`, eight separate storages, enqueued pops, sixteen storages creating one study name |
 | `RedisJournalConcurrencyTests` (Storage suite) | separate storages on one study; `nJobs` at four times the pool's minimum does not starve the client; dispose races |
+| `RedisJournalCostAndThreadsTests` (Storage suite) | plan 10, items 2.2 and 2.3: a two-parameter trial costs 12 client commands, all script calls; snapshots at the configured interval under OptunaSharp's key only; with no snapshot of its own a backend reads only the first byte of Python's pickle; the owning constructors turn the `DedicatedThreads` flag on by default, `false` leaves it alone, an injected multiplexer is untouched (Inconclusive on 2.x, which has no flag); more thread-pool callers than twice the pool's minimum ask and tell without losing a trial, on 3.x and on 2.x |
+| `JournalBackendContractTests` (Storage suite, all three clients) | batched reads across batches, ending at the counter seen first and waiting for a record missing inside a batch; the counter seeded inside the append script after the journal's keys are deleted; snapshots written to OptunaSharp's key only, an older one found once in Python's key, a pickle there ignored; each backend's snapshot interval by read mode, taken by a storage built without one |
+| `JournalStorageTests` | the snapshot interval: saves at its multiples, a cold start that reads only the records after the snapshot, the backend's interval when the constructor is not given one (read once), Optuna's 100 otherwise, and invalid values refused from either source |
+| `JournalRedisInteropTests` (Interop suite) | each client against live Optuna on one Redis journal, both directions; Python's and OptunaSharp's snapshots on one journal, each in its own key, each language's cold start restoring its own without a failed-restore warning |
 | `StorageDisposalEdgeTests` (Storage suite) | a scoped SQLite storage, gRPC proxy or EF Core storage, disposed through both of its DI registrations, synchronously or asynchronously, closes its connection, channel or owned data source |
 | `JournalMixedFleetInteropTests` (Interop suite) | C# and Python workers on one journal file (both lock protocols), on Redis, and with CMA-ES, compared with a Python-only fleet |
 | `CmaEsMixedFleetInteropTests` (Interop suite) | C# and Python workers taking turns on one CMA-ES study, with and without margin, run the study Python runs alone |
@@ -884,7 +947,11 @@ timeouts; with StackExchange.Redis's `DedicatedThreads` flag, 640 of 640 in 11 s
 | `OptunaHubBridgeParityTests` (Interop suite) | the real hub sampler at `nJobs: 8`; the real hub sampler and median pruner with an objective inside `Py.GIL()` at `nJobs: 4` |
 
 The tests plan 10's item 2.1 added were checked against the old code, which they fail: 9–14 repeated
-draws in 300,000 reseeds, and 8 terminator calls at once.
+draws in 300,000 reseeds, and 8 terminator calls at once. For items 2.2 and 2.3, the old code costs 20
+client commands per trial where the test expects 12, writes its snapshot to Python's key, and, without
+the flag on 3.x, lost 6 of 640 trials in the host scenario. Python logs ``Failed to restore
+`JournalStorageReplayResult`.`` when OptunaSharp's JSON sits in its key, which is what the cross-language
+snapshot test watches for.
 
 ## 12. Known limits and open items
 
@@ -894,8 +961,10 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
 - **19b:** `PymooSampler` is bound to the thread that created it, which rules out `nJobs` above 1 (§8).
   Plan 10, 2.5.
 - **Journal throughput:** one monitor across all of an operation's round trips, as in Python (§7.3).
-  Plan 10, 2.2 cuts a trial from 19 to 11 Redis round trips; 2.3 turns on StackExchange.Redis's
-  `DedicatedThreads` for the connections OptunaSharp opens (§7.2).
+  On a standalone Redis server a two-parameter trial costs 12 round trips (plan 10, 2.2, done); cluster
+  mode still reads key by key.
+- **Snapshot cost:** OptunaSharp's journal snapshot is JSON through `PyJson`, about ten times slower to
+  parse than `System.Text.Json`, and it is saved under the storage's monitor (§7.3). Plan 10, 2.7.
 - **The Redis cluster append** (§7.1): a writer that dies between `INCR` and `SET` stalls every reader,
   as in Python.
 - **No cancellation token and no Ctrl+C handling:** stop through a callback. Ctrl+C ends the process

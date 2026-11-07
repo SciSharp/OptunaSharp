@@ -37,6 +37,8 @@ public static class NRedisStackJournalServiceCollectionExtensions
     /// <param name="useCluster">Whether the server is a Redis Cluster (changes key hash-tagging).</param>
     /// <param name="prefix">Key-namespace prefix for this study's journal keys.</param>
     /// <param name="lifetime">The registration lifetime; defaults to <see cref="ServiceLifetime.Singleton" />.</param>
+    /// <param name="dedicatedThreads">Whether the backend turns on StackExchange.Redis's process-wide <c>DedicatedThreads</c>
+    ///   feature flag before it connects (default <c>true</c>); see <see cref="NRedisStackJournalRedisBackend" />'s remarks.</param>
     /// <returns>The same <paramref name="services" />, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services" />, <paramref name="url" /> or <paramref name="prefix" /> is <c>null</c>.</exception>
     public static IServiceCollection AddNRedisStackJournalStorage(
@@ -44,12 +46,13 @@ public static class NRedisStackJournalServiceCollectionExtensions
         string url,
         bool useCluster = false,
         string prefix = "",
-        ServiceLifetime lifetime = ServiceLifetime.Singleton)
+        ServiceLifetime lifetime = ServiceLifetime.Singleton,
+        bool dedicatedThreads = true)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(url);
         ArgumentNullException.ThrowIfNull(prefix);
-        return Add(services, new ServiceDescriptor(typeof(NRedisStackJournalRedisBackend), _ => new NRedisStackJournalRedisBackend(url, useCluster, prefix), lifetime), lifetime);
+        return Add(services, new ServiceDescriptor(typeof(NRedisStackJournalRedisBackend), _ => new NRedisStackJournalRedisBackend(url, useCluster, prefix, dedicatedThreads), lifetime), lifetime);
     }
 
     /// <summary>Register a pre-built <see cref="NRedisStackJournalRedisBackend" /> (wrapped in a <see cref="JournalStorage" /> and exposed as <see cref="BaseStorage" />).</summary>

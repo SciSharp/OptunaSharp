@@ -127,6 +127,115 @@ public class JournalRedisInteropTests
         }
     }
 
+    /// <summary>
+    ///     Plan 10, item 2.2: on one Redis journal each language keeps its own replay snapshot. Python pickles its state
+    ///     under <c>{prefix}:snapshot</c>; OptunaSharp writes JSON under <c>{prefix}:snapshot:optunasharp</c>. Neither
+    ///     overwrites the other's, and a cold start of either language restores its own snapshot without the
+    ///     <c>Failed to restore `JournalStorageReplayResult`.</c> warning both logged while they shared one key (and then
+    ///     replayed the whole journal).
+    /// </summary>
+    /// <remarks>
+    ///     C# runs trials 0–6 at an interval of 5 (its snapshot at trial 5), Python continues with trials 7–13 at its
+    ///     <c>SNAPSHOT_INTERVAL</c> patched from 100 to 5 (its snapshot at trial 10; the module global is put back
+    ///     afterwards), then each language opens a new storage over the journal and must see all 14 trials.
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("RequiresRedis")]
+    [TestCategory("Integration")]
+    public void PythonAndCSharp_OnOneRedisJournal_EachKeepsItsOwnSnapshot()
+    {
+        PythonSession.EnsureOrInconclusive();
+        EnsureRedisOrInconclusive();
+
+        var csharpWarnings = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var handler = new RestoreWarningHandler(csharpWarnings);
+        OptunaSharp.Logging.OptunaLogging.AddHandler(handler);
+        try
+        {
+            // --- 1. C# creates the study: trials 0-6, a snapshot at trial 5 under its own key only. -------------
+            var writer = new JournalStorage(new StackExchangeJournalRedisBackend(Url, prefix: _prefix), snapshotInterval: 5);
+            var study = Optuna.CreateStudy(studyName: "snapshots", storage: writer, sampler: new RandomSampler(seed: 3));
+            study.Optimize(t => t.SuggestFloat("x", -10, 10), nTrials: 7);
+
+            using var mux = ConnectionMultiplexer.Connect(ProbeConfig);
+            var db = mux.GetDatabase();
+            byte[] ownAfterCSharp = (byte[])db.StringGet(RedisJournalProtocol.OwnSnapshotKey(_prefix))!;
+            ownAfterCSharp[0].Should().Be((byte)'{', "OptunaSharp's snapshot is JSON");
+            db.KeyExists(RedisJournalProtocol.SnapshotKey(_prefix)).Should().BeFalse("OptunaSharp never writes Python's key");
+
+            // --- 2. Python continues (trials 7-13, its snapshot at trial 10), then cold-starts over the journal. ---
+            double[] pythonValues;
+            using (Py.GIL())
+            {
+                using PyModule scope = Py.CreateScope();
+                scope.Exec(
+                    "import logging, pickle, optuna\n" +
+                    "import optuna.storages.journal._storage as js\n" +
+                    "optuna.logging.set_verbosity(optuna.logging.WARNING)\n" +
+                    "messages = []\n" +
+                    "class Collect(logging.Handler):\n" +
+                    "    def emit(self, record):\n" +
+                    "        messages.append(record.getMessage())\n" +
+                    "handler = Collect()\n" +
+                    "logger = logging.getLogger('optuna.storages.journal._storage')\n" +
+                    "logger.addHandler(handler)\n" +
+                    "saved_interval = js.SNAPSHOT_INTERVAL\n" +
+                    "js.SNAPSHOT_INTERVAL = 5\n" +
+                    "try:\n" +
+                    $"    backend = optuna.storages.journal.JournalRedisBackend('{Url}', prefix='{_prefix}')\n" +
+                    "    study = optuna.load_study(study_name='snapshots', storage=optuna.storages.JournalStorage(backend),\n" +
+                    "                              sampler=optuna.samplers.RandomSampler(seed=4))\n" +
+                    "    study.optimize(lambda t: t.suggest_float('x', -10, 10), n_trials=7)\n" +
+                    "    snapshot = backend.load_snapshot()\n" +
+                    "    is_pickle = snapshot is not None and snapshot[:1] == b'\\x80'\n" +
+                    "    pickled_trials = len(pickle.loads(snapshot).get_all_trials(0, None))\n" +
+                    $"    cold_backend = optuna.storages.journal.JournalRedisBackend('{Url}', prefix='{_prefix}')\n" +
+                    "    cold = optuna.load_study(study_name='snapshots', storage=optuna.storages.JournalStorage(cold_backend))\n" +
+                    "    cold_values = [float(t.value) for t in cold.trials]\n" +
+                    "finally:\n" +
+                    "    js.SNAPSHOT_INTERVAL = saved_interval\n" +
+                    "    logger.removeHandler(handler)\n" +
+                    "restore_failures = sum('Failed to restore' in m for m in messages)\n");
+
+                scope.Get("is_pickle").As<bool>().Should().BeTrue("Python's key holds Python's pickle");
+                scope.Get("pickled_trials").As<int>().Should().Be(11, "Python saved its state when it created trial 10");
+                scope.Get("restore_failures").As<int>().Should().Be(0, "Python's cold start restores its own pickle");
+                using var coldValues = scope.Get("cold_values");
+                pythonValues = Enumerable.Range(0, 14).Select(i => coldValues[i].As<double>()).ToArray();
+            }
+
+            // --- 3. C#'s own snapshot is untouched, and a C# cold start restores it and sees all 14 trials. --------
+            // Outside the GIL: the C# side never needs Python, and the interop discipline keeps the two apart.
+            ((byte[])db.StringGet(RedisJournalProtocol.OwnSnapshotKey(_prefix))!).Should().Equal(ownAfterCSharp,
+                "Python never writes OptunaSharp's key");
+            var cold = Optuna.LoadStudy("snapshots",
+                new JournalStorage(new StackExchangeJournalRedisBackend(Url, prefix: _prefix), snapshotInterval: 5));
+            cold.Trials.Select(t => t.Value!.Value).Should().Equal(pythonValues,
+                "both languages replay the same 14 trials, bit for bit");
+
+            csharpWarnings.Should().BeEmpty("OptunaSharp's cold start restores its own JSON snapshot");
+        }
+        finally
+        {
+            OptunaSharp.Logging.OptunaLogging.RemoveHandler(handler);
+        }
+    }
+
+    /// <summary>Collects OptunaSharp's journal-restore failure warnings, the C# twin of Python's log handler above.</summary>
+    /// <param name="sink">Receives each warning's message.</param>
+    private sealed class RestoreWarningHandler(System.Collections.Concurrent.ConcurrentQueue<string> sink)
+        : OptunaSharp.Logging.ILogHandler
+    {
+        /// <summary>Keeps the record when it is a journal snapshot that failed to restore.</summary>
+        /// <param name="record">The log record.</param>
+        public void Emit(in OptunaSharp.Logging.LogRecord record)
+        {
+            if (record.Message.Contains("Failed to restore"))
+                sink.Enqueue(record.Message);
+        }
+    }
+
     /// <summary>Skip (Inconclusive) unless a Redis server is reachable AND redis-py is importable.</summary>
     /// <remarks>Shared with the Redis fleet of <see cref="JournalMixedFleetInteropTests" />.</remarks>
     internal static void EnsureRedisOrInconclusive()

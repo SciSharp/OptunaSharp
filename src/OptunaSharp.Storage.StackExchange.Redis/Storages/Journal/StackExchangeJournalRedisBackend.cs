@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,7 +29,34 @@ namespace OptunaSharp.Storages.Journal;
 ///     is reachable; the on-wire journal format is fixed by <see cref="RedisJournalProtocol" />
 ///     regardless of how you connect, so byte-compatibility holds however you configure the client.</para>
 /// </summary>
-public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot, IDisposable, IAsyncDisposable
+/// <remarks>
+///     <para>
+///         <b>Thread-pool callers and StackExchange.Redis's <c>DedicatedThreads</c> flag.</b> StackExchange.Redis 3.x,
+///         the net10.0 build's client, runs each connection's socket reader and writer on the .NET thread pool, while a
+///         synchronous call parks its own thread until the reply arrives. When thread-pool callers outnumber the pool's
+///         minimum (an ASP.NET request burst calling <c>Ask</c>/<c>Tell</c>, or <c>Optimize</c> with the thread-pool
+///         executor), nothing is left to read the replies, the pool adds threads only about once a second, and calls
+///         fail with <c>RedisTimeoutException</c>. The URL and options constructors therefore turn on the library's
+///         <c>DedicatedThreads</c> feature flag before they connect (<c>dedicatedThreads: true</c>, the default), which
+///         gives each connection a reader and a writer thread of its own. Measured 2026-11-07 on 32 cores, 64
+///         <c>Task.Run</c> callers asking and telling on one journal: 634 of 640 trials in 37.0 s without the flag,
+///         the 6 failed calls including 4 <c>RedisTimeoutException</c>s, and 640 of 640 in 7.0 s with it
+///         (THREADING.md §7.2).
+///     </para>
+///     <list type="bullet">
+///         <item>The flag is process-wide: every StackExchange.Redis connection the process opens afterwards, the
+///         host's own included, gets its two threads too. Connections opened before are unchanged.</item>
+///         <item>StackExchange.Redis reserves <c>ConnectionMultiplexer.SetFeatureFlag</c> for support guidance and hides
+///         it from IntelliSense.</item>
+///         <item>To opt out, pass <c>dedicatedThreads: false</c>, which leaves the flag as it is (it never turns it off),
+///         or connect a multiplexer yourself and pass it in: the backend never touches an injected connection.</item>
+///         <item>StackExchange.Redis 2.x, the net8.0 build's client, has no such flag, and the argument has no effect
+///         there. 2.x lost no trial under the same load, but took 37.6 s, against 8.2 s with the pool's minimum raised
+///         to 200: raise the pool's minimum with <see cref="ThreadPool.SetMinThreads(int, int)" /> if your host calls from many pool
+///         threads at once.</item>
+///     </list>
+/// </remarks>
+public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot, IJournalSnapshotInterval, IDisposable, IAsyncDisposable
 {
     private readonly string _url;
     private readonly bool _useCluster;
@@ -39,6 +67,9 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     // false for an injected multiplexer, which stays the caller's. Before Dispose existed, every scoped or transient
     // DI registration leaked one open Redis connection per scope (40 scopes left 40 connections).
     private readonly bool _ownsConnection;
+
+    // StackExchange.Redis's feature-flag name; SetFeatureFlag matches names case-insensitively and ignores unknown ones.
+    private const string DedicatedThreadsFeatureFlag = "DedicatedThreads";
     private int _disposed;
 
     // ---------------------------------------------------------------- construction
@@ -58,6 +89,10 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <param name="useCluster">If <c>false</c> (default), a standalone server + one atomic Lua
     ///   <c>EVAL</c>; if <c>true</c>, a cluster + non-atomic <c>INCR</c>+<c>SET</c>.</param>
     /// <param name="prefix">Prefix of the preserved keys — useful when many users share one server.</param>
+    /// <param name="dedicatedThreads">Whether to turn on StackExchange.Redis's <c>DedicatedThreads</c> feature flag
+    ///   before connecting (default <c>true</c>), so the connection's socket reader and writer run on threads of their
+    ///   own rather than on the .NET thread pool. See the class remarks: the flag is process-wide, <c>false</c> never
+    ///   turns it off, and StackExchange.Redis 2.x (the net8.0 build's client) has no such flag.</param>
     /// <exception cref="ValueError">A URL redis-py rejects, with redis-py's message (see <see cref="RedisUrl.Parse" />).</exception>
     /// <exception cref="TypeError">A query argument redis-py's connection class does not take, with redis-py's message.</exception>
     /// <exception cref="OverflowException">A timeout or TLS version too large for Python, with Python's message.</exception>
@@ -65,8 +100,8 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <exception cref="System.IO.FileNotFoundException">A TLS certificate, key or authority file that does not exist.</exception>
     /// <exception cref="System.Security.Cryptography.CryptographicException">A malformed TLS certificate, key or authority file.</exception>
     /// <remarks>The backend owns the connection it opens here: <see cref="Dispose" /> closes it.</remarks>
-    public StackExchangeJournalRedisBackend(string url, bool useCluster = false, string prefix = "")
-        : this(ConnectionMultiplexer.Connect(ToConfiguration(RedisUrl.Parse(url))), url, useCluster, prefix, ownsConnection: true)
+    public StackExchangeJournalRedisBackend(string url, bool useCluster = false, string prefix = "", bool dedicatedThreads = true)
+        : this(Connect(ToConfiguration(RedisUrl.Parse(url)), dedicatedThreads), url, useCluster, prefix, ownsConnection: true)
     {
     }
 
@@ -81,10 +116,14 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     ///   <paramref name="url" /> immediately before connecting; mutate it in place.</param>
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    /// <param name="dedicatedThreads">Whether to turn on StackExchange.Redis's <c>DedicatedThreads</c> feature flag
+    ///   before connecting (default <c>true</c>), so the connection's socket reader and writer run on threads of their
+    ///   own rather than on the .NET thread pool. See the class remarks: the flag is process-wide, <c>false</c> never
+    ///   turns it off, and StackExchange.Redis 2.x (the net8.0 build's client) has no such flag.</param>
     /// <remarks>The backend owns the connection it opens here: <see cref="Dispose" /> closes it.</remarks>
     public StackExchangeJournalRedisBackend(string url, Action<ConfigurationOptions> configure,
-        bool useCluster = false, string prefix = "")
-        : this(ConnectionMultiplexer.Connect(Configure(RedisUrl.Parse(url), configure)), url, useCluster, prefix, ownsConnection: true)
+        bool useCluster = false, string prefix = "", bool dedicatedThreads = true)
+        : this(Connect(Configure(RedisUrl.Parse(url), configure), dedicatedThreads), url, useCluster, prefix, ownsConnection: true)
     {
     }
 
@@ -96,10 +135,15 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     /// <param name="options">The connection options; passed straight to <see cref="ConnectionMultiplexer" />.</param>
     /// <param name="useCluster">Append strategy (see the URL-only constructor).</param>
     /// <param name="prefix">Key prefix (see the URL-only constructor).</param>
+    /// <param name="dedicatedThreads">Whether to turn on StackExchange.Redis's <c>DedicatedThreads</c> feature flag
+    ///   before connecting (default <c>true</c>), so the connection's socket reader and writer run on threads of their
+    ///   own rather than on the .NET thread pool. See the class remarks: the flag is process-wide, <c>false</c> never
+    ///   turns it off, and StackExchange.Redis 2.x (the net8.0 build's client) has no such flag.</param>
     /// <exception cref="System.ArgumentNullException"><paramref name="options" /> is null.</exception>
     /// <remarks>The backend owns the connection it opens here: <see cref="Dispose" /> closes it.</remarks>
-    public StackExchangeJournalRedisBackend(ConfigurationOptions options, bool useCluster = false, string prefix = "")
-        : this(ConnectionMultiplexer.Connect(options ?? throw new ArgumentNullException(nameof(options))),
+    public StackExchangeJournalRedisBackend(ConfigurationOptions options, bool useCluster = false, string prefix = "",
+        bool dedicatedThreads = true)
+        : this(Connect(options ?? throw new ArgumentNullException(nameof(options)), dedicatedThreads),
                "", useCluster, prefix, ownsConnection: true)
     {
     }
@@ -118,6 +162,30 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
     public StackExchangeJournalRedisBackend(IConnectionMultiplexer connection, bool useCluster = false, string prefix = "")
         : this(connection ?? throw new ArgumentNullException(nameof(connection)), "", useCluster, prefix, ownsConnection: false)
     {
+    }
+
+    /// <summary>
+    ///     Opens the connection a URL or options constructor owns, first turning on StackExchange.Redis's process-wide
+    ///     <c>DedicatedThreads</c> feature flag when <paramref name="dedicatedThreads" /> asks for it.
+    /// </summary>
+    /// <param name="options">The connection options to connect with.</param>
+    /// <param name="dedicatedThreads">Whether to set the flag first; <c>false</c> leaves it as it is.</param>
+    /// <returns>The connected multiplexer.</returns>
+    /// <remarks>
+    ///     The flag must be set before <see cref="ConnectionMultiplexer.Connect(ConfigurationOptions, System.IO.TextWriter)" />:
+    ///     a multiplexer reads it when it starts its socket reader and writer. StackExchange.Redis 3.x otherwise runs
+    ///     both on the .NET thread pool while each synchronous call parks its own thread, so thread-pool callers above
+    ///     the pool's minimum starve the reader and the calls time out. Measured 2026-11-07 on 32 cores, 64
+    ///     <c>Task.Run</c> callers asking and telling on one journal: 634 of 640 trials in 37.0 s without the flag, the
+    ///     6 failed calls including 4 <c>RedisTimeoutException</c>s, and 640 of 640 in 7.0 s with it (THREADING.md §7.2).
+    ///     StackExchange.Redis 2.x has no such flag and ignores the unknown name, so the call is harmless there; a
+    ///     net8.0 application that references 3.x itself still gets the flag.
+    /// </remarks>
+    private static ConnectionMultiplexer Connect(ConfigurationOptions options, bool dedicatedThreads)
+    {
+        if (dedicatedThreads)
+            ConnectionMultiplexer.SetFeatureFlag(DedicatedThreadsFeatureFlag, true);
+        return ConnectionMultiplexer.Connect(options);
     }
 
     /// <summary>Binds the shared Redis connection, key namespace, and append strategy for all constructor paths.</summary>
@@ -188,7 +256,24 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
 
     /// <inheritdoc />
     /// <exception cref="NumSharp.ValueError">A nonfinal journal record contains malformed JSON.</exception>
+    /// <remarks>
+    ///     On a standalone server the counter and up to <see cref="RedisJournalProtocol.ReadLogsBatchLimit" /> records
+    ///     arrive in one round trip (<see cref="RedisJournalProtocol.ReadLogsScript" />), where Python sends one
+    ///     <c>GET</c> for the counter and one per record. Cluster mode reads key by key, as Python does, because its keys
+    ///     span hash slots. Either way the read ends at the counter value it saw first and applies Python's rule for a
+    ///     corrupt record: only the last one may be incomplete.
+    /// </remarks>
     public override IEnumerable<OrderedDict<string, object?>> ReadLogs(int logNumberFrom)
+        => _useCluster ? ReadLogsByKey(logNumberFrom) : ReadLogsByScript(logNumberFrom);
+
+    /// <summary>
+    ///     Reads key by key, as Python's <c>read_logs</c> does: one <c>GET</c> for the counter, then one per record,
+    ///     waiting for a record the counter already covers. Cluster mode's read.
+    /// </summary>
+    /// <param name="logNumberFrom">The first log number to read.</param>
+    /// <returns>The decoded records, in log order.</returns>
+    /// <exception cref="NumSharp.ValueError">A nonfinal journal record contains malformed JSON.</exception>
+    private IEnumerable<OrderedDict<string, object?>> ReadLogsByKey(int logNumberFrom)
     {
         RedisValue maxLogNumberBytes = Db.StringGet(RedisJournalProtocol.LogNumberKey(_prefix));
         if (maxLogNumberBytes.IsNull)
@@ -231,11 +316,119 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
         }
     }
 
+    /// <summary>
+    ///     Reads a standalone journal in batches through <see cref="RedisJournalProtocol.ReadLogsScript" />: one round
+    ///     trip per <see cref="RedisJournalProtocol.ReadLogsBatchLimit" /> records, the counter included.
+    /// </summary>
+    /// <param name="logNumberFrom">The first log number to read.</param>
+    /// <returns>The decoded records, in log order.</returns>
+    /// <exception cref="NumSharp.ValueError">A nonfinal journal record contains malformed JSON.</exception>
+    private IEnumerable<OrderedDict<string, object?>> ReadLogsByScript(int logNumberFrom)
+    {
+        long next = logNumberFrom;
+        long maxLogNumber = 0;
+        bool firstCall = true;
+        while (true)
+        {
+            // The first call reads up to the counter's current value and reports it; the later ones stop at that value,
+            // so the read ends where Python's would, however many records other workers append meanwhile.
+            var reply = (RedisResult[]?)Db.ScriptEvaluate(
+                RedisJournalProtocol.ReadLogsScript,
+                keys: Array.Empty<RedisKey>(),
+                values: new RedisValue[]
+                {
+                    _prefix, next, RedisJournalProtocol.ReadLogsBatchLimit,
+                    firstCall ? RedisValue.EmptyString : (RedisValue)maxLogNumber,
+                });
+            if (reply is null || reply.Length == 0)
+                yield break;   // no counter: nothing was ever appended under this prefix
+            if (firstCall)
+            {
+                maxLogNumber = long.Parse((string)reply[0]!, CultureInfo.InvariantCulture);
+                firstCall = false;
+            }
+
+            for (int k = 1; k < reply.Length; k++, next++)
+            {
+                if (!TryParseLog((string)reply[k]!, next, maxLogNumber, out var parsed))
+                    yield break;
+                yield return parsed;
+            }
+
+            if (next > maxLogNumber)
+                yield break;
+            if (reply.Length - 1 < RedisJournalProtocol.ReadLogsBatchLimit)
+            {
+                // The script stopped at a record the counter covers but that does not exist yet, which only a cluster-mode
+                // writer sharing this prefix leaves, between its INCR and its SET. Wait for it as Python's reader does,
+                // then go on in batches.
+                if (!TryParseLog(WaitForLog(next), next, maxLogNumber, out var waited))
+                    yield break;
+                yield return waited;
+                next++;
+                if (next > maxLogNumber)
+                    yield break;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Waits until record <paramref name="logNumber" /> exists, polling as Python's reader does: 0.1 s at first,
+    ///     doubling up to 10 s between tries.
+    /// </summary>
+    /// <param name="logNumber">The record the counter already covers.</param>
+    /// <returns>The record's JSON text.</returns>
+    /// <exception cref="RedisConnectionException">The connection fails while waiting; the wait itself never gives up.</exception>
+    /// <exception cref="RedisTimeoutException">One <c>GET</c> exceeds the connection's synchronous timeout.</exception>
+    private string WaitForLog(long logNumber)
+    {
+        double sleepSecs = 0.1;
+        while (true)
+        {
+            RedisValue log = Db.StringGet(RedisJournalProtocol.LogKey(_prefix, logNumber));
+            if (!log.IsNull)
+                return log.ToString();
+            Thread.Sleep(TimeSpan.FromSeconds(sleepSecs));
+            sleepSecs = Math.Min(sleepSecs * 2, 10);
+        }
+    }
+
+    /// <summary>Decodes one record, applying Python's rule that only the read's last record may be incomplete.</summary>
+    /// <param name="log">The record's JSON text.</param>
+    /// <param name="logNumber">The record's log number.</param>
+    /// <param name="maxLogNumber">The last log number of this read.</param>
+    /// <param name="parsed">The decoded record when this returns <c>true</c>.</param>
+    /// <returns><c>false</c> when the last record is incomplete, which ends the read as in Python.</returns>
+    /// <exception cref="NumSharp.ValueError">A record other than the last contains malformed JSON.</exception>
+    private static bool TryParseLog(string log, long logNumber, long maxLogNumber, out OrderedDict<string, object?> parsed)
+    {
+        try
+        {
+            parsed = (OrderedDict<string, object?>)PyJson.Loads(log)!;
+            return true;
+        }
+        catch (ValueError)
+        {
+            // Only the final record may still be incomplete; corruption earlier in the journal cannot be deferred
+            // without changing the replayed sequence of storage operations.
+            if (logNumber != maxLogNumber)
+                throw;
+            parsed = null!;
+            return false;
+        }
+    }
+
     /// <inheritdoc />
+    /// <remarks>
+    ///     On a standalone server each record costs one round trip: <see cref="RedisJournalProtocol.AppendLogScript" />
+    ///     seeds the counter itself, where Python sends a separate <c>SETNX</c> before every append. Cluster mode and an
+    ///     empty append still send the <c>SETNX</c>, so an empty append creates the counter at -1 as Python's does.
+    /// </remarks>
     public override void AppendLogs(IReadOnlyList<OrderedDict<string, object?>> logs)
     {
         IDatabase db = Db;
-        db.StringSet(RedisJournalProtocol.LogNumberKey(_prefix), RedisJournalProtocol.InitialLogNumber, when: When.NotExists);
+        if (_useCluster || logs.Count == 0)
+            db.StringSet(RedisJournalProtocol.LogNumberKey(_prefix), RedisJournalProtocol.InitialLogNumber, when: When.NotExists);
         foreach (var log in logs)
         {
             if (!_useCluster)
@@ -253,17 +446,51 @@ public class StackExchangeJournalRedisBackend : BaseJournalBackend, IBaseJournal
         }
     }
 
-    /// <summary>Replaces the Redis journal snapshot with the supplied opaque serialized bytes.</summary>
+    /// <summary>
+    ///     The snapshot interval a <see cref="JournalStorage" /> over this backend uses when its constructor is not given
+    ///     one: <see cref="RedisJournalProtocol.StandaloneSnapshotInterval" /> (1000) on a standalone server, where records
+    ///     are read a thousand per round trip, and <see cref="RedisJournalProtocol.ClusterSnapshotInterval" /> (Optuna's
+    ///     100) in cluster mode, where every record costs a round trip of its own.
+    /// </summary>
+    public int DefaultSnapshotInterval
+        => _useCluster ? RedisJournalProtocol.ClusterSnapshotInterval : RedisJournalProtocol.StandaloneSnapshotInterval;
+
+    /// <summary>
+    ///     Replaces OptunaSharp's snapshot of this journal (<see cref="RedisJournalProtocol.OwnSnapshotKey" />) with the
+    ///     supplied opaque serialized bytes. Python Optuna's snapshot key is never written.
+    /// </summary>
     /// <param name="snapshot">The serialized journal-state snapshot to store as opaque bytes.</param>
     public void SaveSnapshot(byte[] snapshot)
-        => Db.StringSet(RedisJournalProtocol.SnapshotKey(_prefix), snapshot);
+        => Db.StringSet(RedisJournalProtocol.OwnSnapshotKey(_prefix), snapshot);
 
-    /// <summary>Reads the latest Redis journal snapshot, if one has been saved.</summary>
-    /// <returns>The saved snapshot bytes, or null when the snapshot key is absent.</returns>
+    /// <summary>Reads OptunaSharp's latest snapshot of this journal, if one has been saved.</summary>
+    /// <returns>The saved snapshot bytes, or null when there is none of OptunaSharp's.</returns>
+    /// <remarks>
+    ///     When <see cref="RedisJournalProtocol.OwnSnapshotKey" /> is empty, Python Optuna's key is checked too, for a
+    ///     snapshot an older OptunaSharp saved there; the next save goes to the own key. Only its first byte is read at
+    ///     first (<c>GETRANGE 0 0</c>): Python's pickle there counts as no snapshot
+    ///     (<see cref="RedisJournalProtocol.IsOptunaSharpSnapshot" />), so the storage replays the journal without
+    ///     logging a failed restore, and a C# worker that only reads a Python study does not download Python's whole
+    ///     pickle at every start.
+    /// </remarks>
     public byte[]? LoadSnapshot()
     {
-        RedisValue snapshotBytes = Db.StringGet(RedisJournalProtocol.SnapshotKey(_prefix));
-        return snapshotBytes.IsNull ? null : (byte[]?)snapshotBytes;
+        IDatabase db = Db;
+        RedisValue own = db.StringGet(RedisJournalProtocol.OwnSnapshotKey(_prefix));
+        if (!own.IsNull)
+            return (byte[]?)own;
+
+        // A missing key reads back as an empty range, like a pickle's first byte it is not OptunaSharp's.
+        string legacyKey = RedisJournalProtocol.SnapshotKey(_prefix);
+        RedisValue head = db.StringGetRange(legacyKey, 0, 0);
+        if (head.IsNullOrEmpty || !RedisJournalProtocol.IsOptunaSharpSnapshot((byte[])head!))
+            return null;
+        RedisValue legacy = db.StringGet(legacyKey);
+        if (legacy.IsNull)
+            return null;
+        // Checked again: a Python worker may have replaced the old snapshot between the two reads.
+        byte[] bytes = (byte[])legacy!;
+        return RedisJournalProtocol.IsOptunaSharpSnapshot(bytes) ? bytes : null;
     }
 
     /// <summary>

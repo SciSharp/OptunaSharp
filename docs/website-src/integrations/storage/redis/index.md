@@ -110,15 +110,16 @@ The `Add…JournalStorage` DI methods take a `lifetime`. A backend the container
 |---|---|
 | `{prefix}:log_number` | Highest allocated log number; initialized to `-1` |
 | `{prefix}:log:{n}` | One JSON operation record; first number is `0` |
-| `{prefix}:snapshot` | Optional binary replay snapshot |
+| `{prefix}:snapshot` | Python Optuna's replay snapshot (a pickle). OptunaSharp never writes it |
+| `{prefix}:snapshot:optunasharp` | OptunaSharp's replay snapshot (JSON). Python never reads it |
 
 With the empty default prefix the keys begin with a colon, such as `:log_number`. Setting a prefix isolates a journal from other experiments using the same Redis database.
 
-For standalone Redis, each log append uses one Lua `EVAL` that increments the counter and writes that record atomically. A list of logs is appended record by record; the whole list is not one transaction.
+For standalone Redis, each log append uses one Lua `EVAL` that seeds the counter if it is missing, increments it, and writes that record atomically. Python sends the seeding `SETNX` as a separate command before every append; OptunaSharp does it inside the script, which saves a round trip and still numbers the first record `0` if the keys are deleted under a live backend. Keys, numbering and record bytes are Python's. A list of logs is appended record by record; the whole list is not one transaction.
 
 `useCluster: true` switches the append strategy to separate `INCR` and `SET` calls because the shared Lua script derives its keys internally. This flag does not discover nodes, configure client routing, or make the two writes atomic. Configure the native client's cluster connectivity separately. A connection failure between allocation and write can leave a missing record.
 
-Readers first capture the highest log number, then read sequentially. A missing record is retried with exponential waits starting at 100 ms and capped at 10 seconds per wait, with no overall timeout. A malformed final JSON record stops that read; malformed earlier records raise an error. These behaviors make journal consistency and Redis data retention operationally important. The package does not configure Redis persistence, expiry, eviction, replication, or cluster recovery.
+Readers first capture the highest log number, then read sequentially up to it. On standalone Redis OptunaSharp reads the counter and up to 1,000 records in one read-only Lua call, so a sync costs one round trip however many records it brings; Python sends one `GET` for the counter and one per record. Cluster mode reads key by key, as Python does. A trial with two parameters, asked and told, costs 12 client round trips instead of 20, and a journal ran 92–127 trials per second instead of 62–69 at `nJobs` 1 and 8 against a local Redis (measured 2026-11-07). A missing record is retried with exponential waits starting at 100 ms and capped at 10 seconds per wait, with no overall timeout. A malformed final JSON record stops that read; malformed earlier records raise an error. These behaviors make journal consistency and Redis data retention operationally important. The package does not configure Redis persistence, expiry, eviction, replication, or cluster recovery.
 
 ## Python interoperability and snapshot limits
 
@@ -135,15 +136,37 @@ study = optuna.load_study(study_name="quadratic", storage=storage)
 print(study.best_value)
 ```
 
-Python needs Optuna and `redis`. The live interop tests write in Python, continue in C#, and read the result back in Python for all three adapters. Cross-library tests verify log bytes across all writer/reader pairs; the inherited backend contract tests separately verify raw snapshot bytes for each adapter. Cluster-branch tests use the shared Redis fixture, rather than exercising a multi-node cluster's routing or failover.
+Python needs Optuna and `redis`. The live interop tests write in Python, continue in C#, and read the result back in Python for all three adapters. Another runs both runtimes' snapshots on one journal and checks that each restores its own. Cross-library tests verify log bytes across all writer/reader pairs; the inherited backend contract tests separately verify raw snapshot bytes for each adapter. Cluster-branch tests use the shared Redis fixture, rather than exercising a multi-node cluster's routing or failover.
 
-**Replay snapshots are not cross-language compatible.** OptunaSharp serializes JSON tagged `optunasharp-journal-snapshot-v1`; Python uses pickle. Both runtimes store snapshots under the same key. Their implementations can reject the other's snapshot and replay retained logs instead, so sharing the journal does not provide shared snapshot acceleration. Do not remove the operation history on the assumption that a snapshot is a portable replacement. The current live Redis language-interoperability test uses a short study; it does not itself exercise long histories crossing the snapshot interval.
+**Each runtime keeps its own replay snapshot.** OptunaSharp serializes JSON tagged `optunasharp-journal-snapshot-v1` under `{prefix}:snapshot:optunasharp`; Python pickles its replay state under `{prefix}:snapshot`. A new storage of either runtime restores its own latest snapshot and reads only the records written after it, so mixed fleets keep both runtimes' snapshot acceleration. Until 2026-11-07 both runtimes used the one key, and each one's new workers found the other's bytes, logged ``Failed to restore `JournalStorageReplayResult`.`` and replayed the whole journal. An OptunaSharp snapshot that an older version saved in Python's key is still found while OptunaSharp's own key is empty. Python's key is checked by its first byte before it is read, so a pickle there is never downloaded or handed to the OptunaSharp storage. A snapshot is a cache, not a replacement for the operation history: do not remove the logs.
+
+How many trials apart OptunaSharp saves a snapshot depends on how the backend reads. On a standalone server, where one script call replays a thousand records, the backends default to 1000. In cluster mode, where every record costs a round trip, they default to Optuna's 100. `JournalStorage(backend, snapshotInterval: n)` overrides either, and `storage.SnapshotInterval` reports the value in use. Each snapshot serializes the whole study under the storage's lock, so it costs the writer more as the study grows. Measured at 20,000 two-parameter trials (2026-11-07, local Redis):
+
+| Interval | Writer, ms per trial | Cold start, standalone | Cold start, cluster mode |
+|---|---|---|---|
+| 100 | 12.87 (+48%) | 1.19 s | 1.17 s |
+| 1000 | 9.23 (+6%) | 1.22 s | 4.03 s |
+| no snapshot | 8.69 | 1.30 s | 53.8 s |
+
+A long-lived worker syncs incrementally and never reads a snapshot. Only a new storage does, such as each `optunasharp` CLI command. Restoring a snapshot today costs about as much as replaying the records it replaces, because its JSON parser is slow. Plan 10's item 2.7 is meant to make snapshots faster to save and restore.
 
 ## Shared package
 
-`OptunaSharp.Storage.Redis` is a separate package installed transitively by the adapters. It has no Redis client dependency and cannot persist a study on its own. Its public `RedisUrl.Parse` produces a neutral `RedisEndpoint`; `RedisJournalProtocol` defines key builders, the initial counter, the append script, and the experimental-warning message. The adapters implement the journal operations independently using their native clients.
+`OptunaSharp.Storage.Redis` is a separate package installed transitively by the adapters. It has no Redis client dependency and cannot persist a study on its own. Its public `RedisUrl.Parse` produces a neutral `RedisEndpoint`; `RedisJournalProtocol` defines key builders, the initial counter, the append and read scripts, the read batch size, and the snapshot keys. The adapters implement the journal operations independently using their native clients.
 
-Construction of each adapter emits an `ExperimentalWarning`, following the upstream Redis journal API's experimental designation. The version in that warning refers to the upstream API introduction, not an OptunaSharp package version.
+Construction emits no `ExperimentalWarning`: Optuna marks `JournalRedisBackend` experimental, and OptunaSharp treats the Optuna 5 surface as stable, so the warning is deliberately left out.
+
+## Thread-pool callers and the `DedicatedThreads` flag
+
+StackExchange.Redis 3.x, the client of the StackExchange.Redis and NRedisStack adapters' .NET 10 builds, reads and writes each connection's socket on the .NET thread pool, while a synchronous call parks its own thread until the reply arrives. When thread-pool callers outnumber the pool's minimum (an ASP.NET Core request burst calling `Ask` and `Tell`, or `Optimize` with the thread-pool executor), nothing is left to read the replies, and calls fail with `RedisTimeoutException`. Measured on 32 cores with 64 `Task.Run` callers asking and telling on one journal: 634 of 640 trials in 37.0 s, the 6 failed calls including 4 `RedisTimeoutException`s, against 640 of 640 in 7.0 s with the flag.
+
+The adapters' URL and `ConfigurationOptions` constructors therefore turn on StackExchange.Redis's `DedicatedThreads` feature flag before they connect: `dedicatedThreads: true` is the default, and the DI `Add…JournalStorage(url, …)` methods take the same argument. It gives each connection a reader and a writer thread of its own.
+
+- The flag is process-wide: every StackExchange.Redis connection the process opens afterwards, your application's own included, gets its two threads too. Connections opened before are unchanged.
+- StackExchange.Redis reserves `ConnectionMultiplexer.SetFeatureFlag` for support guidance and hides it from IntelliSense.
+- To opt out, pass `dedicatedThreads: false`, which leaves the flag as it is (it never turns it off), or connect a multiplexer yourself and pass it in: the adapters never touch an injected connection.
+- The .NET 8 builds use StackExchange.Redis 2.x, which has no such flag, so the argument has no effect there. 2.x lost no trial under the same load, but took 37.6 s, against 8.2 s once the pool's minimum was raised to 200. If your application calls from many thread-pool threads at once, raise the pool's minimum with `ThreadPool.SetMinThreads`.
+- ServiceStack.Redis uses its own synchronous sockets and does not depend on the pool.
 
 ## Implementation and verification
 
@@ -151,4 +174,5 @@ Construction of each adapter emits an `ExperimentalWarning`, following the upstr
 - [Journal replay and snapshot implementation](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Core/Storages/Journal/JournalStorage.cs)
 - [Adapter configuration tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/RedisBackendTests.cs) and [URL tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/RedisUrlTests.cs)
 - [Backend contract, snapshot, and cluster-branch tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/JournalBackendContractTests.cs)
+- [Round-trip count, snapshot interval, and `DedicatedThreads` tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/RedisJournalCostAndThreadsTests.cs)
 - [Cross-library byte parity](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/CrossLibraryParityTests.cs) and [Python journal interoperability](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/JournalRedisInteropTests.cs)

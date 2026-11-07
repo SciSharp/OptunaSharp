@@ -111,8 +111,11 @@ var study = Optuna.CreateStudy(storage: storage, studyName: "dist", loadIfExists
 
 The adapters support `redis://` and `rediss://` (TLS); Unix-socket support and cluster configuration
 depend on the client. A `prefix` isolates a journal namespace that may contain several studies.
-Journal logs can be shared with Python Optuna; snapshots use different serialization formats.
-The [Redis guide](../integrations/storage/redis/index.md) explains those boundaries.
+Journal logs can be shared with Python Optuna. Each language keeps its replay snapshot under a key of
+its own (`{prefix}:snapshot` for Python's pickle, `{prefix}:snapshot:optunasharp` for OptunaSharp's JSON),
+so a new worker of either language restores its own latest snapshot and reads only the records after it.
+The [Redis guide](../integrations/storage/redis/index.md) explains those boundaries and how often each
+backend snapshots.
 
 ## SQLite RDB storage (a persistent database file)
 
@@ -298,7 +301,10 @@ Limits and costs:
 
 - **Throughput.** The file journal syncs every append to disk (`fsync`), so many workers on a fast
   objective are bound by the disk. 16 contending workers sustained about 80–150 appends per second on
-  an SSD in testing. Redis is about 5–8× faster at the same contention. A [gRPC proxy](#grpc-storage-proxy-distributed-cross-language)
+  an SSD in testing. Redis is about 5–8× faster at the same contention. On a standalone Redis server
+  OptunaSharp reads the journal a thousand records per round trip and seeds the counter inside its append
+  script, so a two-parameter trial costs 12 client round trips instead of Python's 20: 92–127 trials per
+  second against 62–69 before (local Redis, 2026-11-07). A [gRPC proxy](#grpc-storage-proxy-distributed-cross-language)
   in front of the file gives one writer process.
 - **Crashed workers.** The journal has no heartbeat, in Python too. A trial whose process dies stays
   `RUNNING`.
@@ -323,7 +329,13 @@ Limits and costs:
   on the .NET thread pool. If your code blocks more pool threads than the pool's minimum on journal
   calls at once, Redis calls time out after `SyncTimeout`. Examples: dozens of `Task.Run(() =>
   study.Optimize(...))`, an ASP.NET request burst, or `Optimize` with the opt-in thread-pool executor at an
-  `nJobs` at or above the pool's minimum. Use dedicated threads, as `nJobs` does by default, or raise
+  `nJobs` at or above the pool's minimum. The StackExchange.Redis and NRedisStack backends therefore turn
+  on StackExchange.Redis's process-wide `DedicatedThreads` feature flag before they connect, unless you pass
+  `dedicatedThreads: false` or your own multiplexer: 64 callers then told 640 of 640 trials in 7 s, against
+  634 in 37 s with timeouts. The flag affects every StackExchange.Redis connection the process opens
+  afterwards, and the .NET 8 builds (StackExchange.Redis 2.x) have no such flag; the
+  [Redis guide](../integrations/storage/redis/index.md#thread-pool-callers-and-the-dedicatedthreads-flag)
+  has the details. Otherwise use dedicated threads, as `nJobs` does by default, or raise
   `ThreadPool.SetMinThreads`.
 
 ### The same setups on SQLite, PostgreSQL, MySQL and gRPC
@@ -432,7 +444,10 @@ names default to the `no-name-` prefix (`BaseStorage.DefaultStudyNamePrefix`), m
 
 **Divergence.** Journal *snapshots* are serialized as JSON rather than Python `pickle` bytes, so a
 snapshot cannot be resumed across languages (the *log* itself is fully cross-language). This is a
-deliberate, documented difference — pickle compatibility is a non-goal.
+deliberate, documented difference — pickle compatibility is a non-goal. On Redis each language keeps its
+snapshot under its own key, so neither overwrites the other's, and OptunaSharp's snapshot interval follows
+the backend's read mode (1000 on a standalone server, Optuna's 100 in cluster mode) where Python's is a
+fixed 100.
 
 ## See also
 

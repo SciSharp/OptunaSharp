@@ -43,7 +43,7 @@ numeric prefix is the recommended execution order.
 | [07](07-moead-rvea-pso-baselines.md) | MOEA/D · RVEA · PSO baselines | Core | N | ★ / medium |
 | [08](08-pymoo-interop-sampler-bridge.md) | pymoo sampler bridge (`Interop.Pymoo`) | pythonnet interop | **X** | ★★★ / med-high |
 | [09](09-pymoo-live-parity-gate.md) | Live pymoo parity gate (AGE-MOEA-2) | AGE-MOEA-2 (done) | **X** | ★★ / low |
-| [10](10-threading.md) | Threading: a configurable `nJobs` executor, then six follow-ups | the reused worker threads of `9cfcb12` (done) | N | ★★ / medium |
+| [10](10-threading.md) | Threading: a configurable `nJobs` executor, then seven follow-ups | the reused worker threads of `9cfcb12` (done) | N | ★★ / medium |
 
 **Threading workstream (10).** Unrelated to JANUS. Decided with the owner on 2026-11-07. Phase 1, built on
 2026-11-07, adds an opt-in thread-pool executor next to the default reused dedicated threads, configured

@@ -1,6 +1,6 @@
-# Plan 10 — Threading: a configurable `nJobs` executor, then six follow-ups
+# Plan 10 — Threading: a configurable `nJobs` executor, then seven follow-ups
 
-> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 in progress (2.1 and 2.6 done 2026-11-07).** Phase 1, the executor, came first.
+> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 in progress (2.1, 2.2, 2.3 and 2.6 done 2026-11-07).** Phase 1, the executor, came first.
 > Phase 2 starts only after Phase 1 is finished; the owner's words (2026-11-07): "document what we will do
 > but we only tackle these AFTER finished all the threading". The decisions below are the owner's answers
 > to three rounds of design questions on 2026-11-07. The names, deferred at first, were settled on
@@ -200,9 +200,9 @@ Built as designed in §1.2–1.4, with the names of §1.8:
 
 ---
 
-## Phase 2 — six follow-ups, after Phase 1 is finished
+## Phase 2 — seven follow-ups, after Phase 1 is finished
 
-The owner chose all six on 2026-11-07. Each section gives why, the design, the sub-decisions still open
+The owner chose the first six on 2026-11-07, and added 2.7 the same day from a finding of 2.2. Each section gives why, the design, the sub-decisions still open
 (asked when the item starts), the tests, and when it is done.
 
 ### 2.1 Close Open item 24.h: seeds, the terminator lock, the divergence test
@@ -270,6 +270,45 @@ The owner chose all six on 2026-11-07. Each section gives why, the design, the s
   within its free tier (the owner's rule: at most 6,000 requests per hour per process).
 - **Done when** a trial costs 11 round trips on a standalone server, and THREADING.md §7.3 and the
   storage page say so.
+- **DONE 2026-11-07.** Outcome:
+  - Sub-decisions (owner, 2026-11-07, two rounds):
+    - The counter's `SETNX` moves inside the append script ("Inside the append script"), rather than once per
+      backend instance. The append stays atomic, and numbering still starts at 0 if the journal's keys are deleted
+      under a live backend.
+    - Cluster-mode reads stay key by key ("Leave as is").
+    - The read cap became a question about snapshots. The owner's words: "Can't we maintain a latest or snpashots
+      and so user gets from point X+diff to head ... We must maintain backwards compatability to optuna". Each
+      language now keeps its own snapshot ("Own C# snapshot key"): OptunaSharp's JSON under
+      `{prefix}:snapshot:optunasharp`, and Python's pickle stays alone in `{prefix}:snapshot`. A cold start of
+      either language restores its own latest snapshot and reads only the records after it. One read script call
+      returns at most 1,000 records (`RedisJournalProtocol.ReadLogsBatchLimit`), so a script never holds the
+      server for long.
+    - The snapshot interval is configurable ("make it configurable") and was measured ("Measure every how many
+      trails it gets recommended to create snapshot"). The owner chose a default by read mode ("By read mode:
+      100/1000"):
+      - `JournalStorage(backend, int? snapshotInterval = null)`; null asks the backend through the new
+        `IJournalSnapshotInterval`, then falls back to Optuna's 100;
+      - the Redis backends answer 1000 on a standalone server and 100 in cluster mode;
+      - `JournalStorage.SnapshotInterval` reports the value in use.
+  - Round trips: 12 client commands per two-parameter trial (8 read-script syncs, 4 appends), against 20 before.
+    The plan's "19 → 11" counted the server's statistics during `Optimize`. The profiler, counting the client's
+    calls for an asked-and-told trial, gives 20 → 12; the saving is the same 8.
+  - Throughput: 92–127 trials/s at `nJobs` 1 and 8, against 62–69, on a local Redis (0.66 ms median `PING`).
+    A cold start over 400 trials took 24–49 ms instead of 312–391.
+  - Compatibility: keys, record bytes and numbering are Python's. Python and C# workers still produce identical
+    studies on one journal (`JournalMixedFleetInteropTests`), each client still round-trips with live Optuna,
+    and a new cross-language test runs both languages' snapshots on one journal. Each language restores its own
+    without the failed-restore warning both logged while they shared one key. An OptunaSharp snapshot an older
+    version saved in Python's key is still found while OptunaSharp's own key is empty. Python's key is checked by its first byte (`GETRANGE 0 0`) before it is read, so a pickle there is never downloaded or handed to the OptunaSharp storage.
+  - Snapshot measurements, at 20,000 trials: an interval of 100 made the writer 48% slower than no snapshots, and
+    1000 made it 6% slower. A cold start took 1.19 s, 1.22 s and 1.30 s on a standalone server, and 1.17 s, 4.03 s
+    and 53.8 s in cluster mode, which reads every record with its own `GET`. The snapshot's JSON is the
+    bottleneck, which led to item 2.7.
+  - Tests: `RedisJournalCostAndThreadsTests` (round trips, the interval under the own key, Python's pickle read by its
+    first byte only), the contract tests'
+    batch, seeding, snapshot-key and interval cases on all three clients, `JournalStorageTests`'s interval cases,
+    and `JournalRedisInteropTests.PythonAndCSharp_OnOneRedisJournal_EachKeepsItsOwnSnapshot`. ServiceStack's
+    requests stay within its free tier: batching cut them too.
 
 ### 2.3 Redis: `DedicatedThreads` on the connections OptunaSharp opens
 
@@ -295,6 +334,21 @@ The owner chose all six on 2026-11-07. Each section gives why, the design, the s
   every trial completes, no `RedisTimeoutException`; an injected multiplexer is not affected.
 - **Done when** the flag is set where decided, documented in all four places, and the host scenario is
   pinned.
+- **DONE 2026-11-07.** Outcome:
+  - Sub-decision (owner, 2026-11-07): an opt-in constructor argument, defaulting to true ("Opt-in argument",
+    "defaulting true"). It is `dedicatedThreads: true` on the URL and `ConfigurationOptions` constructors of the
+    StackExchange.Redis and NRedisStack backends and on their DI `Add…JournalStorage(url, …)` methods. `false`
+    leaves the flag as it is, and an injected multiplexer is never touched.
+  - Verified first: StackExchange.Redis 2.x (2.13.17, and 2.12.14 under NRedisStack 1.5.0) has no such flag and
+    silently ignores the name. It did not time out under the same load, but took 37.6 s for 64 callers, against
+    8.2 s with the pool's minimum at 200 (THREADING.md §7.2 has the whole matrix).
+  - Measured on `net10.0`, 64 callers × 10 trials on 32 cores: 634 of 640 trials in 37.0 s without the flag (6
+    failed calls, 4 of them `RedisTimeoutException`), and 640 of 640 in 7.0 s with it.
+  - Documented in the backends' XML remarks, the Redis integration page (a section of its own), `storage.md`, and
+    THREADING.md §7.2 and §10.
+  - Tests: `RedisJournalCostAndThreadsTests`. The owning constructors turn the flag on, `false` leaves it alone,
+    and an injected multiplexer stays untouched; these report Inconclusive on 2.x. More thread-pool callers than
+    twice the pool's minimum ask and tell without losing a trial, on 3.x and on 2.x.
 
 ### 2.4 Cancellation: a `CancellationToken` and Ctrl+C
 
@@ -359,6 +413,34 @@ The owner chose all six on 2026-11-07. Each section gives why, the design, the s
   never raise; THREADING.md §10 now says so, along with the factory and scorer's thread-safety requirement and the
   untested case of trainers that draw from the shared context's random source.
 
+### 2.7 A faster journal snapshot codec (added 2026-11-07)
+
+- **Why.** Item 2.2's measurements: OptunaSharp's snapshot of 20,000 trials is 10.6 MB of JSON.
+  - Restoring it takes 0.75–0.95 s. `PyJson.Loads` alone takes 0.48–0.58 s, where `JsonDocument.Parse` takes
+    0.05 s.
+  - Saving it takes 0.49–0.61 s, under the storage's monitor, so the writing worker stalls.
+  - Replaying 80,001 records with batched reads takes 0.84–0.97 s, mostly parsing their JSON.
+  - So a snapshot buys a standalone cold start little (1.19 s against 1.30 s), and the default interval had to
+    trade writer cost against cluster-mode cold starts.
+- **Design** (to be refined when the item starts):
+  - write and read OptunaSharp's snapshot with `Utf8JsonWriter`/`Utf8JsonReader`. The snapshot is C#-only, so its
+    format may change, but v1 snapshots must stay readable;
+  - speed up the parse of journal records, which stay Python's JSON (`json.dumps`, with bare `NaN` and
+    `Infinity` tokens that `System.Text.Json` rejects), keeping `PyJson`'s grammar exactly;
+  - goal: restore and save several times faster, so snapshots pay off on standalone servers too.
+- **Tests: very high parity coverage, the owner's condition** ("But you must do very high parity test
+  coverage"):
+  - every record kind Python writes, parsed by the new reader into exactly what `PyJson` gives;
+  - Python-written journals (`json.dumps` of every value kind: NaN, ±Infinity, -0.0, subnormals, huge and tiny
+    floats, big integers, unicode escapes, surrogate pairs, nested attrs) replayed into identical studies;
+  - property tests of random values round-tripping;
+  - v1 snapshots written by the current code restored identically;
+  - mixed fleets with Python;
+  - the measurements repeated.
+- **Open sub-decisions.** Asked when the item starts.
+- **Done when** restore and save are measured several times faster, the parity suite is green on both TFMs,
+  and THREADING.md §7.3 and §12 are updated.
+
 ---
 
 ## Order
@@ -366,5 +448,6 @@ The owner chose all six on 2026-11-07. Each section gives why, the design, the s
 1. Settle the deferred names (§1.8). Done 2026-11-07.
 2. Phase 1, in one commit series: §1.5 steps 1–7. Done 2026-11-07 (§1.9).
 3. Phase 2, one item at a time, each asking its open sub-decisions first. Suggested order: 2.1 (small,
-   low risk; done 2026-11-07), 2.6 (a test that may need no fix; done 2026-11-07, none needed), 2.3, 2.2 (the cross-language journal
-   contract), 2.4 (new public API), 2.5 (needs a root cause first).
+   low risk; done 2026-11-07), 2.6 (a test that may need no fix; done 2026-11-07, none needed), 2.3 and 2.2
+   (the cross-language journal contract; done together 2026-11-07), 2.4 (new public API), 2.5 (needs a root
+   cause first), 2.7 (the owner's choice: after 2.4 and 2.5).

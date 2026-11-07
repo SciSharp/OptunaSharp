@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using AwesomeAssertions;
@@ -205,6 +206,161 @@ public class JournalStorageTests
         var act = () => new JournalFileOpenLock(_path, gracePeriod: 0);
         act.Should().Throw<ValueError>()
             .WithMessage("The value of `grace_period` should be a positive integer.");
+    }
+
+    // ------------------------------------------------------------------ snapshots
+
+    /// <summary>
+    ///     A journal backend in memory that also keeps snapshots, as the Redis backends do, and records where each read
+    ///     started. Records cross it as JSON text, so the storage never shares a dictionary with its own replay.
+    /// </summary>
+    private class MemorySnapshotJournal : BaseJournalBackend, IBaseJournalSnapshot
+    {
+        private readonly List<string> _records = new();
+        private byte[]? _snapshot;
+
+        /// <summary>How many snapshots the storages saved.</summary>
+        internal int Saves { get; private set; }
+
+        /// <summary>The first log number of every read, in order.</summary>
+        internal List<int> ReadsFrom { get; } = new();
+
+        /// <summary>Returns the records from <paramref name="logNumberFrom" /> on, and remembers where the read began.</summary>
+        /// <param name="logNumberFrom">The first log number to return.</param>
+        /// <returns>The decoded records after it.</returns>
+        public override IEnumerable<OrderedDict<string, object?>> ReadLogs(int logNumberFrom)
+        {
+            lock (_records)
+            {
+                ReadsFrom.Add(logNumberFrom);
+                return _records.Skip(logNumberFrom).Select(r => (OrderedDict<string, object?>)global::OptunaSharp.Internal.PyJson.Loads(r)!).ToList();
+            }
+        }
+
+        /// <summary>Appends the records as JSON text.</summary>
+        /// <param name="logs">The records to append.</param>
+        public override void AppendLogs(IReadOnlyList<OrderedDict<string, object?>> logs)
+        {
+            lock (_records)
+                _records.AddRange(logs.Select(l => global::OptunaSharp.Internal.PyJson.Dumps(l)));
+        }
+
+        /// <summary>Keeps the latest snapshot and counts it.</summary>
+        /// <param name="snapshot">The serialized replay state.</param>
+        public void SaveSnapshot(byte[] snapshot)
+        {
+            _snapshot = snapshot;
+            Saves++;
+        }
+
+        /// <summary>Returns the latest snapshot, or <c>null</c> before the first.</summary>
+        /// <returns>The snapshot bytes.</returns>
+        public byte[]? LoadSnapshot() => _snapshot;
+    }
+
+    /// <summary>
+    ///     A <see cref="MemorySnapshotJournal" /> that also states its own snapshot interval, as the Redis backends do, and
+    ///     counts how often a storage asks for it.
+    /// </summary>
+    /// <param name="interval">The interval to answer, valid or not.</param>
+    private sealed class IntervalMemorySnapshotJournal(int interval) : MemorySnapshotJournal, IJournalSnapshotInterval
+    {
+        /// <summary>How many times a storage read <see cref="DefaultSnapshotInterval" />.</summary>
+        internal int Asked { get; private set; }
+
+        /// <summary>The interval given at construction; every read is counted.</summary>
+        public int DefaultSnapshotInterval
+        {
+            get
+            {
+                Asked++;
+                return interval;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     The snapshot interval is a constructor argument (plan 10, item 2.2): with an interval of 3, creating trials
+    ///     3 and 6 saves a snapshot each, where the default (Optuna's 100) saves none for the same 8 trials. A new storage
+    ///     over the journal restores the latest snapshot and reads only the records written after it, and still sees
+    ///     every trial.
+    /// </summary>
+    [TestMethod]
+    public void SnapshotInterval_DecidesWhenSnapshotsAreSaved_AndAColdStartReadsOnlyWhatFollows()
+    {
+        var journal = new MemorySnapshotJournal();
+        var study = Optuna.CreateStudy(storage: new JournalStorage(journal, snapshotInterval: 3), sampler: new RandomSampler(2));
+        study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 8);
+        journal.Saves.Should().Be(2, "trials 3 and 6 are the multiples of 3 above 0");
+
+        journal.ReadsFrom.Clear();
+        var reopened = Optuna.LoadStudy(study.StudyName, new JournalStorage(journal, snapshotInterval: 3));
+
+        journal.ReadsFrom[0].Should().BeGreaterThan(0, "the restored snapshot already holds the records before it");
+        reopened.Trials.Select(t => (t.Number, t.State, t.Value)).Should().Equal(study.Trials.Select(t => (t.Number, t.State, t.Value)));
+
+        var defaultJournal = new MemorySnapshotJournal();
+        Optuna.CreateStudy(storage: new JournalStorage(defaultJournal), sampler: new RandomSampler(2))
+            .Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 8);
+        defaultJournal.Saves.Should().Be(0);
+    }
+
+    /// <summary>
+    ///     Without an argument, a storage takes its backend's interval (<see cref="IJournalSnapshotInterval" />), read
+    ///     once, and a snapshot backend that states none gets Optuna's 100. An argument wins without asking the backend.
+    ///     The interval a backend states decides the saves: 3 saves snapshots at trials 3 and 6 of 8.
+    /// </summary>
+    [TestMethod]
+    public void SnapshotInterval_WithoutAnArgument_IsTheBackendsChoice_ElseOptunas100()
+    {
+        new JournalStorage(new MemorySnapshotJournal()).SnapshotInterval.Should().Be(100);
+
+        var preferring = new IntervalMemorySnapshotJournal(3);
+        var storage = new JournalStorage(preferring);
+        storage.SnapshotInterval.Should().Be(3);
+        preferring.Asked.Should().Be(1);
+
+        Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(2)).Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 8);
+        preferring.Saves.Should().Be(2, "the backend's interval of 3 saves at trials 3 and 6");
+        preferring.Asked.Should().Be(1, "the constructor reads the backend's interval once, never at a save");
+
+        var overridden = new IntervalMemorySnapshotJournal(3);
+        new JournalStorage(overridden, snapshotInterval: 5).SnapshotInterval.Should().Be(5);
+        overridden.Asked.Should().Be(0);
+    }
+
+    /// <summary>
+    ///     A backend interval below 1 is refused as an argument error on the backend, before the journal is read; the
+    ///     same value given as the argument is refused as out of range (<see cref="SnapshotInterval_BelowOne_IsRefused" />).
+    /// </summary>
+    /// <param name="interval">The backend's refused interval.</param>
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(-2)]
+    public void SnapshotInterval_FromTheBackend_BelowOne_IsRefused(int interval)
+    {
+        var journal = new IntervalMemorySnapshotJournal(interval);
+
+        var act = () => new JournalStorage(journal);
+
+        act.Should().ThrowExactly<ArgumentException>().WithParameterName("logStorage")
+            .WithMessage($"The backend's DefaultSnapshotInterval must be at least 1, but it is {interval}.*");
+        journal.ReadsFrom.Should().BeEmpty();
+    }
+
+    /// <summary>An interval below 1 is refused before the backend is touched.</summary>
+    /// <param name="interval">The refused interval.</param>
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(-5)]
+    public void SnapshotInterval_BelowOne_IsRefused(int interval)
+    {
+        var journal = new MemorySnapshotJournal();
+
+        var act = () => new JournalStorage(journal, snapshotInterval: interval);
+
+        act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("snapshotInterval");
+        journal.ReadsFrom.Should().BeEmpty();
     }
 
     // ------------------------------------------------------------------ default lock

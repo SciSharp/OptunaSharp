@@ -41,7 +41,7 @@ namespace OptunaSharp.Storages.Journal;
 ///     request-quota-limited). Prefer the MIT <c>StackExchange</c>/<c>NRedisStack</c> backends unless
 ///     your app already standardizes on ServiceStack.</para>
 /// </summary>
-public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot, IDisposable, IAsyncDisposable
+public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSnapshot, IJournalSnapshotInterval, IDisposable, IAsyncDisposable
 {
     private readonly string _url;
     private readonly bool _useCluster;
@@ -206,7 +206,25 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// <inheritdoc />
     /// <exception cref="NumSharp.ValueError">A nonfinal journal record contains malformed JSON.</exception>
     /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
+    /// <remarks>
+    ///     On a standalone server the counter and up to <see cref="RedisJournalProtocol.ReadLogsBatchLimit" /> records
+    ///     arrive in one request (<see cref="RedisJournalProtocol.ReadLogsScript" />), where Python sends one
+    ///     <c>GET</c> for the counter and one per record; that also stretches a request-metered licence. Cluster mode
+    ///     reads key by key, as Python does, because its keys span hash slots. Either way the read ends at the counter
+    ///     value it saw first and applies Python's rule for a corrupt record: only the last one may be incomplete.
+    /// </remarks>
     public override IEnumerable<OrderedDict<string, object?>> ReadLogs(int logNumberFrom)
+        => _useCluster ? ReadLogsByKey(logNumberFrom) : ReadLogsByScript(logNumberFrom);
+
+    /// <summary>
+    ///     Reads key by key, as Python's <c>read_logs</c> does: one <c>GET</c> for the counter, then one per record,
+    ///     waiting for a record the counter already covers. Cluster mode's read.
+    /// </summary>
+    /// <param name="logNumberFrom">The first log number to read.</param>
+    /// <returns>The decoded records, in log order.</returns>
+    /// <exception cref="NumSharp.ValueError">A nonfinal journal record contains malformed JSON.</exception>
+    /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
+    private IEnumerable<OrderedDict<string, object?>> ReadLogsByKey(int logNumberFrom)
     {
         string? maxStr = GetValue(RedisJournalProtocol.LogNumberKey(_prefix));
         if (maxStr is null)
@@ -249,14 +267,133 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
         }
     }
 
+    /// <summary>
+    ///     Reads a standalone journal in batches through <see cref="RedisJournalProtocol.ReadLogsScript" />: one request
+    ///     per <see cref="RedisJournalProtocol.ReadLogsBatchLimit" /> records, the counter included.
+    /// </summary>
+    /// <param name="logNumberFrom">The first log number to read.</param>
+    /// <returns>The decoded records, in log order.</returns>
+    /// <exception cref="NumSharp.ValueError">A nonfinal journal record contains malformed JSON.</exception>
+    /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
+    private IEnumerable<OrderedDict<string, object?>> ReadLogsByScript(int logNumberFrom)
+    {
+        long next = logNumberFrom;
+        long maxLogNumber = 0;
+        bool firstCall = true;
+        while (true)
+        {
+            // The first call reads up to the counter's current value and reports it; the later ones stop at that value,
+            // so the read ends where Python's would, however many records other workers append meanwhile. The client
+            // goes back to the pool before any record is yielded, so a slow consumer never holds a connection.
+            RedisText reply;
+            using (IRedisClient client = BorrowClient())
+            {
+                reply = client.ExecLua(RedisJournalProtocol.ReadLogsScript, Array.Empty<string>(), new[]
+                {
+                    _prefix,
+                    next.ToString(CultureInfo.InvariantCulture),
+                    RedisJournalProtocol.ReadLogsBatchLimit.ToString(CultureInfo.InvariantCulture),
+                    firstCall ? string.Empty : maxLogNumber.ToString(CultureInfo.InvariantCulture),
+                });
+            }
+
+            var items = reply?.Children;
+            if (items is null || items.Count == 0)
+                yield break;   // no counter: nothing was ever appended under this prefix
+            if (firstCall)
+            {
+                maxLogNumber = long.Parse(items[0].Text, CultureInfo.InvariantCulture);
+                firstCall = false;
+            }
+
+            for (int k = 1; k < items.Count; k++, next++)
+            {
+                if (!TryParseLog(items[k].Text, next, maxLogNumber, out var parsed))
+                    yield break;
+                yield return parsed;
+            }
+
+            if (next > maxLogNumber)
+                yield break;
+            if (items.Count - 1 < RedisJournalProtocol.ReadLogsBatchLimit)
+            {
+                // The script stopped at a record the counter covers but that does not exist yet, which only a cluster-mode
+                // writer sharing this prefix leaves, between its INCR and its SET. Wait for it as Python's reader does,
+                // then go on in batches.
+                if (!TryParseLog(WaitForLog(next), next, maxLogNumber, out var waited))
+                    yield break;
+                yield return waited;
+                next++;
+                if (next > maxLogNumber)
+                    yield break;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Waits until record <paramref name="logNumber" /> exists, polling as Python's reader does: 0.1 s at first,
+    ///     doubling up to 10 s between tries.
+    /// </summary>
+    /// <param name="logNumber">The record the counter already covers.</param>
+    /// <returns>The record's JSON text.</returns>
+    /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
+    /// <exception cref="ServiceStack.Redis.RedisException">
+    ///     A <c>GET</c> fails (the connection drops or times out); the wait itself never gives up.
+    /// </exception>
+    private string WaitForLog(long logNumber)
+    {
+        double sleepSecs = 0.1;
+        while (true)
+        {
+            string? log = GetValue(RedisJournalProtocol.LogKey(_prefix, logNumber));
+            if (log is not null)
+                return log;
+            System.Threading.Thread.Sleep(TimeSpan.FromSeconds(sleepSecs));
+            sleepSecs = Math.Min(sleepSecs * 2, 10);
+        }
+    }
+
+    /// <summary>Decodes one record, applying Python's rule that only the read's last record may be incomplete.</summary>
+    /// <param name="log">The record's JSON text.</param>
+    /// <param name="logNumber">The record's log number.</param>
+    /// <param name="maxLogNumber">The last log number of this read.</param>
+    /// <param name="parsed">The decoded record when this returns <c>true</c>.</param>
+    /// <returns><c>false</c> when the last record is incomplete, which ends the read as in Python.</returns>
+    /// <exception cref="NumSharp.ValueError">A record other than the last contains malformed JSON.</exception>
+    private static bool TryParseLog(string log, long logNumber, long maxLogNumber, out OrderedDict<string, object?> parsed)
+    {
+        try
+        {
+            parsed = (OrderedDict<string, object?>)PyJson.Loads(log)!;
+            return true;
+        }
+        catch (ValueError)
+        {
+            // Only the final record may still be incomplete; corruption earlier in the journal cannot be deferred
+            // without changing the replayed sequence of storage operations.
+            if (logNumber != maxLogNumber)
+                throw;
+            parsed = null!;
+            return false;
+        }
+    }
+
     /// <inheritdoc />
     /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
+    /// <remarks>
+    ///     On a standalone server each record costs one request: <see cref="RedisJournalProtocol.AppendLogScript" /> seeds
+    ///     the counter itself, where Python sends a separate <c>SETNX</c> before every append. Cluster mode and an empty
+    ///     append still send the <c>SETNX</c>, so an empty append creates the counter at -1 as Python's does.
+    /// </remarks>
     public override void AppendLogs(IReadOnlyList<OrderedDict<string, object?>> logs)
     {
         using IRedisClient client = BorrowClient();
-        client.SetValueIfNotExists(
-            RedisJournalProtocol.LogNumberKey(_prefix),
-            RedisJournalProtocol.InitialLogNumber.ToString(CultureInfo.InvariantCulture));
+        if (_useCluster || logs.Count == 0)
+        {
+            client.SetValueIfNotExists(
+                RedisJournalProtocol.LogNumberKey(_prefix),
+                RedisJournalProtocol.InitialLogNumber.ToString(CultureInfo.InvariantCulture));
+        }
 
         foreach (var log in logs)
         {
@@ -275,24 +412,56 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
         }
     }
 
-    /// <summary>Replaces the Redis journal snapshot with the supplied opaque serialized bytes.</summary>
+    /// <summary>
+    ///     The snapshot interval a <see cref="JournalStorage" /> over this backend uses when its constructor is not given
+    ///     one: <see cref="RedisJournalProtocol.StandaloneSnapshotInterval" /> (1000) on a standalone server, where records
+    ///     are read a thousand per round trip, and <see cref="RedisJournalProtocol.ClusterSnapshotInterval" /> (Optuna's
+    ///     100) in cluster mode, where every record costs a round trip of its own.
+    /// </summary>
+    public int DefaultSnapshotInterval
+        => _useCluster ? RedisJournalProtocol.ClusterSnapshotInterval : RedisJournalProtocol.StandaloneSnapshotInterval;
+
+    /// <summary>
+    ///     Replaces OptunaSharp's snapshot of this journal (<see cref="RedisJournalProtocol.OwnSnapshotKey" />) with the
+    ///     supplied opaque serialized bytes. Python Optuna's snapshot key is never written.
+    /// </summary>
     /// <param name="snapshot">The serialized journal-state snapshot to store as opaque bytes.</param>
     /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
     public void SaveSnapshot(byte[] snapshot)
     {
         using IRedisClient client = BorrowClient();
-        ((IRedisNativeClient)client).Set(RedisJournalProtocol.SnapshotKey(_prefix), snapshot);
+        ((IRedisNativeClient)client).Set(RedisJournalProtocol.OwnSnapshotKey(_prefix), snapshot);
     }
 
-    /// <summary>Reads the latest Redis journal snapshot, if one has been saved.</summary>
-    /// <returns>The saved snapshot bytes, or null when the snapshot key is absent.</returns>
+    /// <summary>Reads OptunaSharp's latest snapshot of this journal, if one has been saved.</summary>
+    /// <returns>The saved snapshot bytes, or null when there is none of OptunaSharp's.</returns>
     /// <exception cref="ObjectDisposedException">This backend has closed the client pool it built.</exception>
+    /// <remarks>
+    ///     When <see cref="RedisJournalProtocol.OwnSnapshotKey" /> is empty, Python Optuna's key is checked too, for a
+    ///     snapshot an older OptunaSharp saved there; the next save goes to the own key. Only its first byte is read at
+    ///     first (<c>GETRANGE 0 0</c>): Python's pickle there counts as no snapshot
+    ///     (<see cref="RedisJournalProtocol.IsOptunaSharpSnapshot" />), so the storage replays the journal without
+    ///     logging a failed restore, and a C# worker that only reads a Python study does not download Python's whole
+    ///     pickle at every start.
+    /// </remarks>
     public byte[]? LoadSnapshot()
     {
         using IRedisClient client = BorrowClient();
         // ServiceStack's native GET returns null for a missing key — same as the other backends'
         // RedisValue.IsNull, so an absent snapshot is null and a present one is its exact bytes.
-        return ((IRedisNativeClient)client).Get(RedisJournalProtocol.SnapshotKey(_prefix));
+        var native = (IRedisNativeClient)client;
+        byte[]? own = native.Get(RedisJournalProtocol.OwnSnapshotKey(_prefix));
+        if (own is not null)
+            return own;
+
+        // A missing key reads back as an empty range, like a pickle's first byte it is not OptunaSharp's.
+        string legacyKey = RedisJournalProtocol.SnapshotKey(_prefix);
+        byte[]? head = native.GetRange(legacyKey, 0, 0);
+        if (head is null || !RedisJournalProtocol.IsOptunaSharpSnapshot(head))
+            return null;
+        // Checked again: a Python worker may have replaced the old snapshot between the two reads.
+        byte[]? legacy = native.Get(legacyKey);
+        return legacy is not null && RedisJournalProtocol.IsOptunaSharpSnapshot(legacy) ? legacy : null;
     }
 
     /// <summary>
