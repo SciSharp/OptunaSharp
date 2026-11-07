@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Cryptography;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -126,10 +125,9 @@ public class NSGAIISampler : BaseGASampler
     public override void ReseedRng()
     {
         _randomSampler.ReseedRng();
-        // Python: self._rng.rng.seed() — reseed from OS entropy.
-        Span<byte> buffer = stackalloc byte[4];
-        RandomNumberGenerator.Fill(buffer);
-        _rng.Rng.seed(BitConverter.ToUInt32(buffer));
+        // Python: self._rng.rng.seed(), fresh OS entropy: 128 bits through numpy's own key construction,
+        // so concurrent workers never share a stream (THREADING.md §6.3).
+        OsEntropySeed.Reseed(_rng.Rng);
     }
 
     /// <inheritdoc />

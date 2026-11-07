@@ -1,6 +1,5 @@
-using System;
-using System.Security.Cryptography;
 using NumSharp;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers;
 
@@ -29,23 +28,24 @@ public sealed class LazyRandomState
 
     /// <summary>Allocates the NumPy-compatible random generator on first access, seeded from OS entropy.</summary>
     /// <remarks>
-    ///     Python's <c>np.random.RandomState()</c> seeds itself from the operating system's entropy source, so two
-    ///     unseeded samplers never share a stream. NumSharp's unseeded constructor seeds from
-    ///     <see cref="System.Environment.TickCount" /> instead, whose resolution is 1–16 ms: unseeded samplers created
-    ///     within one tick drew identical streams. That duplicated trials across worker processes or parallel CLI
-    ///     <c>ask</c> calls started together (8 parallel shells repeated 11 and 15 of their 80 draws in two runs),
-    ///     and across studies whose samplers were built at once. The seed now comes from
-    ///     <see cref="RandomNumberGenerator" />, as the samplers' <c>ReseedRng</c> already does. An explicit seed
-    ///     never reaches this path, so seeded runs are unchanged.
+    ///     <para>
+    ///         Python's <c>np.random.RandomState()</c> seeds itself from the operating system's entropy source, so two
+    ///         unseeded samplers never share a stream. NumSharp's unseeded constructor seeds from
+    ///         <see cref="System.Environment.TickCount" /> instead, whose resolution is 1–16 ms: unseeded samplers
+    ///         created within one tick drew identical streams. That duplicated trials across worker processes or
+    ///         parallel CLI <c>ask</c> calls started together (8 parallel shells repeated 11 and 15 of their 80 draws in
+    ///         two runs), and across studies whose samplers were built at once.
+    ///     </para>
+    ///     <para>
+    ///         The state is now numpy's own for 128 bits of OS entropy (<see cref="OsEntropySeed.NewRandomState()" />):
+    ///         a <see cref="SeedSequence" /> expanded into the whole key, at numpy's starting position. The first fix,
+    ///         one 32-bit word from <see cref="System.Security.Cryptography.RandomNumberGenerator" />, still let two of
+    ///         about 77,000 unseeded samplers share a stream half the time (THREADING.md §6.3). An explicit seed replaces
+    ///         this state at once (the constructor calls <c>seed(seed)</c> on the generator, as Python's does), so
+    ///         seeded runs are unchanged.
+    ///     </para>
     /// </remarks>
-    private void SetRng()
-    {
-        Span<byte> entropy = stackalloc byte[4];
-        RandomNumberGenerator.Fill(entropy);
-        var rng = np.random.RandomState();
-        rng.seed(BitConverter.ToUInt32(entropy));
-        _rng = rng;
-    }
+    private void SetRng() => _rng = OsEntropySeed.NewRandomState();
 
     /// <summary>The underlying <c>np.random.RandomState</c>, created on first use.</summary>
     public NumPyRandom Rng

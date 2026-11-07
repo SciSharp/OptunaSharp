@@ -1,18 +1,17 @@
 # OptunaSharp — Threading Design
 
-**Status:** describes the code at `f39763d` (2026-10-30), plus three changes since:
+**Status:** describes the code at `f39763d` (2026-10-30), plus four changes since:
 
 - 2026-11-06: the `nJobs` executor reuses its worker threads (review item P3-4, §3.5–3.6);
 - 2026-11-06: the GIL-aware monitor entry lets code that holds the Python GIL call OptunaSharp (review item
   P3-1, §8);
 - 2026-11-07: the executor can be chosen at four levels, OptunaSharp's dedicated threads (the default) or the
-  .NET thread pool ([plan 10](plans/10-threading.md), Phase 1, §3.5).
+  .NET thread pool ([plan 10](plans/10-threading.md), Phase 1, §3.5);
+- 2026-11-07: OS seeds take numpy's 128-bit construction (§6.3), `TerminatorCallback` serializes its calls
+  (§6.6), and the stale-trial error divergence is pinned (§3.3) (plan 10, item 2.1).
 
-Three items are open. Each is marked where it applies, and §12 lists them all:
-
-- `PymooSampler` driven from more than one thread (review item 19b, §8);
-- the 32 bits of entropy behind the samplers' seeds from the operating system (§6.3);
-- the terminator callback's unguarded random generators (§6.6).
+One item is open: `PymooSampler` driven from more than one thread (review item 19b, §8). §12 lists it with
+the known limits.
 
 Optuna gets most of its thread safety from Python itself. Only one thread runs Python code at a time
 (the GIL), and numpy's `RandomState` locks every draw. .NET threads run in parallel, so OptunaSharp adds
@@ -121,7 +120,7 @@ A worker is Python's `_optimize_sequential(n_trials=1, reseed_sampler_rng=True)`
      sampler's parallel run cannot be reproduced.
    - The reseed does not keep concurrent trials apart. The workers reseed and draw from the one shared
      generator in turn, and the monitor is what makes their draws distinct (§6.3).
-   - The new seed has 32 bits (open, §6.3).
+   - The new key comes from 128 bits of OS entropy, through numpy's own construction (§6.3).
 3. It runs one trial (`RunTrial`, Python's `_run_trial`):
    - with heartbeats on, it first fails the stale trials (§6.7);
    - it asks for a trial, starts the heartbeat thread and runs the objective;
@@ -141,7 +140,7 @@ A worker is Python's `_optimize_sequential(n_trials=1, reseed_sampler_rng=True)`
 
 What happens to the trial, and whether `Optimize` raises. Every row was observed on Optuna 5.0 too, and
 Optuna does the same except where a row says otherwise. `OptimizeEdgeCaseTests` and
-`OptimizeConcurrencyTests` pin every row but the last.
+`OptimizeConcurrencyTests` pin every row.
 
 | What fails | The trial | Raised by `Optimize` |
 |---|---|---|
@@ -154,7 +153,7 @@ Optuna does the same except where a row says otherwise. `OptimizeEdgeCaseTests` 
 | the sampler's `AfterTrial`, inside the tell | stored, because the state is written in a `finally` | yes, whatever `catch` holds |
 | a callback | stays `COMPLETE`, because callbacks run after the trial is stored | yes, whatever `catch` holds |
 | the storage, writing the final state | stays `RUNNING` | yes: the storage's own exception, which `catch` never covers. A documented divergence (`[Misaligned]`): Optuna 5.0 raises `AssertionError('Should not reach.')` instead. The logging `finally` of `_run_trial` finds no objective error and no warning to log, and hits `assert False`. |
-| the tell, because `FailStaleTrials` failed the trial while its objective ran (§6.7) | `FAIL` | yes: `ValueError: Cannot tell a FAIL trial.` The same divergence: Optuna 5.0 raises `AssertionError('Should not reach.')` by the same route (measured 2026-10-30, sequentially and at `n_jobs=2`). |
+| the tell, because `FailStaleTrials` failed the trial while its objective ran (§6.7) | `FAIL` | yes: `ValueError: Cannot tell a FAIL trial.` The same divergence (`[Misaligned]`, `TrialFailedAsStaleWhileItsObjectiveRuns_RaisesCannotTellAFailTrial`): Optuna 5.0 raises `AssertionError('Should not reach.')` by the same route, with the `ValueError` as its context, and the `ValueError` itself under `python -O` (measured 2026-10-30 sequentially and at `n_jobs=2`, again 2026-11-07). The owner chose to keep the clearer error (plan 10, item 2.1). |
 
 How a raised exception travels under `nJobs`:
 
@@ -532,20 +531,28 @@ study from inside its monitor.
   itself from OS entropy (`RandomNumberGenerator`) rather than the clock. Samplers created at the same
   moment therefore draw different streams: in one process, in worker processes, and in parallel
   `optunasharp ask` calls. On the clock, 8 parallel shells had repeated 11 and 15 of their 80 draws.
-- **Open: 32 bits of entropy.** The seeds that `LazyRandomState` and every `ReseedRng` take from the
-  operating system have 4 bytes: the seed of an unseeded sampler, and the new seed of each reseed.
-  numpy's `RandomState()` and `RandomState.seed()` instead fill the generator's whole 624-word key from a
-  128-bit `SeedSequence`.
-  - Two of N 32-bit seeds are equal with probability about N²/2³³: 1% at 9,300 seeds, 50% at 77,000.
-  - A generator reseeded with a seed it had before replays the earlier stream. A trial that draws first
-    after each of the two reseeds draws what the earlier trial drew: a `RandomSampler` point, or a
-    sampler's random-startup or independent values.
-  - Measured 2026-10-30: one million `RandomSampler.ReseedRng` calls, each followed by one draw,
-    repeated 116 draws, where the birthday bound predicts 116.4. One million numpy reseeds repeated none.
-  - An `nJobs` run reseeds once per trial, so a run of 100,000 random trials can repeat a point. Across
-    processes the risk is small: 1,000 unseeded workers share a stream with probability about 0.01%.
-  - The fix is to seed from at least 128 bits, through `RandomState.seed(uint[])` (numpy's
-    `init_by_array`).
+- **128 bits of OS entropy, numpy's construction** (plan 10, item 2.1, 2026-11-07). An unseeded sampler's
+  generator and every `ReseedRng` take their state from `Internal/OsEntropySeed`, a port of numpy 2.4.2's
+  `MT19937.__init__` and `MT19937._legacy_seeding(None)`:
+  - a `SeedSequence` of 128 fresh bits is expanded by `generate_state(624)` into the whole key, and the
+    first word is forced to `0x80000000`;
+  - a new generator starts at position 623 (numpy keeps its key-copy loop's last index), so its first draw
+    tempers the key's last word before the first twist;
+  - a reseed keeps the position where it was and drops the cached Gaussian, as numpy's `seed()` does;
+  - an explicit seed overwrites this state at once (`LazyRandomState(seed)` calls `seed(seed)` on the new
+    generator, as Python's does), so seeded runs are unchanged.
+
+  Until then every OS seed was one 32-bit word through `RandomState.seed(uint)`. Two of N such seeds are
+  equal with probability about N²/2³³: 1% at 9,300 seeds, 50% at 77,000. A generator reseeded with a seed
+  it had before replays the earlier stream, so an `nJobs` run, which reseeds once per trial, could hand a
+  later trial an earlier trial's `RandomSampler` point or random-startup values.
+  - Measured 2026-10-30: one million `RandomSampler.ReseedRng` calls, each followed by one draw, repeated
+    116 draws, where the birthday bound predicts 116.4; one million numpy reseeds repeated none.
+  - Measured 2026-11-07, 300,000 reseeds: the old path repeated 9–14 draws in five rounds (bound 10.5),
+    the port none. `OsEntropySeedTests` pins both the construction, against numpy output for injected
+    entropy, and the absence of repeats.
+  - `BoTorchSampler.ReseedRng` draws a new 31-bit integer seed for torch, as Python's
+    `RandomState().randint(int32 max)` does, so it never had a key to fill.
 - Some samplers can give one point to two concurrent trials, by design: JANUS without `nJobs` lanes,
   REMBO, JANUS-DE, LM-CMA, TuRBO, the genetic samplers, Grid, BruteForce and QMC. The Storage page lists
   them with counts.
@@ -575,22 +582,18 @@ study from inside its monitor.
 - **Callbacks** run on the worker thread that ran the trial, after the trial is stored, each with its
   own deep copy of it, as in Python. Under `nJobs` the callbacks of different trials run at the same
   time, so a callback must be thread-safe.
-- **Open: `TerminatorCallback` is not thread-safe.**
-  - Its terminator's improvement evaluators (`RegretBoundEvaluator`, `EMMREvaluator`) each keep one
-    `LazyRandomState` across calls, and `Invoke` takes no lock. At `nJobs` above 1, concurrent callbacks
-    therefore draw from one unguarded generator (§6.3).
-  - Measured at `nJobs: 8`: eight callbacks ran at once, and 8 rounds showed no failure, likely because
-    the draws are a small part of each GP fit. In Python, numpy's lock makes the same draws safe.
-  - Until the callback takes a lock, serialize it yourself:
-
-    ```csharp
-    var terminatorCallback = new TerminatorCallback();
-    var gate = new object();
-    study.Optimize(objective, nTrials: 200, nJobs: 8, callbacks: new Action<Study, FrozenTrial>[]
-    {
-        (s, t) => { lock (gate) terminatorCallback.Invoke(s, t); },
-    });
-    ```
+- **`TerminatorCallback` serializes its calls** (plan 10, item 2.1, 2026-11-07). Its terminator's improvement
+  evaluators (`RegretBoundEvaluator`, `EMMREvaluator`) each keep one `LazyRandomState` across calls, so at
+  `nJobs` above 1 concurrent callbacks used to draw from one unguarded generator (§6.3). In Python,
+  numpy's lock makes the same draws safe.
+  - `Invoke` now runs `ShouldTerminate` under one lock per callback, entered through `MonitorGate`. It
+    comes before the GIL in the lock order, so a caller that holds the GIL releases it while it waits
+    (§8), and a terminator that takes the GIL cannot deadlock. `Study.Stop` runs outside the lock.
+  - Measured before the fix at `nJobs: 8`: eight callbacks ran at once, and 8 rounds of real terminators
+    showed no failure, likely because the draws are a small part of each GP fit. The test
+    `TerminatorCallback_UnderNJobs_RunsItsTerminatorOneCallAtATime` counts overlapping calls: 1 with the
+    lock, 8 without it.
+  - Wrapping the callback in a lock of your own is no longer needed.
 - **Logging.** The level and the handler list are guarded by one lock. `Emit` copies the handler list
   and calls the handlers outside that lock, from whichever thread logs. A handler must therefore be
   thread-safe, and it must not throw: `Emit` does not catch.
@@ -626,7 +629,8 @@ study from inside its monitor.
     the trial.
 - A trial whose heartbeat stopped while its objective was still running (a failed write, a long pause)
   can be failed under it. Its own tell then raises `ValueError: Cannot tell a FAIL trial.`, and
-  `Optimize` raises that. Optuna raises `AssertionError('Should not reach.')` there instead (§3.3).
+  `Optimize` raises that. Optuna raises `AssertionError('Should not reach.')` there instead, a pinned
+  divergence (§3.3).
 - `Ask` and `Tell` outside `Optimize` start no heartbeat thread. When heartbeats are on, `Ask` there warns
   `Heartbeat of storage is supposed to be used with Study.optimize.`
 
@@ -805,7 +809,7 @@ timeouts; with StackExchange.Redis's `DedicatedThreads` flag, 640 of 640 in 11 s
   thread or per trial (`Random.Shared`, or a generator seeded from `trial.Number`), never from one shared
   `System.Random` or NumSharp's `np.random` (§9).
 - **Callbacks** run on the worker thread, concurrently with other trials' callbacks. They may call
-  `Stop()`. Serialize `TerminatorCallback` yourself (§6.6).
+  `Stop()`. `TerminatorCallback` serializes its own calls (§6.6).
 - **Custom samplers and pruners.**
   - The study already serializes its calls into one instance under the instance's monitor; do not add
     a lock for them. Calls made outside a study (a test, a tool) are not serialized.
@@ -828,9 +832,16 @@ timeouts; with StackExchange.Redis's `DedicatedThreads` flag, 640 of 640 in 11 s
   it, as in Python.
 - **`OptunaSearchCV(nJobs: n)`** passes `n` to `Optimize`, so `n` cross-validations run at once.
   - The native sklearn port clones its estimator for each, which is safe.
-  - `MLNetEstimator` shares one caller-supplied `MLContext` and its folds across every call. Concurrent
-    training through one `MLContext` is not tested here, so keep `nJobs: 1` with it unless you have
-    verified your pipeline.
+  - `MLNetEstimator` shares one caller-supplied `MLContext`, its fold views and your pipeline factory
+    across every call. Tested at `nJobs: 4` with a FastTree regression pipeline: every trial's fold scores
+    equal a sequential evaluation of the same parameters (plan 10, item 2.6). Your factory and scorer run
+    concurrently, so they must be thread-safe: build a new trainer per call, and never share a
+    `PredictionEngine`, which ML.NET documents as not thread-safe. A trainer that draws randomness from the
+    shared context (bagging, a feature fraction below 1, shuffling) was not tested under `nJobs`, and its
+    results can depend on the order the trials run in.
+  - `MLNetEstimator` records an exception raised while a fold fits or scores as that fold's error score
+    (NaN by default), as scikit-learn does. A thread-safety fault in your pipeline therefore shows up as
+    NaN or changed scores rather than as an exception.
 - **Artifacts.** Uploads from concurrent trials do not interfere. Each upload gets a new artifact id (a
   GUID) and its own file or object, and one attribute write records it on the trial or study.
 - **Choosing an executor** (§3.5). Keep the default, `DedicatedThreads`, unless you have a reason to put
@@ -852,15 +863,18 @@ timeouts; with StackExchange.Redis's `DedicatedThreads` flag, 640 of 640 in 11 s
 | Test class | Pins |
 |---|---|
 | `OptimizeConcurrencyTests` | `nJobs` draws never repeat (Random, TPE); samplers with their own state complete every trial; evolution strategies never repeat a candidate; Hyperband builds its brackets once; `Optimize` on pool threads after an `nJobs` run is not a nested call; the error rules of §3.3; workers on dedicated threads; a trial's writes leave older snapshots alone; concurrent user attributes; the `nJobs` refusal |
-| `OptimizeEdgeCaseTests` | the stop, timeout and error rules of §3.3–3.4, each first observed on Optuna 5.0: timeouts; `Stop()` from an objective, a callback or another thread; `MaxTrialsCallback`; `catch`; failing callbacks and sampler hooks; unacceptable results; a nested `Optimize` in a worker; a failing final write (`[Misaligned]`); the timeout-only progress bar |
+| `OptimizeEdgeCaseTests` | the stop, timeout and error rules of §3.3–3.4, each first observed on Optuna 5.0: timeouts; `Stop()` from an objective, a callback or another thread; `MaxTrialsCallback`; `catch`; failing callbacks and sampler hooks; unacceptable results; a nested `Optimize` in a worker; a failing final write and a trial failed as stale under its objective (both `[Misaligned]`); the timeout-only progress bar |
 | `TrialExecutorOptionsTests` | the executor of §3.5: new options are dedicated threads with a 30 s idle timeout; both settings and `Default` refuse invalid values; `ThreadPool` runs every trial on a pool thread and `DedicatedThreads` none; `nJobs: 1` runs on the caller's thread whatever the executor; `nJobs` trials at once on the pool below its minimum; an `Optimize` called from a pool thread never runs a trial on that thread; pool threads keep no loop state afterwards; Python's error and stop rules on both executors; the caller's culture and `AsyncLocal` values reach workers and callbacks on both; the order of the four levels; a new `Default` reaching a study that never chose; `CreateStudy` and `LoadStudy` leaving the study setting unset; the snapshot (a change during a run does not reach it; a derived class's getters are read once, and its invalid values are refused before any trial); equal idle timeouts sharing one thread set; a short timeout retiring its threads, which then restart; the DI factory giving every study its options |
 | `StudyConcurrencyEdgeTests` | two threads optimizing one study; many threads asking and telling; a consistent reader during a run; enqueued trials run once and first, also when callbacks enqueue them; two tells of one trial; one sampler shared by two studies on two threads |
 | `JournalConcurrencyTests` | both lock protocols under contention; stale-lock takeover after the grace period; mixed protocols on one journal; separate storages on one study; a shared backend's offset cache; many studies on one journal; enqueued trials popped once; one trial's concurrent reports, suggestions and constraints; the create race |
 | `HeartbeatTests` | heartbeat threads beat and stop; a failed write ends only its thread, reported like `threading.excepthook`; trials complete when every heartbeat write fails; `FailStaleTrials` and the retry callback; `Ask`'s warning outside `Optimize` |
 | `SamplerNJobsSweepTests`, `PrunerNJobsSweepTests` | every Core sampler and pruner under `nJobs` on a journal: contiguous numbers, every trial ends as its rule dictates |
 | `LazyRandomStateSeedingTests` | unseeded samplers created together never share a stream; seeded ones stay reproducible |
+| `OsEntropySeedTests` | numpy's OS-entropy seeding: the constructor's key, position 623 and draws, and a reseed's kept position and dropped Gaussian, against numpy 2.4.2 output for injected entropy; no repeated draw in 300,000 reseeds |
+| `TerminatorTests` | `TerminatorCallback` at `nJobs: 8` runs its terminator one call at a time |
 | `ProgressBarTests` | the bar counts every `nJobs` trial once, in order |
 | `ConcurrentOrderedDictTests` | the contract of the internal concurrent collection (§5.1) |
+| `MLNetEstimatorNJobsTests` (Integration.ML.NET suite) | `OptunaSearchCV(nJobs: 4)` over one `MLNetEstimator`: 16 trials that overlap in time, every fold score equal to a sequential evaluation and none NaN |
 | `StorageConcurrencyTestsBase` and its SQLite, PostgreSQL, MySQL and gRPC subclasses (Storage suite) | one storage under `nJobs: 8`, eight separate storages, enqueued pops, sixteen storages creating one study name |
 | `RedisJournalConcurrencyTests` (Storage suite) | separate storages on one study; `nJobs` at four times the pool's minimum does not starve the client; dispose races |
 | `StorageDisposalEdgeTests` (Storage suite) | a scoped SQLite storage, gRPC proxy or EF Core storage, disposed through both of its DI registrations, synchronously or asynchronously, closes its connection, channel or owned data source |
@@ -869,8 +883,8 @@ timeouts; with StackExchange.Redis's `DedicatedThreads` flag, 640 of 640 in 11 s
 | `GilAwareMonitorTests` (Interop suite) | P3-1: `PythonRuntime.Initialize` installs the gate's hooks; three deterministic two-thread deadlocks (a GIL holder against a sampler, trial or pruner monitor held by a thread that needs the GIL), recovered by `Thread.Interrupt` if they regress; an objective inside `Py.GIL()` at `nJobs: 4` over a GIL-taking sampler and pruner, on dedicated threads and on the thread-pool executor; `Optimize(nJobs: 4)` called inside `Py.GIL()`; four ask-and-tell threads holding the GIL |
 | `OptunaHubBridgeParityTests` (Interop suite) | the real hub sampler at `nJobs: 8`; the real hub sampler and median pruner with an objective inside `Py.GIL()` at `nJobs: 4` |
 
-No test pins these yet: the reseed's entropy, `TerminatorCallback` under `nJobs`, and the error a trial
-failed under its objective raises (§3.3).
+The tests plan 10's item 2.1 added were checked against the old code, which they fail: 9–14 repeated
+draws in 300,000 reseeds, and 8 terminator calls at once.
 
 ## 12. Known limits and open items
 
@@ -879,14 +893,6 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
 
 - **19b:** `PymooSampler` is bound to the thread that created it, which rules out `nJobs` above 1 (§8).
   Plan 10, 2.5.
-- **The 32-bit seeds** (§6.3): long `nJobs` runs and large fleets can repeat a random stream. The fix is
-  to seed from at least 128 bits through `RandomState.seed(uint[])`. Plan 10, 2.1.
-- **`TerminatorCallback` under `nJobs`** (§6.6): concurrent callbacks share the evaluators' generators.
-  The fix is a lock in `TerminatorCallback.Invoke`; until then, wrap it in a lock of your own. Plan 10, 2.1.
-- **`MLNetEstimator` under `OptunaSearchCV(nJobs > 1)`** is untested (§10). Plan 10, 2.6.
-- **A trial failed under its objective** (§3.3, §6.7): its tell's `ValueError` reaches the caller, where
-  Optuna raises `AssertionError('Should not reach.')`. This is the divergence `[Misaligned]` already
-  documents for a failing final write, but no test pins this case. Plan 10, 2.1.
 - **Journal throughput:** one monitor across all of an operation's round trips, as in Python (§7.3).
   Plan 10, 2.2 cuts a trial from 19 to 11 Redis round trips; 2.3 turns on StackExchange.Redis's
   `DedicatedThreads` for the connections OptunaSharp opens (§7.2).
@@ -914,6 +920,6 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
 | `study._thread_local` | `Study.ThreadLocal` (`ThreadLocal<ThreadLocalStudyAttribute>`) |
 | `worker_id = prefix + threading.get_ident()` | `prefix + Environment.CurrentManagedThreadId` |
 | Heartbeat on a `threading.Thread`; `threading.excepthook` reports its failure | A background `Thread`; the same report, written to standard error |
-| `RandomState()` and `RandomState.seed()` take 128 bits of OS entropy for the whole key | `LazyRandomState` and `ReseedRng` take 32 bits from `RandomNumberGenerator` (open, §6.3) |
+| `RandomState()` and `RandomState.seed()` take 128 bits of OS entropy for the whole key | The same construction, ported: a `SeedSequence` expanded into the key, numpy's starting position, the position kept by a reseed (plan 10, 2.1; §6.3) |
 | Logging handlers take their own lock per record | Handlers are called concurrently and must be thread-safe |
 | Two tells of one trial: the GIL makes one practically always win | The tell stripe guarantees it |

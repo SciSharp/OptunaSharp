@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using AwesomeAssertions;
 using NumSharp;
 using OptunaSharp.Collections;
@@ -112,6 +113,59 @@ public class TerminatorTests
         study.Optimize(_ => 0.0, nTrials: 100, callbacks: new Action<Study, FrozenTrial>[] { callback });
 
         study.Trials.Count.Should().Be(terminationTrialNumber + 1);
+    }
+
+    /// <summary>A terminator that never stops and records the largest number of its calls running at once.</summary>
+    private sealed class OverlapCountingTerminator : BaseTerminator
+    {
+        private int _inside;
+        private int _maxInside;
+        private int _calls;
+
+        /// <summary>The most calls that were inside <see cref="ShouldTerminate" /> at the same moment.</summary>
+        internal int MaxInside => Volatile.Read(ref _maxInside);
+
+        /// <summary>How many times the terminator was asked.</summary>
+        internal int Calls => Volatile.Read(ref _calls);
+
+        /// <summary>Counts itself in, holds the call long enough for unserialized callers to overlap, and counts out.</summary>
+        /// <param name="study">Unused: the decision is always to continue.</param>
+        /// <returns>Always <c>false</c>.</returns>
+        public override bool ShouldTerminate(Study study)
+        {
+            int now = Interlocked.Increment(ref _inside);
+            int seen;
+            while (now > (seen = Volatile.Read(ref _maxInside)) && Interlocked.CompareExchange(ref _maxInside, now, seen) != seen)
+            {
+            }
+
+            Interlocked.Increment(ref _calls);
+            Thread.Sleep(2);
+            Interlocked.Decrement(ref _inside);
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     Under <c>nJobs</c> the callbacks of different trials run at once, and the default terminator's evaluators
+    ///     share one random generator. The callback therefore runs its terminator under a lock: at <c>nJobs: 8</c> no two
+    ///     calls overlap, and every trial's call still happens (plan 10, item 2.1; THREADING.md §6.6).
+    /// </summary>
+    [TestMethod]
+    public void TerminatorCallback_UnderNJobs_RunsItsTerminatorOneCallAtATime()
+    {
+        var terminator = new OverlapCountingTerminator();
+        var callback = new TerminatorCallback(terminator);
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(0));
+
+        study.Optimize(t =>
+        {
+            Thread.Sleep(1);
+            return t.SuggestFloat("x", 0, 1);
+        }, nTrials: 64, nJobs: 8, callbacks: new Action<Study, FrozenTrial>[] { callback });
+
+        terminator.Calls.Should().Be(64);
+        terminator.MaxInside.Should().Be(1, "the callback serializes its terminator across worker threads");
     }
 
     // ------------------------------------------------------------------ error evaluators (test_erroreval.py)

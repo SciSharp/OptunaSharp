@@ -120,10 +120,9 @@ public class GPSampler : BaseSampler
     /// <inheritdoc />
     public override void ReseedRng()
     {
-        // Python: self._rng.rng.seed() — reseed from OS entropy.
-        Span<byte> buffer = stackalloc byte[4];
-        System.Security.Cryptography.RandomNumberGenerator.Fill(buffer);
-        _rng.Rng.seed(BitConverter.ToUInt32(buffer));
+        // Python: self._rng.rng.seed(), fresh OS entropy: 128 bits through numpy's own key construction,
+        // so concurrent workers never share a stream (THREADING.md §6.3).
+        OsEntropySeed.Reseed(_rng.Rng);
         _independentSampler.ReseedRng();
     }
 

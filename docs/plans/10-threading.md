@@ -1,6 +1,6 @@
 # Plan 10 — Threading: a configurable `nJobs` executor, then six follow-ups
 
-> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 not started.** Phase 1, the executor, came first.
+> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 in progress (2.1 and 2.6 done 2026-11-07).** Phase 1, the executor, came first.
 > Phase 2 starts only after Phase 1 is finished; the owner's words (2026-11-07): "document what we will do
 > but we only tackle these AFTER finished all the threading". The decisions below are the owner's answers
 > to three rounds of design questions on 2026-11-07. The names, deferred at first, were settled on
@@ -227,6 +227,23 @@ The owner chose all six on 2026-11-07. Each section gives why, the design, the s
   the divergence test.
 - **Done when** the three items are gone from THREADING.md §6.3, §6.6, §11 and §12 and from catalog Open
   item 24.h.
+- **DONE 2026-11-07.** Outcome:
+  - Sub-decision (owner, 2026-11-07): pin the divergence as `[Misaligned]`. Re-observed on Optuna 5.0.0 with an
+    in-memory heartbeat storage: `AssertionError('Should not reach.')` whose context is the `ValueError`, and the
+    `ValueError` itself under `python -O`. Test: `OptimizeEdgeCaseTests.TrialFailedAsStaleWhileItsObjectiveRuns_RaisesCannotTellAFailTrial`.
+  - Seeds: one design refinement over the sketch above. NumSharp ships numpy's `SeedSequence`, so
+    `Internal/OsEntropySeed.cs` ports numpy's own construction instead of calling `seed(uint[])`: 128 bits
+    through `SeedSequence().generate_state(624)`, key[0] forced to `0x80000000`, the constructor's position 623,
+    and a reseed that keeps the position and drops the cached Gaussian (`MT19937.__init__`,
+    `_legacy_seeding(None)`, `RandomState.seed`). `LazyRandomState.SetRng` and the 12 Core `ReseedRng`
+    overrides call it. `BoTorchSampler.ReseedRng` is unchanged: it draws a 31-bit torch seed, as Python's
+    `RandomState().randint(int32 max)` does.
+  - Terminator: `TerminatorCallback.Invoke` runs `ShouldTerminate` under a private lock entered through
+    `MonitorGate` (GIL-aware); `Study.Stop` stays outside it.
+  - Tests: `OsEntropySeedTests` (8, against numpy 2.4.2 output for injected entropy, plus 300,000 reseeds with
+    no repeated draw) and `TerminatorTests.TerminatorCallback_UnderNJobs_RunsItsTerminatorOneCallAtATime`.
+    Negative controls on the old code: 9–14 repeated draws per 300,000 32-bit reseeds (bound 10.5), and 8
+    terminator calls at once without the lock.
 
 ### 2.2 Redis journal: 19 → 11 round trips per trial
 
@@ -333,6 +350,14 @@ The owner chose all six on 2026-11-07. Each section gives why, the design, the s
   `PredictionEngine`, which ML.NET documents as not thread-safe.
 - **Open sub-decisions.** None until the test has run.
 - **Done when** the test is green on both TFMs and THREADING.md §10 and §12 are updated.
+- **DONE 2026-11-07, no fix needed.** `MLNetEstimatorNJobsTests.OptunaSearchCV_NJobs4_ScoresEveryFoldAsASequentialEvaluation`
+  (Integration.ML.NET suite): 16 trials at `nJobs: 4` over one `MLNetEstimator` (FastTree regression, three folds).
+  Every trial completes, no fold score is NaN, and every fold score equals a sequential evaluation through a
+  separate context and estimator. The test also checks that the trials overlapped in time (summed durations above
+  1.5× the wall span), so the comparison runs on real concurrency. Green 3 runs × 2 TFMs. Found while writing it:
+  the estimator turns any fit or score exception into the fold's error score (NaN), so a concurrency fault would
+  never raise; THREADING.md §10 now says so, along with the factory and scorer's thread-safety requirement and the
+  untested case of trainers that draw from the shared context's random source.
 
 ---
 
@@ -341,5 +366,5 @@ The owner chose all six on 2026-11-07. Each section gives why, the design, the s
 1. Settle the deferred names (§1.8). Done 2026-11-07.
 2. Phase 1, in one commit series: §1.5 steps 1–7. Done 2026-11-07 (§1.9).
 3. Phase 2, one item at a time, each asking its open sub-decisions first. Suggested order: 2.1 (small,
-   low risk), 2.6 (a test that may need no fix), 2.3, 2.2 (the cross-language journal contract), 2.4 (new
-   public API), 2.5 (needs a root cause first).
+   low risk; done 2026-11-07), 2.6 (a test that may need no fix; done 2026-11-07, none needed), 2.3, 2.2 (the cross-language journal
+   contract), 2.4 (new public API), 2.5 (needs a root cause first).

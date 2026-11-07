@@ -554,6 +554,47 @@ public class OptimizeEdgeCaseTests
     }
 
     /// <summary>
+    ///     A trial that <see cref="HeartbeatHelpers.FailStaleTrials" /> fails while its own objective still runs: the
+    ///     objective's result then cannot be told, so <c>Optimize</c> raises the tell's
+    ///     <c>ValueError: Cannot tell a FAIL trial.</c> and the trial stays FAIL. In a real run another worker's
+    ///     <c>FailStaleTrials</c>, at the start of its own trial, does this when the trial's heartbeat is late; here the
+    ///     objective calls it with the storage naming its own trial stale, which is the same storage write.
+    /// </summary>
+    /// <remarks>
+    ///     [Misaligned] Optuna 5.0 raises <c>AssertionError('Should not reach.')</c> instead, with the
+    ///     <c>ValueError('Cannot tell a FAIL trial.')</c> as its context. The logging <c>finally</c> of
+    ///     <c>_run_trial</c> finds the trial FAIL with neither an objective error nor a warning to log, and hits
+    ///     <c>assert False</c>. Under <c>python -O</c> the assert is stripped and the <c>ValueError</c> propagates, as
+    ///     here. Both runs were observed on 2026-11-07 with this objective over an in-memory heartbeat storage: trials 0
+    ///     and 1 COMPLETE, trial 2 FAIL, and the run ended there. The owner chose to keep the clearer error and pin it
+    ///     (plan 10, item 2.1), as for the failing final write above, which has the same root.
+    /// </remarks>
+    [TestMethod]
+    [Misaligned]
+    public void TrialFailedAsStaleWhileItsObjectiveRuns_RaisesCannotTellAFailTrial()
+    {
+        var storage = new NamedStaleTrialsStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(1));
+
+        var act = () => study.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", 0, 1);
+            if (t.Number == 2)
+            {
+                storage.Stale = new[] { t.TrialId };
+                HeartbeatHelpers.FailStaleTrials(study);
+                storage.Stale = Array.Empty<int>();
+            }
+
+            return x;
+        }, nTrials: 5);
+
+        act.Should().Throw<ValueError>().WithMessage("Cannot tell a FAIL trial.");
+        study.Trials.Select(t => (t.Number, t.State)).Should().Equal(
+            (0, TrialState.Complete), (1, TrialState.Complete), (2, TrialState.Fail));
+    }
+
+    /// <summary>
     ///     The run warns and drops the bar when asked for a timeout-only progress bar with nJobs, as Python does
     ///     (Optuna 5.0, verbatim: "The timeout-based progress bar is not supported with n_jobs != 1."), and still runs.
     /// </summary>
@@ -687,5 +728,40 @@ public class OptimizeEdgeCaseTests
                 throw new IOException("disk full");
             return base.SetTrialStateValues(trialId, state, values);
         }
+    }
+
+    /// <summary>
+    ///     An in-memory storage with heartbeats on, whose stale trials are exactly the ones a test names: the C# twin of
+    ///     the Python storage the stale-trial divergence was observed with.
+    /// </summary>
+    private sealed class NamedStaleTrialsStorage : InMemoryStorage, IBaseHeartbeat
+    {
+        private int[] _stale = Array.Empty<int>();
+
+        /// <summary>The trial ids <see cref="GetStaleTrialIds" /> reports; empty unless a test sets them.</summary>
+        internal int[] Stale
+        {
+            get => Volatile.Read(ref _stale);
+            set => Volatile.Write(ref _stale, value);
+        }
+
+        /// <summary>Accepts the trial's heartbeat and keeps nothing: staleness comes only from <see cref="Stale" />.</summary>
+        /// <param name="trialId">The trial's storage identifier.</param>
+        public void RecordHeartbeat(int trialId)
+        {
+        }
+
+        /// <summary>Returns the named trials, whatever their heartbeats.</summary>
+        /// <param name="studyId">Unused: the test names trials by storage id.</param>
+        /// <returns>A copy of <see cref="Stale" />.</returns>
+        public List<int> GetStaleTrialIds(int studyId) => Stale.ToList();
+
+        /// <summary>A long interval, so heartbeats are enabled but never decide anything by time.</summary>
+        /// <returns>60 seconds.</returns>
+        public int? GetHeartbeatInterval() => 60;
+
+        /// <summary>No callback: a stale trial is only failed.</summary>
+        /// <returns><c>null</c>.</returns>
+        public Action<Study, FrozenTrial>? GetHeartbeatStaleTrialCallback() => null;
     }
 }
