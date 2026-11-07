@@ -58,7 +58,10 @@ study.Optimize(Objective, nTrials: 10, callbacks: new Action<Study, FrozenTrial>
 ```
 
 `study.Stop()` only takes effect inside an objective or a callback; it lets the currently running
-trials finish and then returns from `Optimize`.
+trials finish and then returns from `Optimize`. To stop a run from outside, such as from another thread
+or on Ctrl+C, cancel the token passed as `Optimize`'s `ct` instead. The run then ends the same way, and
+`Optimize` throws `OperationCanceledException` (see
+[Easy parallelization](../key-features/parallelization.md#stopping-a-run-cancellation-ctrlc-and-sigterm)).
 
 ## Relationship to Optuna
 

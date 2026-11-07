@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -18,7 +19,7 @@ namespace OptunaSharp;
 ///
 ///     Note that the direct use of this constructor is not recommended. This object is
 ///     seamlessly instantiated and passed to the objective function behind the
-///     <see cref="Study.Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions)" />
+///     <see cref="Study.Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions, CancellationToken)" />
 ///     method; hence library users do not care about instantiation of this object.
 /// </summary>
 /// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.trial.Trial.html">Official Optuna active-trial contract.</seealso>
@@ -26,6 +27,27 @@ public class Trial : BaseTrial
 {
     /// <summary>The parent <see cref="Study" />.</summary>
     public Study Study { get; }
+
+    /// <summary>
+    ///     The cancellation token of the <c>Optimize</c> call running this trial (its <c>ct</c> argument), or
+    ///     <see cref="CancellationToken.None" /> for a trial from <see cref="Study.Ask(OrderedDict{string, BaseDistribution})" />
+    ///     or one built directly. OptunaSharp only: Python interrupts a running objective with <c>KeyboardInterrupt</c>
+    ///     instead.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         An objective may poll it (<see cref="CancellationToken.ThrowIfCancellationRequested" />) or hand it to
+    ///         cancellable work, so that a long evaluation stops when the caller cancels the run. An
+    ///         <see cref="OperationCanceledException" /> that escapes the objective while the token is cancelled stores
+    ///         this trial as FAIL, as Python stores the trial its <c>KeyboardInterrupt</c> lands in, skips the callbacks,
+    ///         and ends the <c>Optimize</c> call whatever its <c>catch</c> argument holds.
+    ///     </para>
+    ///     <para>
+    ///         An objective that ignores the token runs to its end and is stored as it returns; the run stops before the
+    ///         next trial. Observing the token is the objective's choice, as in any cooperative .NET cancellation.
+    ///     </para>
+    /// </remarks>
+    public CancellationToken CancellationToken { get; internal set; }
 
     /// <summary>Storage identifier for this trial, separate from its per-study number.</summary>
     internal readonly int TrialId;

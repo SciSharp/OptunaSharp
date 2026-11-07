@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using OptunaSharp.Logging;
 using OptunaSharp.Storages;
@@ -27,16 +28,33 @@ internal static class OptimizeLoop
     ///     study's <see cref="Study.ExecutorOptions" /> and then <see cref="TrialExecutorOptions.Default" />. Read once,
     ///     here, before anything runs.
     /// </param>
+    /// <param name="ct">
+    ///     The caller's cancellation (plan 10, item 2.4), checked before every trial is scheduled and handed to every
+    ///     trial as <see cref="Trial.CancellationToken" />.
+    /// </param>
     /// <exception cref="NumSharp.RuntimeError">Optimization is invoked recursively for a study already being optimized on the current execution context.</exception>
     /// <exception cref="NumSharp.ValueError"><paramref name="nJobs" /> is 0 or below -1 (Python's <c>ThreadPoolExecutor</c> refusal).</exception>
     /// <exception cref="ArgumentOutOfRangeException">The resolved executor options return an undefined executor kind or an invalid idle timeout (only a derived options class can).</exception>
+    /// <exception cref="OperationCanceledException">
+    ///     <paramref name="ct" /> was cancelled and stopped the scheduling, or an objective threw this exception while it
+    ///     was cancelled; thrown after every trial in flight is stored, carrying <paramref name="ct" />.
+    /// </exception>
     /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
     /// <remarks>
-    ///     With <paramref name="nJobs" /> other than 1 this follows Python's executor block exactly: a failure is
-    ///     raised (as the original exception, not an <see cref="AggregateException" />) only after every trial
-    ///     still running has finished, and a failure among the trials that finish after the last submission is
-    ///     not raised at all; such a trial is still recorded as FAIL and logged. The executor only decides which
-    ///     threads run the workers; none of these rules depends on it.
+    ///     <para>
+    ///         With <paramref name="nJobs" /> other than 1 this follows Python's executor block exactly: a failure is
+    ///         raised (as the original exception, not an <see cref="AggregateException" />) only after every trial
+    ///         still running has finished, and a failure among the trials that finish after the last submission is
+    ///         not raised at all; such a trial is still recorded as FAIL and logged. The executor only decides which
+    ///         threads run the workers; none of these rules depends on it.
+    ///     </para>
+    ///     <para>
+    ///         Cancellation is OptunaSharp's form of Python's <c>KeyboardInterrupt</c> (THREADING.md §3.4). Python, at
+    ///         <c>n_jobs</c> above 1, lets the trials in flight finish and then raises; at <c>n_jobs</c> 1 the interrupt
+    ///         usually lands inside the objective, whose trial is stored FAIL. Here the token is cooperative: no trial
+    ///         starts after it is cancelled, a running objective that observes it is stored FAIL (see
+    ///         <see cref="RunTrial" />), and one that ignores it finishes and is stored as it returns.
+    ///     </para>
     /// </remarks>
     internal static void Optimize(
         Study study,
@@ -48,7 +66,8 @@ internal static class OptimizeLoop
         IReadOnlyList<Action<Study, FrozenTrial>>? callbacks = null,
         bool gcAfterTrial = false,
         bool showProgressBar = false,
-        TrialExecutorOptions? executorOptions = null)
+        TrialExecutorOptions? executorOptions = null,
+        CancellationToken ct = default)
     {
         var catchTypes = catchExceptions ?? Array.Empty<Type>();
 
@@ -70,13 +89,16 @@ internal static class OptimizeLoop
 
         study.StopFlag = false;
 
+        // Set when the token, not the count, the timeout or Stop(), ended the scheduling; the call then throws once every
+        // trial in flight is stored.
+        bool cancelled = false;
         try
         {
             if (nJobs == 1)
             {
-                OptimizeSequential(
+                cancelled = OptimizeSequential(
                     study, func, nTrials, timeout, catchTypes, callbacks, gcAfterTrial,
-                    reseedSamplerRng: false, timeStart: null, progressBar: progressBar);
+                    reseedSamplerRng: false, timeStart: null, progressBar: progressBar, ct: ct);
             }
             else
             {
@@ -94,6 +116,14 @@ internal static class OptimizeLoop
                 {
                     for (int nSubmittedTrials = 0; ; nSubmittedTrials++)
                     {
+                        // The token first: a run that is both stopped and cancelled reports the cancellation, so a
+                        // caller that cancelled always learns that its run was cut short.
+                        if (ct.IsCancellationRequested)
+                        {
+                            cancelled = true;
+                            break;
+                        }
+
                         if (study.StopFlag)
                             break;
 
@@ -121,10 +151,12 @@ internal static class OptimizeLoop
                             completed.FirstOrDefault(f => !f.IsCompletedSuccessfully)?.GetAwaiter().GetResult();
                         }
 
+                        // A worker that starts after the token is cancelled runs no trial, as one that starts after Stop()
+                        // does; its result is ignored, since this loop sees the token itself at its next check.
                         futures.Add(StartWorker(executor, () => OptimizeSequential(
                             study, func, 1, timeout, catchTypes, callbacks, gcAfterTrial,
                             reseedSamplerRng: true, timeStart: timeStart, progressBar: progressBar,
-                            restoreLoopFlag: true)));
+                            restoreLoopFlag: true, ct: ct)));
                     }
                 }
                 finally
@@ -137,11 +169,23 @@ internal static class OptimizeLoop
                 }
             }
         }
+        catch (OperationCanceledException e) when (ct.IsCancellationRequested && e.CancellationToken != ct)
+        {
+            // An objective cancelled through a token of its own (one linked to the trial's, say) while the caller's token
+            // was cancelled: report the caller's cancellation, carrying the caller's token, which is what .NET callers
+            // compare, and keep the objective's exception as the cause.
+            throw new OperationCanceledException(e.Message, e, ct);
+        }
         finally
         {
             study.ThreadLocal.InOptimizeLoop = false;
             progressBar.Close();
         }
+
+        // The token ended the scheduling. Every trial in flight is stored by now (the workers were awaited above), so the
+        // call ends as Python's ends on KeyboardInterrupt: by raising.
+        if (cancelled)
+            throw new OperationCanceledException(ct);
     }
 
     /// <summary>Python <c>_optimize_sequential</c>.</summary>
@@ -159,8 +203,10 @@ internal static class OptimizeLoop
     ///     True for an n_jobs worker: put this thread's <c>InOptimizeLoop</c> back to its previous value on exit.
     ///     False on the caller's own thread, where <see cref="Optimize" /> clears it, as Python does.
     /// </param>
+    /// <param name="ct">The caller's cancellation, checked before each trial and handed to it.</param>
+    /// <returns><c>true</c> when <paramref name="ct" />, rather than the count, the timeout or Stop(), ended the loop.</returns>
     /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
-    private static void OptimizeSequential(
+    private static bool OptimizeSequential(
         Study study,
         Func<Trial, IReadOnlyList<double>> func,
         int? nTrials,
@@ -171,7 +217,8 @@ internal static class OptimizeLoop
         bool reseedSamplerRng,
         DateTime? timeStart,
         ProgressBar? progressBar,
-        bool restoreLoopFlag = false)
+        bool restoreLoopFlag = false,
+        CancellationToken ct = default)
     {
         // Here we set `InOptimizeLoop = true`, not at the beginning of the `Optimize()` function.
         // Because it is a thread-local value and the n_jobs option spawns new threads.
@@ -187,7 +234,7 @@ internal static class OptimizeLoop
                 sampler.Locked(sampler.ReseedRng);
             }
 
-            RunTrials(study, func, nTrials, timeout, catchTypes, callbacks, gcAfterTrial, timeStart, progressBar);
+            return RunTrials(study, func, nTrials, timeout, catchTypes, callbacks, gcAfterTrial, timeStart, progressBar, ct);
         }
         finally
         {
@@ -214,8 +261,10 @@ internal static class OptimizeLoop
     /// <param name="gcAfterTrial">Whether to request garbage collection after each objective invocation.</param>
     /// <param name="timeStart">The start time shared by workers when enforcing the overall timeout.</param>
     /// <param name="progressBar">The progress renderer shared with this optimization loop, or null when no progress is displayed.</param>
+    /// <param name="ct">The caller's cancellation, checked before each trial and handed to it.</param>
+    /// <returns><c>true</c> when <paramref name="ct" />, rather than the count, the timeout or Stop(), ended the loop.</returns>
     /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
-    private static void RunTrials(
+    private static bool RunTrials(
         Study study,
         Func<Trial, IReadOnlyList<double>> func,
         int? nTrials,
@@ -224,14 +273,23 @@ internal static class OptimizeLoop
         IReadOnlyList<Action<Study, FrozenTrial>>? callbacks,
         bool gcAfterTrial,
         DateTime? timeStart,
-        ProgressBar? progressBar)
+        ProgressBar? progressBar,
+        CancellationToken ct)
     {
         int iTrial = 0;
+        bool cancelled = false;
 
         timeStart ??= DateTime.Now;
 
         while (true)
         {
+            // Before Stop(), as in the n_jobs submit loop: a run both stopped and cancelled reports the cancellation.
+            if (ct.IsCancellationRequested)
+            {
+                cancelled = true;
+                break;
+            }
+
             if (study.StopFlag)
                 break;
 
@@ -252,7 +310,7 @@ internal static class OptimizeLoop
             int frozenTrialId;
             try
             {
-                frozenTrialId = RunTrial(study, func, catchTypes);
+                frozenTrialId = RunTrial(study, func, catchTypes, ct);
             }
             finally
             {
@@ -275,6 +333,7 @@ internal static class OptimizeLoop
         }
 
         study.Storage.RemoveSession();
+        return cancelled;
     }
 
     /// <summary>
@@ -330,14 +389,21 @@ internal static class OptimizeLoop
     /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
     /// <param name="func">The objective callback returning one value per study objective for the new trial.</param>
     /// <param name="catchTypes">Exception types permitted to fail a trial while optimization continues.</param>
+    /// <param name="ct">The caller's cancellation, exposed to the objective as <see cref="Trial.CancellationToken" />.</param>
     /// <returns>The storage identifier of the executed trial, suitable for a subsequent storage GetTrial call.</returns>
+    /// <exception cref="OperationCanceledException">
+    ///     The objective threw it while <paramref name="ct" /> was cancelled: the trial is stored FAIL first, and
+    ///     <paramref name="catchTypes" /> cannot swallow it.
+    /// </exception>
     /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
-    internal static int RunTrial(Study study, Func<Trial, IReadOnlyList<double>> func, Type[] catchTypes)
+    internal static int RunTrial(Study study, Func<Trial, IReadOnlyList<double>> func, Type[] catchTypes, CancellationToken ct = default)
     {
         if (HeartbeatHelpers.IsHeartbeatEnabled(study.Storage))
             HeartbeatHelpers.FailStaleTrials(study);
 
         var trial = study.Ask();
+        // Before the objective sees the trial: the objective polls the token or hands it to cancellable work.
+        trial.CancellationToken = ct;
 
         TrialState? state = null;
         IReadOnlyList<double>? valueOrValues = null;
@@ -399,10 +465,28 @@ internal static class OptimizeLoop
 
         LogTrialOutcome(study, trial, updatedState, values, funcErr, warningMessage, valueOrValues);
 
-        if (updatedState == TrialState.Fail && funcErr is not null && !IsCaught(funcErr, catchTypes))
+        // The caller's cancellation leaves whatever catch says, as Python's KeyboardInterrupt does: it is not an
+        // Exception subclass there, so the catch tuple can never hold it, and the trial it lands in is stored FAIL.
+        if (updatedState == TrialState.Fail && funcErr is not null
+            && (IsRunCancellation(funcErr, ct) || !IsCaught(funcErr, catchTypes)))
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(funcErr).Throw();
         return trial.TrialId;
     }
+
+    /// <summary>
+    ///     Whether an objective's exception is the caller's cancellation: an <see cref="OperationCanceledException" />
+    ///     (or a subclass such as <see cref="TaskCanceledException" />) thrown while <paramref name="ct" /> is cancelled.
+    /// </summary>
+    /// <param name="error">The exception the objective threw.</param>
+    /// <param name="ct">The caller's token.</param>
+    /// <returns><c>true</c> when the exception ends the run whatever the catch list holds.</returns>
+    /// <remarks>
+    ///     The token is not compared with the exception's own: an objective may cancel through a token linked to
+    ///     <see cref="Trial.CancellationToken" />, which carries the linked token instead. A cancellation exception while
+    ///     the caller's token is not cancelled (an HTTP timeout, say) is an ordinary failure, subject to catch.
+    /// </remarks>
+    private static bool IsRunCancellation(Exception error, CancellationToken ct)
+        => error is OperationCanceledException && ct.IsCancellationRequested;
 
     /// <summary>Routes a finalized trial to the completed, pruned, or failed diagnostic path.</summary>
     /// <param name="study">The study supplying trial history, objective directions, and storage.</param>

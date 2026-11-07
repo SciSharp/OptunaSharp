@@ -9,7 +9,7 @@ namespace OptunaSharp.Terminator;
 ///     Port of <c>optuna/terminator/callback.py: TerminatorCallback</c>.
 ///
 ///     This class wraps a <see cref="Terminator" /> so that it can be used with
-///     <see cref="Study.Optimize(System.Func{Trial, double}, int?, double?, int, System.Type[], System.Collections.Generic.IEnumerable{System.Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions)" />.
+///     <see cref="Study.Optimize(System.Func{Trial, double}, int?, double?, int, System.Type[], System.Collections.Generic.IEnumerable{System.Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions, System.Threading.CancellationToken)" />.
 ///     Pass it via the <c>callbacks</c> argument; the implicit conversion to
 ///     <see cref="Action{Study, FrozenTrial}" /> lets it be handed over directly.
 /// </summary>

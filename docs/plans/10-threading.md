@@ -1,6 +1,6 @@
 # Plan 10 — Threading: a configurable `nJobs` executor, then seven follow-ups
 
-> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 in progress (2.1, 2.2, 2.3 and 2.6 done 2026-11-07).** Phase 1, the executor, came first.
+> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 in progress (2.1, 2.2, 2.3, 2.4 and 2.6 done 2026-11-07).** Phase 1, the executor, came first.
 > Phase 2 starts only after Phase 1 is finished; the owner's words (2026-11-07): "document what we will do
 > but we only tackle these AFTER finished all the threading". The decisions below are the owner's answers
 > to three rounds of design questions on 2026-11-07. The names, deferred at first, were settled on
@@ -370,6 +370,43 @@ The owner chose the first six on 2026-11-07, and added 2.7 the same day from a f
 - **Tests.** Cancel mid-run at `nJobs` 1 and 8: no trial left `RUNNING`, the exception type and token; an
   already-cancelled token runs no trial; `Stop()` still works; both executors.
 - **Done when** THREADING.md §3.4 and §12 describe the token and the recipe.
+- **DONE 2026-11-07.** Outcome:
+  - Sub-decisions (owner, 2026-11-07, three HTML rounds):
+    - "Token on Trial": `Trial.CancellationToken`. An objective that throws for it is stored FAIL; one that
+      ignores it finishes.
+    - The parameter is named `ct` (the owner's own answer, over the proposed `cancellationToken`):
+      `Optimize(…, executorOptions, CancellationToken ct = default)` on both overloads.
+    - Ctrl+C: the owner first asked "Which solution uses zero cpu until Ctrl+C is pressed". Measured: all of them;
+      over 10 idle seconds the CPU matched no handler on Windows and Linux. The owner then chose a helper that
+      also covers SIGTERM ("Helper incl. SIGTERM", commenting "Which is used with CLI exe launch": it serves
+      console executables, and a Generic Host passes `ApplicationStopping` instead).
+    - Its name: `StopSignals` (`using var signals = StopSignals.Listen(); … ct: signals.Token`).
+  - Behavior:
+    - The submit loop and every worker check the token before each trial, ahead of the stop flag.
+    - Once it is cancelled no trial starts. The trials in flight finish and are stored, then
+      `OperationCanceledException` is thrown carrying `ct`. An already cancelled token runs no trial.
+    - An `OperationCanceledException` that escapes an objective while `ct` is cancelled stores that trial FAIL,
+      whatever `catch` holds, and the callbacks skip it (Python's `KeyboardInterrupt`). A linked token is reported
+      with the caller's token, the objective's exception being the cause. Another token's cancellation stays an
+      ordinary failure.
+  - `StopSignals` (Core, opt-in), over `PosixSignalRegistration`:
+    - SIGINT and SIGTERM. The first signal is held, cancels the token and logs a warning; a second one takes its
+      default action.
+    - A throwing token callback cannot escape the handler.
+    - `Dispose` unhooks; the token stays readable.
+  - Python, re-observed on Optuna 5.0.0: at `n_jobs=1` an interrupt in the objective stores that trial FAIL, then
+    `KeyboardInterrupt`. At `n_jobs=3` the trials in flight finish COMPLETE first.
+  - Real-signal checks:
+    - Linux container, `docker kill` with SIGTERM or SIGINT: graceful within about 1 s, every trial COMPLETE in a
+      new storage. Two quick SIGINTs exit 130.
+    - Windows, `CTRL_C_EVENT` raised on the demo's own console: graceful in 0.4 s; two presses exit `0xC000013A`.
+      A process that inherits "ignore Ctrl+C" from its parent never sees Ctrl+C; documented.
+  - Tests:
+    - `OptimizeCancellationTests` (16 cases) and `StopSignalsTests` (8 cases, the real-SIGTERM case on Linux and
+      macOS only).
+    - Mutations caught: dropping the loop's token check fails 4 cases, and letting `catch` swallow the
+      cancellation fails 2.
+  - Docs: THREADING.md §3.4, §11 and §12; the site's parallelization page ("Stopping a run"); the callback recipe.
 
 ### 2.5 `PymooSampler` on any thread (review item 19b)
 
@@ -449,5 +486,5 @@ The owner chose the first six on 2026-11-07, and added 2.7 the same day from a f
 2. Phase 1, in one commit series: §1.5 steps 1–7. Done 2026-11-07 (§1.9).
 3. Phase 2, one item at a time, each asking its open sub-decisions first. Suggested order: 2.1 (small,
    low risk; done 2026-11-07), 2.6 (a test that may need no fix; done 2026-11-07, none needed), 2.3 and 2.2
-   (the cross-language journal contract; done together 2026-11-07), 2.4 (new public API), 2.5 (needs a root
-   cause first), 2.7 (the owner's choice: after 2.4 and 2.5).
+   (the cross-language journal contract; done together 2026-11-07), 2.4 (new public API; done 2026-11-07), 2.5
+   (needs a root cause first), 2.7 (the owner's choice: after 2.4 and 2.5).

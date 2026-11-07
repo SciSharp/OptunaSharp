@@ -11,7 +11,9 @@
   (§6.6), and the stale-trial error divergence is pinned (§3.3) (plan 10, item 2.1);
 - 2026-11-07: the Redis journal reads in batches, seeds its counter inside the append script, keeps
   OptunaSharp's snapshot under a key of its own at an interval chosen by read mode (§7.3), and its
-  StackExchange.Redis connections get dedicated threads by default (§7.2) (plan 10, items 2.2 and 2.3).
+  StackExchange.Redis connections get dedicated threads by default (§7.2) (plan 10, items 2.2 and 2.3);
+- 2026-11-07: `Optimize` takes a `CancellationToken` (`ct`), trials see it as `Trial.CancellationToken`, and
+  the opt-in `StopSignals` turns Ctrl+C and SIGTERM into it (§3.4) (plan 10, item 2.4).
 
 One item is open: `PymooSampler` driven from more than one thread (review item 19b, §8). §12 lists it with
 the known limits.
@@ -184,16 +186,42 @@ How a raised exception travels under `nJobs`:
   and the run goes on.
 - The stop flag is a `volatile` field of the `Study` object. It stops every `Optimize` call running on
   that object, and each new `Optimize` call clears it, as Python resets `_stop_flag`.
-- There is no `CancellationToken`. To cancel from outside, set a flag that a callback checks, and let the
-  callback call `Stop()`.
-- **Ctrl+C.** .NET ends the process on Ctrl+C by default, and the worker threads end with it. The trials
-  in flight stay `RUNNING` in a persistent storage: an RDB storage with heartbeats fails them later as
-  stale, and a journal never does.
-  - Python, when `n_jobs` is 1, stores the running trial as `FAIL` when the interrupt arrives in its
-    objective. With more workers it lets the running trials finish. Either way it then raises
-    `KeyboardInterrupt`.
-  - To let the trials in flight finish instead, handle `Console.CancelKeyPress`: set `e.Cancel = true`
-    and the flag your callback checks.
+- **Cancellation** (plan 10, item 2.4, the owner's choices of 2026-11-07). `Optimize(…, ct:)` takes a
+  `CancellationToken`. The submit loop and every worker check it before each trial, ahead of the stop
+  flag, so a run that is both stopped and cancelled reports the cancellation.
+  - Once the token is cancelled no trial starts. The trials in flight finish and are stored, and
+    `Optimize` throws `OperationCanceledException` carrying the token. An already cancelled token runs
+    no trial.
+  - Every trial gets the token as `Trial.CancellationToken`; an asked trial has
+    `CancellationToken.None`.
+  - An `OperationCanceledException` that escapes an objective while the token is cancelled stores that
+    trial `FAIL`, whatever `catch` holds, and the callbacks skip it. This is Python's
+    `KeyboardInterrupt`, which is no `Exception` subclass, so `catch` can never hold it.
+  - An objective may cancel through a token linked to the trial's. `Optimize` then reports the caller's
+    token and keeps the objective's exception as the cause.
+  - A cancellation exception while the token is not cancelled (an HTTP timeout, say) is an ordinary
+    failure, subject to `catch`.
+  - Python, observed on Optuna 5.0.0: at `n_jobs` 1 the interrupt lands in the objective, whose trial is
+    stored `FAIL` (trials 0–3 COMPLETE, 4 FAIL), then `KeyboardInterrupt` propagates. At `n_jobs` 3 the
+    trials in flight finish COMPLETE and the interrupt is raised after them. The token is cooperative,
+    so the first outcome needs an objective that observes it.
+- **Ctrl+C and SIGTERM.** .NET ends the process on either signal by default, and the worker threads end
+  with it. The trials in flight stay `RUNNING` in a persistent storage: an RDB storage with heartbeats
+  fails them later as stale, and a journal never does.
+  - `StopSignals.Listen()` (opt-in; OptunaSharp installs no handler by itself, because a handler is
+    process-wide) registers SIGINT and SIGTERM through `PosixSignalRegistration`. The first signal is
+    held, and the process lives on. It also cancels `StopSignals.Token` and logs a warning. A second
+    signal takes its default action, which ends the process.
+  - The handlers cost nothing until a signal arrives. Measured over 10 idle seconds, a process used the
+    same CPU with and without them: Windows creates the handler thread only at the signal, and Linux
+    adds one runtime thread asleep in a blocking read.
+  - Checked with real signals on 2026-11-07. In a Linux container, `docker kill` with SIGTERM or SIGINT
+    stopped a 4-worker journal study gracefully about 1 s later: every trial COMPLETE in a new storage,
+    exit code 0. Two quick SIGINTs exited with 130. On Windows, a real `CTRL_C_EVENT` on the demo's own
+    console stopped it 0.4 s later, and two exited with `0xC000013A`.
+  - Windows passes a parent's "ignore Ctrl+C" on to its children. A process started that way never sees
+    Ctrl+C, with or without the helper: the launcher in that check had to clear it first.
+  - A .NET Generic Host already handles both signals; it passes `ApplicationStopping` as the token.
 
 ### 3.5 The executor: dedicated threads by default, the thread pool on request
 
@@ -923,6 +951,8 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 |---|---|
 | `OptimizeConcurrencyTests` | `nJobs` draws never repeat (Random, TPE); samplers with their own state complete every trial; evolution strategies never repeat a candidate; Hyperband builds its brackets once; `Optimize` on pool threads after an `nJobs` run is not a nested call; the error rules of §3.3; workers on dedicated threads; a trial's writes leave older snapshots alone; concurrent user attributes; the `nJobs` refusal |
 | `OptimizeEdgeCaseTests` | the stop, timeout and error rules of §3.3–3.4, each first observed on Optuna 5.0: timeouts; `Stop()` from an objective, a callback or another thread; `MaxTrialsCallback`; `catch`; failing callbacks and sampler hooks; unacceptable results; a nested `Optimize` in a worker; a failing final write and a trial failed as stale under its objective (both `[Misaligned]`); the timeout-only progress bar |
+| `OptimizeCancellationTests` | plan 10, item 2.4: an already cancelled token runs no trial; a cancellation mid-run finishes the trials in flight and then throws, carrying the token (`nJobs` 1 and 8, both executors); an objective observing the token is stored FAIL whatever `catch` holds, and the callbacks skip it; workers observing it leave no trial RUNNING; an objective ignoring it finishes COMPLETE; a cancellation exception of another token is an ordinary failure; a linked token is reported with the caller's; `Trial.CancellationToken` in `Optimize` and for asked trials; `Stop()` unchanged; a cancelled run on a journal leaves no trial RUNNING |
+| `StopSignalsTests` | the first SIGINT or SIGTERM is held and cancels the token, a second falls through; after `Dispose` signals fall through and the token stays readable; a throwing token callback does not escape the handler; a signal during `Optimize(nJobs: 4)` stops it gracefully; a real SIGTERM sent to the process cancels the token (Linux and macOS) |
 | `TrialExecutorOptionsTests` | the executor of §3.5: new options are dedicated threads with a 30 s idle timeout; both settings and `Default` refuse invalid values; `ThreadPool` runs every trial on a pool thread and `DedicatedThreads` none; `nJobs: 1` runs on the caller's thread whatever the executor; `nJobs` trials at once on the pool below its minimum; an `Optimize` called from a pool thread never runs a trial on that thread; pool threads keep no loop state afterwards; Python's error and stop rules on both executors; the caller's culture and `AsyncLocal` values reach workers and callbacks on both; the order of the four levels; a new `Default` reaching a study that never chose; `CreateStudy` and `LoadStudy` leaving the study setting unset; the snapshot (a change during a run does not reach it; a derived class's getters are read once, and its invalid values are refused before any trial); equal idle timeouts sharing one thread set; a short timeout retiring its threads, which then restart; the DI factory giving every study its options |
 | `StudyConcurrencyEdgeTests` | two threads optimizing one study; many threads asking and telling; a consistent reader during a run; enqueued trials run once and first, also when callbacks enqueue them; two tells of one trial; one sampler shared by two studies on two threads |
 | `JournalConcurrencyTests` | both lock protocols under contention; stale-lock takeover after the grace period; mixed protocols on one journal; separate storages on one study; a shared backend's offset cache; many studies on one journal; enqueued trials popped once; one trial's concurrent reports, suggestions and constraints; the create race |
@@ -951,7 +981,8 @@ draws in 300,000 reseeds, and 8 terminator calls at once. For items 2.2 and 2.3,
 client commands per trial where the test expects 12, writes its snapshot to Python's key, and, without
 the flag on 3.x, lost 6 of 640 trials in the host scenario. Python logs ``Failed to restore
 `JournalStorageReplayResult`.`` when OptunaSharp's JSON sits in its key, which is what the cross-language
-snapshot test watches for.
+snapshot test watches for. Item 2.4's cancellation tests fail when the loop drops its token check (4 cases)
+or lets `catch` swallow the run's cancellation (2 cases).
 
 ## 12. Known limits and open items
 
@@ -967,8 +998,9 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
   parse than `System.Text.Json`, and it is saved under the storage's monitor (§7.3). Plan 10, 2.7.
 - **The Redis cluster append** (§7.1): a writer that dies between `INCR` and `SET` stalls every reader,
   as in Python.
-- **No cancellation token and no Ctrl+C handling:** stop through a callback. Ctrl+C ends the process
-  and leaves the trials in flight `RUNNING` (§3.4). Plan 10, 2.4.
+- **Ctrl+C without a handler** still ends the process and leaves the trials in flight `RUNNING` (§3.4),
+  as .NET does by default. `StopSignals` or a host's `ApplicationStopping` token stops gracefully; both
+  are opt-in (plan 10, 2.4, done).
 - **No journal heartbeat:** a trial whose process dies stays `RUNNING`, as in Python.
 - **Repeated candidates** by design in some samplers (§6.3).
 

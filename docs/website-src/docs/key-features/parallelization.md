@@ -76,6 +76,52 @@ ports.
 > `ThreadPool.SetMinThreads`. The design is in
 > [THREADING.md](https://github.com/SciSharp/OptunaSharp/blob/master/docs/THREADING.md).
 
+### Stopping a run: cancellation, Ctrl+C and SIGTERM
+
+`Optimize` takes a `CancellationToken` as `ct`:
+
+- Once the token is cancelled, no new trial starts, and the trials in flight finish and are stored.
+  `Optimize` then throws `OperationCanceledException` carrying the token.
+- An already cancelled token runs no trial.
+- Every trial sees the token as `trial.CancellationToken`, so a long objective can stop early. A trial
+  whose objective throws for the token is stored as `FAIL`, whatever `catch` holds, as Python stores the
+  trial its `KeyboardInterrupt` lands in. An objective that ignores the token runs to its end.
+
+```csharp
+using var signals = StopSignals.Listen();   // the first Ctrl+C or SIGTERM cancels signals.Token
+try
+{
+    study.Optimize(trial =>
+    {
+        double lr = trial.SuggestFloat("lr", 1e-5, 1e-1, log: true);
+        for (int epoch = 0; epoch < 100; epoch++)
+        {
+            trial.CancellationToken.ThrowIfCancellationRequested();   // optional: stop a long trial early
+            Train(lr, epoch);
+        }
+        return Evaluate();
+    }, nTrials: 500, nJobs: 4, ct: signals.Token);
+}
+catch (OperationCanceledException)
+{
+    Console.WriteLine($"Stopped after {study.Trials.Count} trials.");
+}
+```
+
+Without a handler, .NET ends the process at Ctrl+C or SIGTERM, and the trials in flight stay `RUNNING`
+in a persistent storage, where a journal never fails them.
+
+- `StopSignals` is opt-in, because a signal handler is process-wide. The first SIGINT (Ctrl+C) or
+  SIGTERM (`docker stop`, a Kubernetes pod's termination) cancels its token, and a second one ends the
+  process at once.
+- It costs no CPU until a signal arrives: the handlers are operating-system callbacks.
+- A container's grace period, 10 s for Docker and 30 s for Kubernetes by default, must cover the trials
+  in flight.
+- In a .NET Generic Host, pass `IHostApplicationLifetime.ApplicationStopping` as `ct` instead: the host
+  already handles both signals.
+- On Windows, a process started with Ctrl+C disabled never receives it, with or without `StopSignals`.
+  Windows lets a parent pass that setting on to its children, and some launchers do.
+
 ## Multi-process optimization
 
 Point several processes at one shared storage and each pulls unevaluated work. `InMemoryStorage`
@@ -114,6 +160,7 @@ interoperates with Python Optuna's proxy on the wire, in both directions.
 | Optuna (Python) | OptunaSharp |
 |-----------------|-------------|
 | `study.optimize(objective, n_trials=20, n_jobs=4)` | `study.Optimize(Objective, nTrials: 20, nJobs: 4)` |
+| Ctrl+C raises `KeyboardInterrupt` out of `study.optimize` | `study.Optimize(…, ct: signals.Token)` throws `OperationCanceledException`, with `using var signals = StopSignals.Listen()` |
 | `JournalStorage(JournalFileBackend("./journal.log"))` | `new JournalStorage(new JournalFileBackend("./journal.log"))` |
 | `create_study(storage="mysql://…", load_if_exists=True)` | `Optuna.CreateStudy(storage: new RDBStorage("mysql://…"), loadIfExists: true)` (EF Core package) |
 | `GrpcStorageProxy(host=…, port=…)` | `new GrpcStorageProxy(host: …, port: …)` |

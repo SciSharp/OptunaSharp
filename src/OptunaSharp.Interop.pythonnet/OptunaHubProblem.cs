@@ -51,14 +51,14 @@ public sealed class OptunaHubProblem : IDisposable
     private PyObject Problem => _problem ?? throw new ObjectDisposedException(nameof(OptunaHubProblem));
 
     /// <summary>
-    ///     A multi-objective objective for <see cref="Study.Optimize(Func{Trial, IReadOnlyList{double}}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions)" />:
+    ///     A multi-objective objective for <see cref="Study.Optimize(Func{Trial, IReadOnlyList{double}}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions, System.Threading.CancellationToken)" />:
     ///     suggests each search-space parameter on the trial, records the problem's constraints on it, then
     ///     calls the Python <c>evaluate</c>.
     /// </summary>
     public Func<Trial, IReadOnlyList<double>> Objective => Evaluate;
 
     /// <summary>
-    ///     A single-objective objective for <see cref="Study.Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions)" />.
+    ///     A single-objective objective for <see cref="Study.Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions, System.Threading.CancellationToken)" />.
     ///     Throws if the problem is multi-objective.
     /// </summary>
     /// <exception cref="OptunaSharp.Interop.PythonNet.OptunaHubInteropException">The benchmark declares more than one objective; use Objective to retain all values.</exception>
