@@ -41,6 +41,15 @@ foreach (var trial in study.BestTrials)
 when reproducibility is required. The constructor requires `populationSize >= 2`, including when
 the chosen family ultimately derives its actual population from directions or points.
 
+> **macOS on Apple silicon: give AGE-MOEA a large thread stack.** `AgeMoea` and `AgeMoea2` run
+> pymoo's numba-compiled survival kernels. The first `tell` JIT-compiles them, and on macOS arm64
+> that needs more stack than a thread .NET creates has by default (the thread pool, `Task.Run`,
+> ASP.NET requests, `nJobs` workers, test runners). The process then stops with "Stack overflow."
+> Run the study on the process's main thread or on a thread you create with a `maxStackSize` of at
+> least 16 MB, or set `DOTNET_DefaultStackSize=1000000` (hexadecimal, 16 MB) before the process
+> starts. Measured on Windows x64 down to 256 KB and on the Linux x64 CI runner with default stacks:
+> neither is affected.
+
 ## Algorithms and population sizes
 
 | `PymooAlgorithm` | Python class | Population configuration |

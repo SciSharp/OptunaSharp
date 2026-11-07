@@ -359,6 +359,12 @@ jobs:
       # Fixed, OS-agnostic pip download cache so the heavy wheels (torch, numpy, scipy, sklearn, …)
       # are fetched once and reused across runs. Cached by the step below.
       PIP_CACHE_DIR: ${{ github.workspace }}/.pip-cache
+      # 16 MB default stacks (hex, as every DOTNET_ setting) for threads .NET creates without a size, which includes the
+      # test platform's worker thread. On macOS arm64 numba JIT-compiling pymoo's AGE-MOEA kernels overflowed the default
+      # stack and killed the test host ("Stack overflow." in PymooSampler -> Algorithm.tell; dispatch 42268066671 and its
+      # re-run). Diagnostic runs 42281082036 / 42288792150: default stacks crash, 16 MB and 64 MB pass all 11 pymoo rows.
+      # Windows x64 passes even at 256 KB. Users need the same on macOS (src/OptunaSharp.Interop.Pymoo/README.md).
+      DOTNET_DefaultStackSize: '1000000'
 
     steps:
     - uses: actions/checkout@v7

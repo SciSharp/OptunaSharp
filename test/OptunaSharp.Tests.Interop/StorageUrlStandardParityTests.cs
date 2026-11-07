@@ -44,12 +44,47 @@ public class StorageUrlStandardParityTests : OptunaInteropTestBase
     /// <summary>The scratch folder for the SQLite cases' databases.</summary>
     private string _dir = null!;
 
-    /// <summary>Creates the scratch folder.</summary>
+    /// <summary>
+    ///     Creates the scratch folder and keeps its real path (every symlinked component resolved), so the paths both
+    ///     sides hand to SQLite are the ones SQLite reports back through <c>pragma_database_list</c>.
+    /// </summary>
+    /// <remarks>
+    ///     On macOS the temp folder lives under <c>/var</c>, a symlink to <c>/private/var</c>; SQLite resolves it, so an
+    ///     unresolved folder never matched the reported <c>/private/var/…</c> file (the macOS leg failed here at 49f53dc and
+    ///     7d1db43). Windows and Linux temp folders have no symlinked component, and their paths are unchanged.
+    /// </remarks>
+    /// <exception cref="IOException">The folder cannot be created or a link in its path cannot be read.</exception>
     [TestInitialize]
     public void CreateFolder()
     {
-        _dir = Path.Combine(Path.GetTempPath(), $"optunasharp-urlstd-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_dir);
+        string created = Path.Combine(Path.GetTempPath(), $"optunasharp-urlstd-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(created);
+        _dir = RealPath(created);
+    }
+
+    /// <summary>
+    ///     <paramref name="path" /> with every symlinked component replaced by its final target, the form SQLite reports for a
+    ///     database file (like POSIX <c>realpath</c>, which .NET does not expose).
+    /// </summary>
+    /// <param name="path">An existing folder.</param>
+    /// <returns>The absolute path with no symlinked component.</returns>
+    /// <exception cref="IOException">A link in the path cannot be read.</exception>
+    private static string RealPath(string path)
+    {
+        string full = Path.GetFullPath(path);
+        string root = Path.GetPathRoot(full)!;
+        string current = root;
+        foreach (string part in full[root.Length..].Split(
+                     new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            // ResolveLinkTarget returns null for a plain folder; a link (macOS /var -> private/var) becomes its final
+            // target, resolved against the link's own folder when the target is relative.
+            if (new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true) is { } target)
+                current = target.FullName;
+        }
+
+        return current;
     }
 
     /// <summary>Deletes the scratch folder once both sides have released their files.</summary>
