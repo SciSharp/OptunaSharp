@@ -39,12 +39,13 @@ public static class RedisJournalProtocol
     public static string SnapshotKey(string prefix) => $"{prefix}:snapshot";
 
     /// <summary>
-    ///     OptunaSharp's own snapshot key, <c>{prefix}:snapshot:optunasharp</c>, which holds its JSON replay state.
+    ///     OptunaSharp's own snapshot key, <c>{prefix}:snapshot:optunasharp</c>, which holds its replay state: the binary
+    ///     v2 format since plan 10, item 2.7, or the v1 JSON an older OptunaSharp saved, which still restores.
     /// </summary>
     /// <param name="prefix">The journal key namespace, shared by its counter, log records, and snapshots.</param>
     /// <returns>The namespaced Redis key of OptunaSharp's snapshot.</returns>
     /// <remarks>
-    ///     Python pickles its replay state and OptunaSharp writes JSON. While both used <see cref="SnapshotKey" />, each
+    ///     Python pickles its replay state and OptunaSharp writes its own format. While both used <see cref="SnapshotKey" />, each
     ///     language's new workers on a mixed fleet found the other's bytes, logged
     ///     <c>Failed to restore `JournalStorageReplayResult`.</c>, and replayed the whole journal. With a key each, a
     ///     cold start of either language restores its own latest snapshot and reads only the records after it, and
@@ -53,8 +54,9 @@ public static class RedisJournalProtocol
     public static string OwnSnapshotKey(string prefix) => $"{prefix}:snapshot:optunasharp";
 
     /// <summary>
-    ///     Whether <paramref name="snapshot" /> can be one of OptunaSharp's own: its JSON starts with <c>{</c>, where a
-    ///     Python pickle (protocol 2 or later) starts with the byte <c>0x80</c>.
+    ///     Whether <paramref name="snapshot" />, read from Python's key, can be a snapshot an older OptunaSharp saved
+    ///     there: those were v1 JSON, which starts with <c>{</c>, where a Python pickle (protocol 2 or later) starts with
+    ///     the byte <c>0x80</c>. OptunaSharp's binary v2 snapshots only ever go to <see cref="OwnSnapshotKey" />.
     /// </summary>
     /// <param name="snapshot">Bytes read from a snapshot key.</param>
     /// <returns><c>true</c> when the bytes may be an OptunaSharp snapshot; the journal storage still checks its format.</returns>
@@ -67,26 +69,31 @@ public static class RedisJournalProtocol
 
     /// <summary>
     ///     The snapshot interval the backends give a journal storage on a standalone server
-    ///     (<c>IJournalSnapshotInterval.DefaultSnapshotInterval</c>): one OptunaSharp snapshot every 1000 study or trial
-    ///     ids.
+    ///     (<c>IJournalSnapshotInterval.DefaultSnapshotInterval</c>): Optuna's 100, one OptunaSharp snapshot every 100
+    ///     study or trial ids.
     /// </summary>
     /// <remarks>
-    ///     On a standalone server, <see cref="ReadLogsScript" /> replays a thousand records per round trip, so a snapshot
-    ///     saves a cold start little and costs its writer a serialization of the whole study. Measured on 2026-11-07 at
-    ///     20,000 two-parameter trials: every trial written 6% slower than with no snapshot, against 48% at Optuna's
-    ///     interval of 100, while a cold start took 1.22 s against 1.19 s at 100 and 1.30 s with no snapshot. The owner
-    ///     chose 1000 over never snapshotting, so that a faster snapshot codec (plan 10, item 2.7) pays off without a
-    ///     new default.
+    ///     <para>
+    ///         The owner's choice of 2026-11-07, "Optuna's 100 everywhere", after the binary snapshot of plan 10, item 2.7.
+    ///         Measured at 20,000 two-parameter trials (Release build, local Redis): a cold start took 109 ms at an interval
+    ///         of 100, 170 ms at 1000 and 927 ms with no snapshot, and the writer took 9.76 ms per trial at 100 against
+    ///         10.74 with no snapshot, the same within noise, since a snapshot of that study saves in about 20 ms.
+    ///     </para>
+    ///     <para>
+    ///         It was 1000 from item 2.2 until then, chosen from measurements later found to come from builds with the JIT
+    ///         optimizer off (an interval of 100 had looked 48% slower for the writer). The constant stays apart from
+    ///         <see cref="ClusterSnapshotInterval" /> so the two read modes can diverge again if measurements call for it.
+    ///     </para>
     /// </remarks>
-    public const int StandaloneSnapshotInterval = 1000;
+    public const int StandaloneSnapshotInterval = 100;
 
     /// <summary>
     ///     The snapshot interval the backends give a journal storage in cluster mode: Optuna's 100.
     /// </summary>
     /// <remarks>
     ///     In cluster mode a reader fetches every record with its own <c>GET</c>, as Python does, so the records after a
-    ///     snapshot cost a round trip each. Measured on 2026-11-07 at 20,000 trials: a cold start took 1.17 s with a
-    ///     snapshot every 100 ids, 4.03 s with one every 1000, and 53.8 s with none.
+    ///     snapshot cost a round trip each. Measured on 2026-11-07 at 20,000 trials (Release build, local Redis): a cold
+    ///     start took 0.43 s with a snapshot every 100 ids, 3.3 s with one every 1000, and 70.8 s with none.
     /// </remarks>
     public const int ClusterSnapshotInterval = 100;
 

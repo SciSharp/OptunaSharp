@@ -111,7 +111,7 @@ The `Add…JournalStorage` DI methods take a `lifetime`. A backend the container
 | `{prefix}:log_number` | Highest allocated log number; initialized to `-1` |
 | `{prefix}:log:{n}` | One JSON operation record; first number is `0` |
 | `{prefix}:snapshot` | Python Optuna's replay snapshot (a pickle). OptunaSharp never writes it |
-| `{prefix}:snapshot:optunasharp` | OptunaSharp's replay snapshot (JSON). Python never reads it |
+| `{prefix}:snapshot:optunasharp` | OptunaSharp's replay snapshot (its own binary format). Python never reads it |
 
 With the empty default prefix the keys begin with a colon, such as `:log_number`. Setting a prefix isolates a journal from other experiments using the same Redis database.
 
@@ -138,17 +138,17 @@ print(study.best_value)
 
 Python needs Optuna and `redis`. The live interop tests write in Python, continue in C#, and read the result back in Python for all three adapters. Another runs both runtimes' snapshots on one journal and checks that each restores its own. Cross-library tests verify log bytes across all writer/reader pairs; the inherited backend contract tests separately verify raw snapshot bytes for each adapter. Cluster-branch tests use the shared Redis fixture, rather than exercising a multi-node cluster's routing or failover.
 
-**Each runtime keeps its own replay snapshot.** OptunaSharp serializes JSON tagged `optunasharp-journal-snapshot-v1` under `{prefix}:snapshot:optunasharp`; Python pickles its replay state under `{prefix}:snapshot`. A new storage of either runtime restores its own latest snapshot and reads only the records written after it, so mixed fleets keep both runtimes' snapshot acceleration. Until 2026-11-07 both runtimes used the one key, and each one's new workers found the other's bytes, logged ``Failed to restore `JournalStorageReplayResult`.`` and replayed the whole journal. An OptunaSharp snapshot that an older version saved in Python's key is still found while OptunaSharp's own key is empty. Python's key is checked by its first byte before it is read, so a pickle there is never downloaded or handed to the OptunaSharp storage. A snapshot is a cache, not a replacement for the operation history: do not remove the logs.
+**Each runtime keeps its own replay snapshot.** OptunaSharp saves its replay state under `{prefix}:snapshot:optunasharp` in a binary format of its own (v2, starting with the bytes `OSJS`); Python pickles its replay state under `{prefix}:snapshot`. Earlier OptunaSharp versions saved JSON tagged `optunasharp-journal-snapshot-v1`, which still restores. Those versions cannot read v2: on a prefix shared with them they log ``Failed to restore `JournalStorageReplayResult`.`` and replay the whole journal, so upgrade every OptunaSharp worker of a fleet together. A new storage of either runtime restores its own latest snapshot and reads only the records written after it, so mixed fleets keep both runtimes' snapshot acceleration. Until 2026-11-07 both runtimes used the one key, and each one's new workers found the other's bytes, logged ``Failed to restore `JournalStorageReplayResult`.`` and replayed the whole journal. An OptunaSharp snapshot that an older version saved in Python's key is still found while OptunaSharp's own key is empty. Python's key is checked by its first byte before it is read, so a pickle there is never downloaded or handed to the OptunaSharp storage. A snapshot is a cache, not a replacement for the operation history: do not remove the logs.
 
-How many trials apart OptunaSharp saves a snapshot depends on how the backend reads. On a standalone server, where one script call replays a thousand records, the backends default to 1000. In cluster mode, where every record costs a round trip, they default to Optuna's 100. `JournalStorage(backend, snapshotInterval: n)` overrides either, and `storage.SnapshotInterval` reports the value in use. Each snapshot serializes the whole study under the storage's lock, so it costs the writer more as the study grows. Measured at 20,000 two-parameter trials (2026-11-07, local Redis):
+The backends save a snapshot every 100 study or trial ids in both read modes, Optuna's interval. `JournalStorage(backend, snapshotInterval: n)` overrides it, and `storage.SnapshotInterval` reports the value in use. Each snapshot serializes the whole study under the storage's lock, as Python saves its pickle, so it costs the writer more as the study grows. Measured at 20,000 two-parameter trials with one string attribute each (2026-11-07, local Redis, Release build):
 
 | Interval | Writer, ms per trial | Cold start, standalone | Cold start, cluster mode |
 |---|---|---|---|
-| 100 | 12.87 (+48%) | 1.19 s | 1.17 s |
-| 1000 | 9.23 (+6%) | 1.22 s | 4.03 s |
-| no snapshot | 8.69 | 1.30 s | 53.8 s |
+| 100 (the default) | 9.76 | 109 ms | 0.43 s |
+| 1000 | 14.81* | 170 ms | 3.3 s |
+| no snapshot | 10.74 | 927 ms | 70.8 s |
 
-A long-lived worker syncs incrementally and never reads a snapshot. Only a new storage does, such as each `optunasharp` CLI command. Restoring a snapshot today costs about as much as replaying the records it replaces, because its JSON parser is slow. Plan 10's item 2.7 is meant to make snapshots faster to save and restore.
+\* Builds ran on the machine during that phase; other work shared the machine throughout. At that size a snapshot takes about 20 ms to save and 40 ms to restore, and is about 1.3 MB; the JSON format it replaced on 2026-11-07 took about 440 ms and 640 ms and was 11 MB, and a standalone server then snapshotted every 1000 ids. A long-lived worker syncs incrementally and never reads a snapshot. Only a new storage does, such as each `optunasharp` CLI command.
 
 ## Shared package
 

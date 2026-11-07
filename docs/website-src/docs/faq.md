@@ -779,7 +779,7 @@ Here OptunaSharp treats `a` and `A` as distinct, MySQL does not. Workarounds:
 | `n_jobs` multi-threading | Throttled by the GIL | No GIL — CPU-bound objectives genuinely parallelize (numeric kernels stay single-threaded) |
 | Exponentiation | `x ** 2` | `x * x` or `Math.Pow(x, 2)` — C# has no `**` |
 | Testing objectives | `objective(trial)` duck-types over `Trial`/`FixedTrial` | Type the objective against `BaseTrial` so both `Trial` and `FixedTrial` drive it |
-| Journal snapshots | pickled | JSON (log stays cross-language; snapshots don't) |
+| Journal snapshots | pickled | OptunaSharp's own binary format (log stays cross-language; snapshots don't) |
 
 ## See also
 

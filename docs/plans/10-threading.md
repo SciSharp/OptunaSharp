@@ -1,6 +1,6 @@
 # Plan 10 — Threading: a configurable `nJobs` executor, then seven follow-ups
 
-> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 in progress (2.1 to 2.6 done 2026-11-07; 2.7 left).** Phase 1, the executor, came first.
+> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 DONE (2.1 to 2.7, 2026-11-07).** Phase 1, the executor, came first.
 > Phase 2 starts only after Phase 1 is finished; the owner's words (2026-11-07): "document what we will do
 > but we only tackle these AFTER finished all the threading". The decisions below are the owner's answers
 > to three rounds of design questions on 2026-11-07. The names, deferred at first, were settled on
@@ -304,6 +304,10 @@ The owner chose the first six on 2026-11-07, and added 2.7 the same day from a f
     1000 made it 6% slower. A cold start took 1.19 s, 1.22 s and 1.30 s on a standalone server, and 1.17 s, 4.03 s
     and 53.8 s in cluster mode, which reads every record with its own `GET`. The snapshot's JSON is the
     bottleneck, which led to item 2.7.
+  - Correction (found during 2.7): those probes ran with the JIT optimizer off, since `dotnet run file.cs`
+    ignores a file's `#:property Configuration=Release`. Rerun in Release on the old code: 13.62, 11.10 and
+    11.65 ms per trial at 100, 1000 and no snapshot, and standalone cold starts of 962, 944 and 1143 ms. After
+    item 2.7's binary snapshot, the owner moved the standalone default to Optuna's 100 (see 2.7).
   - Tests: `RedisJournalCostAndThreadsTests` (round trips, the interval under the own key, Python's pickle read by its
     first byte only), the contract tests'
     batch, seeding, snapshot-key and interval cases on all three clients, `JournalStorageTests`'s interval cases,
@@ -449,7 +453,9 @@ The owner chose the first six on 2026-11-07, and added 2.7 the same day from a f
     - The first round was rejected ("I dont like the solutions, rethink this"): keep a thread state per caller
       thread in `PythonRuntime`, a `PymooSampler` owner thread, or both.
     - The second round chose "One Python thread", after measuring the hand-off: 0.5–0.8 µs a call for today's
-      churn, 0.36 µs for a kept state, 1.1–1.3 µs for a hop to a dedicated thread.
+      churn, 0.36 µs for a kept state, 1.1–1.3 µs for a hop to a dedicated thread. Those probes ran unoptimized
+      (see 2.7); in Release: 0.55–0.8, 0.4 and 1.17–1.47 µs, and 1.45–1.56 µs through the shipped
+      `PythonRuntime.Run`.
     - Separately, "16 MB worker stacks" for OptunaSharp's `nJobs` threads.
     - Refusing calls from other threads, the plan's other option, was no longer viable: one non-main thread
       crashed too.
@@ -524,6 +530,64 @@ The owner chose the first six on 2026-11-07, and added 2.7 the same day from a f
 - **Open sub-decisions.** Asked when the item starts.
 - **Done when** restore and save are measured several times faster, the parity suite is green on both TFMs,
   and THREADING.md §7.3 and §12 are updated.
+- **DONE 2026-11-07.** Outcome:
+  - Measuring first found that every probe of this plan had run with the JIT optimizer off (`dotnet run
+    file.cs` ignores `#:property Configuration=Release`; `dotnet run -c Release file.cs` does not), so the
+    "Why" above overstates the costs. In Release, at 20,000 trials: saving 437 ms, restoring 643 ms,
+    replaying 100,001 records 537 ms.
+  - Prototypes on the same snapshot (Release): reading it took 392 ms through PyJson, 122 ms through a
+    byte-level reader with PyJson's grammar, 80 ms as binary; writing it 106, 60 and 38 ms.
+  - Owner's decisions:
+    - round 13: **"Binary v2 format"**, over keeping v1 JSON with new code, and **"Share one object"** for
+      distributions during replay and restore;
+    - round 14, after the Release re-measurement below: **"Optuna's 100 everywhere"**, so a standalone Redis
+      server snapshots every 100 ids like cluster mode and like Python, instead of 1000.
+  - Design:
+    - `PyJsonUtf8` (Core): PyJson's grammar on UTF-8 bytes. For any input it returns exactly what
+      `PyJson.Loads(Encoding.UTF8.GetString(bytes))` returns, or throws the same, because it takes PyJson's
+      decision at every position and hands anything it cannot finish to PyJson. Containers are built at their
+      final size from a reusable value stack, and repeated keys and small integers are reused. The file
+      journal and all three Redis clients read records through it (ServiceStack through its string overload,
+      which sends text with surrogates to PyJson directly).
+    - The file journal reads 64 KB at a time instead of a byte at a time.
+    - `JournalDistributionCache`: the same distribution JSON gives the same object, for `FloatDistribution`,
+      `IntDistribution` and `CategoricalDistribution` exactly; the deprecated types are built per use (their
+      FutureWarning fires as before), `DiscreteUniformDistribution` with its public `Q` setter is never
+      shared, and at most 4,096 texts are kept.
+    - The v2 snapshot: header `OSJS`, version 2, flags 0; each distinct distribution JSON once in a table the
+      trials index; studies and trials in their dictionaries' order; doubles as eight bytes, integers as
+      LEB128 (zigzag for signed ones), strings as Latin-1 or UTF-16 code units, datetimes as UTC ticks cut to
+      microseconds as v1's text was, attributes as tagged values of PyJson's object model (a value a record
+      cannot carry goes through JSON first, as v1 wrote it). A restore canonicalizes NaN as v1's `NaN` token
+      did, builds every study and trial with v1's arguments, checks counts against the bytes left, and turns
+      any malformed input into "no snapshot". v1 still restores (now through `PyJsonUtf8` and the cache), and
+      v1 is also the fallback writer when the v2 writer fails, which keeps v1's outcome. Older OptunaSharp
+      versions cannot read v2; they log the failed-restore warning and replay the whole journal.
+    - `RedisJournalProtocol.StandaloneSnapshotInterval` is 100 (round 14); the per-mode constants and
+      `IJournalSnapshotInterval` stay.
+  - Measured (Release, 20,000 trials with float, int and a string attribute, one session, in process):
+
+    | | v1 JSON before | v2 binary after |
+    |---|---|---|
+    | snapshot save | 437 ms | 19.5 ms |
+    | snapshot restore | 643 ms | 38.7 ms |
+    | cold start, snapshot 1,000 trials back + 4,000 records | 650 ms | 46 ms |
+    | replay of 100,001 records, no snapshot | 537 ms | 367 ms |
+    | cold start of a journal file | 715 ms | 390 ms |
+    | snapshot size | 11.1 MB | 1.6 MB |
+
+  - On Redis (Release, local server, the same study), which round 14 rested on:
+
+    | Interval | Writer, ms per trial | Cold start, standalone | Cold start, cluster mode |
+    |---|---|---|---|
+    | 100 | 9.76 | 109 ms | 0.43 s |
+    | 1000 | 14.81 (builds ran meanwhile) | 170 ms | 3.3 s |
+    | none | 10.74 | 927 ms | 70.8 s |
+
+  - Item 2.5's hop cost, re-measured in Release: 1.45–1.56 µs a call through `PythonRuntime.Run`.
+  - Tests: `PyJsonUtf8Tests` (149 cases), `JournalSnapshotV2Tests` (21), `JournalCodecParityInteropTests` (4,
+    live Optuna). Four deliberate bugs were caught: a restore keeping UTC instead of local time, a repeated key
+    keeping its first value, parameters written in their external representation, studies written in id order.
 
 ---
 
@@ -534,4 +598,4 @@ The owner chose the first six on 2026-11-07, and added 2.7 the same day from a f
 3. Phase 2, one item at a time, each asking its open sub-decisions first. Suggested order: 2.1 (small,
    low risk; done 2026-11-07), 2.6 (a test that may need no fix; done 2026-11-07, none needed), 2.3 and 2.2
    (the cross-language journal contract; done together 2026-11-07), 2.4 (new public API; done 2026-11-07), 2.5
-   (root cause first; done 2026-11-07), 2.7 (the owner's choice: after 2.4 and 2.5).
+   (root cause first; done 2026-11-07), 2.7 (the owner's choice: after 2.4 and 2.5; done 2026-11-07).

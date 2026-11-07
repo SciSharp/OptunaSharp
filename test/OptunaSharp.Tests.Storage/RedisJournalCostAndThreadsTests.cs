@@ -200,14 +200,25 @@ public class RedisJournalCostAndThreadsTests
 
     /// <summary>
     ///     The host scenario of THREADING.md §7.2: more thread-pool callers than the pool's minimum ask and tell on one
-    ///     journal at once, no <c>nJobs</c>. On StackExchange.Redis 3.x (net10.0) the backends' default turns the flag
-    ///     on, no call times out and every trial is told; without the flag, 64 callers on 32 cores lost 6 of 640 trials
-    ///     (4 <c>RedisTimeoutException</c>s, a <c>RedisConnectionException</c> and a <c>TaskCanceledException</c>,
-    ///     measured 2026-11-07). StackExchange.Redis 2.x (net8.0) has no flag and must lose nothing either: it completed
-    ///     the same 640 trials in 37.6 s, against 8.2 s with the pool's minimum raised to 200. Here the first case to run
-    ///     on 2.x takes the longest (36 s on 32 cores, 3 s for the second): it pays for the pool's growth.
+    ///     journal at once, no <c>nJobs</c>, and no trial is lost.
     /// </summary>
     /// <param name="backendName"><c>StackExchange</c> or <c>NRedisStack</c>.</param>
+    /// <remarks>
+    ///     <para>
+    ///         On StackExchange.Redis 3.x (net10.0) the backends' default turns the flag on, no call times out and every
+    ///         trial is told; without the flag, 64 callers on 32 cores lost 6 of 640 trials (4
+    ///         <c>RedisTimeoutException</c>s, a <c>RedisConnectionException</c> and a <c>TaskCanceledException</c>,
+    ///         measured 2026-11-07).
+    ///     </para>
+    ///     <para>
+    ///         StackExchange.Redis 2.x (net8.0) has no flag, and whether its synchronous calls survive parked callers
+    ///         depends on the pool growing before the 5 s <c>syncTimeout</c>. The first measurement passed (640 trials in
+    ///         37.6 s), but on a machine busy with other work this case timed out in 1 of 3 runs on the code before plan
+    ///         10's item 2.7 and in 2 of 3 after it (2026-11-07): luck, not a guarantee. On 2.x the case therefore pins the
+    ///         remedy §7.2 gives net8.0 hosts, a pool minimum above the callers, and restores the minimum afterwards. The
+    ///         class does not run in parallel with others, so the raised minimum reaches no other test.
+    ///     </para>
+    /// </remarks>
     [TestMethod]
     [DataRow("StackExchange")]
     [DataRow("NRedisStack")]
@@ -217,35 +228,47 @@ public class RedisJournalCostAndThreadsTests
         // The test leaves the flag to the backend's owning constructor, the path a host takes; on 3.x it must be on by
         // the time the callers start, on 2.x it does not exist.
         ConnectionMultiplexer.SetFeatureFlag(Flag, false);
-        ThreadPool.GetMinThreads(out int minWorkers, out _);
+        bool hasFlag = typeof(ConnectionMultiplexer).Assembly.GetName().Version!.Major >= 3;
+        ThreadPool.GetMinThreads(out int minWorkers, out int minCompletionPorts);
         int callers = 2 * minWorkers + 8;
         const int trialsPerCaller = 3;
-        var create = RedisSession.Backends.Single(b => b.Name == backendName).Create;
-        var study = Optuna.CreateStudy(storage: new JournalStorage(create(RedisSession.UniquePrefix(), false)),
-            sampler: new RandomSampler(0));
-        if (typeof(ConnectionMultiplexer).Assembly.GetName().Version!.Major >= 3)
-            ConnectionMultiplexer.GetFeatureFlag(Flag).Should().BeTrue("the owning constructor turns the flag on by default");
-
-        var errors = new ConcurrentQueue<Exception>();
-        var callerTasks = Enumerable.Range(0, callers).Select(_ => Task.Run(() =>
+        if (!hasFlag)
+            ThreadPool.SetMinThreads(callers + 16, minCompletionPorts);
+        try
         {
-            for (int i = 0; i < trialsPerCaller; i++)
-            {
-                try
-                {
-                    var trial = study.Ask();
-                    study.Tell(trial, trial.SuggestFloat("x", 0, 1));
-                }
-                catch (Exception e)
-                {
-                    errors.Enqueue(e);
-                }
-            }
-        })).ToArray();
-        Task.WaitAll(callerTasks);
+            var create = RedisSession.Backends.Single(b => b.Name == backendName).Create;
+            var study = Optuna.CreateStudy(storage: new JournalStorage(create(RedisSession.UniquePrefix(), false)),
+                sampler: new RandomSampler(0));
+            if (hasFlag)
+                ConnectionMultiplexer.GetFeatureFlag(Flag).Should().BeTrue("the owning constructor turns the flag on by default");
 
-        errors.Should().BeEmpty();
-        study.Trials.Should().HaveCount(callers * trialsPerCaller).And.OnlyContain(t => t.State == TrialState.Complete);
+            var errors = new ConcurrentQueue<Exception>();
+            var callerTasks = Enumerable.Range(0, callers).Select(_ => Task.Run(() =>
+            {
+                for (int i = 0; i < trialsPerCaller; i++)
+                {
+                    try
+                    {
+                        var trial = study.Ask();
+                        study.Tell(trial, trial.SuggestFloat("x", 0, 1));
+                    }
+                    catch (Exception e)
+                    {
+                        errors.Enqueue(e);
+                    }
+                }
+            })).ToArray();
+            Task.WaitAll(callerTasks);
+
+            errors.Should().BeEmpty();
+            study.Trials.Should().HaveCount(callers * trialsPerCaller).And.OnlyContain(t => t.State == TrialState.Complete);
+        }
+        finally
+        {
+            // Back to the minimum the test found, so the cases after it see the pool the process started with.
+            if (!hasFlag)
+                ThreadPool.SetMinThreads(minWorkers, minCompletionPorts);
+        }
     }
 
     /// <summary>Builds a StackExchange.Redis-based backend through one of its owning constructors.</summary>

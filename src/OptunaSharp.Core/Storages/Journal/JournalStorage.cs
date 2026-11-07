@@ -87,7 +87,7 @@ public class JournalStorage : BaseStorage
     ///     For a backend that stores snapshots (<see cref="IBaseJournalSnapshot" />: the Redis backends), how many study
     ///     or trial ids apart this storage saves one: the worker that creates a study or trial whose id is a multiple of
     ///     this value saves the whole replay state. <c>null</c> (the default) lets the backend choose through
-    ///     <see cref="IJournalSnapshotInterval" /> (the Redis backends: 1000 on a standalone server, 100 in cluster mode),
+    ///     <see cref="IJournalSnapshotInterval" /> (the Redis backends: Optuna's 100 in both read modes),
     ///     and falls back to Optuna's fixed <c>SNAPSHOT_INTERVAL</c> of 100. Optuna has no such parameter. See the
     ///     remarks for the trade-off; <see cref="SnapshotInterval" /> reports the value this storage uses.
     /// </param>
@@ -101,14 +101,15 @@ public class JournalStorage : BaseStorage
     ///         long-lived workers sync incrementally and never read one.
     ///     </para>
     ///     <para>
-    ///         Measured on 2026-11-07 at 20,000 two-parameter trials on a standalone Redis server, where records are read
-    ///         in batches: an interval of 100 made every trial 48% slower to write than no snapshot at all and 1000 made
-    ///         it 6% slower, while a cold start took 1.19 s, 1.22 s and 1.30 s respectively. In cluster mode, where every
-    ///         record costs a round trip, the same cold start took 1.17 s, 4.03 s and 53.8 s.
+    ///         Measured on 2026-11-07 at 20,000 two-parameter trials on a standalone Redis server (Release build, with the
+    ///         binary snapshot of plan 10, item 2.7), where records are read in batches: a cold start took 109 ms, 170 ms
+    ///         and 927 ms at an interval of 100, 1000 and no snapshot, and the writer 9.76 ms per trial at 100 against
+    ///         10.74 with no snapshot. In cluster mode, where every record costs a round trip, the same cold start took
+    ///         0.43 s, 3.3 s and 70.8 s. A snapshot of that study saves in about 20 ms and restores in about 40 ms.
     ///     </para>
     ///     <para>
-    ///         OptunaSharp's snapshots are its own (JSON, under their own Redis key): Python workers on the same journal
-    ///         neither read nor write them, whatever interval either side uses.
+    ///         OptunaSharp's snapshots are its own (a binary format, under their own Redis key): Python workers on the
+    ///         same journal neither read nor write them, whatever interval either side uses.
     ///     </para>
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="snapshotInterval" /> is below 1.</exception>
@@ -181,11 +182,12 @@ public class JournalStorage : BaseStorage
     /// <summary>
     ///     Restore the in-memory replay state from a snapshot produced by
     ///     <see cref="JournalStorageReplayResult.Serialize" />.
-    ///     [Misaligned] Python snapshots are pickle bytes; OptunaSharp uses its own JSON form under its own key (the
-    ///     Redis backends' <c>{prefix}:snapshot:optunasharp</c>) — snapshots are a same-language acceleration, never a
-    ///     cross-language artifact (the file backend has no snapshot support on either side).
+    ///     [Misaligned] Python snapshots are pickle bytes; OptunaSharp uses its own binary format (v2 since plan 10,
+    ///     item 2.7; the older v1 JSON still restores) under its own key (the Redis backends'
+    ///     <c>{prefix}:snapshot:optunasharp</c>) — snapshots are a same-language acceleration, never a cross-language
+    ///     artifact (the file backend has no snapshot support on either side).
     /// </summary>
-    /// <param name="snapshot">OptunaSharp JSON snapshot bytes; incompatible snapshots are ignored with a warning.</param>
+    /// <param name="snapshot">OptunaSharp snapshot bytes, v2 or v1; anything else is ignored with a warning.</param>
     public void RestoreReplayResult(byte[] snapshot)
     {
         var r = JournalStorageReplayResult.TryDeserialize(snapshot);
@@ -655,7 +657,11 @@ internal static class JournalDatetime
 }
 
 /// <summary>Port of <c>JournalStorageReplayResult</c>.</summary>
-internal sealed class JournalStorageReplayResult
+/// <remarks>
+///     Partial: its snapshot codecs live in <c>JournalStorageReplayResult.Snapshot.cs</c> (the binary v2 format of plan
+///     10, item 2.7, which it writes) and at the end of this file (the v1 JSON format, which it still reads).
+/// </remarks>
+internal sealed partial class JournalStorageReplayResult
 {
     /// <summary>Number of log records already consumed by replay.</summary>
     internal int LogNumberRead;
@@ -667,6 +673,10 @@ internal sealed class JournalStorageReplayResult
     private readonly Dictionary<int, int> _trialIdToStudyId = new();
     private int _nextStudyId;
     private Dictionary<string, int> _workerIdToOwnedTrialId = new();
+
+    // One distribution object per distinct JSON text across records and restores (plan 10, item 2.7; the owner's
+    // "Share one object"): parsing every record's text again was most of the replay's distribution cost.
+    private readonly JournalDistributionCache _distributionCache = new();
 
     /// <summary>Last trial created by this process family, or -1 before a local creation.</summary>
     internal int LastCreatedTrialIdByThisProcess = -1;
@@ -938,7 +948,7 @@ internal sealed class JournalStorageReplayResult
         if (log.ContainsKey("distributions"))
         {
             foreach (var (k, v) in (OrderedDict<string, object?>)log["distributions"]!)
-                distributions[k] = Distribution.FromJson((string)v!);
+                distributions[k] = _distributionCache.FromJson((string)v!);
         }
         var @params = new OrderedDict<string, object?>();
         if (log.ContainsKey("params"))
@@ -1013,7 +1023,7 @@ internal sealed class JournalStorageReplayResult
 
         string paramName = (string)log["param_name"]!;
         double paramValueInternal = ToDouble(log["param_value_internal"]);
-        var distribution = Distribution.FromJson((string)log["distribution"]!);
+        var distribution = _distributionCache.FromJson((string)log["distribution"]!);
 
         int studyId = _trialIdToStudyId[trialId];
 
@@ -1202,12 +1212,19 @@ internal sealed class JournalStorageReplayResult
     // ------------------------------------------------------------------ snapshots
 
     /// <summary>
-    ///     Serialize the replay state for <see cref="IBaseJournalSnapshot" /> backends.
+    ///     Serializes the replay state in the v1 JSON snapshot format, OptunaSharp's format until plan 10, item 2.7.
     ///     [Misaligned] Not pickle bytes (see <see cref="JournalStorage.RestoreReplayResult" />);
     ///     the format is an OptunaSharp-internal JSON dump.
     /// </summary>
     /// <returns>UTF-8 bytes containing the OptunaSharp versioned replay snapshot.</returns>
-    internal byte[] Serialize()
+    /// <exception cref="NumSharp.TypeError">An attribute value has no JSON representation.</exception>
+    /// <exception cref="NumSharp.RuntimeError">An attribute value nests deeper than <see cref="PyJson.MaxDepth" /> within the snapshot.</exception>
+    /// <remarks>
+    ///     <see cref="Serialize" /> writes the binary v2 format and falls back to this one only when its writer fails,
+    ///     so the outcome stays this method's (its bytes or its exception). Every OptunaSharp version reads v1, which
+    ///     also makes it the parity tests' reference for what a restore must give.
+    /// </remarks>
+    internal byte[] SerializeV1()
     {
         var studies = new OrderedDict<string, object?>();
         foreach (var (studyId, study) in _studies)
@@ -1264,14 +1281,19 @@ internal sealed class JournalStorageReplayResult
         return System.Text.Encoding.UTF8.GetBytes(PyJson.DumpsCompact(payload));
     }
 
-    /// <summary>Deserialize a snapshot produced by <see cref="Serialize" />; <c>null</c> on failure.</summary>
-    /// <param name="snapshot">UTF-8 bytes produced by the OptunaSharp snapshot serializer.</param>
+    /// <summary>Deserializes a v1 JSON snapshot (<see cref="SerializeV1" />); <c>null</c> on failure.</summary>
+    /// <param name="snapshot">UTF-8 bytes produced by the v1 snapshot serializer.</param>
     /// <returns>Restored replay state, or null for any format or content failure.</returns>
-    internal static JournalStorageReplayResult? TryDeserialize(byte[] snapshot)
+    /// <remarks>
+    ///     Older OptunaSharp versions write v1, so mixed fleets and snapshots saved before plan 10, item 2.7 still
+    ///     restore. The text is read by <see cref="PyJsonUtf8" />, which gives <see cref="PyJson.Loads" />'s values from
+    ///     the bytes, and distributions come from the result's <see cref="JournalDistributionCache" />.
+    /// </remarks>
+    internal static JournalStorageReplayResult? TryDeserializeV1(byte[] snapshot)
     {
         try
         {
-            if (PyJson.Loads(System.Text.Encoding.UTF8.GetString(snapshot)) is not OrderedDict<string, object?> payload
+            if (PyJsonUtf8.Loads(snapshot) is not OrderedDict<string, object?> payload
                 || payload.GetValueOrDefault("format") is not "optunasharp-journal-snapshot-v1")
             {
                 return null;
@@ -1306,7 +1328,7 @@ internal sealed class JournalStorageReplayResult
 
                 var distributions = new OrderedDict<string, BaseDistribution>();
                 foreach (var (k, v) in (OrderedDict<string, object?>)trialDict["distributions"]!)
-                    distributions[k] = Distribution.FromJson((string)v!);
+                    distributions[k] = result._distributionCache.FromJson((string)v!);
                 var @params = new OrderedDict<string, object?>();
                 foreach (var (k, p) in (OrderedDict<string, object?>)trialDict["params"]!)
                     @params[k] = distributions[k].ToExternalRepr(ToDouble(p));

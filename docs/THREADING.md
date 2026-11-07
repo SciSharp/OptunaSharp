@@ -16,7 +16,10 @@
   the opt-in `StopSignals` turns Ctrl+C and SIGTERM into it (§3.4) (plan 10, item 2.4);
 - 2026-11-07: every Python bridge call runs on one Python thread that keeps its CPython thread state for the
   life of the process (§8), which closes review item 19b, and the `nJobs` threads reserve 16 MB of stack
-  (§2) (plan 10, item 2.5).
+  (§2) (plan 10, item 2.5);
+- 2026-11-07: journal records parse from their UTF-8 bytes, OptunaSharp's journal snapshot is a binary format
+  (v2) about 20 times faster to save and 17 times faster to restore, trials share their distribution objects,
+  and the Redis snapshot interval is Optuna's 100 in both read modes (§7.3) (plan 10, item 2.7).
 
 No threading item is open. §12 lists the known limits.
 
@@ -733,7 +736,11 @@ container disposes a scoped or transient storage twice.
 
   **StackExchange.Redis 2.x**, the `net8.0` builds' client (2.13.17 for the StackExchange.Redis backend,
   2.12.14 under NRedisStack 1.5.0; a process loads one), has no such flag and silently ignores the name.
-  It does not time out under the same load, but it is slow until the pool grows.
+  It is slow until the pool grows, and it can time out too: the measurement below passed, but on a machine
+  busy with other work the Storage suite's host case (twice the pool's minimum plus 8 callers) timed out in
+  1 of 3 runs on the code before plan 10's item 2.7 and 2 of 3 after it (2026-11-07). On `net8.0`, keep the
+  `DedicatedThreads` executor for `nJobs` and raise the pool's minimum above a host's concurrent callers with
+  `ThreadPool.SetMinThreads`; the test now pins that remedy on 2.x.
 
   Measured 2026-11-07 on 32 cores, pool minimum 32, each caller asking and telling 10 trials on one
   journal from `Task.Run`:
@@ -788,22 +795,37 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
   `{prefix}:snapshot:optunasharp`. Python's pickle stays alone in `{prefix}:snapshot`, so a new worker of
   either language restores its own latest snapshot. A snapshot is saved by the worker that creates a
   study or trial whose id is a multiple of the interval. It serializes the whole study under the storage's
-  monitor, so it stalls that process's other operations and grows with the study. The interval follows
-  the backend's read mode (`IJournalSnapshotInterval`, the owner's choice on 2026-11-07): 1000 on a
-  standalone server and Optuna's 100 in cluster mode. `JournalStorage(…, snapshotInterval:)` overrides
-  it. Measured at 20,000 two-parameter trials:
+  monitor, as Python saves its pickle under its lock, so it stalls that process's other operations and
+  grows with the study. The backend states the interval (`IJournalSnapshotInterval`): Optuna's 100 in both
+  read modes, the owner's choice on 2026-11-07 after the binary format below (a standalone server used 1000
+  from item 2.2 until then). `JournalStorage(…, snapshotInterval:)` overrides it. Measured at 20,000
+  two-parameter trials with one string attribute each (Release build, local Redis):
 
   | Interval | Writer, ms per trial | Cold start, standalone | Cold start, cluster mode |
   |---|---|---|---|
-  | 100 | 12.87 (+48%) | 1.19 s | 1.17 s |
-  | 1000 | 9.23 (+6%) | 1.22 s | 4.03 s |
-  | none | 8.69 | 1.30 s | 53.8 s |
+  | 100 (the default) | 9.76 | 109 ms | 0.43 s |
+  | 1000 | 14.81* | 170 ms | 3.3 s |
+  | none | 10.74 | 927 ms | 70.8 s |
 
-  At 4,000 trials, intervals of 25, 100, 500 and 2000 and no snapshot gave the writer 11.37, 9.27, 8.39,
-  8.06 and 8.48 ms per trial, and cold starts of 236, 240, 248, 288 and 304 ms. With batched reads a
-  snapshot buys a standalone cold start little because its JSON is slow. Restoring the 10.6 MB snapshot of
-  20,000 trials took 0.75–0.95 s: `PyJson.Loads` alone took 0.48–0.58 s, where `JsonDocument.Parse` takes
-  0.05 s. Saving it took 0.49–0.61 s. Plan 10's item 2.7 addresses that.
+  \* Builds ran on the machine during that phase; other work shared the machine throughout. Within noise,
+  a snapshot every 100 trials costs the writer nothing: one of this study saves in about 20 ms.
+
+  - **The snapshot format (plan 10, item 2.7).** Snapshots are OptunaSharp's own binary format, v2: each
+    distribution's JSON once in a table, doubles as their eight bytes, integers as variable-length numbers,
+    strings as Latin-1 or UTF-16, attributes as tagged values of PyJson's object model, decoded straight into
+    trials. At 20,000 trials it is 1.6 MB, saves in about 20 ms and restores in about 39 ms, where the v1 JSON
+    it replaced was 11 MB, saved in 437 ms and restored in 643 ms (same machine, same session). A restore
+    gives exactly what restoring v1 gives; v1 snapshots still restore; older OptunaSharp versions cannot read
+    v2 and replay the whole journal instead.
+  - **Records** parse from their UTF-8 bytes through `PyJsonUtf8`, which gives `PyJson`'s values and errors
+    for every input, and trials with the same distribution JSON share one distribution object (the owner's
+    choice; distributions are immutable, and `FrozenTrial.DeepCopy` already shares them). Replaying 100,001
+    records with no snapshot took 367 ms instead of 537 ms; a file journal's cold start 390 ms instead of 715 ms.
+  - The measurements this section held before (an interval of 100 costing the writer 48%, cold starts of
+    1.19–1.30 s) came from probe builds with the JIT optimizer off: `dotnet run file.cs` ignores a file's
+    `#:property Configuration=Release`, and only `dotnet run -c Release file.cs` optimizes. Rerun in Release
+    before the new format, the old code gave the writer 13.62, 11.10 and 11.65 ms per trial at 100, 1000 and no
+    snapshot, and standalone cold starts of 962, 944 and 1143 ms.
 - The file journal syncs every append to disk. 16 contending workers sustained about 80–150 appends per
   second on an SSD.
 - Sampling is serial per sampler (§6.3).
@@ -836,8 +858,9 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
     - thread-local Python state (torch's grad mode, CUDA's current device, numpy's error state) is the
       same for every call;
     - the 16 MB stack covers the macOS numba overflow below for every bridge;
-    - a call costs about 1 µs more: measured 1.1–1.3 µs, against 0.5–0.8 µs for the old per-call thread
-      state and 0.36 µs for a kept one, where a bridge call takes milliseconds.
+    - a call costs about 1.5 µs more: measured 1.45–1.56 µs through `PythonRuntime.Run` in a Release build,
+      against 0.55–0.8 µs for the old per-call thread state and 0.4 µs for a kept one, where a bridge call
+      takes milliseconds.
     - Python already runs one thread at a time, so no parallelism is lost within a study, whose sampler
       calls are serial anyway. Concurrent studies whose Python code releases the GIL (torch kernels,
       large numpy operations) no longer overlap; torch kernels use every core inside one call.
@@ -1021,8 +1044,11 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `StorageConcurrencyTestsBase` and its SQLite, PostgreSQL, MySQL and gRPC subclasses (Storage suite) | one storage under `nJobs: 8`, eight separate storages, enqueued pops, sixteen storages creating one study name |
 | `RedisJournalConcurrencyTests` (Storage suite) | separate storages on one study; `nJobs` at four times the pool's minimum does not starve the client; dispose races |
 | `RedisJournalCostAndThreadsTests` (Storage suite) | plan 10, items 2.2 and 2.3: a two-parameter trial costs 12 client commands, all script calls; snapshots at the configured interval under OptunaSharp's key only; with no snapshot of its own a backend reads only the first byte of Python's pickle; the owning constructors turn the `DedicatedThreads` flag on by default, `false` leaves it alone, an injected multiplexer is untouched (Inconclusive on 2.x, which has no flag); more thread-pool callers than twice the pool's minimum ask and tell without losing a trial, on 3.x and on 2.x |
-| `JournalBackendContractTests` (Storage suite, all three clients) | batched reads across batches, ending at the counter seen first and waiting for a record missing inside a batch; the counter seeded inside the append script after the journal's keys are deleted; snapshots written to OptunaSharp's key only, an older one found once in Python's key, a pickle there ignored; each backend's snapshot interval by read mode, taken by a storage built without one |
+| `JournalBackendContractTests` (Storage suite, all three clients) | batched reads across batches, ending at the counter seen first and waiting for a record missing inside a batch; the counter seeded inside the append script after the journal's keys are deleted; snapshots written to OptunaSharp's key only, an older one found once in Python's key, a pickle there ignored; each backend's snapshot interval (Optuna's 100 in both read modes), taken by a storage built without one |
 | `JournalStorageTests` | the snapshot interval: saves at its multiples, a cold start that reads only the records after the snapshot, the backend's interval when the constructor is not given one (read once), Optuna's 100 otherwise, and invalid values refused from either source |
+| `PyJsonUtf8Tests` | plan 10, item 2.7: the UTF-8 record reader against `PyJson`, strictly (runtime types, key order, double bits, exception type and message): every literal and number form, lenient and refused ones included; every escape; raw UTF-8 text, valid and invalid; non-ASCII bytes outside strings; malformed structure; repeated keys; the depth limit; journal records of every operation in three separator styles; 18,000 random documents; 4,500 corrupted ones; decoded text; eight threads at once; the state after a failed or huge parse. Valid documents must take the fast path, and refused ones must not |
+| `JournalSnapshotV2Tests` | plan 10, item 2.7: for random journals of every record kind, restoring the binary v2 snapshot gives the original state and what restoring v1 gives (v1's bytes, then every field strictly), and the v2 bytes survive a round trip; empty states; deleted studies keeping their enumeration order; shared distribution objects, never the deprecated ones, and the lookup's capacity; v1 snapshots restoring; every truncation and 6,000 corruptions restoring nothing without throwing; values a record cannot carry taking v1's normalization; v1's exception kept; attributes at the depth limit; a storage restoring v2 seeing what a full replay sees |
+| `JournalCodecParityInteropTests` (Interop suite) | plan 10, item 2.7: journals live Optuna writes with every value kind, every trial state and every distribution type parse through the fast path to `PyJson`'s values (file and Redis forms), and replay, directly or through a v1 or v2 snapshot, into the studies Python sees |
 | `JournalRedisInteropTests` (Interop suite) | each client against live Optuna on one Redis journal, both directions; Python's and OptunaSharp's snapshots on one journal, each in its own key, each language's cold start restoring its own without a failed-restore warning |
 | `StorageDisposalEdgeTests` (Storage suite) | a scoped SQLite storage, gRPC proxy or EF Core storage, disposed through both of its DI registrations, synchronously or asynchronously, closes its connection, channel or owned data source |
 | `JournalMixedFleetInteropTests` (Interop suite) | C# and Python workers on one journal file (both lock protocols), on Redis, and with CMA-ES, compared with a Python-only fleet |
@@ -1039,7 +1065,9 @@ the flag on 3.x, lost 6 of 640 trials in the host scenario. Python logs ``Failed
 snapshot test watches for. Item 2.4's cancellation tests fail when the loop drops its token check (4 cases)
 or lets `catch` swallow the run's cancellation (2 cases). On the old `PythonRuntime`, item 2.5's thread-state
 test failed (the calls ran on different Python threads, and the `threading.local` lost its value), and the
-stack read 1.5 MB instead of 16.
+stack read 1.5 MB instead of 16. Item 2.7's parity suites caught four deliberate bugs: a restore that kept the
+UTC instant instead of converting it to local time (10 cases failed), a repeated key keeping its first value (1),
+parameters written in their external representation (9), and studies written in id order (9).
 
 ## 12. Known limits and open items
 
@@ -1049,8 +1077,9 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
 - **Journal throughput:** one monitor across all of an operation's round trips, as in Python (§7.3).
   On a standalone Redis server a two-parameter trial costs 12 round trips (plan 10, 2.2, done); cluster
   mode still reads key by key.
-- **Snapshot cost:** OptunaSharp's journal snapshot is JSON through `PyJson`, about ten times slower to
-  parse than `System.Text.Json`, and it is saved under the storage's monitor (§7.3). Plan 10, 2.7.
+- **Snapshot cost:** a snapshot is still saved under the storage's monitor, as Python saves its pickle
+  under its lock, but the binary format takes about 20 ms at 20,000 trials (§7.3; plan 10, 2.7, done).
+  Older OptunaSharp versions on the same Redis prefix cannot read it and replay the whole journal.
 - **The Redis cluster append** (§7.1): a writer that dies between `INCR` and `SET` stalls every reader,
   as in Python.
 - **Ctrl+C without a handler** still ends the process and leaves the trials in flight `RUNNING` (§3.4),

@@ -112,7 +112,7 @@ var study = Optuna.CreateStudy(storage: storage, studyName: "dist", loadIfExists
 The adapters support `redis://` and `rediss://` (TLS); Unix-socket support and cluster configuration
 depend on the client. A `prefix` isolates a journal namespace that may contain several studies.
 Journal logs can be shared with Python Optuna. Each language keeps its replay snapshot under a key of
-its own (`{prefix}:snapshot` for Python's pickle, `{prefix}:snapshot:optunasharp` for OptunaSharp's JSON),
+its own (`{prefix}:snapshot` for Python's pickle, `{prefix}:snapshot:optunasharp` for OptunaSharp's own binary format),
 so a new worker of either language restores its own latest snapshot and reads only the records after it.
 The [Redis guide](../integrations/storage/redis/index.md) explains those boundaries and how often each
 backend snapshots.
@@ -442,12 +442,12 @@ names default to the `no-name-` prefix (`BaseStorage.DefaultStudyNamePrefix`), m
 | `optuna.storages.run_grpc_proxy_server(storage, …)` | `GrpcProxyServer.RunGrpcProxyServer(storage, …)` |
 | `optuna.storages.RetryFailedTrialCallback` | `RetryHeartbeatStaleTrialCallback` |
 
-**Divergence.** Journal *snapshots* are serialized as JSON rather than Python `pickle` bytes, so a
-snapshot cannot be resumed across languages (the *log* itself is fully cross-language). This is a
-deliberate, documented difference — pickle compatibility is a non-goal. On Redis each language keeps its
-snapshot under its own key, so neither overwrites the other's, and OptunaSharp's snapshot interval follows
-the backend's read mode (1000 on a standalone server, Optuna's 100 in cluster mode) where Python's is a
-fixed 100.
+**Divergence.** Journal *snapshots* are serialized in OptunaSharp's own binary format rather than Python
+`pickle` bytes, so a snapshot cannot be resumed across languages (the *log* itself is fully
+cross-language). This is a deliberate, documented difference — pickle compatibility is a non-goal. The
+JSON format it replaced on 2026-11-07 still restores, but older OptunaSharp versions cannot read the new one. On
+Redis each language keeps its snapshot under its own key, so neither overwrites the other's, and both save
+one every 100 ids, Python's interval.
 
 ## See also
 

@@ -454,16 +454,15 @@ public abstract class JournalBackendContractTests
     }
 
     /// <summary>
-    ///     Every Redis backend states its snapshot interval by read mode (plan 10, item 2.2, the owner's choice of
-    ///     2026-11-07): 1000 on a standalone server, where one script call reads a thousand records, and Optuna's 100 in
-    ///     cluster mode, where every record costs a round trip. A journal storage built without an interval takes the
-    ///     backend's; one built with an interval keeps its own.
+    ///     Every Redis backend states its snapshot interval per read mode: Optuna's 100 in both (the owner's choice of
+    ///     2026-11-07, after the binary snapshot of plan 10, item 2.7; a standalone server used 1000 before). A journal
+    ///     storage built without an interval takes the backend's; one built with an interval keeps its own.
     /// </summary>
     /// <param name="useCluster">The backend's read mode.</param>
     /// <param name="expected">The interval that mode should state.</param>
     [TestMethod]
     [TestCategory("Integration")]
-    [DataRow(false, 1000)]
+    [DataRow(false, 100)]
     [DataRow(true, 100)]
     public void DefaultSnapshotInterval_FollowsTheReadMode_AndTheStorageTakesIt(bool useCluster, int expected)
     {

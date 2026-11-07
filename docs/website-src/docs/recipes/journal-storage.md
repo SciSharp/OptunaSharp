@@ -63,9 +63,9 @@ client adapter such as `OptunaSharp.Storage.StackExchange.Redis`. See the
 | `journal.JournalFileOpenLock(path)` | `new JournalFileOpenLock(path)` |
 | `JournalStorage(JournalRedisBackend("redis://…"))` | `new JournalStorage(new StackExchangeJournalRedisBackend("redis://…"))` |
 
-**Divergence.** Journal *snapshots* are serialized as JSON rather than Python `pickle` bytes, so a
-snapshot cannot be resumed across languages — but the *log* itself is fully cross-language. This is a
-deliberate, documented difference.
+**Divergence.** Journal *snapshots* are serialized in OptunaSharp's own binary format rather than Python
+`pickle` bytes, so a snapshot cannot be resumed across languages — but the *log* itself is fully
+cross-language. This is a deliberate, documented difference.
 
 ## See also
 

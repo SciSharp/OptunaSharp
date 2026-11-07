@@ -250,7 +250,9 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
             bool decoded = true;
             try
             {
-                parsed = (OrderedDict<string, object?>)PyJson.Loads(log)!;
+                // ServiceStack hands over decoded text; the UTF-8 reader still gives PyJson's value or error for it,
+                // faster (plan 10, item 2.7).
+                parsed = (OrderedDict<string, object?>)PyJsonUtf8.Loads(log)!;
             }
             catch (ValueError)
             {
@@ -364,7 +366,8 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     {
         try
         {
-            parsed = (OrderedDict<string, object?>)PyJson.Loads(log)!;
+            // PyJson's value or error for the decoded text, through the UTF-8 reader (plan 10, item 2.7).
+            parsed = (OrderedDict<string, object?>)PyJsonUtf8.Loads(log)!;
             return true;
         }
         catch (ValueError)
@@ -414,10 +417,14 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
 
     /// <summary>
     ///     The snapshot interval a <see cref="JournalStorage" /> over this backend uses when its constructor is not given
-    ///     one: <see cref="RedisJournalProtocol.StandaloneSnapshotInterval" /> (1000) on a standalone server, where records
-    ///     are read a thousand per round trip, and <see cref="RedisJournalProtocol.ClusterSnapshotInterval" /> (Optuna's
-    ///     100) in cluster mode, where every record costs a round trip of its own.
+    ///     one: Optuna's 100 in both read modes (<see cref="RedisJournalProtocol.StandaloneSnapshotInterval" /> on a
+    ///     standalone server, <see cref="RedisJournalProtocol.ClusterSnapshotInterval" /> in cluster mode).
     /// </summary>
+    /// <remarks>
+    ///     The owner's choice of 2026-11-07, after the binary snapshot of plan 10, item 2.7, made a snapshot cheap to save
+    ///     and to restore. Until then a standalone server used 1000. The two constants stay separate so the read modes
+    ///     can diverge again.
+    /// </remarks>
     public int DefaultSnapshotInterval
         => _useCluster ? RedisJournalProtocol.ClusterSnapshotInterval : RedisJournalProtocol.StandaloneSnapshotInterval;
 

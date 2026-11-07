@@ -129,7 +129,8 @@ public class JournalRedisInteropTests
 
     /// <summary>
     ///     Plan 10, item 2.2: on one Redis journal each language keeps its own replay snapshot. Python pickles its state
-    ///     under <c>{prefix}:snapshot</c>; OptunaSharp writes JSON under <c>{prefix}:snapshot:optunasharp</c>. Neither
+    ///     under <c>{prefix}:snapshot</c>; OptunaSharp writes its binary v2 format (item 2.7) under
+    ///     <c>{prefix}:snapshot:optunasharp</c>. Neither
     ///     overwrites the other's, and a cold start of either language restores its own snapshot without the
     ///     <c>Failed to restore `JournalStorageReplayResult`.</c> warning both logged while they shared one key (and then
     ///     replayed the whole journal).
@@ -161,7 +162,7 @@ public class JournalRedisInteropTests
             using var mux = ConnectionMultiplexer.Connect(ProbeConfig);
             var db = mux.GetDatabase();
             byte[] ownAfterCSharp = (byte[])db.StringGet(RedisJournalProtocol.OwnSnapshotKey(_prefix))!;
-            ownAfterCSharp[0].Should().Be((byte)'{', "OptunaSharp's snapshot is JSON");
+            JournalStorageReplayResult.IsSnapshotV2(ownAfterCSharp).Should().BeTrue("OptunaSharp's snapshot is its binary v2 format");
             db.KeyExists(RedisJournalProtocol.SnapshotKey(_prefix)).Should().BeFalse("OptunaSharp never writes Python's key");
 
             // --- 2. Python continues (trials 7-13, its snapshot at trial 10), then cold-starts over the journal. ---
@@ -214,7 +215,7 @@ public class JournalRedisInteropTests
             cold.Trials.Select(t => t.Value!.Value).Should().Equal(pythonValues,
                 "both languages replay the same 14 trials, bit for bit");
 
-            csharpWarnings.Should().BeEmpty("OptunaSharp's cold start restores its own JSON snapshot");
+            csharpWarnings.Should().BeEmpty("OptunaSharp's cold start restores its own v2 snapshot");
         }
         finally
         {

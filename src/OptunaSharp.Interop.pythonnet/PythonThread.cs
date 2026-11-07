@@ -29,8 +29,9 @@ namespace OptunaSharp.Interop.PythonNet;
 ///         is the same for every call; and CPython's 16 MB thread stack (its macOS <c>THREAD_STACK_SIZE</c>) lets numba
 ///         compile pymoo's AGE-MOEA kernels, which overflowed .NET's default stacks on macOS arm64. Python already runs one
 ///         thread at a time under the GIL, so calls lose no parallelism within a study, whose sampler calls are serial
-///         anyway. The hop costs about 1 µs a call (measured 1.1–1.3 µs against 0.5–0.8 µs for the old per-call thread
-///         state), where a bridge call takes milliseconds. What is lost: concurrent studies whose Python code releases the
+///         anyway. The hop costs about 1.5 µs a call (measured 1.45–1.56 µs through <see cref="PythonRuntime.Run(Action)" />
+///         in a Release build, against 0.55–0.8 µs for the old per-call thread state), where a bridge call takes
+///         milliseconds. What is lost: concurrent studies whose Python code releases the
 ///         GIL (torch kernels, large numpy operations) no longer overlap.
 ///     </para>
 ///     <para>

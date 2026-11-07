@@ -295,7 +295,9 @@ public class NRedisStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSn
             bool decoded = true;
             try
             {
-                parsed = (OrderedDict<string, object?>)PyJson.Loads(log.ToString())!;
+                // The record's bytes go straight to the UTF-8 reader, which gives PyJson's value or error without a
+                // string decode first (plan 10, item 2.7).
+                parsed = (OrderedDict<string, object?>)PyJsonUtf8.Loads(((ReadOnlyMemory<byte>)log).Span)!;
             }
             catch (ValueError)
             {
@@ -346,7 +348,7 @@ public class NRedisStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSn
 
             for (int k = 1; k < reply.Length; k++, next++)
             {
-                if (!TryParseLog((string)reply[k]!, next, maxLogNumber, out var parsed))
+                if (!TryParseLog((RedisValue)reply[k], next, maxLogNumber, out var parsed))
                     yield break;
                 yield return parsed;
             }
@@ -373,34 +375,35 @@ public class NRedisStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSn
     ///     doubling up to 10 s between tries.
     /// </summary>
     /// <param name="logNumber">The record the counter already covers.</param>
-    /// <returns>The record's JSON text.</returns>
+    /// <returns>The record's JSON, as the bytes Redis returned.</returns>
     /// <exception cref="RedisConnectionException">The connection fails while waiting; the wait itself never gives up.</exception>
     /// <exception cref="RedisTimeoutException">One <c>GET</c> exceeds the connection's synchronous timeout.</exception>
-    private string WaitForLog(long logNumber)
+    private RedisValue WaitForLog(long logNumber)
     {
         double sleepSecs = 0.1;
         while (true)
         {
             RedisValue log = Db.StringGet(RedisJournalProtocol.LogKey(_prefix, logNumber));
             if (!log.IsNull)
-                return log.ToString();
+                return log;
             Thread.Sleep(TimeSpan.FromSeconds(sleepSecs));
             sleepSecs = Math.Min(sleepSecs * 2, 10);
         }
     }
 
     /// <summary>Decodes one record, applying Python's rule that only the read's last record may be incomplete.</summary>
-    /// <param name="log">The record's JSON text.</param>
+    /// <param name="log">The record's JSON, as the bytes Redis returned (never null: the read script and the wait stop at a missing record).</param>
     /// <param name="logNumber">The record's log number.</param>
     /// <param name="maxLogNumber">The last log number of this read.</param>
     /// <param name="parsed">The decoded record when this returns <c>true</c>.</param>
     /// <returns><c>false</c> when the last record is incomplete, which ends the read as in Python.</returns>
     /// <exception cref="NumSharp.ValueError">A record other than the last contains malformed JSON.</exception>
-    private static bool TryParseLog(string log, long logNumber, long maxLogNumber, out OrderedDict<string, object?> parsed)
+    private static bool TryParseLog(RedisValue log, long logNumber, long maxLogNumber, out OrderedDict<string, object?> parsed)
     {
         try
         {
-            parsed = (OrderedDict<string, object?>)PyJson.Loads(log)!;
+            // PyJson's value or error, read from the bytes without a string decode first (plan 10, item 2.7).
+            parsed = (OrderedDict<string, object?>)PyJsonUtf8.Loads(((ReadOnlyMemory<byte>)log).Span)!;
             return true;
         }
         catch (ValueError)
@@ -444,10 +447,14 @@ public class NRedisStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSn
 
     /// <summary>
     ///     The snapshot interval a <see cref="JournalStorage" /> over this backend uses when its constructor is not given
-    ///     one: <see cref="RedisJournalProtocol.StandaloneSnapshotInterval" /> (1000) on a standalone server, where records
-    ///     are read a thousand per round trip, and <see cref="RedisJournalProtocol.ClusterSnapshotInterval" /> (Optuna's
-    ///     100) in cluster mode, where every record costs a round trip of its own.
+    ///     one: Optuna's 100 in both read modes (<see cref="RedisJournalProtocol.StandaloneSnapshotInterval" /> on a
+    ///     standalone server, <see cref="RedisJournalProtocol.ClusterSnapshotInterval" /> in cluster mode).
     /// </summary>
+    /// <remarks>
+    ///     The owner's choice of 2026-11-07, after the binary snapshot of plan 10, item 2.7, made a snapshot cheap to save
+    ///     and to restore. Until then a standalone server used 1000. The two constants stay separate so the read modes
+    ///     can diverge again.
+    /// </remarks>
     public int DefaultSnapshotInterval
         => _useCluster ? RedisJournalProtocol.ClusterSnapshotInterval : RedisJournalProtocol.StandaloneSnapshotInterval;
 

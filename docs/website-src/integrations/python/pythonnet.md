@@ -95,8 +95,8 @@ On the Python thread nothing is freed, so neither can happen, and samplers work 
   do not call `Trial` or `Study` methods inside `Run` while other threads optimize the same study with a
   Python sampler. For Python code of your own inside an objective, take the GIL with `Py.GIL()`.
 - Calls run one at a time, as Python does under the GIL. Python code from concurrent studies that releases
-  the GIL (torch kernels, large NumPy operations) therefore no longer overlaps. Each call costs about 1 µs
-  for the hand-off.
+  the GIL (torch kernels, large NumPy operations) therefore no longer overlaps. Each call costs about
+  1.5 µs for the hand-off.
 
 ## GIL and object ownership
 

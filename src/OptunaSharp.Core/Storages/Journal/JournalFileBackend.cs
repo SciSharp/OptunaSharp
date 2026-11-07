@@ -140,7 +140,9 @@ public class JournalFileBackend : BaseJournalBackend
             OrderedDict<string, object?>? parsed = null;
             try
             {
-                parsed = (OrderedDict<string, object?>)PyJson.Loads(Encoding.UTF8.GetString(lineBytes))!;
+                // The UTF-8 reader gives PyJson's value or error for the line's bytes (plan 10, item 2.7), without
+                // decoding the line to a string first.
+                parsed = (OrderedDict<string, object?>)PyJsonUtf8.Loads(lineBytes)!;
             }
             catch (ValueError err)
             {
@@ -161,24 +163,57 @@ public class JournalFileBackend : BaseJournalBackend
     /// </summary>
     /// <param name="stream">Caller-owned readable stream; this iterator does not close it.</param>
     /// <returns>Raw line bytes plus whether each line ends with newline.</returns>
-    /// <exception cref="System.IO.IOException">Reading a byte from the input stream fails.</exception>
+    /// <exception cref="System.IO.IOException">Reading from the input stream fails.</exception>
     /// <exception cref="System.ObjectDisposedException">The stream is closed.</exception>
+    /// <remarks>
+    ///     Reads <see cref="LineChunkSize" /> bytes at a time and cuts each chunk at its <c>\n</c> bytes, which yields the
+    ///     lines reading byte by byte did, at a fraction of the cost (plan 10, item 2.7: a 17 MB journal's cold start).
+    ///     Like the byte-by-byte read, it reads to the end of the file as the file is when each chunk is read; the
+    ///     caller stops at the size it saw first, so a record another process is still appending is left for the next
+    ///     read either way.
+    /// </remarks>
     private static IEnumerable<(byte[] Line, bool EndsWithNewline)> ReadRawLines(Stream stream)
     {
-        var buffer = new List<byte>(256);
-        int b;
-        while ((b = stream.ReadByte()) != -1)
+        byte[] chunk = new byte[LineChunkSize];
+        // A line that runs past the end of a chunk: its first part, until the chunk that holds its '\n' is read.
+        byte[] pending = Array.Empty<byte>();
+        int pendingLength = 0;
+        int read;
+        while ((read = stream.Read(chunk, 0, chunk.Length)) > 0)
         {
-            buffer.Add((byte)b);
-            if (b == (byte)'\n')
+            int start = 0;
+            while (start < read)
             {
-                yield return (buffer.ToArray(), true);
-                buffer.Clear();
+                int newline = Array.IndexOf(chunk, (byte)'\n', start, read - start);
+                if (newline < 0)
+                {
+                    // No terminator in the rest of the chunk: keep it, the line continues in the next chunk.
+                    int tail = read - start;
+                    if (pendingLength + tail > pending.Length)
+                        Array.Resize(ref pending, Math.Max(pendingLength + tail, Math.Max(256, pending.Length * 2)));
+                    Buffer.BlockCopy(chunk, start, pending, pendingLength, tail);
+                    pendingLength += tail;
+                    break;
+                }
+
+                int length = newline + 1 - start;
+                var line = new byte[pendingLength + length];
+                Buffer.BlockCopy(pending, 0, line, 0, pendingLength);
+                Buffer.BlockCopy(chunk, start, line, pendingLength, length);
+                pendingLength = 0;
+                start = newline + 1;
+                yield return (line, true);
             }
         }
-        if (buffer.Count > 0)
-            yield return (buffer.ToArray(), false);
+        if (pendingLength > 0)
+            yield return (pending.AsSpan(0, pendingLength).ToArray(), false);
     }
+
+    /// <summary>
+    ///     How many bytes <see cref="ReadRawLines" /> reads at a time: large enough to read a journal in few calls, small
+    ///     enough to stay off the large object heap.
+    /// </summary>
+    private const int LineChunkSize = 64 * 1024;
 
     /// <summary>Appends compact JSON records while holding the interprocess lock, then flushes data to disk.</summary>
     /// <param name="logs">Ordered JSON-serializable records to append as one locked batch.</param>
