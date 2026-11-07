@@ -256,7 +256,10 @@ Throughput for cheap trials (in memory, `nJobs: 8`): the pool and reused threads
 `Optimize(nTrials: 8, nJobs: 8)`: threads reused across calls 813 calls/s, the pool 789, a thread per
 trial 443, threads created per call 81. Threads reused across calls were chosen (2026-11-06): they are the
 only option that keeps all five properties and matches the pool's throughput. The pool fails properties 4
-and 5, so it can only ever be an opt-in; whether to expose one, and how, is the owner's open decision.
+and 5, so it can only ever be an opt-in. The owner decided on 2026-11-07 to expose it as an opt-in through
+an options class at four levels (a static default, a DI default, a study setting, a per-call argument),
+with the plain pool's limits documented rather than handled. It is not built yet:
+[plan 10, Phase 1](plans/10-threading.md#phase-1--the-njobs-executor) holds the design.
 
 ## 4. Per-thread state
 
@@ -733,20 +736,26 @@ failed under its objective raises (§3.3).
 
 ## 12. Known limits and open items
 
+[Plan 10](plans/10-threading.md) (decided 2026-11-07) schedules the work on these items. Phase 1 adds the
+thread-pool executor option (§3.6); Phase 2 starts after it and covers the items marked "plan 10, 2.x".
+
 - **19b:** `PymooSampler` is bound to the thread that created it, which rules out `nJobs` above 1 (§8).
+  Plan 10, 2.5.
 - **The 32-bit seeds** (§6.3): long `nJobs` runs and large fleets can repeat a random stream. The fix is
-  to seed from at least 128 bits through `RandomState.seed(uint[])`.
+  to seed from at least 128 bits through `RandomState.seed(uint[])`. Plan 10, 2.1.
 - **`TerminatorCallback` under `nJobs`** (§6.6): concurrent callbacks share the evaluators' generators.
-  The fix is a lock in `TerminatorCallback.Invoke`; until then, wrap it in a lock of your own.
-- **`MLNetEstimator` under `OptunaSearchCV(nJobs > 1)`** is untested (§10).
+  The fix is a lock in `TerminatorCallback.Invoke`; until then, wrap it in a lock of your own. Plan 10, 2.1.
+- **`MLNetEstimator` under `OptunaSearchCV(nJobs > 1)`** is untested (§10). Plan 10, 2.6.
 - **A trial failed under its objective** (§3.3, §6.7): its tell's `ValueError` reaches the caller, where
   Optuna raises `AssertionError('Should not reach.')`. This is the divergence `[Misaligned]` already
-  documents for a failing final write, but no test pins this case.
+  documents for a failing final write, but no test pins this case. Plan 10, 2.1.
 - **Journal throughput:** one monitor across all of an operation's round trips, as in Python (§7.3).
+  Plan 10, 2.2 cuts a trial from 19 to 11 Redis round trips; 2.3 turns on StackExchange.Redis's
+  `DedicatedThreads` for the connections OptunaSharp opens (§7.2).
 - **The Redis cluster append** (§7.1): a writer that dies between `INCR` and `SET` stalls every reader,
   as in Python.
 - **No cancellation token and no Ctrl+C handling:** stop through a callback. Ctrl+C ends the process
-  and leaves the trials in flight `RUNNING` (§3.4).
+  and leaves the trials in flight `RUNNING` (§3.4). Plan 10, 2.4.
 - **No journal heartbeat:** a trial whose process dies stays `RUNNING`, as in Python.
 - **Repeated candidates** by design in some samplers (§6.3).
 
