@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -6,9 +7,11 @@ using System.Threading.Tasks;
 namespace OptunaSharp.Internal;
 
 /// <summary>
-///     The threads that run <c>Optimize(nJobs)</c> trials: OptunaSharp's own dedicated threads, never .NET thread-pool
-///     threads. They are created on demand, reused by every later trial and <c>Optimize</c> call, and retired after
-///     <see cref="IdleTimeout" /> without work. This is the port of Python's <c>ThreadPoolExecutor</c> thread reuse.
+///     The threads that run <c>Optimize(nJobs)</c> trials under <see cref="TrialExecutorKind.DedicatedThreads" />, the
+///     default executor: OptunaSharp's own dedicated threads, never .NET thread-pool threads. They are created on
+///     demand, reused by every later trial and <c>Optimize</c> call, and retired after <see cref="IdleTimeout" />
+///     without work. This is the port of Python's <c>ThreadPoolExecutor</c> thread reuse. The opt-in
+///     <see cref="TrialExecutorKind.ThreadPool" /> executor does not use this class.
 /// </summary>
 /// <remarks>
 ///     <para>Why not a new thread per trial: creating a thread costs about 100 µs, serialized on the submit loop, which
@@ -33,11 +36,27 @@ namespace OptunaSharp.Internal;
 /// </remarks>
 internal sealed class TrialWorkerScheduler : TaskScheduler
 {
+    // One scheduler per distinct idle timeout, for the life of the process. Declared before Shared, which reads it
+    // during the same static initialization. An entry costs one small object once its threads have retired.
+    private static readonly ConcurrentDictionary<TimeSpan, TrialWorkerScheduler> _byIdleTimeout = new();
+
     /// <summary>
-    ///     The process-wide scheduler every <c>Optimize(nJobs)</c> call uses. Its threads outlive one call, so a series
-    ///     of small calls does not pay for thread creation each time.
+    ///     The process-wide scheduler of every <c>Optimize(nJobs)</c> call on dedicated threads with the default idle
+    ///     timeout (30 s). Its threads outlive one call, so a series of small calls does not pay for thread creation
+    ///     each time.
     /// </summary>
-    internal static readonly TrialWorkerScheduler Shared = new(TimeSpan.FromSeconds(30));
+    internal static readonly TrialWorkerScheduler Shared = For(TrialExecutorOptions.DefaultThreadIdleTimeout);
+
+    /// <summary>
+    ///     The process-wide scheduler for <paramref name="idleTimeout" />: calls with equal timeouts share one set of
+    ///     worker threads, so reuse across studies and calls keeps working when an application sets its own
+    ///     <see cref="TrialExecutorOptions.ThreadIdleTimeout" />.
+    /// </summary>
+    /// <param name="idleTimeout">An idle timeout already validated by <see cref="TrialExecutorOptions" />.</param>
+    /// <returns>The scheduler of that timeout, created on first use.</returns>
+    internal static TrialWorkerScheduler For(TimeSpan idleTimeout)
+        // A racing first use may build two schedulers; GetOrAdd keeps one, and the loser has started no thread yet.
+        => _byIdleTimeout.GetOrAdd(idleTimeout, static timeout => new TrialWorkerScheduler(timeout));
 
     private readonly object _gate = new();
     private readonly Queue<Task> _queue = new();

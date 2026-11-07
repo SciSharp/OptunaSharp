@@ -270,7 +270,9 @@ What each layer guarantees within one process:
   handle multiple studies.``, exactly as Python's does. Give each concurrent study its own sampler.
   `AddOptunaSampler(factory)` does this by default: it registers the sampler as transient, so the study
   factory builds a new one per study.
-- **`nJobs`.** Workers run on dedicated threads, as Python's `ThreadPoolExecutor` does. When one trial
+- **`nJobs`.** Workers run on dedicated threads by default, as Python's `ThreadPoolExecutor` does; the
+  .NET thread pool is an opt-in ([which threads run the trials](key-features/parallelization.md#which-threads-run-the-trials)).
+  The rules below hold on both. When one trial
   raises an exception that is not caught, `Optimize` waits for the trials still running and then
   raises that original exception. Errors among the final trials are not raised, as in Python. They are
   still logged and stored as `FAIL`. `nJobs` of 0 or below -1 raises Python's
@@ -320,7 +322,8 @@ Limits and costs:
 - **StackExchange.Redis and the thread pool.** StackExchange.Redis 3.x completes even synchronous calls
   on the .NET thread pool. If your code blocks more pool threads than the pool's minimum on journal
   calls at once, Redis calls time out after `SyncTimeout`. Examples: dozens of `Task.Run(() =>
-  study.Optimize(...))`, or an ASP.NET request burst. Use dedicated threads, as `nJobs` does, or raise
+  study.Optimize(...))`, an ASP.NET request burst, or `Optimize` with the opt-in thread-pool executor at an
+  `nJobs` at or above the pool's minimum. Use dedicated threads, as `nJobs` does by default, or raise
   `ThreadPool.SetMinThreads`.
 
 ### The same setups on SQLite, PostgreSQL, MySQL and gRPC

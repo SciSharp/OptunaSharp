@@ -18,7 +18,7 @@ namespace OptunaSharp;
 ///
 ///     Note that the direct use of this constructor is not recommended. This object is
 ///     seamlessly instantiated and passed to the objective function behind the
-///     <see cref="Study.Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool)" />
+///     <see cref="Study.Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions)" />
 ///     method; hence library users do not care about instantiation of this object.
 /// </summary>
 /// <seealso href="https://optuna.readthedocs.io/en/stable/reference/generated/optuna.trial.Trial.html">Official Optuna active-trial contract.</seealso>

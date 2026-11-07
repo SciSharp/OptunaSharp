@@ -1,11 +1,12 @@
 # Plan 10 — Threading: a configurable `nJobs` executor, then six follow-ups
 
-> **Status: DESIGN (decided 2026-11-07, not started).** Phase 1, the executor, comes first. Phase 2 starts
-> only after Phase 1 is finished; the owner's words (2026-11-07): "document what we will do but we only
-> tackle these AFTER finished all the threading". The decisions below are the owner's answers to three
-> rounds of design questions on 2026-11-07. **The names are working names:** the owner deferred the final
-> type, member and namespace names (§1.8). The design document,
-> [`docs/THREADING.md`](../THREADING.md), describes only what the code does; its §3.6 and §12 point here.
+> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 not started.** Phase 1, the executor, came first.
+> Phase 2 starts only after Phase 1 is finished; the owner's words (2026-11-07): "document what we will do
+> but we only tackle these AFTER finished all the threading". The decisions below are the owner's answers
+> to three rounds of design questions on 2026-11-07. The names, deferred at first, were settled on
+> 2026-11-07 before the commit (§1.8). The design document,
+> [`docs/THREADING.md`](../THREADING.md), describes what the code does: §3.5 the executor, §12 the open
+> items.
 
 Context: `9cfcb12` (2026-11-06, review item P3-4) moved `Optimize(nJobs)` onto OptunaSharp's own reused
 dedicated threads (`Internal/TrialWorkerScheduler.cs`). The owner had asked on 2026-10-29 for "reused
@@ -34,7 +35,7 @@ dedicated threads, without changing the default or Python's semantics.
 | DI | a property on `OptunaStudyOptions`, the existing `AddOptunaStudyFactory(o => …)` pattern; no `IOptions<T>` |
 | What the pool does above its capacity | nothing: the plain pool, documented only. No check, no warning, no `SetMinThreads`. The owner: "If user has achieved threadpool starvation, they should consider either dedicatedthreads which reuses created threads or strengthen the threadpool." |
 | `nJobs` | Python's meaning on both executors: default 1, `-1` = `Environment.ProcessorCount` |
-| Names | deferred (§1.8) |
+| Names | deferred, then settled on 2026-11-07 (§1.8) |
 
 Considered and not chosen: a per-call argument only; a study setting only; accepting any `TaskScheduler`;
 an open executor base class; raising the pool's minimum for the run; capping `nJobs` at the pool's size;
@@ -42,7 +43,7 @@ a warning above the pool's minimum; `-1` following the pool's minimum; parallel 
 `IOptions<TrialExecutorOptions>` binding; `ThreadName`, `Priority` and `SharedThreads` settings; a
 static-instances-only type; an immutable record; freeze-on-first-use.
 
-### 1.3 API sketch (working names)
+### 1.3 API sketch (the names as settled in §1.8)
 
 ```csharp
 namespace OptunaSharp;   // working; the namespace is deferred too
@@ -77,7 +78,7 @@ public class Study
 public sealed class OptunaStudyOptions
 {
     // When set, the DI study factory copies it into every study it builds (study.ExecutorOptions).
-    public TrialExecutorOptions? TrialExecutor { get; set; }
+    public TrialExecutorOptions? DefaultExecutorOptions { get; set; }
 }
 ```
 
@@ -121,7 +122,7 @@ public sealed class OptunaStudyOptions
    `OptimizeLoop.Optimize`; resolution and snapshot; `StartWorker` dispatching on the snapshot.
 4. Core: a `TrialWorkerScheduler` registry keyed by idle timeout (`Shared` = the 30 s entry); keep its
    counters for tests.
-5. Core DI: `OptunaStudyOptions.TrialExecutor`; `OptunaStudyFactory` copies it into each study it builds.
+5. Core DI: `OptunaStudyOptions.DefaultExecutorOptions`; `OptunaStudyFactory` copies it into each study it builds.
 6. Callers inside OptunaSharp: `OptunaSearchCV` creates and optimizes its own study with `nJobs`. It
    follows the static default and the study setting with no change; check that no other `Optimize(nJobs)`
    caller exists (the LightGBM tuner runs sequentially).
@@ -131,7 +132,7 @@ public sealed class OptunaStudyOptions
 
 - Resolution: the argument beats the study setting, which beats the static default; a static default
   changed between two calls reaches a study that never set its own; the DI factory copies
-  `OptunaStudyOptions.TrialExecutor`; `CreateStudy` and `LoadStudy` leave `ExecutorOptions` null.
+  `OptunaStudyOptions.DefaultExecutorOptions`; `CreateStudy` and `LoadStudy` leave `ExecutorOptions` null.
 - Snapshot: changing the options object during a run does not change the running call; a derived class's
   overridden getters are read once.
 - Pool: trials run on pool threads (`Thread.CurrentThread.IsThreadPoolThread`); the default stays off the
@@ -156,13 +157,46 @@ public sealed class OptunaStudyOptions
   "StackExchange.Redis and the thread pool" paragraph.
 - The catalog project doc.
 
-### 1.8 Deferred: names
+### 1.8 Names
 
-The owner deferred the final names on 2026-11-07. Working names used in this plan:
-`TrialExecutorKind` (`DedicatedThreads`, `ThreadPool`), `TrialExecutorOptions` (`Executor`,
-`ThreadIdleTimeout`, `Default`), `Study.ExecutorOptions`, `Optimize(…, executorOptions:)`,
-`OptunaStudyOptions.TrialExecutor`, namespace `OptunaSharp`. `ThreadIdleTimeout` is the owner's name. The
-names are to be settled before Phase 1's public API is committed.
+The owner deferred the final names on 2026-11-07, then settled them the same day, before the commit, after
+Phase 1 was built with working names. Choices offered: keep the working names, rename only the DI
+property, or move the two types to an `OptunaSharp.Threading` namespace. The owner chose to rename only the
+DI property: `OptunaStudyOptions.TrialExecutor` became `OptunaStudyOptions.DefaultExecutorOptions`, which
+matches its siblings (`DefaultDirection`, `DefaultStudyName`) and the other levels' *ExecutorOptions*.
+
+The public names: `TrialExecutorKind` (`DedicatedThreads`, `ThreadPool`), `TrialExecutorOptions`
+(`Executor`, `ThreadIdleTimeout`, `Default`), `Study.ExecutorOptions`, `Optimize(…, executorOptions:)`,
+`OptunaStudyOptions.DefaultExecutorOptions`, all in namespace `OptunaSharp` (the DI type in
+`OptunaSharp.Extensions`, as before). `TrialExecutorOptions` and `ThreadIdleTimeout` are the owner's own
+names. `DedicatedThreads` is also the name of a StackExchange.Redis feature flag, so the docs always say
+"StackExchange.Redis's `DedicatedThreads` flag" for that one.
+
+### 1.9 Outcome (2026-11-07)
+
+Built as designed in §1.2–1.4, with the names of §1.8:
+
+- `src/OptunaSharp.Core/TrialExecutorOptions.cs`: `TrialExecutorKind` and `TrialExecutorOptions`. The two
+  properties are virtual and use volatile reads and writes. The idle timeout is stored as 64-bit ticks, so a
+  32-bit process never reads a torn value. Validation: an undefined kind; a timeout that is zero, negative
+  (other than `Timeout.InfiniteTimeSpan`) or above `int.MaxValue` ms, `Monitor.Wait`'s limit.
+- `src/OptunaSharp.Core/Internal/TrialExecutorSnapshot.cs`: the resolution and the once-per-call read. The
+  pool branch is `TaskScheduler.Default` with `DenyChildAttach | PreferFairness`. The dedicated branch is
+  `TrialWorkerScheduler.For(timeout)`, a `ConcurrentDictionary` registry; `Shared` is the 30 s entry.
+- `Study.ExecutorOptions` (volatile), the `executorOptions` parameter on both `Study.Optimize` overloads and
+  `OptimizeLoop.Optimize`, `OptunaStudyOptions.DefaultExecutorOptions`, and `OptunaStudyFactory` assigning it to
+  every study it builds.
+- Step 6 checked: `OptunaSearchCV` is the only other `Optimize(nJobs)` caller in the repo, and it follows
+  the static default with no change.
+- Tests: `TrialExecutorOptionsTests` (32 cases, every bullet of §1.6, plus the `ExecutionContext` flow on
+  both executors, which no test pinned before) and the `GilAwareMonitorTests` pool scenario. The CI unit
+  filter passed on both TFMs (1,560 per TFM before the context-flow test was added).
+- Measured on the built code (32 CPUs, pool minimum 32; 192 trials of 1 s at `nJobs: 96`, ideal 2 s):
+  dedicated threads ran 96 at once in 2.0–2.3 s, and the host's pool work waited at most 1 ms; the pool ran
+  at most 33 at once in 6.1 s, and the host waited up to 2.0 s. THREADING.md §3.6 has the table.
+- Docs: THREADING.md (status line, §2, §3.1, §3.5, §3.6, §4, §5.1, §7.2, §8, §10–§13), the README header,
+  the site's parallelization page ("Which threads run the trials"), the FAQ's parallelization answer and
+  `storage.md`'s concurrency bullets.
 
 ---
 
@@ -278,6 +312,10 @@ The owner chose all six on 2026-11-07. Each section gives why, the design, the s
 - **Likely design:** one owner thread per `PymooSampler`. Every pymoo call is posted to it and awaited
   through `MonitorGate.Wait`, so a caller holding the GIL releases it. Calls are already serial under the
   sampler monitor, so the hand-off costs one thread switch per call and loses no parallelism.
+- **Also relevant (found 2026-11-07, `d5c25f3`):** on macOS arm64, `AgeMoea` and `AgeMoea2` JIT-compile
+  numba kernels on their first `tell`, which overflows the default stack of any .NET-created thread
+  (`nJobs` workers on both executors, pool threads, test runners). CI now sets 16 MB default stacks. An
+  owner thread created with a `maxStackSize` of 16 MB would remove that limit for `PymooSampler` too.
 - **Open sub-decisions.**
   - An owner thread, or refusing calls from another thread with a clear error.
   - How the owner thread ends: `IDisposable`, or a background thread that retires when idle.
@@ -300,8 +338,8 @@ The owner chose all six on 2026-11-07. Each section gives why, the design, the s
 
 ## Order
 
-1. Settle the deferred names (§1.8).
-2. Phase 1, in one commit series: §1.5 steps 1–7.
+1. Settle the deferred names (§1.8). Done 2026-11-07.
+2. Phase 1, in one commit series: §1.5 steps 1–7. Done 2026-11-07 (§1.9).
 3. Phase 2, one item at a time, each asking its open sub-decisions first. Suggested order: 2.1 (small,
    low risk), 2.6 (a test that may need no fix), 2.3, 2.2 (the cross-language journal contract), 2.4 (new
    public API), 2.5 (needs a root cause first).

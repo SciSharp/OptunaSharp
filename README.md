@@ -47,9 +47,9 @@
   OptunaSharp is <a href="docs/THREADING.md"><strong>thread-safe and truly parallel</strong></a>:
   <code>nJobs</code> runs trials on all your cores at once, with no GIL in the way, and workers on many
   machines share one study, Python Optuna workers included.<br>
-  Its <code>nJobs</code> workers are dedicated threads, reused across trials and <code>Optimize</code> calls
-  instead of taken from the .NET ThreadPool, which stays free for your app; <code>Ask</code> and
-  <code>Tell</code> work from any thread, ThreadPool threads included.
+  By default its <code>nJobs</code> workers are dedicated threads, reused across trials and <code>Optimize</code>
+  calls instead of taken from the .NET ThreadPool, which stays free for your app (the ThreadPool is one option
+  away); <code>Ask</code> and <code>Tell</code> work from any thread, ThreadPool threads included.
 </p>
 
 ---

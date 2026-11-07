@@ -1,9 +1,14 @@
 # OptunaSharp — Threading Design
 
-**Status:** describes the code at `f39763d` (2026-10-30), plus two changes of 2026-11-06: the `nJobs` executor,
-which reuses its worker threads (review item P3-4, §3.5–3.6), and the GIL-aware monitor entry, which lets code
-that holds the Python GIL call OptunaSharp (review item P3-1, §8). Three items are open. Each is marked where
-it applies, and §12 lists them all:
+**Status:** describes the code at `f39763d` (2026-10-30), plus three changes since:
+
+- 2026-11-06: the `nJobs` executor reuses its worker threads (review item P3-4, §3.5–3.6);
+- 2026-11-06: the GIL-aware monitor entry lets code that holds the Python GIL call OptunaSharp (review item
+  P3-1, §8);
+- 2026-11-07: the executor can be chosen at four levels, OptunaSharp's dedicated threads (the default) or the
+  .NET thread pool ([plan 10](plans/10-threading.md), Phase 1, §3.5).
+
+Three items are open. Each is marked where it applies, and §12 lists them all:
 
 - `PymooSampler` driven from more than one thread (review item 19b, §8);
 - the 32 bits of entropy behind the samplers' seeds from the operating system (§6.3);
@@ -54,19 +59,21 @@ on the Storage page. This file is the design behind it.
 | Thread | Started by | Lives for | Runs |
 |---|---|---|---|
 | The caller's | your code | — | `Optimize`. With `nJobs: 1` it runs every trial, callback and progress-bar update itself; otherwise it runs the submit loop and waits. `Ask` and `Tell` run on whichever thread calls them. |
-| `nJobs` worker | `OptimizeLoop.StartWorker`: a `LongRunning` task, which the default scheduler runs on a new background thread named `.NET Long Running Task` | one trial | the reseed, `Ask`, the objective, `Tell`, the callbacks, the progress bar |
+| `nJobs` worker, the default executor | `OptimizeLoop.StartWorker`, on `TrialWorkerScheduler` (§3.5): a background thread of OptunaSharp's own named `OptunaSharp trial worker`, with the runtime's default stack size | until it has waited `ThreadIdleTimeout` (30 s by default) for a trial; meanwhile it runs trials of any study and any later `Optimize` call | the reseed, `Ask`, the objective, `Tell`, the callbacks, the progress bar |
+| `nJobs` worker on the thread pool, opt-in (§3.5) | `OptimizeLoop.StartWorker`: a task queued to the .NET thread pool's global queue | one trial; the pool keeps the thread for its other work | the same |
 | Heartbeat | `HeartbeatThread.Start`, for each trial of an RDB storage whose heartbeat interval is set (§6.7) | the trial's objective | the trial's heartbeat, once at the start and then once per interval. A background thread named `OptunaSharp heartbeat (trial_id=N)`. |
 | Storage client I/O | StackExchange.Redis, NRedisStack, Grpc.Net.Client, the AWS SDK | the connection | socket reads and writes, on the .NET thread pool (§7.2) |
 | gRPC proxy server | Kestrel | one request | the wrapped storage's operation, synchronously, on a pool thread |
 | OpenBLAS | the native library | the process | LAPACK and BLAS internals (§9) |
 | Python | embedded CPython | the process | every bridge call, under the GIL (§8) |
 
-OptunaSharp starts no other threads: no timers, no `Task.Run`, no thread-pool work items. Logging and the
-progress bar write on the thread that logs.
+OptunaSharp starts no other threads: no timers and no `Task.Run`. The only thread-pool work items it queues
+are the trials of a call that chose the thread-pool executor. Logging and the progress bar write on the
+thread that logs.
 
-**What a worker inherits.** A worker starts with the caller's `ExecutionContext`, as every .NET task does:
-its `CurrentCulture` and `CurrentUICulture`, and every `AsyncLocal<T>` value (which is also how
-`Activity.Current` and logging scopes travel). Measured: the workers and callbacks of a caller running
+**What a worker inherits.** A worker starts with the caller's `ExecutionContext`, as every .NET task does, on
+either executor: its `CurrentCulture` and `CurrentUICulture`, and every `AsyncLocal<T>` value (which is also
+how `Activity.Current` and logging scopes travel). Measured: the workers and callbacks of a caller running
 `de-DE` ran `de-DE` and saw the caller's `AsyncLocal` value. An objective therefore formats and parses
 numbers the same way under `nJobs` as sequentially. Python's executor threads start without the caller's
 `contextvars`, and Python's locale is process-wide.
@@ -82,8 +89,10 @@ its workers before it returns (§3.1), so this matters only when the process end
 
 ### 3.1 The loop
 
-- `nJobs: 1`, the default, runs `OptimizeSequential` on the caller's thread.
-- `nJobs: -1` uses `Environment.ProcessorCount` workers (Python: `os.cpu_count()`).
+- First, whatever `nJobs` is, the call resolves its executor and reads its options once (§3.5). Invalid
+  values from a derived options class raise `ArgumentOutOfRangeException` here, before any trial.
+- `nJobs: 1`, the default, runs `OptimizeSequential` on the caller's thread, whatever the executor.
+- `nJobs: -1` uses `Environment.ProcessorCount` workers (Python: `os.cpu_count()`), on either executor.
 - `nJobs` of 0 or below -1 raises `ValueError: max_workers must be greater than 0`, the refusal of
   Python's `ThreadPoolExecutor`.
 - Any other value runs Python's submit loop on the caller's thread:
@@ -93,7 +102,7 @@ for each submission:
     stop when Stop() was called, the timeout has passed, or nTrials trials were submitted
     when nJobs trials are in flight:
         wait for the first to finish (Task.WhenAny) and raise the first failure among the finished ones
-    start a worker for one trial
+    start a worker for one trial, on the call's executor
 finally: wait for every worker still running, without raising (the exit of Python's `with ThreadPoolExecutor`)
 ```
 
@@ -184,9 +193,88 @@ How a raised exception travels under `nJobs`:
   - To let the trials in flight finish instead, handle `Console.CancelKeyPress`: set `e.Cancel = true`
     and the flag your callback checks.
 
-### 3.5 Why workers run on dedicated threads
+### 3.5 The executor: dedicated threads by default, the thread pool on request
 
-Until `3a75811` the workers ran on the .NET thread pool (`Task.Run`). That caused two failures:
+`StartWorker` runs each worker on the executor the call resolved. There are two
+([`TrialExecutorOptions.cs`](../src/OptunaSharp.Core/TrialExecutorOptions.cs),
+[`Internal/TrialExecutorSnapshot.cs`](../src/OptunaSharp.Core/Internal/TrialExecutorSnapshot.cs)):
+
+- **`TrialExecutorKind.DedicatedThreads`, the default.** The worker is queued on a `TrialWorkerScheduler`:
+  OptunaSharp's own threads, never pool threads. They are created on demand and reused by later trials and
+  later `Optimize` calls. Each one ends after waiting `ThreadIdleTimeout` for a trial: 30 s by default, and
+  never with `Timeout.InfiniteTimeSpan`. They are background threads, so they never keep the process alive.
+  - **One thread set per idle timeout.** The process keeps one scheduler for each distinct timeout. Calls
+    with equal timeouts share threads, whatever study or options object they come from. The default 30 s
+    entry is `TrialWorkerScheduler.Shared`.
+  - **`nJobs` trials really in flight.** A queued trial gets a new thread whenever fewer workers are idle
+    than trials are queued.
+  - **No inlining.** A trial is never run on the thread that waits for it.
+- **`TrialExecutorKind.ThreadPool`, opt-in.** Each worker is a task on the .NET thread pool, queued with
+  `PreferFairness` to the pool's global queue. That has two effects:
+  - An `Optimize` called from a pool thread never runs one of its own trials on that thread. The TPL runs
+    a waited-on task inline only when it can pop the task from the waiting thread's own local queue, and
+    a task on the global queue is not there.
+  - Queued trials take turns with the host's other pool work instead of jumping ahead of it.
+
+  `ThreadIdleTimeout` does not apply: the pool manages its own threads.
+
+Everything else is the same on both executors:
+
+- Python's submit and wait loop, and its error and stop rules (§3.1–3.4);
+- the GIL-aware waits (§8);
+- the caller's `ExecutionContext`, which every worker inherits (§2);
+- the per-thread hygiene of §4: each worker restores `InOptimizeLoop` and drops its `CachedAllTrials`
+  snapshot when it finishes. That matters even more on pool threads, which the host reuses.
+
+`nJobs` keeps Python's meaning on both, `-1` included, and `nJobs: 1` runs on the caller's thread whatever
+the executor.
+
+**Choosing.** A `TrialExecutorOptions` object holds the choice in two settings, `Executor` and
+`ThreadIdleTimeout`. The class is mutable, has a public parameterless constructor, and is not sealed. Each
+`Optimize` call uses the first of four levels that is set:
+
+1. the call's `executorOptions` argument;
+2. the study's `ExecutorOptions` property. It is `null` until set. It belongs to the `Study` object, not to
+   the stored study, so a study opened again (`LoadStudy`, `CreateStudy(loadIfExists: true)`) starts with
+   `null`;
+3. the DI default, `OptunaStudyOptions.DefaultExecutorOptions`. `OptunaStudyFactory` assigns it to the
+   `ExecutorOptions` of every study it builds, so a value set on the study afterwards overrides it;
+4. the process-wide `TrialExecutorOptions.Default`: dedicated threads with a 30 s idle timeout, unless the
+   application replaces it. Assigning `null` throws `ArgumentNullException`.
+
+Optuna has no counterpart: Python always runs `ThreadPoolExecutor(max_workers=n_jobs)`.
+
+**The snapshot.** When the call starts, the winning object's `Executor` and `ThreadIdleTimeout` getters are
+each called exactly once. A derived class's overrides are therefore honored, and a computed value is
+computed once. Changing an options object, or replacing `Default`, affects later calls and never a running
+one.
+
+The values are validated at that point, as the setters validate theirs. An undefined `Executor` raises
+`ArgumentOutOfRangeException` before any trial, and so does a `ThreadIdleTimeout` that is any of:
+
+- zero;
+- negative, other than `Timeout.InfiniteTimeSpan`;
+- longer than `int.MaxValue` milliseconds, the longest wait `Monitor.Wait` accepts.
+
+These are .NET exceptions, not Python ones, because the settings have no Optuna counterpart. The setters
+and `Default` may be used from any thread: they use volatile reads and writes. The timeout is stored as
+64-bit ticks, so a 32-bit process never reads a torn value.
+
+**The pool's limits are documented, not handled** (the owner's decision, 2026-11-07). A trial blocks its
+thread for the whole trial. Once `nJobs` reaches the pool's minimum worker count (`ThreadPool.GetMinThreads`,
+the processor count by default), the pool adds threads only about once a second. Measured in §3.6:
+
+- clients that complete their synchronous calls on the pool stall or time out (StackExchange.Redis,
+  Grpc.Net.Client, the AWS SDK; §7.2);
+- fewer trials run at once than `nJobs` asks for: at most 33 at `nJobs: 96` on 32 cores, so 192 trials of
+  1 s took 6.1 s instead of 2 s;
+- the host's other pool work waits behind the queued trials, up to 2 s in that run.
+
+OptunaSharp does not check for this, warn, or raise the minimum. If it happens, use `DedicatedThreads`,
+which reuses OptunaSharp's own threads, or raise the pool's minimum with `ThreadPool.SetMinThreads`.
+
+**Why dedicated threads are the default.** Until `3a75811` the workers ran on the .NET thread pool
+(`Task.Run`). That caused two failures:
 
 - **Pool starvation.** A worker is blocked for most of a trial: on the storage's lock, on file or
   network I/O, in the objective. With `nJobs` above the pool's minimum thread count every pool thread was
@@ -198,15 +286,16 @@ Until `3a75811` the workers ran on the .NET thread pool (`Task.Run`). That cause
   with a false "Nested invocation" error. Workers now restore the flag (`restoreLoopFlag`), whatever
   thread runs them.
 
-`3a75811` then gave every trial a new thread (`TaskCreationOptions.LongRunning`). Since 2026-11-06,
-`StartWorker` queues each worker on `TrialWorkerScheduler.Shared` instead: OptunaSharp's own dedicated
-threads, never pool threads. They are created on demand, reused by later trials and later `Optimize` calls,
-and retired after 30 s idle (background threads, so they never keep the process alive).
-- **No inlining:** a trial is never run on the thread that waits for it.
-- **No stale state:** each worker restores `InOptimizeLoop` and drops its `CachedAllTrials` snapshot when it
-  finishes.
-- **Pinned by tests:** `NJobs_WorkersRunOnDedicatedThreads_NotOnTheThreadPool`, and `TrialWorkerSchedulerTests`
-  (reuse, `nJobs` really in flight, no inlining, retirement).
+`3a75811` then gave every trial a new thread (`TaskCreationOptions.LongRunning`), which made cheap trials
+slow (§3.6). Since 2026-11-06 the trials reuse the dedicated threads described above. The opt-in pool
+executor of 2026-11-07 keeps the H5 fix, because the fix lives in the worker, not in the executor.
+
+**Pinned by tests:**
+
+- `NJobs_WorkersRunOnDedicatedThreads_NotOnTheThreadPool`;
+- `TrialWorkerSchedulerTests`: reuse, `nJobs` really in flight, no inlining, retirement;
+- `TrialExecutorOptionsTests`: both executors, the four levels, the snapshot, validation, the idle-timeout
+  thread sets, and Python's rules on the pool (§11).
 
 ### 3.6 The executor's throughput (P3-4, fixed 2026-11-06)
 
@@ -239,7 +328,7 @@ A replacement executor had to keep five properties. Each one is a measured failu
 The alternatives were measured on 2026-10-29 with scratch builds of the real `Optimize`, on 32 logical
 CPUs (the pool's minimum is 32), on a machine busy with other work:
 
-| | Thread per trial (current) | Thread pool | Pool + StackExchange.Redis `DedicatedThreads` | Pool, minimum raised by `nJobs` | OptunaSharp threads, reused across calls |
+| | Thread per trial (the executor then) | Thread pool | Pool + StackExchange.Redis `DedicatedThreads` | Pool, minimum raised by `nJobs` | OptunaSharp threads, reused across calls |
 |---|---|---|---|---|---|
 | Redis journal, 400 trials, `nJobs` 64 / 96 | all complete | **58/400 and 85/400, `RedisTimeoutException`** | all complete | all complete | all complete |
 | Trials in flight at `nJobs: 96` (960 × 1 s, in memory; ideal 10 s) | — | **at most 34; 29.4 s** | the same as the pool | 96; 10.4 s | 96; 10.3 s |
@@ -247,8 +336,8 @@ CPUs (the pool's minimum is 32), on a machine busy with other work:
 | Delay before the host's other pool work starts, `nJobs` 64–96 | — | up to 58 s | **0.5–2.9 s** | at most 85 ms | at most 16 ms |
 | Process-wide setting required | none | none | a StackExchange.Redis feature flag | `ThreadPool.SetMinThreads` | none |
 
-A dash means the configuration was not part of that run. The current thread per trial runs all `nJobs`
-trials at once (128 trials of 1.5 s at `nJobs: 64` took 3.2 s, ideal 3.0 s) and kept the host's work
+A dash means the configuration was not part of that run. The thread per trial, the executor then, ran all
+`nJobs` trials at once (128 trials of 1.5 s at `nJobs: 64` took 3.2 s, ideal 3.0 s) and kept the host's work
 waiting at most 3 ms.
 
 Throughput for cheap trials (in memory, `nJobs: 8`): the pool and reused threads tie at 7.8k–8.7k and
@@ -258,8 +347,17 @@ trial 443, threads created per call 81. Threads reused across calls were chosen 
 only option that keeps all five properties and matches the pool's throughput. The pool fails properties 4
 and 5, so it can only ever be an opt-in. The owner decided on 2026-11-07 to expose it as an opt-in through
 an options class at four levels (a static default, a DI default, a study setting, a per-call argument),
-with the plain pool's limits documented rather than handled. It is not built yet:
-[plan 10, Phase 1](plans/10-threading.md#phase-1--the-njobs-executor) holds the design.
+with the plain pool's limits documented rather than handled. It was built the same day (§3.5;
+[plan 10, Phase 1](plans/10-threading.md#phase-1--the-njobs-executor)).
+
+The built executors, re-measured on 2026-11-07 on the same 32-CPU machine (pool minimum 32). The run was
+192 trials of 1 s at `nJobs: 96` (ideal 2 s), with a host thread queuing a pool work item every 50 ms:
+
+| | `DedicatedThreads` (default) | `ThreadPool` (opt-in) |
+|---|---|---|
+| Trials in flight, at most | 96 | 33 |
+| Wall time | 2.0–2.3 s | 6.1 s |
+| The host's pool work waited, at most | 1 ms | 2.0 s |
 
 ## 4. Per-thread state
 
@@ -274,6 +372,17 @@ of Python's `study._thread_local`. It holds two fields:
     flags of its own.
 - **`CachedAllTrials`** is one coherent snapshot of the study's trials. A sampler may read it many times
   while it suggests one trial. `Ask` and every tell clear it, so every trial starts from fresh history.
+
+**Reused threads.** A worker's thread outlives its trial on both executors (§3.5). A dedicated thread runs
+later trials of any study, and a pool thread goes back to the host's other work. Each worker therefore
+leaves its thread as it found it:
+
+- it puts back the `InOptimizeLoop` value it found (`restoreLoopFlag`);
+- it drops its `CachedAllTrials` snapshot.
+
+The next trial, or the host's next work item, then sees no state of this study. On the pool this is pinned
+by `ThreadPool_AfterARun_PoolThreadsCarryNoOptimizeLoopState`: a later `Optimize` on any pool thread is not
+taken for a nested call.
 
 **The journal's worker id.** Every journal record carries `worker_id`, which is
 `<storage guid>-<managed thread id>` (Python: `threading.get_ident()`). The replay credits a record to
@@ -310,12 +419,18 @@ plain `lock`s, because no holder of theirs ever waits for the GIL.
 terms:
 
 - `Study.StopFlag`, a `volatile` bool (§3.4).
+- The executor settings (§3.5): `TrialExecutorOptions.Default`, `Study.ExecutorOptions` and the two
+  properties of a `TrialExecutorOptions` are read and written with `Volatile`. The idle timeout is kept as
+  64-bit ticks, so it is never torn. A call reads each value once and keeps it for its whole run. A change
+  made while a call starts can reach one of the two values and not the other, and each is valid on its own.
 - Caches built on first use and published whole through one reference, so a racing reader sees the
   finished object or builds an identical one:
   - `CategoricalDistribution`'s index of its choices, and `HyperbandPruner`'s bracket plan (both
     `volatile`);
   - the static QMC tables: the Sobol' direction numbers and the Halton primes.
 - `ConcurrentDictionary` caches:
+  - `TrialWorkerScheduler`'s schedulers, one per idle timeout (static; a racing first use may build two,
+    and the one that loses has started no thread);
   - `EnumCategorical`'s value names (static);
   - `RandomEmbeddingProjection`'s rows;
   - `PythonRuntime`'s imported modules (static);
@@ -561,11 +676,12 @@ container disposes a scoped or transient storage twice.
   one thread a second, queued work items take the new threads in order, and the calls fail after the 5 s
   `syncTimeout`. On 32 cores, 36 parked workers passed and 40 failed. The remedies:
 
-  - dedicated threads, as `nJobs` uses;
+  - dedicated threads, as `nJobs` uses by default (`TrialExecutorKind.DedicatedThreads`, §3.5);
   - `ThreadPool.SetMinThreads`;
-  - StackExchange.Redis's `ConnectionMultiplexer.SetFeatureFlag("DedicatedThreads", true)` before
-    connecting. That flag is process-wide, its own documentation reserves it for support guidance, and
-    it adds a reader and a writer thread per connection.
+  - StackExchange.Redis's own `DedicatedThreads` feature flag,
+    `ConnectionMultiplexer.SetFeatureFlag("DedicatedThreads", true)`, set before connecting. It has nothing
+    to do with OptunaSharp's executor of the same name. The flag is process-wide, its own documentation
+    reserves it for support guidance, and it adds a reader and a writer thread per connection.
 - **Grpc.Net.Client** makes its synchronous calls over asynchronous HTTP/2 loops and starves the same
   way. It has no default deadline, so a starved call waits instead of failing: 400 trials took 54–57 s at
   96 parked workers.
@@ -577,9 +693,16 @@ container disposes a scoped or transient storage twice.
 - **Not pool-dependent:** ServiceStack.Redis (its own synchronous sockets), Microsoft.Data.Sqlite, the
   synchronous APIs of Npgsql and MySqlConnector, and the journal file backend.
 
+**The thread-pool executor** (§3.5) runs every trial on a pool thread, so an `nJobs` at or above the pool's
+minimum brings these stalls back. The "Thread pool" column of §3.6 measured the plain pool this executor
+queues to, and the re-measurement of the built executor there agrees. OptunaSharp leaves the choice and its
+limits to the caller. When a storage or artifact client
+above is in use, keep the default `DedicatedThreads` executor, or raise the pool's minimum above `nJobs`
+plus the host's own need with `ThreadPool.SetMinThreads`.
+
 The same applies without `nJobs`. A host that calls `Ask`/`Tell` from many pool threads at once starves
 too: 64 concurrent `Task.Run` callers on a Redis journal finished 624 of 640 trials in 92 s, with
-timeouts; with `DedicatedThreads`, 640 of 640 in 11 s.
+timeouts; with StackExchange.Redis's `DedicatedThreads` flag, 640 of 640 in 11 s.
 
 ### 7.3 Throughput
 
@@ -635,8 +758,15 @@ timeouts; with `DedicatedThreads`, 640 of 640 in 11 s.
   bridges target `nJobs: 1`.
 - **`PymooSampler`** driven from a thread other than the one that created it crashed in pymoo's
   `Algorithm.ask` with an access violation in 2 of 4 runs (review item 19b, open). Create and drive it
-  on one thread. That rules out `nJobs` above 1, whose workers run on other threads, and an `Optimize`
-  called from a thread other than the one that built the sampler.
+  on one thread. That rules out `nJobs` above 1, whose workers run on other threads on either executor,
+  and an `Optimize` called from a thread other than the one that built the sampler.
+- **Stack size on macOS arm64.** pymoo's `AgeMoea` and `AgeMoea2` JIT-compile numba kernels on their first
+  `tell`, and that needs more stack than a .NET-created thread has by default; the process stops with
+  "Stack overflow." `nJobs` workers have the default stack on both executors, as do `Task.Run` work and
+  test runners.
+  The pymoo page gives the remedies: the main thread, a thread of your own with a `maxStackSize` of at
+  least 16 MB, or `DOTNET_DefaultStackSize=1000000` (hexadecimal) set before the process starts. Windows x64
+  and Linux x64 are not affected.
 
 ## 9. Numeric kernels and random generators
 
@@ -703,9 +833,16 @@ timeouts; with `DedicatedThreads`, 640 of 640 in 11 s.
     verified your pipeline.
 - **Artifacts.** Uploads from concurrent trials do not interfere. Each upload gets a new artifact id (a
   GUID) and its own file or object, and one attribute write records it on the trial or study.
+- **Choosing an executor** (§3.5). Keep the default, `DedicatedThreads`, unless you have a reason to put
+  trials on the thread pool, such as a host that sizes and monitors its pool itself. Set the choice once
+  for the process (`TrialExecutorOptions.Default`), per DI container
+  (`OptunaStudyOptions.DefaultExecutorOptions`), per study (`study.ExecutorOptions`), or per call
+  (`executorOptions:`). With the pool, keep `nJobs` below the pool's minimum, or raise the minimum, when
+  the storage client needs the pool (§7.2). A derived `TrialExecutorOptions` may compute its values; each
+  call reads them once.
 - **Host applications.** Do not run many studies or Ask/Tell calls on pool threads at once when the
   storage client needs the pool (§7.2). Use `nJobs` or threads of your own, raise
-  `ThreadPool.SetMinThreads`, or turn on `DedicatedThreads` for Redis.
+  `ThreadPool.SetMinThreads`, or turn on StackExchange.Redis's `DedicatedThreads` flag for Redis.
 - **Dependency injection.** Samplers and pruners are registered transient by default, so every study
   gets its own instance. Storages are singletons by default: one instance is thread-safe and shares its
   connection.
@@ -716,6 +853,7 @@ timeouts; with `DedicatedThreads`, 640 of 640 in 11 s.
 |---|---|
 | `OptimizeConcurrencyTests` | `nJobs` draws never repeat (Random, TPE); samplers with their own state complete every trial; evolution strategies never repeat a candidate; Hyperband builds its brackets once; `Optimize` on pool threads after an `nJobs` run is not a nested call; the error rules of §3.3; workers on dedicated threads; a trial's writes leave older snapshots alone; concurrent user attributes; the `nJobs` refusal |
 | `OptimizeEdgeCaseTests` | the stop, timeout and error rules of §3.3–3.4, each first observed on Optuna 5.0: timeouts; `Stop()` from an objective, a callback or another thread; `MaxTrialsCallback`; `catch`; failing callbacks and sampler hooks; unacceptable results; a nested `Optimize` in a worker; a failing final write (`[Misaligned]`); the timeout-only progress bar |
+| `TrialExecutorOptionsTests` | the executor of §3.5: new options are dedicated threads with a 30 s idle timeout; both settings and `Default` refuse invalid values; `ThreadPool` runs every trial on a pool thread and `DedicatedThreads` none; `nJobs: 1` runs on the caller's thread whatever the executor; `nJobs` trials at once on the pool below its minimum; an `Optimize` called from a pool thread never runs a trial on that thread; pool threads keep no loop state afterwards; Python's error and stop rules on both executors; the caller's culture and `AsyncLocal` values reach workers and callbacks on both; the order of the four levels; a new `Default` reaching a study that never chose; `CreateStudy` and `LoadStudy` leaving the study setting unset; the snapshot (a change during a run does not reach it; a derived class's getters are read once, and its invalid values are refused before any trial); equal idle timeouts sharing one thread set; a short timeout retiring its threads, which then restart; the DI factory giving every study its options |
 | `StudyConcurrencyEdgeTests` | two threads optimizing one study; many threads asking and telling; a consistent reader during a run; enqueued trials run once and first, also when callbacks enqueue them; two tells of one trial; one sampler shared by two studies on two threads |
 | `JournalConcurrencyTests` | both lock protocols under contention; stale-lock takeover after the grace period; mixed protocols on one journal; separate storages on one study; a shared backend's offset cache; many studies on one journal; enqueued trials popped once; one trial's concurrent reports, suggestions and constraints; the create race |
 | `HeartbeatTests` | heartbeat threads beat and stop; a failed write ends only its thread, reported like `threading.excepthook`; trials complete when every heartbeat write fails; `FailStaleTrials` and the retry callback; `Ask`'s warning outside `Optimize` |
@@ -728,7 +866,7 @@ timeouts; with `DedicatedThreads`, 640 of 640 in 11 s.
 | `StorageDisposalEdgeTests` (Storage suite) | a scoped SQLite storage, gRPC proxy or EF Core storage, disposed through both of its DI registrations, synchronously or asynchronously, closes its connection, channel or owned data source |
 | `JournalMixedFleetInteropTests` (Interop suite) | C# and Python workers on one journal file (both lock protocols), on Redis, and with CMA-ES, compared with a Python-only fleet |
 | `CmaEsMixedFleetInteropTests` (Interop suite) | C# and Python workers taking turns on one CMA-ES study, with and without margin, run the study Python runs alone |
-| `GilAwareMonitorTests` (Interop suite) | P3-1: `PythonRuntime.Initialize` installs the gate's hooks; three deterministic two-thread deadlocks (a GIL holder against a sampler, trial or pruner monitor held by a thread that needs the GIL), recovered by `Thread.Interrupt` if they regress; an objective inside `Py.GIL()` at `nJobs: 4` over a GIL-taking sampler and pruner; `Optimize(nJobs: 4)` called inside `Py.GIL()`; four ask-and-tell threads holding the GIL |
+| `GilAwareMonitorTests` (Interop suite) | P3-1: `PythonRuntime.Initialize` installs the gate's hooks; three deterministic two-thread deadlocks (a GIL holder against a sampler, trial or pruner monitor held by a thread that needs the GIL), recovered by `Thread.Interrupt` if they regress; an objective inside `Py.GIL()` at `nJobs: 4` over a GIL-taking sampler and pruner, on dedicated threads and on the thread-pool executor; `Optimize(nJobs: 4)` called inside `Py.GIL()`; four ask-and-tell threads holding the GIL |
 | `OptunaHubBridgeParityTests` (Interop suite) | the real hub sampler at `nJobs: 8`; the real hub sampler and median pruner with an objective inside `Py.GIL()` at `nJobs: 4` |
 
 No test pins these yet: the reseed's entropy, `TerminatorCallback` under `nJobs`, and the error a trial
@@ -736,8 +874,8 @@ failed under its objective raises (§3.3).
 
 ## 12. Known limits and open items
 
-[Plan 10](plans/10-threading.md) (decided 2026-11-07) schedules the work on these items. Phase 1 adds the
-thread-pool executor option (§3.6); Phase 2 starts after it and covers the items marked "plan 10, 2.x".
+[Plan 10](plans/10-threading.md) (decided 2026-11-07) schedules the work on these items. Its Phase 1, the
+thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the items marked "plan 10, 2.x".
 
 - **19b:** `PymooSampler` is bound to the thread that created it, which rules out `nJobs` above 1 (§8).
   Plan 10, 2.5.
@@ -766,7 +904,8 @@ thread-pool executor option (§3.6); Phase 2 starts after it and covers the item
 | The GIL serializes Python code | Monitors: sampler, pruner, trial, tell stripes, storages |
 | A thread blocked on a lock or in `wait()` has released the GIL | `MonitorGate`: with a Python bridge loaded, a thread holding the GIL releases it while it waits for a tell stripe, trial, sampler or pruner monitor, or for its `nJobs` workers (P3-1, fixed 2026-11-06) |
 | numpy's `RandomState` locks each draw | The sampler monitor; MT19937 itself takes no lock |
-| `ThreadPoolExecutor(max_workers=n_jobs)`, threads reused within the call | OptunaSharp's own dedicated threads, reused across trials and calls (P3-4, fixed 2026-11-06) |
+| `ThreadPoolExecutor(max_workers=n_jobs)`, threads reused within the call | By default OptunaSharp's own dedicated threads, reused across trials and calls (P3-4, fixed 2026-11-06); on request the .NET thread pool (§3.5) |
+| The executor is fixed | `TrialExecutorOptions`, chosen per call, per study, per DI container or for the process, and read once when the call starts (§3.5) |
 | `wait(FIRST_COMPLETED)`, then `f.result()` | `Task.WhenAny`, then the first failure's original exception |
 | The `with ThreadPoolExecutor(...)` exit | `WaitForAllWithoutRaising` |
 | Executor threads start without the caller's `contextvars`; the locale is process-wide | Workers inherit the caller's `ExecutionContext`: its culture and `AsyncLocal` values |

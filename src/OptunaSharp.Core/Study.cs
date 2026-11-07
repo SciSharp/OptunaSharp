@@ -65,6 +65,32 @@ public class Study
     /// <summary>The pruner in use.</summary>
     public BasePruner Pruner { get; set; }
 
+    private TrialExecutorOptions? _executorOptions;
+
+    /// <summary>
+    ///     The executor options this study's <c>Optimize(nJobs: …)</c> calls use when a call passes none: which
+    ///     threads run the trials. <see langword="null" /> (the default) defers to
+    ///     <see cref="TrialExecutorOptions.Default" />, read at the start of each call. Optuna has no counterpart.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The second of the executor's levels: a call's <c>executorOptions</c> argument overrides it, and it
+    ///         overrides <see cref="TrialExecutorOptions.Default" />. The DI study factory sets it from
+    ///         <see cref="Extensions.OptunaStudyOptions.DefaultExecutorOptions" /> when it builds the study, so a
+    ///         value set here afterwards replaces that DI default.
+    ///     </para>
+    ///     <para>
+    ///         It belongs to this <see cref="Study" /> object and is not stored: a study opened again with
+    ///         <see cref="Optuna.LoadStudy" /> starts with <see langword="null" />. Two threads running <c>Optimize</c>
+    ///         on one study object share it; each call takes its own snapshot when it starts.
+    ///     </para>
+    /// </remarks>
+    public TrialExecutorOptions? ExecutorOptions
+    {
+        get => Volatile.Read(ref _executorOptions);
+        set => Volatile.Write(ref _executorOptions, value);
+    }
+
     /// <summary>Opens an existing named study using a shared storage backend.</summary>
     /// <param name="studyName">Name identifying the study in the selected storage.</param>
     /// <param name="storage">
@@ -326,7 +352,14 @@ public class Study
     ///     Flag to determine whether to automatically run garbage collection after each trial.
     /// </param>
     /// <param name="showProgressBar">Flag to show progress bars or not.</param>
+    /// <param name="executorOptions">
+    ///     Which threads run the trials when <paramref name="nJobs" /> is not 1. <see langword="null" /> (the default)
+    ///     uses <see cref="ExecutorOptions" />, then <see cref="TrialExecutorOptions.Default" />, which start as
+    ///     OptunaSharp's reused dedicated threads. Read once, when the call starts. Not part of Optuna's API.
+    /// </param>
     /// <exception cref="NumSharp.RuntimeError">Optimization is invoked recursively on the same thread.</exception>
+    /// <exception cref="NumSharp.ValueError"><paramref name="nJobs" /> is 0 or below -1, as Python's <c>ThreadPoolExecutor</c> refuses.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The executor options in effect return an undefined executor kind or an invalid idle timeout; only a derived <see cref="TrialExecutorOptions" /> class can, because its setters validate.</exception>
     /// <exception cref="System.Exception">An objective raises an exception outside catch, or a callback, sampler, pruner, or storage operation fails; the original failure propagates.</exception>
     /// <remarks>Running objectives are allowed to finish when the count, timeout, or Stop request ends scheduling. Callback failures are not covered by the objective catch list.</remarks>
     public void Optimize(
@@ -337,7 +370,8 @@ public class Study
         Type[]? @catch = null,
         IEnumerable<Action<Study, FrozenTrial>>? callbacks = null,
         bool gcAfterTrial = false,
-        bool showProgressBar = false)
+        bool showProgressBar = false,
+        TrialExecutorOptions? executorOptions = null)
         => OptimizeLoop.Optimize(
             study: this,
             func: trial => new[] { func(trial) },
@@ -347,11 +381,12 @@ public class Study
             catchExceptions: @catch,
             callbacks: callbacks?.ToList(),
             gcAfterTrial: gcAfterTrial,
-            showProgressBar: showProgressBar);
+            showProgressBar: showProgressBar,
+            executorOptions: executorOptions);
 
     /// <summary>
     ///     Optimize a multi-objective function. See
-    ///     <see cref="Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool)" />.
+    ///     <see cref="Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions)" />.
     /// </summary>
     /// <param name="nTrials">Maximum trials started by this invocation; null leaves the count unlimited.</param>
     /// <param name="func">Objective delegate returning a scalar or values in study direction order.</param>
@@ -361,7 +396,13 @@ public class Study
     /// <param name="callbacks">Callbacks invoked after a trial finishes, receiving the study and finished trial.</param>
     /// <param name="gcAfterTrial">Whether to request full garbage collection after each trial.</param>
     /// <param name="showProgressBar">Whether to show supported trial-count or timeout progress.</param>
+    /// <param name="executorOptions">
+    ///     Which threads run the trials when <paramref name="nJobs" /> is not 1; <see langword="null" /> uses
+    ///     <see cref="ExecutorOptions" />, then <see cref="TrialExecutorOptions.Default" />. Read once, when the call starts.
+    /// </param>
     /// <exception cref="NumSharp.RuntimeError">Optimization is invoked recursively on the same thread.</exception>
+    /// <exception cref="NumSharp.ValueError"><paramref name="nJobs" /> is 0 or below -1, as Python's <c>ThreadPoolExecutor</c> refuses.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The executor options in effect return an undefined executor kind or an invalid idle timeout; only a derived <see cref="TrialExecutorOptions" /> class can.</exception>
     /// <exception cref="System.Exception">An objective raises an exception outside catch, or a callback, sampler, pruner, or storage operation fails; the original failure propagates.</exception>
     /// <remarks>Running objectives are allowed to finish when the count, timeout, or Stop request ends scheduling. Callback failures are not covered by the objective catch list.</remarks>
     public void Optimize(
@@ -372,7 +413,8 @@ public class Study
         Type[]? @catch = null,
         IEnumerable<Action<Study, FrozenTrial>>? callbacks = null,
         bool gcAfterTrial = false,
-        bool showProgressBar = false)
+        bool showProgressBar = false,
+        TrialExecutorOptions? executorOptions = null)
         => OptimizeLoop.Optimize(
             study: this,
             func: func,
@@ -382,13 +424,14 @@ public class Study
             catchExceptions: @catch,
             callbacks: callbacks?.ToList(),
             gcAfterTrial: gcAfterTrial,
-            showProgressBar: showProgressBar);
+            showProgressBar: showProgressBar,
+            executorOptions: executorOptions);
 
     /// <summary>
     ///     Create a new trial from which hyperparameters can be suggested.
     ///
     ///     This method is part of an alternative to
-    ///     <see cref="Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool)" />
+    ///     <see cref="Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions)" />
     ///     that allows controlling the lifetime of a trial outside the scope of <c>func</c>. Each
     ///     call to this method should be followed by a call to <see cref="Tell(Trial, double, bool)" />
     ///     to finish the created trial.
@@ -589,7 +632,7 @@ public class Study
     ///     Exit from the current optimization loop after the running trials finish.
     ///
     ///     This method lets the running
-    ///     <see cref="Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool)" />
+    ///     <see cref="Optimize(Func{Trial, double}, int?, double?, int, Type[], IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions)" />
     ///     method return immediately after all trials which the method spawned finishes. This
     ///     method only works when it is called inside an objective function or callback.
     /// </summary>

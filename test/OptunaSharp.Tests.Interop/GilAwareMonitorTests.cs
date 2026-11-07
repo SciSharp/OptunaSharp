@@ -184,6 +184,38 @@ public class GilAwareMonitorTests
     }
 
     /// <summary>
+    ///     The same sampler shape on the thread-pool executor (<see cref="TrialExecutorKind.ThreadPool" />, plan 10
+    ///     Phase 1): the GIL-aware monitor entry does not depend on which threads run the workers, so pool workers that
+    ///     hold the GIL around <see cref="Trial.SuggestFloat" /> finish too. <c>nJobs: 4</c> stays below the pool's
+    ///     minimum on the CI runners, so the pool's own documented limit does not come into play.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void Optimize_ObjectiveHoldsTheGil_GilTakingSampler_NJobs4_OnTheThreadPool_Completes()
+    {
+        RequireEngineWithHook();
+
+        var study = Optuna.CreateStudy(sampler: new GilTakingSampler(seed: 5));
+        int onPool = 0;
+
+        RunWithinWatchdog(() => study.Optimize(t =>
+        {
+            if (Thread.CurrentThread.IsThreadPoolThread)
+                Interlocked.Increment(ref onPool);
+            using (Py.GIL())
+            {
+                RunPython(100_000);
+                return t.SuggestFloat("x", 0, 1);
+            }
+        }, nTrials: 60, nJobs: 4, executorOptions: new TrialExecutorOptions { Executor = TrialExecutorKind.ThreadPool }),
+            "Optimize(nJobs: 4) on the thread pool with a GIL-holding objective over a GIL-taking sampler");
+
+        Assert.AreEqual(60, study.Trials.Count);
+        Assert.IsTrue(study.Trials.All(t => t.State == TrialState.Complete), "every trial must complete");
+        Assert.AreEqual(60, onPool, "every trial ran on a pool thread");
+    }
+
+    /// <summary>
     ///     The probe's pruner shape: four <c>nJobs</c> workers report and call <see cref="Trial.ShouldPrune" /> while
     ///     holding the GIL, over a pruner whose <c>Prune</c> takes the GIL, as the OptunaHub pruner bridge does.
     /// </summary>

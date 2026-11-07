@@ -54,4 +54,17 @@ public sealed class OptunaStudyOptions
     ///     "many workers, one shared study" pattern.
     /// </summary>
     public bool LoadIfExists { get; set; }
+
+    /// <summary>
+    ///     The executor options every study this factory builds starts with: the factory assigns this instance to
+    ///     each new study's <see cref="Study.ExecutorOptions" />. <c>null</c> (the default) leaves that setting
+    ///     unset, so <see cref="TrialExecutorOptions.Default" /> applies. Optuna has no counterpart.
+    /// </summary>
+    /// <remarks>
+    ///     This is the DI level of the executor's resolution: an <c>Optimize</c> call's <c>executorOptions</c>
+    ///     argument, or a study's own <see cref="Study.ExecutorOptions" /> set after creation, still override it.
+    ///     Every study gets this same instance, so changing a property later changes the executor of all of them,
+    ///     from their next <c>Optimize</c> call on.
+    /// </remarks>
+    public TrialExecutorOptions? DefaultExecutorOptions { get; set; }
 }

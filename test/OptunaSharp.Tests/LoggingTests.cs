@@ -10,7 +10,7 @@ namespace OptunaSharp.Tests;
 ///     <c>Handler.handleError</c>. A write to a broken stream must be reported on the current standard error
 ///     ("--- Logging error ---") and swallowed, never propagated: under Optuna a closed log stream cannot fail
 ///     the optimization that is logging, and before this port it did (an <see cref="ObjectDisposedException" />
-///     escaped <see cref="Study.Optimize(Func{Trial, double}, int?, double?, int, Type[], System.Collections.Generic.IEnumerable{Action{Study, FrozenTrial}}, bool, bool)" />).
+///     escaped <see cref="Study.Optimize(Func{Trial, double}, int?, double?, int, Type[], System.Collections.Generic.IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions)" />).
 ///     <para>These tests redirect <see cref="Console.Error" /> and rebuild the process-wide logging
 ///     configuration, so every test restores both in a <c>finally</c> (the project runs tests sequentially).</para>
 /// </summary>

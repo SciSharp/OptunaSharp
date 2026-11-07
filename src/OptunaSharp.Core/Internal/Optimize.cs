@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using OptunaSharp.Logging;
 using OptunaSharp.Storages;
@@ -23,14 +22,21 @@ internal static class OptimizeLoop
     /// <param name="callbacks">Delegates invoked after each trial has been recorded in its final state.</param>
     /// <param name="gcAfterTrial">Whether to request garbage collection after each objective invocation.</param>
     /// <param name="showProgressBar">Whether optimization should render progress to the console.</param>
+    /// <param name="executorOptions">
+    ///     The executor for this call's trials when <paramref name="nJobs" /> is not 1, or null to fall back to the
+    ///     study's <see cref="Study.ExecutorOptions" /> and then <see cref="TrialExecutorOptions.Default" />. Read once,
+    ///     here, before anything runs.
+    /// </param>
     /// <exception cref="NumSharp.RuntimeError">Optimization is invoked recursively for a study already being optimized on the current execution context.</exception>
     /// <exception cref="NumSharp.ValueError"><paramref name="nJobs" /> is 0 or below -1 (Python's <c>ThreadPoolExecutor</c> refusal).</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The resolved executor options return an undefined executor kind or an invalid idle timeout (only a derived options class can).</exception>
     /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
     /// <remarks>
     ///     With <paramref name="nJobs" /> other than 1 this follows Python's executor block exactly: a failure is
     ///     raised (as the original exception, not an <see cref="AggregateException" />) only after every trial
     ///     still running has finished, and a failure among the trials that finish after the last submission is
-    ///     not raised at all; such a trial is still recorded as FAIL and logged.
+    ///     not raised at all; such a trial is still recorded as FAIL and logged. The executor only decides which
+    ///     threads run the workers; none of these rules depends on it.
     /// </remarks>
     internal static void Optimize(
         Study study,
@@ -41,12 +47,18 @@ internal static class OptimizeLoop
         Type[]? catchExceptions = null,
         IReadOnlyList<Action<Study, FrozenTrial>>? callbacks = null,
         bool gcAfterTrial = false,
-        bool showProgressBar = false)
+        bool showProgressBar = false,
+        TrialExecutorOptions? executorOptions = null)
     {
         var catchTypes = catchExceptions ?? Array.Empty<Type>();
 
         if (study.ThreadLocal.InOptimizeLoop)
             throw new NumSharp.RuntimeError("Nested invocation of `Study.optimize` method isn't allowed.");
+
+        // The executor is resolved and read once, before anything runs, whatever nJobs is: invalid options from a
+        // derived class then fail the same way at nJobs 1 and 8, and the run is immune to later changes of the
+        // options object (THREADING.md §3.5).
+        var executor = TrialExecutorSnapshot.Resolve(executorOptions, study);
 
         if (showProgressBar && nTrials is null && timeout is not null && nJobs != 1)
         {
@@ -109,7 +121,7 @@ internal static class OptimizeLoop
                             completed.FirstOrDefault(f => !f.IsCompletedSuccessfully)?.GetAwaiter().GetResult();
                         }
 
-                        futures.Add(StartWorker(() => OptimizeSequential(
+                        futures.Add(StartWorker(executor, () => OptimizeSequential(
                             study, func, 1, timeout, catchTypes, callbacks, gcAfterTrial,
                             reseedSamplerRng: true, timeStart: timeStart, progressBar: progressBar,
                             restoreLoopFlag: true)));
@@ -266,10 +278,11 @@ internal static class OptimizeLoop
     }
 
     /// <summary>
-    ///     Starts one n_jobs worker on one of OptunaSharp's dedicated, reused worker threads
-    ///     (<see cref="TrialWorkerScheduler" />), as Python's <c>ThreadPoolExecutor</c> runs its work on threads of its
-    ///     own and reuses them.
+    ///     Starts one n_jobs worker on the call's executor: by default one of OptunaSharp's dedicated, reused worker
+    ///     threads (<see cref="TrialWorkerScheduler" />), as Python's <c>ThreadPoolExecutor</c> runs its work on threads
+    ///     of its own and reuses them; with <see cref="TrialExecutorKind.ThreadPool" />, the .NET thread pool.
     /// </summary>
+    /// <param name="executor">The executor this call resolved when it started.</param>
     /// <param name="work">One <c>_optimize_sequential(n_trials=1)</c> call.</param>
     /// <returns>The worker's task; it completes when the trial and its callbacks are done.</returns>
     /// <remarks>
@@ -279,10 +292,12 @@ internal static class OptimizeLoop
     ///     <c>Optimize(nJobs: 96)</c> on a Redis journal died after 88 trials. A new thread per trial (3a75811 until
     ///     2026-11-06) fixed that but cost about 100 µs per trial on the submit loop, which capped cheap studies near
     ///     10,000 trials/s (P3-4). The dedicated threads are reused across trials and calls instead, and the worker
-    ///     leaves its thread-local state clean (see <see cref="OptimizeSequential" />).
+    ///     leaves its thread-local state clean (see <see cref="OptimizeSequential" />). The pool is the caller's
+    ///     explicit choice (2026-11-07): those limits then apply, documented on
+    ///     <see cref="TrialExecutorKind.ThreadPool" />, and the clean thread-local state matters even more there,
+    ///     because the host reuses pool threads.
     /// </remarks>
-    private static Task StartWorker(Action work)
-        => Task.Factory.StartNew(work, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TrialWorkerScheduler.Shared);
+    private static Task StartWorker(TrialExecutorSnapshot executor, Action work) => executor.Start(work);
 
     /// <summary>
     ///     Blocks until every worker task has finished, observing (not raising) their failures: the exit of
@@ -290,9 +305,11 @@ internal static class OptimizeLoop
     /// </summary>
     /// <param name="futures">Worker tasks that may still be running; failed ones are observed and dropped.</param>
     /// <remarks>
-    ///     Workers run on dedicated threads (see <see cref="StartWorker" />), which are never inlined into this
-    ///     wait. Catching the <see cref="AggregateException" /> marks every failure observed, so none resurfaces
-    ///     later through <see cref="TaskScheduler.UnobservedTaskException" />.
+    ///     Workers are never inlined into this wait: the dedicated scheduler refuses inlining, and pool workers are
+    ///     queued with <see cref="TaskCreationOptions.PreferFairness" /> on the pool's global queue, from which
+    ///     <see cref="Task.WaitAll(Task[])" /> cannot pop them (see <see cref="StartWorker" />). Catching the
+    ///     <see cref="AggregateException" /> marks every failure observed, so none resurfaces later through
+    ///     <see cref="TaskScheduler.UnobservedTaskException" />.
     /// </remarks>
     private static void WaitForAllWithoutRaising(IReadOnlyCollection<Task> futures)
     {

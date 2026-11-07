@@ -520,6 +520,14 @@ study.Optimize(Objective, nTrials: 100, nJobs: 4);
 > run, results are no longer reproducible (see
 > [reproducible results](#how-can-i-obtain-reproducible-optimization-results)).
 
+The workers are OptunaSharp's own dedicated threads, reused across trials and `Optimize` calls, so the
+.NET thread pool stays free for your application. To run them on the thread pool instead, pass
+`executorOptions: new TrialExecutorOptions { Executor = TrialExecutorKind.ThreadPool }`, or set it once
+for a study, a DI container or the process. An `nJobs` at or above the pool's minimum thread count then
+runs fewer trials at once and can make Redis and gRPC calls time out; the
+[parallelization page](key-features/parallelization.md#which-threads-run-the-trials) has the levels, the
+measurements and the remedies.
+
 ### 2. Multi-processing on a single node
 
 Point multiple processes at the same [journal-file storage](recipes/journal-storage.md) or a

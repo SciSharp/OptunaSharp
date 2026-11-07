@@ -45,9 +45,9 @@ numeric prefix is the recommended execution order.
 | [09](09-pymoo-live-parity-gate.md) | Live pymoo parity gate (AGE-MOEA-2) | AGE-MOEA-2 (done) | **X** | ★★ / low |
 | [10](10-threading.md) | Threading: a configurable `nJobs` executor, then six follow-ups | the reused worker threads of `9cfcb12` (done) | N | ★★ / medium |
 
-**Threading workstream (10).** Unrelated to JANUS. Decided with the owner on 2026-11-07, not started. Phase 1
-adds an opt-in thread-pool executor next to the default reused dedicated threads, configured through an
-options class at four levels. Phase 2, done only after Phase 1, closes six open items of
+**Threading workstream (10).** Unrelated to JANUS. Decided with the owner on 2026-11-07. Phase 1, built on
+2026-11-07, adds an opt-in thread-pool executor next to the default reused dedicated threads, configured
+through an options class at four levels. Phase 2, done only after Phase 1, closes six open items of
 [`docs/THREADING.md`](../THREADING.md) §12: OS seed width, the terminator lock, Redis round trips and
 `DedicatedThreads`, cancellation, `PymooSampler` on any thread, and ML.NET search under `nJobs`.
 

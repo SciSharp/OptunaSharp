@@ -84,7 +84,7 @@ public sealed class OptunaStudyFactory : IOptunaStudyFactory
         string? effectiveName = studyName ?? _options.DefaultStudyName;
         bool effectiveLoadIfExists = loadIfExists ?? _options.LoadIfExists;
 
-        return Optuna.CreateStudy(
+        var study = Optuna.CreateStudy(
             storage: storage,
             sampler: sampler,
             pruner: pruner,
@@ -92,5 +92,11 @@ public sealed class OptunaStudyFactory : IOptunaStudyFactory
             direction: effectiveDirection,
             loadIfExists: effectiveLoadIfExists,
             directions: effectiveDirections);
+
+        // The DI level of the executor's resolution (THREADING.md §3.5). Left alone when unset, so a study built
+        // here behaves like one from Optuna.CreateStudy and follows TrialExecutorOptions.Default.
+        if (_options.DefaultExecutorOptions is not null)
+            study.ExecutorOptions = _options.DefaultExecutorOptions;
+        return study;
     }
 }
