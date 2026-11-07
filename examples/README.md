@@ -5,9 +5,20 @@ Runnable OptunaSharp programs — [.NET 10 file-based apps](https://learn.micros
 public Optuna usage, harvested with the [`interop-test-porting`](../.claude/skills/interop-test-porting/SKILL.md)
 skill), and **feature showcases** of canonical Optuna capabilities.
 
-CI compiles every example here, including `optunahub/`, whenever `examples/` or `src/` changes
-([`examples.yml`](../.github/workflows/examples.yml)). It builds them but does not run them, because
-several need ffmpeg, Redis or Python.
+CI compiles every example here, including `optunahub/` and the projects under `projects/`, whenever
+`examples/` or `src/` changes ([`examples.yml`](../.github/workflows/examples.yml)). It builds them but does
+not run them, because several need ffmpeg, Redis or Python.
+
+## Example projects
+
+Full .NET projects, in [`projects/`](projects/README.md), that show OptunaSharp inside real application
+hosts. Run them with `dotnet run --project examples/projects/<Name>`.
+
+| Project | First shows |
+|---|---|
+| [`TuningService`](projects/TuningService/README.md) | **ASP.NET Core + dependency injection**: storage, sampler, pruner, study factory and chart renderer registered in the container; ask-and-tell over HTTP, background optimization jobs, Plotly charts, a dashboard, health checks, problem details, and Optuna's gRPC storage proxy |
+| [`TuningWorker`](projects/TuningWorker/README.md) | **Distributed optimization** from a Generic Host worker: several processes, and the Python Optuna worker next to it, share one TuningService study over gRPC |
+| [`MLNetModelTuning`](projects/MLNetModelTuning/README.md) | **Real in-process training**: `OptunaSearchCV` cross-validates ML.NET FastTree models, with a resumable SQLite study, a held-out score, fANOVA importance and Plotly charts |
 
 ## Ported from real-world gists
 

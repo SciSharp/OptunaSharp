@@ -1,0 +1,77 @@
+# Requests for the TuningService, runnable from Visual Studio, Rider or VS Code (REST Client extension).
+# Start the service first:  dotnet run --project examples/projects/TuningService
+
+@baseUrl = http://localhost:5080
+
+### List every study, with its best value
+GET {{baseUrl}}/api/studies
+
+### Create a single-objective study (Optuna's default direction is Minimize)
+POST {{baseUrl}}/api/studies
+Content-Type: application/json
+
+{ "name": "demo", "direction": "Minimize" }
+
+### Optimize it in the background with the built-in objective: 40 trials, 4 at a time
+POST {{baseUrl}}/api/studies/demo/optimize
+Content-Type: application/json
+
+{ "nTrials": 40, "nJobs": 4 }
+
+### Watch the jobs (each has a /api/jobs/{id} location; DELETE it to cancel)
+GET {{baseUrl}}/api/jobs
+
+### The study in detail: trial counts, the best trial
+GET {{baseUrl}}/api/studies/demo
+
+### Its pruned trials (state is complete, pruned, fail, running or waiting)
+GET {{baseUrl}}/api/studies/demo/trials?state=pruned
+
+### Parameter importance: ped-anova (default), fanova, mdi or shap
+GET {{baseUrl}}/api/studies/demo/importance?evaluator=fanova
+
+### A chart as Plotly figure JSON (open {{baseUrl}}/studies/demo/plots/history in a browser for the page)
+GET {{baseUrl}}/api/studies/demo/plots/history
+
+# ---------------------------------------------------------------------------------------------------------
+# Ask and tell over HTTP: the service samples, the client evaluates. Any language can be the client.
+# ---------------------------------------------------------------------------------------------------------
+
+### 1. Create a study for the client to drive
+POST {{baseUrl}}/api/studies
+Content-Type: application/json
+
+{ "name": "quadratic" }
+
+### 2. Ask: the search space uses Optuna's distribution JSON, as `optuna ask --search-space` does
+POST {{baseUrl}}/api/studies/quadratic/trials
+Content-Type: application/json
+
+{
+  "searchSpace": {
+    "x": { "name": "FloatDistribution", "attributes": { "low": -10.0, "high": 10.0, "log": false, "step": null } },
+    "kind": { "name": "CategoricalDistribution", "attributes": { "choices": ["linear", "square"] } }
+  },
+  "worker": "http-client"
+}
+
+### 3. Report an intermediate value; the answer says whether the service's pruner wants the trial stopped
+POST {{baseUrl}}/api/studies/quadratic/trials/0/report
+Content-Type: application/json
+
+{ "step": 1, "value": 12.5 }
+
+### 4. Tell the result (or { "state": "Pruned" } after a prune, or { "state": "Fail" })
+POST {{baseUrl}}/api/studies/quadratic/trials/0/tell
+Content-Type: application/json
+
+{ "values": [4.0] }
+
+### Telling the same trial twice is refused with Optuna's message ("Cannot tell a COMPLETE trial.")
+POST {{baseUrl}}/api/studies/quadratic/trials/0/tell
+Content-Type: application/json
+
+{ "values": [1.0] }
+
+### Health: lists the studies through the storage connection
+GET {{baseUrl}}/health

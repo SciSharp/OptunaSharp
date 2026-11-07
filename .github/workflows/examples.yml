@@ -10,6 +10,7 @@ on:
       - 'NuGet.Config'
       - 'global.json'
       - '.github/workflows/examples.yml'
+      - '.github/scripts/check_documentation.cs'
   pull_request:
     branches: ["master", "main"]
     paths:
@@ -19,6 +20,7 @@ on:
       - 'NuGet.Config'
       - 'global.json'
       - '.github/workflows/examples.yml'
+      - '.github/scripts/check_documentation.cs'
   workflow_dispatch:
 
 permissions:
@@ -30,10 +32,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Compile gate for examples/: every example is a .NET 10 file-based app that nothing else builds, so an
-  # API change in src/ could break one silently. Each is built with `dotnet build <file>.cs`, which also
-  # builds the projects it references through `#:project` (Core, the Redis and SQLite storages, the
-  # OptunaHub bridge). Building only: several examples need ffmpeg, a Redis server or a Python with
+  # Compile gate for examples/: nothing else builds the examples, so an API change in src/ could break one
+  # silently. Two kinds are built:
+  #   - the .NET 10 file-based apps, each with `dotnet build <file>.cs`, which also builds the projects it
+  #     references through `#:project` (Core, the Redis and SQLite storages, the OptunaHub bridge);
+  #   - the example projects under examples/projects/ (the ASP.NET Core TuningService, the TuningWorker, the
+  #     ML.NET tuner and their shared library), each by its .csproj. Their .cs files are not file-based apps,
+  #     so the first loop skips that folder.
+  # Building only: several examples need ffmpeg, a Redis server, a running TuningService or a Python with
   # optunahub to run, and the showcases are long-running optimization loops.
   build:
     runs-on: ubuntu-24.04
@@ -64,7 +70,10 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          mapfile -t examples < <(find examples -type f -name '*.cs' | sort)
+          mapfile -t examples < <(
+            find examples -type f -name '*.cs' -not -path 'examples/projects/*' | sort
+            find examples/projects -type f -name '*.csproj' | sort
+          )
           failed=()
           for example in "${examples[@]}"; do
             echo "::group::dotnet build $example"
@@ -81,3 +90,9 @@ jobs:
             printf 'Failed to compile: %s\n' "${failed[@]}"
             exit 1
           fi
+
+      # The example projects are meant to be copied into real applications, so they carry the same member
+      # documentation the library does; this is the src/ documentation gate, run over them. The file-based
+      # apps are scripts with top-level statements and stay out of it.
+      - name: Check the example projects' documentation
+        run: dotnet run .github/scripts/check_documentation.cs -- examples/projects

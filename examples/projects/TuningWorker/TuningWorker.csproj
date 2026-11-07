@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <!-- A Generic Host worker that joins a TuningService study over Optuna's gRPC storage proxy and optimizes
+       it; run several at once to share one study across processes. See README.md. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- Emit the XML documentation so a missing doc comment on a public member is a CS1591 warning. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Inside this repository the example builds against the current source. Outside it, replace each
+         ProjectReference with the NuGet package of the same name. -->
+    <ProjectReference Include="..\..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+    <ProjectReference Include="..\..\..\src\OptunaSharp.Storage.Grpc\OptunaSharp.Storage.Grpc.csproj" />
+    <ProjectReference Include="..\TuningCommon\TuningCommon.csproj" />
+  </ItemGroup>
+
+</Project>

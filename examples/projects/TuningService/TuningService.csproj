@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- An ASP.NET Core app that hosts OptunaSharp studies: a REST API, background optimization jobs,
+       Plotly charts, and Optuna's gRPC storage proxy for remote workers. See README.md. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- Emit the XML documentation so a missing doc comment on a public member is a CS1591 warning. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Inside this repository the example builds against the current source. Outside it, replace each
+         ProjectReference with the NuGet package of the same name, for example
+         <PackageReference Include="OptunaSharp.Storage.Sqlite" Version="..." />. -->
+    <ProjectReference Include="..\..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+    <!-- Never referenced in code: Core opens it by name for the sqlite:/// URL in appsettings.json. Add
+         OptunaSharp.Storage.EFCore the same way to accept postgresql:// and mysql:// URLs. -->
+    <ProjectReference Include="..\..\..\src\OptunaSharp.Storage.Sqlite\OptunaSharp.Storage.Sqlite.csproj" />
+    <ProjectReference Include="..\..\..\src\OptunaSharp.Storage.Grpc\OptunaSharp.Storage.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\src\OptunaSharp.Visualization.Plotly\OptunaSharp.Visualization.Plotly.csproj" />
+    <ProjectReference Include="..\TuningCommon\TuningCommon.csproj" />
+  </ItemGroup>
+
+</Project>

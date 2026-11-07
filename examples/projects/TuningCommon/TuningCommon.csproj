@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The code TuningService and TuningWorker share: the objective every worker evaluates, so all of them
+       can work on one study, and the bridge that sends OptunaSharp's log records to ILogger. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- Emit the XML documentation so a missing doc comment on a public member is a CS1591 warning. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Inside this repository the example builds against the current source. Outside it, replace the
+         ProjectReference with <PackageReference Include="OptunaSharp" Version="..." />. -->
+    <ProjectReference Include="..\..\..\src\OptunaSharp.Core\OptunaSharp.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Abstractions only: the logging bridge needs ILogger and IHostedService, not a concrete host. The
+         host that runs it (ASP.NET Core or the Generic Host) supplies the implementations. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+  </ItemGroup>
+
+</Project>
