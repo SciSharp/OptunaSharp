@@ -65,9 +65,38 @@ Console.WriteLine(details.Version);
 Console.WriteLine(details.Path);
 ```
 
-`Run(Action)` and `Run<T>(Func<T>)` initialize the runtime if necessary and acquire the GIL for the
-body. `Initialize()` is also public, idempotent and synchronized. `IsInitialized` reports whether
-Python.NET's engine is running.
+`Run(Action)` and `Run<T>(Func<T>)` initialize the runtime if necessary and run the body under the GIL
+on the runtime's Python thread; the caller waits for it. `Initialize()` is also public, idempotent and
+synchronized. `IsInitialized` reports whether Python.NET's engine is running.
+
+## The Python thread
+
+Every `Run` body, and so every call of the BoTorch, pycma, pymoo and OptunaHub bridges, runs on one
+long-lived background thread named `OptunaSharp Python`. That thread keeps one CPython thread state for
+the life of the process and has a 16 MB stack.
+
+On any other .NET thread, Python.NET's `Py.GIL()` creates a CPython thread state when the outermost scope
+opens and frees it when the scope ends. Extensions built with pybind11, such as scipy and torch, keep using
+the thread state of the thread on which they first loaded. Measured on 2026-11-07:
+
+- `PymooSampler` driven off the main thread crashed the process with an access violation in scipy's
+  `cdist` in 7 of 8 runs;
+- torch, imported on one .NET thread and used from another, hung.
+
+On the Python thread nothing is freed, so neither can happen, and samplers work at any `nJobs`. The
+16 MB stack is the size CPython gives its own threads on macOS, where numba's compiler needs it.
+
+- A body that calls `Run` again runs inline.
+- Code that already holds the GIL inside its own `Py.GIL()` may call `Run`: it releases the GIL while it
+  waits.
+- The caller's culture and `AsyncLocal` values flow into the body, and the body's exception reaches the
+  caller with its stack trace.
+- A body must not wait for another thread that may itself be waiting for the Python thread. For example,
+  do not call `Trial` or `Study` methods inside `Run` while other threads optimize the same study with a
+  Python sampler. For Python code of your own inside an objective, take the GIL with `Py.GIL()`.
+- Calls run one at a time, as Python does under the GIL. Python code from concurrent studies that releases
+  the GIL (torch kernels, large NumPy operations) therefore no longer overlaps. Each call costs about 1 µs
+  for the hand-off.
 
 ## GIL and object ownership
 
@@ -80,8 +109,9 @@ dispose it. Fresh `GetAttr`, `Invoke` and similar results are owned handles; use
 GIL scope. `Builtins` follows the same cached-module rule. `Import` itself expects the caller to hold
 the GIL.
 
-The runtime has no public shutdown method. It calls `BeginAllowThreads` after initialization and keeps
-the engine and cached imports for the process lifetime. Do not finalize or replace the interpreter
+The runtime has no public shutdown method. It starts the engine on the Python thread, calls
+`BeginAllowThreads` after initialization, and keeps the engine and cached imports for the process lifetime.
+With an engine the host started itself, the Python thread takes a thread state of its own and keeps it. Do not finalize or replace the interpreter
 between studies; the bridge is designed around one engine for the process. This runtime dependency also
 means the Python bridges are outside the pure-managed/AOT deployment path.
 

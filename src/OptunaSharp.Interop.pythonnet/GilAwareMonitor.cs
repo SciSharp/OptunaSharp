@@ -107,7 +107,8 @@ internal static class GilAwareMonitor
 
     /// <summary>Whether the calling thread holds the GIL; false when the engine is down or the check is unavailable.</summary>
     /// <returns>True only when CPython reports that this thread holds the GIL.</returns>
-    private static bool CurrentThreadHoldsGil()
+    /// <remarks>Also used by <see cref="PythonThread" />: a caller that holds the GIL releases it while it waits for the Python thread.</remarks>
+    internal static bool CurrentThreadHoldsGil()
         => PythonEngine.IsInitialized && GilStateCheck.Value is { } check && check() == 1;
 
     /// <summary>

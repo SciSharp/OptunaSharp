@@ -163,15 +163,22 @@ Parameters cross to pymoo's continuous unit cube via the bit-exact one-hot `Sear
 (float/int with log/step scale to `[0,1]`; categoricals are one-hot encoded), and the `X`/`F`/`G`
 matrices cross zero-copy through NumSharp's `NDArray` ⇄ numpy interop.
 
-## macOS on Apple silicon: thread stack size
+## Threads and macOS stacks
+
+The sampler's pymoo calls run on the runtime's Python thread (`PythonRuntime`, from
+`OptunaSharp.Interop.pythonnet`), so the sampler can be driven from any thread and at any `nJobs`.
+Before that, driving it off the main thread crashed the process with an access violation in scipy's
+`cdist`: 7 of 8 runs, measured on 2026-11-07.
 
 `AgeMoea` and `AgeMoea2` run pymoo's numba-compiled survival kernels, and the first `tell` JIT-compiles
-them. On macOS arm64 that compilation needs more stack than a thread .NET creates has by default (the
-thread pool, `Task.Run`, ASP.NET requests, `nJobs` workers, test runners); the process stops with
-"Stack overflow." Run the study on the process's main thread or on a thread created with a
-`maxStackSize` of at least 16 MB, or set `DOTNET_DefaultStackSize=1000000` (hexadecimal, 16 MB) before
-the process starts. Windows x64 (measured down to 256 KB) and Linux x64 (default stacks) are not
-affected.
+them.
+
+- On macOS arm64 that compilation needs more stack than a thread .NET creates has by default.
+- The Python thread has 16 MB, CPython's own size, so the sampler needs no remedy.
+- Running such pymoo code yourself on a .NET thread (the thread pool, `Task.Run`, an ASP.NET request)
+  still needs a thread with a `maxStackSize` of at least 16 MB, or `DOTNET_DefaultStackSize=1000000`
+  (hexadecimal, 16 MB) set before the process starts. OptunaSharp's own `nJobs` threads reserve 16 MB.
+- Windows x64 (measured down to 256 KB) and Linux x64 (default stacks) are not affected.
 
 ## Scope of the parity guarantee
 

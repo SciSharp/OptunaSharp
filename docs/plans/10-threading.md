@@ -1,6 +1,6 @@
 # Plan 10 — Threading: a configurable `nJobs` executor, then seven follow-ups
 
-> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 in progress (2.1, 2.2, 2.3, 2.4 and 2.6 done 2026-11-07).** Phase 1, the executor, came first.
+> **Status: Phase 1 BUILT (2026-11-07, §1.9); Phase 2 in progress (2.1 to 2.6 done 2026-11-07; 2.7 left).** Phase 1, the executor, came first.
 > Phase 2 starts only after Phase 1 is finished; the owner's words (2026-11-07): "document what we will do
 > but we only tackle these AFTER finished all the threading". The decisions below are the owner's answers
 > to three rounds of design questions on 2026-11-07. The names, deferred at first, were settled on
@@ -430,6 +430,53 @@ The owner chose the first six on 2026-11-07, and added 2.7 the same day from a f
 - **Tests.** `Optimize` from a thread other than the constructing one, 20 runs; `nJobs: 4` with
   `PymooSampler`, every trial complete.
 - **Done when** item 19b is closed in the catalog and THREADING.md §8 and §12 no longer list it.
+- **DONE 2026-11-07.** Outcome:
+  - **Root cause** (the plan's first step):
+    - Not the stack: a 16 MB thread crashed 6 of 6.
+    - Not the constructing thread: built and driven on one new thread, 6 of 6. A pool thread crashed 6 of 6, the
+      main thread 0 of 8, and the review's case (a new thread) 7 of 8.
+    - The faulthandler stack pointed at scipy's pybind11 `cdist`, which pymoo's duplicate elimination calls inside
+      `Algorithm.ask`; pymoo imports `scipy.spatial` lazily.
+    - The mechanism: on a .NET thread, pythonnet's `Py.GIL()` creates a CPython thread state at the outermost scope
+      and frees it at the end. pybind11 keeps the thread state of the thread on which its internals loaded, and uses
+      it after it was freed.
+    - Confirmed three ways. A worker that kept one thread state passed 8 of 8. Importing scipy on the main thread
+      first passed 8 of 8. A bare probe (scipy `cdist`, torch `cholesky`) failed 5 of 5 each under churn (scipy
+      crashed, torch hung) and passed 5 of 5 each with the state kept.
+    - So BoTorch (torch) and any pybind11 package behind OptunaHub were exposed the same way. Pure-Python pymoo on
+      Python threads ran with stacks down to 256 KB.
+  - **Sub-decisions** (owner, 2026-11-07, three HTML rounds):
+    - The first round was rejected ("I dont like the solutions, rethink this"): keep a thread state per caller
+      thread in `PythonRuntime`, a `PymooSampler` owner thread, or both.
+    - The second round chose "One Python thread", after measuring the hand-off: 0.5–0.8 µs a call for today's
+      churn, 0.36 µs for a kept state, 1.1–1.3 µs for a hop to a dedicated thread.
+    - Separately, "16 MB worker stacks" for OptunaSharp's `nJobs` threads.
+    - Refusing calls from other threads, the plan's other option, was no longer viable: one non-main thread
+      crashed too.
+  - **Design**:
+    - `PythonRuntime.Run` hands every body to `PythonThread`: a long-lived background thread (`OptunaSharp Python`,
+      16 MB stack) that starts the engine itself (it then holds CPython's main thread state for the process). With a
+      host-started engine it takes a thread state of its own and keeps it. It runs each body under the GIL, one at a
+      time.
+    - Nested calls run inline. A caller that holds the GIL releases it while it waits.
+    - The caller's `ExecutionContext` flows in, and exceptions come back with their stack traces.
+    - `OptunaHubRuntime.EnsureQuiet` goes through `Run` too.
+    - `TrialWorkerScheduler` threads reserve `WorkerStackSize` = 16 MB.
+    - The rule a body must follow (never wait for a thread that waits for the Python thread) is documented. The
+      bridges' bodies take only their own locks and the storages'.
+  - **Checks** (the 19b probe, 8 runs per mode): a new thread, a pool thread, built and driven on one new thread,
+    `nJobs: 4` and the main thread all passed 8 of 8. AGE-MOEA and AGE-MOEA-2 passed 4 of 4 on a new thread and at
+    `nJobs: 4`. scipy and torch through `PythonRuntime.Run` from a worker passed 3 of 3.
+  - **Tests**:
+    - `PythonThreadTests` (Interop suite, 9 cases): one Python thread whose `threading.local` survives calls from
+      six .NET threads, nested `Run` inline, a caller holding the GIL, context flow, exceptions, the 16 MB stack
+      (Windows), `PymooSampler` off its thread and at `nJobs: 4`, torch from several threads, and the P3-1 shape
+      through `Run`.
+    - `TrialExecutorOptionsTests.DedicatedThreads_Reserve16MBOfStack` (Windows).
+    - Negative control on the old `PythonRuntime`: the thread-state test and the stack test fail (different Python
+      threads, a lost `threading.local`, a 1.5 MB stack).
+  - **Docs**: THREADING.md §2, §5.2, §8, §10, §11 and §12; the site's pythonnet page ("The Python thread"), the Python
+    integrations index, the pymoo page and the pymoo README.
 
 ### 2.6 `MLNetEstimator` under `OptunaSearchCV(nJobs > 1)`
 
@@ -487,4 +534,4 @@ The owner chose the first six on 2026-11-07, and added 2.7 the same day from a f
 3. Phase 2, one item at a time, each asking its open sub-decisions first. Suggested order: 2.1 (small,
    low risk; done 2026-11-07), 2.6 (a test that may need no fix; done 2026-11-07, none needed), 2.3 and 2.2
    (the cross-language journal contract; done together 2026-11-07), 2.4 (new public API; done 2026-11-07), 2.5
-   (needs a root cause first), 2.7 (the owner's choice: after 2.4 and 2.5).
+   (root cause first; done 2026-11-07), 2.7 (the owner's choice: after 2.4 and 2.5).

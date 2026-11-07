@@ -22,6 +22,12 @@ namespace OptunaSharp.Interop.PythonNet;
 ///     <c>Dispose</c>) must run under the GIL. Use <see cref="Run(Action)" /> / <see cref="Run{T}" />,
 ///     which acquire it for you; never hand a <see cref="PyObject" /> back out of a <c>Run</c> body.
 ///     </para>
+///     <para><b>One Python thread</b> (plan 10, item 2.5): every <see cref="Run(Action)" /> body runs on one long-lived
+///     thread that owns a CPython thread state for the life of the process (see <see cref="PythonThread" />). pythonnet's
+///     <c>Py.GIL()</c> on any other .NET thread creates a thread state and frees it when the scope ends, and pybind11
+///     libraries (scipy, torch) kept using the freed one: <c>PymooSampler</c> crashed off the main thread and torch hung.
+///     A body must therefore not wait for another thread that may be waiting for the Python thread.
+///     </para>
 /// </summary>
 public static class PythonRuntime
 {
@@ -35,12 +41,20 @@ public static class PythonRuntime
     public static bool IsInitialized => PythonEngine.IsInitialized;
 
     /// <summary>
-    ///     Ensure an embedded CPython engine is running, starting one if necessary. Idempotent and
-    ///     thread-safe. Honors <c>PYTHONNET_PYDLL</c> (pythonnet reads it directly); otherwise probes a
-    ///     <c>python</c>/<c>python3</c> (or <c>$PYTHON</c>) on PATH for its shared library. A host that
-    ///     has already called <see cref="PythonEngine.Initialize()" /> is respected as-is.
+    ///     Ensure an embedded CPython engine is running, starting one if necessary, and the Python thread that runs every
+    ///     <see cref="Run(Action)" /> body with it. Idempotent and thread-safe. Honors <c>PYTHONNET_PYDLL</c> (pythonnet
+    ///     reads it directly); otherwise probes a <c>python</c>/<c>python3</c> (or <c>$PYTHON</c>) on PATH for its shared
+    ///     library. A host that has already called <see cref="PythonEngine.Initialize()" /> is respected as-is.
     /// </summary>
-    /// <exception cref="PythonInteropException">No usable libpython could be located/started.</exception>
+    /// <exception cref="PythonInteropException">
+    ///     No usable libpython could be located or started, or a host shut the engine down, which pythonnet cannot start
+    ///     again in the same process.
+    /// </exception>
+    /// <remarks>
+    ///     The engine starts on the Python thread, which then holds CPython's main thread state for the life of the
+    ///     process; with a host-started engine the Python thread takes a thread state of its own and keeps it. A failed
+    ///     start leaves nothing running, and the next call tries again.
+    /// </remarks>
     public static void Initialize()
     {
         if (Volatile.Read(ref _initialized) == 1 && PythonEngine.IsInitialized)
@@ -48,59 +62,97 @@ public static class PythonRuntime
 
         lock (_gate)
         {
-            if (PythonEngine.IsInitialized)
-            {
-                // A host-started engine still needs the hook: objectives may hold the GIL while calling Trial (P3-1).
-                GilAwareMonitor.Install();
-                Volatile.Write(ref _initialized, 1);
+            if (Volatile.Read(ref _initialized) == 1 && PythonEngine.IsInitialized)
                 return;
-            }
 
-            try
+            if (PythonThread.IsStarted)
             {
-                ResolvePythonDll();
-                PythonEngine.Initialize();
-                PythonEngine.BeginAllowThreads();
-                InjectSitePackages();   // add the probed interpreter's site-packages to sys.path
-                // From now on a thread holding the GIL releases it while it waits for an OptunaSharp sampler, pruner
-                // or tell monitor; without this an objective inside Py.GIL() deadlocked at nJobs > 1 (P3-1).
-                GilAwareMonitor.Install();
-            }
-            catch (Exception ex) when (ex is not PythonInteropException)
-            {
+                // The Python thread ran this engine, and a host has since called PythonEngine.Shutdown: pythonnet cannot
+                // start CPython twice in one process, so say so instead of failing inside the next call.
                 throw new PythonInteropException(
-                    "Could not initialize an embedded CPython engine. Install a CPython with the packages " +
-                    "your bridge needs, and if it cannot be found automatically set PYTHONNET_PYDLL to the " +
-                    "libpython path (e.g. /usr/lib/x86_64-linux-gnu/libpython3.12.so, or " +
-                    "C:\\...\\python312.dll).", ex);
+                    "The embedded CPython engine was shut down, and pythonnet cannot start it again in the same process.");
             }
 
+            PythonThread.Start(StartEngine);
+            // From now on a thread holding the GIL releases it while it waits for an OptunaSharp sampler, pruner or tell
+            // monitor; without this an objective inside Py.GIL() deadlocked at nJobs > 1 (P3-1). A host-started engine
+            // needs it as much as ours.
+            GilAwareMonitor.Install();
             Volatile.Write(ref _initialized, 1);
         }
     }
 
-    /// <summary>Run an action under the GIL (initializing the engine first if needed).</summary>
-    /// <param name="body">The action to invoke while holding the GIL. Dispose temporary Python handles before it returns.</param>
+    /// <summary>
+    ///     Starts the embedded engine on the calling thread, the Python thread: finds libpython, starts CPython, releases
+    ///     the GIL (the thread keeps its main thread state), and adds the probed interpreter's site-packages to
+    ///     <c>sys.path</c>.
+    /// </summary>
+    /// <exception cref="PythonInteropException">No usable libpython could be located or started.</exception>
+    private static void StartEngine()
+    {
+        try
+        {
+            ResolvePythonDll();
+            PythonEngine.Initialize();
+            // At once, before anything else can fail: the starting thread holds the GIL until it releases it, and a
+            // start that failed here would otherwise end the thread with the GIL held, hanging every later call.
+            PythonEngine.BeginAllowThreads();
+            InjectSitePackages();   // add the probed interpreter's site-packages to sys.path
+        }
+        catch (Exception ex) when (ex is not PythonInteropException)
+        {
+            throw new PythonInteropException(
+                "Could not initialize an embedded CPython engine. Install a CPython with the packages " +
+                "your bridge needs, and if it cannot be found automatically set PYTHONNET_PYDLL to the " +
+                "libpython path (e.g. /usr/lib/x86_64-linux-gnu/libpython3.12.so, or " +
+                "C:\\...\\python312.dll).", ex);
+        }
+    }
+
+    /// <summary>
+    ///     Run an action under the GIL on the Python thread (initializing the engine first if needed); the caller waits
+    ///     for it.
+    /// </summary>
+    /// <param name="body">
+    ///     The action to invoke while holding the GIL. Dispose temporary Python handles before it returns. It must not wait
+    ///     for another thread that may itself be waiting for the Python thread (see <see cref="PythonThread" />).
+    /// </param>
     /// <exception cref="PythonInteropException">The embedded interpreter cannot be initialized.</exception>
-    /// <exception cref="Exception">The supplied action throws; callback exceptions propagate unchanged.</exception>
+    /// <exception cref="Exception">The supplied action throws; its exception propagates unchanged, with its stack trace.</exception>
+    /// <remarks>
+    ///     Called on the Python thread (a nested call), it runs inline. A caller that holds the GIL releases it while it
+    ///     waits. The caller's culture and <c>AsyncLocal</c> values flow into the body.
+    /// </remarks>
     public static void Run(Action body)
     {
         Initialize();
-        using (Py.GIL())
+        PythonThread.Invoke<object?>(() =>
+        {
             body();
+            return null;
+        });
     }
 
-    /// <summary>Run a function under the GIL (initializing the engine first if needed) and return its result.</summary>
+    /// <summary>
+    ///     Run a function under the GIL on the Python thread (initializing the engine first if needed) and return its
+    ///     result; the caller waits for it.
+    /// </summary>
     /// <typeparam name="T">The managed result type, whose use must not require the GIL after this call.</typeparam>
-    /// <param name="body">The function to invoke while holding the GIL.</param>
+    /// <param name="body">
+    ///     The function to invoke while holding the GIL. It must not wait for another thread that may itself be waiting
+    ///     for the Python thread (see <see cref="PythonThread" />).
+    /// </param>
     /// <returns>The function's result. Internal bridge callers may transfer an owned Python handle only to code that preserves GIL discipline.</returns>
     /// <exception cref="PythonInteropException">The embedded interpreter cannot be initialized.</exception>
-    /// <exception cref="Exception">The supplied function throws; callback exceptions propagate unchanged.</exception>
+    /// <exception cref="Exception">The supplied function throws; its exception propagates unchanged, with its stack trace.</exception>
+    /// <remarks>
+    ///     Called on the Python thread (a nested call), it runs inline. A caller that holds the GIL releases it while it
+    ///     waits. The caller's culture and <c>AsyncLocal</c> values flow into the body.
+    /// </remarks>
     public static T Run<T>(Func<T> body)
     {
         Initialize();
-        using (Py.GIL())
-            return body();
+        return PythonThread.Invoke(body);
     }
 
     /// <summary>

@@ -47,8 +47,8 @@ public static class OptunaHubRuntime
     ///     "A new study created in memory" lines would otherwise flood the console. Idempotent and
     ///     best-effort; re-asserted right before each shadow study is created (Optuna re-configures its
     ///     root logger lazily on first real use, which can undo an early call). Opt out with
-    ///     <c>OPTUNASHARP_OPTUNAHUB_QUIET=0</c>. Safe to call whether or not the GIL is already held
-    ///     (<see cref="Py.GIL" /> is reentrant).
+    ///     <c>OPTUNASHARP_OPTUNAHUB_QUIET=0</c>. Safe to call inside or outside a <see cref="PythonRuntime.Run(System.Action)" />
+    ///     body: on the Python thread it runs inline, elsewhere it runs on the Python thread as every bridge call does.
     /// </summary>
     internal static void EnsureQuiet()
     {
@@ -57,8 +57,9 @@ public static class OptunaHubRuntime
             return;
         try
         {
-            using (Py.GIL())
-                Python.optuna.logging.set_verbosity_warning();
+            // Through the Python thread, not a Py.GIL() of this thread's own: a .NET thread's own GIL scope creates and
+            // frees a CPython thread state, which pybind11 libraries can keep using (plan 10, item 2.5).
+            PythonRuntime.Run(() => Python.optuna.logging.set_verbosity_warning());
         }
         catch
         {

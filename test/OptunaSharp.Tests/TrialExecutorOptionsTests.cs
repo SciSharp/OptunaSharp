@@ -154,6 +154,36 @@ public class TrialExecutorOptionsTests
     }
 
     /// <summary>
+    ///     The dedicated threads reserve 16 MB of stack, CPython's own thread size on macOS (plan 10, item 2.5, the owner's
+    ///     choice of 2026-11-07): native code written for Python's threads, such as numba's JIT compiling pymoo's AGE-MOEA
+    ///     kernels, overflowed .NET's default 1.5 MB stack. Read from Windows' stack limits of each worker.
+    /// </summary>
+    [TestMethod]
+    [WindowsOnly]
+    public void DedicatedThreads_Reserve16MBOfStack()
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Inconclusive("The stack limits are read with GetCurrentThreadStackLimits, a Windows API.");
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(5));
+        var reserved = new ConcurrentBag<long>();
+
+        study.Optimize(t =>
+        {
+            GetCurrentThreadStackLimits(out nuint low, out nuint high);
+            reserved.Add((long)(high - low));
+            return t.SuggestFloat("x", 0, 1);
+        }, nTrials: 8, nJobs: 4, executorOptions: DedicatedOptions());
+
+        reserved.Should().HaveCount(8).And.OnlyContain(bytes => bytes >= TrialWorkerScheduler.WorkerStackSize);
+    }
+
+    /// <summary>Windows' bounds of the calling thread's reserved stack.</summary>
+    /// <param name="lowLimit">The lowest address of the stack.</param>
+    /// <param name="highLimit">The address just above the stack.</param>
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern void GetCurrentThreadStackLimits(out nuint lowLimit, out nuint highLimit);
+
+    /// <summary>
     ///     <c>nJobs: 1</c> runs every trial on the calling thread, as in Python, whatever executor is in effect; the
     ///     executor only decides where the workers of <c>nJobs</c> other than 1 run.
     /// </summary>

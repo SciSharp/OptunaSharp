@@ -41,6 +41,7 @@ integrations; pymoo has behavioral tests for all eleven exposed algorithms and d
 for specific configurations. Those scopes are described on each page. They do not establish identical
 results across arbitrary package upgrades, CPU/GPU builds, or concurrent execution schedules.
 
-The bridges acquire the GIL internally. That protects access to Python objects; it does not turn a
-stateful sampler into a shared, thread-safe service. Create one sampler per study and start with
-`nJobs: 1` when reproducing a reference run.
+The bridges run their Python on the runtime's single Python thread and acquire the GIL there
+([the Python thread](pythonnet.md#the-python-thread)). That protects access to Python objects and makes
+any calling thread and any `nJobs` safe. It does not turn a stateful sampler into a shared service: create
+one sampler per study, and start with `nJobs: 1` when reproducing a reference run.

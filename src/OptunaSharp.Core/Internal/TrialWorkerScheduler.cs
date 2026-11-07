@@ -36,6 +36,19 @@ namespace OptunaSharp.Internal;
 /// </remarks>
 internal sealed class TrialWorkerScheduler : TaskScheduler
 {
+    /// <summary>
+    ///     The stack each worker thread reserves: 16 MB, the size CPython gives its own threads on macOS
+    ///     (<c>THREAD_STACK_SIZE</c>), where .NET's default secondary-thread stack is much smaller.
+    /// </summary>
+    /// <remarks>
+    ///     An objective may run native code written for Python's threads: on macOS arm64, numba's JIT compiling pymoo's
+    ///     AGE-MOEA kernels overflowed .NET's default stack ("Stack overflow"; THREADING.md §8, plan 10, item 2.5, the
+    ///     owner's choice of 2026-11-07). The stack is reserved, not committed: Windows creates the thread with
+    ///     <c>STACK_SIZE_PARAM_IS_A_RESERVATION</c> and Linux and macOS map it lazily, so an unused reserve costs address
+    ///     space only. OptunaSharp's own Python calls run on the bridge's Python thread, which has the same stack.
+    /// </remarks>
+    internal const int WorkerStackSize = 16 * 1024 * 1024;
+
     // One scheduler per distinct idle timeout, for the life of the process. Declared before Shared, which reads it
     // during the same static initialization. An entry costs one small object once its threads have retired.
     private static readonly ConcurrentDictionary<TimeSpan, TrialWorkerScheduler> _byIdleTimeout = new();
@@ -131,7 +144,7 @@ internal sealed class TrialWorkerScheduler : TaskScheduler
         if (startThread)
         {
             // Started outside the lock: thread creation takes about 100 µs and other submitters must not wait on it.
-            var thread = new Thread(WorkerLoop)
+            var thread = new Thread(WorkerLoop, WorkerStackSize)
             {
                 IsBackground = true,   // an idle worker must never keep the process alive
                 Name = "OptunaSharp trial worker",

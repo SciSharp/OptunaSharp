@@ -41,14 +41,22 @@ foreach (var trial in study.BestTrials)
 when reproducibility is required. The constructor requires `populationSize >= 2`, including when
 the chosen family ultimately derives its actual population from directions or points.
 
-> **macOS on Apple silicon: give AGE-MOEA a large thread stack.** `AgeMoea` and `AgeMoea2` run
-> pymoo's numba-compiled survival kernels. The first `tell` JIT-compiles them, and on macOS arm64
-> that needs more stack than a thread .NET creates has by default (the thread pool, `Task.Run`,
-> ASP.NET requests, `nJobs` workers, test runners). The process then stops with "Stack overflow."
-> Run the study on the process's main thread or on a thread you create with a `maxStackSize` of at
-> least 16 MB, or set `DOTNET_DefaultStackSize=1000000` (hexadecimal, 16 MB) before the process
-> starts. Measured on Windows x64 down to 256 KB and on the Linux x64 CI runner with default stacks:
-> neither is affected.
+> **Any thread, any `nJobs`.** The sampler's pymoo calls run on the runtime's
+> [Python thread](pythonnet.md#the-python-thread), so it can be driven from any thread and at any
+> `nJobs`. Before that, driving it off the main thread crashed the process in scipy's `cdist` (7 of 8
+> runs, measured on 2026-11-07).
+>
+> **macOS on Apple silicon: AGE-MOEA's stack.**
+>
+> - `AgeMoea` and `AgeMoea2` run pymoo's numba-compiled survival kernels, and the first `tell`
+>   JIT-compiles them. On macOS arm64 that needs more stack than a thread .NET creates has by default.
+> - The sampler's calls run on the Python thread, which has 16 MB, CPython's own size, so they need
+>   nothing more.
+> - Running such pymoo code yourself on a .NET thread (the thread pool, `Task.Run`, an ASP.NET request)
+>   still needs a thread with a `maxStackSize` of at least 16 MB, or `DOTNET_DefaultStackSize=1000000`
+>   (hexadecimal, 16 MB) set before the process starts. OptunaSharp's own `nJobs` threads reserve 16 MB.
+> - Windows x64 (measured down to 256 KB) and the Linux x64 CI runner with default stacks are not
+>   affected.
 
 ## Algorithms and population sizes
 

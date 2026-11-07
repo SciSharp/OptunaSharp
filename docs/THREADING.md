@@ -13,10 +13,12 @@
   OptunaSharp's snapshot under a key of its own at an interval chosen by read mode (§7.3), and its
   StackExchange.Redis connections get dedicated threads by default (§7.2) (plan 10, items 2.2 and 2.3);
 - 2026-11-07: `Optimize` takes a `CancellationToken` (`ct`), trials see it as `Trial.CancellationToken`, and
-  the opt-in `StopSignals` turns Ctrl+C and SIGTERM into it (§3.4) (plan 10, item 2.4).
+  the opt-in `StopSignals` turns Ctrl+C and SIGTERM into it (§3.4) (plan 10, item 2.4);
+- 2026-11-07: every Python bridge call runs on one Python thread that keeps its CPython thread state for the
+  life of the process (§8), which closes review item 19b, and the `nJobs` threads reserve 16 MB of stack
+  (§2) (plan 10, item 2.5).
 
-One item is open: `PymooSampler` driven from more than one thread (review item 19b, §8). §12 lists it with
-the known limits.
+No threading item is open. §12 lists the known limits.
 
 Optuna gets most of its thread safety from Python itself. Only one thread runs Python code at a time
 (the GIL), and numpy's `RandomState` locks every draw. .NET threads run in parallel, so OptunaSharp adds
@@ -63,15 +65,16 @@ on the Storage page. This file is the design behind it.
 | Thread | Started by | Lives for | Runs |
 |---|---|---|---|
 | The caller's | your code | — | `Optimize`. With `nJobs: 1` it runs every trial, callback and progress-bar update itself; otherwise it runs the submit loop and waits. `Ask` and `Tell` run on whichever thread calls them. |
-| `nJobs` worker, the default executor | `OptimizeLoop.StartWorker`, on `TrialWorkerScheduler` (§3.5): a background thread of OptunaSharp's own named `OptunaSharp trial worker`, with the runtime's default stack size | until it has waited `ThreadIdleTimeout` (30 s by default) for a trial; meanwhile it runs trials of any study and any later `Optimize` call | the reseed, `Ask`, the objective, `Tell`, the callbacks, the progress bar |
+| `nJobs` worker, the default executor | `OptimizeLoop.StartWorker`, on `TrialWorkerScheduler` (§3.5): a background thread of OptunaSharp's own named `OptunaSharp trial worker`, with a 16 MB stack reservation (CPython's own thread stack on macOS; §8) | until it has waited `ThreadIdleTimeout` (30 s by default) for a trial; meanwhile it runs trials of any study and any later `Optimize` call | the reseed, `Ask`, the objective, `Tell`, the callbacks, the progress bar |
 | `nJobs` worker on the thread pool, opt-in (§3.5) | `OptimizeLoop.StartWorker`: a task queued to the .NET thread pool's global queue | one trial; the pool keeps the thread for its other work | the same |
 | Heartbeat | `HeartbeatThread.Start`, for each trial of an RDB storage whose heartbeat interval is set (§6.7) | the trial's objective | the trial's heartbeat, once at the start and then once per interval. A background thread named `OptunaSharp heartbeat (trial_id=N)`. |
 | Storage client I/O | StackExchange.Redis, NRedisStack, Grpc.Net.Client, the AWS SDK | the connection | socket reads and writes, on the .NET thread pool (§7.2) |
 | gRPC proxy server | Kestrel | one request | the wrapped storage's operation, synchronously, on a pool thread |
 | OpenBLAS | the native library | the process | LAPACK and BLAS internals (§9) |
-| Python | embedded CPython | the process | every bridge call, under the GIL (§8) |
+| The Python thread | `PythonRuntime.Initialize`, on first use of any Python bridge: a background thread named `OptunaSharp Python`, with a 16 MB stack | the process | every bridge call (`PythonRuntime.Run` body), one at a time under the GIL, on one CPython thread state that is never freed; it also starts the embedded engine (§8) |
 
-OptunaSharp starts no other threads: no timers and no `Task.Run`. The only thread-pool work items it queues
+OptunaSharp starts no other threads: no timers and no `Task.Run`. Python's own threads, if a library starts any,
+belong to CPython. The only thread-pool work items it queues
 are the trials of a call that chose the thread-pool executor. Logging and the progress bar write on the
 thread that logs.
 
@@ -481,9 +484,11 @@ Outermost first. A thread that holds a lock takes only locks further down the li
 1. the tell stripe;
 2. the trial monitor;
 3. the sampler monitor or the pruner monitor, never one inside the other;
-4. inside a sampler: its private locks, and for the Python bridges the GIL. `OptunaHubSampler` goes the
-   furthest: the monitor, then the GIL, then its private `_gate`, then the storage, which it reads to
-   mirror the study into its Python shadow study;
+4. inside a sampler: its private locks, and for the Python bridges the Python thread and the GIL it
+   takes there: the caller waits for the Python thread, which runs the body under the GIL (§8).
+   `OptunaHubSampler` goes the furthest: the monitor, then the Python thread and the GIL, then its private
+   `_gate` (taken only on the Python thread), then the storage, which it reads to mirror the study into
+   its Python shadow study;
 5. the storage monitor: `CachedStorage`'s before its backend's, `JournalStorage`'s before its backend's
    offset-cache lock and lock file;
 6. the database and cross-process locks.
@@ -805,16 +810,56 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 
 ## 8. Python bridges and the GIL
 
-- `PythonRuntime` (in `OptunaSharp.Interop.pythonnet`) runs one embedded CPython per process. After it
-  starts the engine it releases the GIL (`PythonEngine.BeginAllowThreads`), and every bridge call takes
-  the GIL through `PythonRuntime.Run` (`Py.GIL()`). Every access to a `PyObject`, its `Dispose`
+- `PythonRuntime` (in `OptunaSharp.Interop.pythonnet`) runs one embedded CPython per process, and every
+  bridge call on **one Python thread** (plan 10, item 2.5, the owner's choice of 2026-11-07; review item
+  19b). `PythonRuntime.Run(body)` hands the body to a long-lived background thread named
+  `OptunaSharp Python` and waits for it. That thread starts the engine (so it holds CPython's main thread
+  state for the life of the process), or, with a host-started engine, takes a thread state of its own and
+  keeps it. It runs each body under the GIL, one at a time. Every access to a `PyObject`, its `Dispose`
   included, must happen under the GIL.
+  - **Why.** On a .NET thread, pythonnet's `Py.GIL()` creates a CPython thread state when the outermost
+    scope opens and frees it when that scope ends. pybind11 extensions remember the thread state of the
+    thread on which their process-wide internals load, and use it again after it was freed.
+  - **Measured on 2026-11-07.**
+    - `PymooSampler` crashed with `0xC0000005` in scipy's pybind11 `cdist` (pymoo imports `scipy.spatial`
+      lazily): 7 of 8 runs on a new thread, 6 of 6 on a 16 MB thread, 6 of 6 built and driven on one
+      thread, 6 of 6 on a pool thread, 0 of 8 on the main thread.
+    - A worker that kept one thread state passed 8 of 8, and so did importing scipy on the main thread
+      first.
+    - A bare probe failed 5 of 5 with scipy (a crash) and 5 of 5 with torch (a hang), and passed 5 of 5
+      each with the state kept.
+    - The main thread and Python's own threads keep their state, which is why Python never sees this.
+  - **Why one thread.** The owner chose it over keeping a state per caller thread (which leaks a state
+    whenever a .NET thread ends) and over an owner thread per sampler (which leaves the other bridges
+    exposed):
+    - no thread state is ever freed, and nothing leaks;
+    - thread-local Python state (torch's grad mode, CUDA's current device, numpy's error state) is the
+      same for every call;
+    - the 16 MB stack covers the macOS numba overflow below for every bridge;
+    - a call costs about 1 µs more: measured 1.1–1.3 µs, against 0.5–0.8 µs for the old per-call thread
+      state and 0.36 µs for a kept one, where a bridge call takes milliseconds.
+    - Python already runs one thread at a time, so no parallelism is lost within a study, whose sampler
+      calls are serial anyway. Concurrent studies whose Python code releases the GIL (torch kernels,
+      large numpy operations) no longer overlap; torch kernels use every core inside one call.
+  - **Rules.**
+    - A body that calls `PythonRuntime.Run` again, directly or from .NET code that Python calls back,
+      runs inline.
+    - A caller that holds the GIL (code inside its own `Py.GIL()`) releases it while it waits, as
+      CPython's C extensions release it around blocking waits.
+    - The caller's culture and `AsyncLocal` values flow into the body, and the body's exception reaches
+      the caller with its stack trace.
+    - A body must never wait for another thread that may itself be waiting for the Python thread: the
+      body occupies the only thread that could run that call. So code inside `PythonRuntime.Run` must
+      not call `Trial` or `Study` methods while other threads optimize the same study with a Python
+      sampler; objectives take the GIL with `Py.GIL()` for their own Python code instead, which stays
+      safe (below). OptunaSharp's bridges follow this rule: their bodies take only their own locks and
+      the storages' locks.
 - The bridges (`OptunaHubSampler`, `OptunaHubPruner`, `BoTorchSampler`, `PyCmaSampler`, `PymooSampler`)
-  take the GIL inside their sampler or pruner methods, that is inside the monitor. The order is the
-  monitor, then the GIL.
-- `OptunaHubSampler` goes on under the GIL: it takes its private `_gate` and reads the C# study through
-  the storage to rebuild its Python shadow study. Storage calls take only storage locks, which come
-  after the GIL (§5.2).
+  call Python inside their sampler or pruner methods, that is inside the monitor. The order is the
+  monitor, then the Python thread and the GIL.
+- `OptunaHubSampler` goes on under the GIL, on the Python thread: it takes its private `_gate` and reads
+  the C# study through the storage to rebuild its Python shadow study. Storage calls take only storage
+  locks, which come after the GIL (§5.2).
 - **Code that holds the GIL may call OptunaSharp** (review item P3-1, fixed 2026-11-06).
   - The problem: an objective that called suggest, report, should-prune, ask or tell inside
     `using (Py.GIL())` took the locks in the opposite order. It blocked on a monitor with the GIL held,
@@ -845,17 +890,24 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
     that want it, so take it only around the Python work itself.
 - Python still runs one thread at a time, so bridged sampling gains nothing from `nJobs`. The OptunaHub
   bridges target `nJobs: 1`.
-- **`PymooSampler`** driven from a thread other than the one that created it crashed in pymoo's
-  `Algorithm.ask` with an access violation in 2 of 4 runs (review item 19b, open). Create and drive it
-  on one thread. That rules out `nJobs` above 1, whose workers run on other threads on either executor,
-  and an `Optimize` called from a thread other than the one that built the sampler.
+- **`PymooSampler`** works on any thread and at any `nJobs` (review item 19b, closed by the Python thread).
+  Off the main thread it used to crash in pymoo's `Algorithm.ask`, and it was limited to one thread and
+  `nJobs: 1`. Checked on 2026-11-07, 8 runs per mode: a new thread, a pool thread, built and driven on one
+  new thread, `nJobs: 4`, and the main thread, all 8 of 8. AGE-MOEA and AGE-MOEA-2 passed 4 of 4 on a new
+  thread and at `nJobs: 4`.
 - **Stack size on macOS arm64.** pymoo's `AgeMoea` and `AgeMoea2` JIT-compile numba kernels on their first
-  `tell`, and that needs more stack than a .NET-created thread has by default; the process stops with
-  "Stack overflow." `nJobs` workers have the default stack on both executors, as do `Task.Run` work and
-  test runners.
-  The pymoo page gives the remedies: the main thread, a thread of your own with a `maxStackSize` of at
-  least 16 MB, or `DOTNET_DefaultStackSize=1000000` (hexadecimal) set before the process starts. Windows x64
-  and Linux x64 are not affected.
+  `tell`, and that needs more stack than a .NET-created thread has by default; the process stopped with
+  "Stack overflow." on `nJobs` workers, `Task.Run` work and test runners. CPython gives its own threads 16 MB
+  on macOS (`THREAD_STACK_SIZE`).
+  - Bridge calls now run on the Python thread, which has 16 MB, so `PymooSampler` needs no remedy.
+  - The `nJobs` dedicated threads reserve 16 MB too (the owner's choice of 2026-11-07), for objectives that
+    run such Python code themselves.
+  - Python code you run on threads of your own, the thread pool included, still needs one of the remedies
+    on the pymoo page: a thread with a `maxStackSize` of at least 16 MB, or `DOTNET_DefaultStackSize=1000000`
+    (hexadecimal) set before the process starts.
+  - Windows x64 and Linux x64 are not affected.
+  - The stack is reserved, not committed (Windows `STACK_SIZE_PARAM_IS_A_RESERVATION`; Linux and macOS
+    map it lazily), so an unused reserve costs address space only.
 
 ## 9. Numeric kernels and random generators
 
@@ -901,9 +953,11 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
   - Avoid static mutable state, and keep per-study state keyed by the storage object and the study id:
     study ids repeat across in-memory storages.
   - Do not tell trials of the served study from a hook (§5.3).
-  - A Python-backed implementation takes the GIL inside each method (`PythonRuntime.Run`). Calls into
-    OptunaSharp under the GIL are safe (§8). What stays unsafe is a lock of its own that it holds while
-    it takes the GIL, if code holding the GIL can wait for that lock.
+  - A Python-backed implementation runs its Python inside each method through `PythonRuntime.Run`,
+    which runs it on the Python thread (§8). Calls into OptunaSharp from code that holds the GIL with
+    `Py.GIL()` are safe (§8). What stays unsafe: a lock of its own that it holds while it calls
+    `PythonRuntime.Run`, if a body could wait for that lock; and a body that waits for another thread
+    which may be waiting for the Python thread.
 - **Custom storages.** Every operation must be safe for concurrent calls on one instance: the workers,
   the heartbeat thread and readers all call it. `TellLockFor` comes from `BaseStorage`. Make `Dispose`
   idempotent.
@@ -974,6 +1028,7 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `JournalMixedFleetInteropTests` (Interop suite) | C# and Python workers on one journal file (both lock protocols), on Redis, and with CMA-ES, compared with a Python-only fleet |
 | `CmaEsMixedFleetInteropTests` (Interop suite) | C# and Python workers taking turns on one CMA-ES study, with and without margin, run the study Python runs alone |
 | `GilAwareMonitorTests` (Interop suite) | P3-1: `PythonRuntime.Initialize` installs the gate's hooks; three deterministic two-thread deadlocks (a GIL holder against a sampler, trial or pruner monitor held by a thread that needs the GIL), recovered by `Thread.Interrupt` if they regress; an objective inside `Py.GIL()` at `nJobs: 4` over a GIL-taking sampler and pruner, on dedicated threads and on the thread-pool executor; `Optimize(nJobs: 4)` called inside `Py.GIL()`; four ask-and-tell threads holding the GIL |
+| `PythonThreadTests` (Interop suite) | plan 10, item 2.5: calls from six .NET threads run on one Python thread whose `threading.local` keeps its value between them; a nested `Run` runs inline; a caller holding the GIL completes; the caller's culture and `AsyncLocal` flow into the body; the body's exception reaches the caller unchanged; the Python thread reserves 16 MB (Windows); `PymooSampler` off its thread and at `nJobs: 4` completes every trial (review item 19b); torch imported from one thread and used from others does not hang; the P3-1 deadlock shape through `Run` completes |
 | `OptunaHubBridgeParityTests` (Interop suite) | the real hub sampler at `nJobs: 8`; the real hub sampler and median pruner with an objective inside `Py.GIL()` at `nJobs: 4` |
 
 The tests plan 10's item 2.1 added were checked against the old code, which they fail: 9–14 repeated
@@ -982,15 +1037,15 @@ client commands per trial where the test expects 12, writes its snapshot to Pyth
 the flag on 3.x, lost 6 of 640 trials in the host scenario. Python logs ``Failed to restore
 `JournalStorageReplayResult`.`` when OptunaSharp's JSON sits in its key, which is what the cross-language
 snapshot test watches for. Item 2.4's cancellation tests fail when the loop drops its token check (4 cases)
-or lets `catch` swallow the run's cancellation (2 cases).
+or lets `catch` swallow the run's cancellation (2 cases). On the old `PythonRuntime`, item 2.5's thread-state
+test failed (the calls ran on different Python threads, and the `threading.local` lost its value), and the
+stack read 1.5 MB instead of 16.
 
 ## 12. Known limits and open items
 
 [Plan 10](plans/10-threading.md) (decided 2026-11-07) schedules the work on these items. Its Phase 1, the
 thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the items marked "plan 10, 2.x".
 
-- **19b:** `PymooSampler` is bound to the thread that created it, which rules out `nJobs` above 1 (§8).
-  Plan 10, 2.5.
 - **Journal throughput:** one monitor across all of an operation's round trips, as in Python (§7.3).
   On a standalone Redis server a two-parameter trial costs 12 round trips (plan 10, 2.2, done); cluster
   mode still reads key by key.
@@ -1002,6 +1057,9 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
   as .NET does by default. `StopSignals` or a host's `ApplicationStopping` token stops gracefully; both
   are opt-in (plan 10, 2.4, done).
 - **No journal heartbeat:** a trial whose process dies stays `RUNNING`, as in Python.
+- **One Python thread** (§8): bridge calls of concurrent studies run one at a time, so Python code that
+  releases the GIL (torch kernels, large numpy operations) no longer overlaps across studies. A
+  `PythonRuntime.Run` body must not wait for a thread that may be waiting for the Python thread.
 - **Repeated candidates** by design in some samplers (§6.3).
 
 ## 13. Relationship to Optuna
