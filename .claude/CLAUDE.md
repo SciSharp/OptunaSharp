@@ -119,11 +119,11 @@ OptunaSharp/
 | Project | TFMs | Kind | Key deps | Purpose |
 |---------|------|------|----------|---------|
 | `src/OptunaSharp.Core` | net8.0; net10.0 | library, **packable** (`PackageId=OptunaSharp`) | NumSharp | The library. `RootNamespace`/`AssemblyName` = `OptunaSharp`. Emits XML docs. |
-| `test/OptunaSharp.Tests` | net8.0; net10.0 | MSTest exe, `IsPackable=false` | MSTest 3.8.3, AwesomeAssertions 9.3.0 | Unit tests. |
-| `test/OptunaSharp.Tests.Interop` | net8.0; net10.0 | MSTest exe, `IsPackable=false` | MSTest, AwesomeAssertions, **pythonnet 3.0.5** | Byte/behavior parity vs **live Optuna** in-process. |
+| `test/OptunaSharp.Tests` | net8.0; net10.0 | MSTest exe, `IsPackable=false` | MSTest 4.5.2, AwesomeAssertions 9.6.0 | Unit tests. |
+| `test/OptunaSharp.Tests.Interop` | net8.0; net10.0 | MSTest exe, `IsPackable=false` | MSTest, AwesomeAssertions, **pythonnet 3.2.1** (Python 3.11–3.15) | Byte/behavior parity vs **live Optuna** in-process. |
 | `test/OptunaSharp.Benchmark` | net8.0; net10.0 | exe, `IsPackable=false` | BenchmarkDotNet 0.15.8 | Perf harness (template). |
 
-The solution (`SciSharp.OptunaSharp.sln`) contains only these four projects; NumSharp is a **NuGet
+The solution (`SciSharp.OptunaSharp.sln`) holds these four and every satellite and test project; NumSharp is a **NuGet
 package dependency** (see below), not a solution member.
 
 ---

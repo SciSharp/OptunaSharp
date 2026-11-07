@@ -12,9 +12,10 @@ dotnet add package OptunaSharp.Interop.pythonnet
 ```
 
 The project targets .NET 8 and .NET 10 and references NuGet `pythonnet` with the range
-`[3.0.5,4.0.0)`. The repository's package configuration documents Python 3.7–3.13 for that 3.0.5
-floor and a direct `pythonnet` 3.1.0 reference for a Python 3.14 host. This range does not install
-CPython or any Python library. The individual bridge packages have their own Python requirements.
+`[3.2.1, 4.0.0)`, which supports Python 3.11–3.15 (and the free-threaded 3.14 build). Python 3.7–3.10
+hosts are not supported: pythonnet 3.1.0 removed 3.7–3.9 and 3.2.0 raised its minimum to 3.11. This
+range does not install CPython or any Python library. The individual bridge packages have their own
+Python requirements.
 [Package definition](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj).
 
 Install dependencies into the interpreter that will host the process. For example, for OptunaHub:

@@ -45,7 +45,7 @@ Core is referenced only for the `Study`/`FrozenTrial`/distribution types being m
 | **PackageId / AssemblyName / RootNamespace** | `OptunaSharp.Visualization.Matplotlib` |
 | **TFMs** | `net8.0;net10.0` |
 | **Kind** | library, **packable**, Tier X satellite (foreign runtime) |
-| **Deps** | `ProjectReference` → `OptunaSharp.Interop.pythonnet` (brings `pythonnet [3.0.5,4.0.0)` transitively + all engine/GIL/discovery/marshaling plumbing) and → Core |
+| **Deps** | `ProjectReference` → `OptunaSharp.Interop.pythonnet` (brings `pythonnet [3.2.1, 4.0.0)` transitively + all engine/GIL/discovery/marshaling plumbing) and → Core |
 | **Runtime prereq** | a discoverable CPython with `pip install optuna matplotlib` (self-describes + throws a helpful message if absent — the `PythonRuntime` pattern) |
 | **Core friendship** | not required (uses Core's public surface + PyConvert) |
 

@@ -11,12 +11,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="MSTest" Version="3.8.3" />
-    <PackageReference Include="AwesomeAssertions" Version="9.3.0" />
+    <PackageReference Include="MSTest" Version="4.5.2" />
+    <PackageReference Include="AwesomeAssertions" Version="9.6.0" />
     <!-- Embedded CPython bridge. This is the ONLY place the suite runs real Optuna in-process to
          assert OptunaSharp matches it. 3.0.5 is pythonnet's practical floor (drives Python 3.7-3.13);
          a Python 3.14 host needs 3.1.0. Tests self-skip (Inconclusive) when no engine is found. -->
-    <PackageReference Include="pythonnet" Version="3.0.5" />
+    <PackageReference Include="pythonnet" Version="3.2.1" />
     <!-- Live PostgreSQL/MySQL for the Phase 4.2 cross-language gate (Python Optuna ↔ OptunaSharp EF Core
          storage share the same server database). Self-skips without Docker (or the Python DB drivers). -->
     <PackageReference Include="Testcontainers.PostgreSql" Version="4.14.0" />

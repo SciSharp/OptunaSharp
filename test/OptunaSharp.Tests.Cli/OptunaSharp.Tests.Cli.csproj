@@ -16,8 +16,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="MSTest" Version="3.8.3" />
-    <PackageReference Include="AwesomeAssertions" Version="9.3.0" />
+    <PackageReference Include="MSTest" Version="4.5.2" />
+    <PackageReference Include="AwesomeAssertions" Version="9.6.0" />
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
   </ItemGroup>
 

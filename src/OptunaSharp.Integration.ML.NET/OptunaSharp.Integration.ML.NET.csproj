@@ -55,8 +55,8 @@
          carries the RegressionTree structure the fANOVA tree-walk + MDI read; Microsoft.ML carries
          MLContext / IDataView / LoadFromEnumerable. Both MIT, native FastTree binaries per RID. The
          boosters introduce NO new native dependency beyond FastForest's. -->
-    <PackageReference Include="Microsoft.ML" Version="4.0.3" />
-    <PackageReference Include="Microsoft.ML.FastTree" Version="4.0.3" />
+    <PackageReference Include="Microsoft.ML" Version="5.0.0" />
+    <PackageReference Include="Microsoft.ML.FastTree" Version="5.0.0" />
   </ItemGroup>
 
   <ItemGroup>

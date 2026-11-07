@@ -47,8 +47,8 @@
          RegressionTree structure the fANOVA tree-walk and MDI read; Microsoft.ML carries MLContext /
          IDataView / LoadFromEnumerable. Both MIT. This is the heavy native dependency of the importance
          plan. -->
-    <PackageReference Include="Microsoft.ML" Version="4.0.3" />
-    <PackageReference Include="Microsoft.ML.LightGbm" Version="4.0.3" />
+    <PackageReference Include="Microsoft.ML" Version="5.0.0" />
+    <PackageReference Include="Microsoft.ML.LightGbm" Version="5.0.0" />
   </ItemGroup>
 
   <ItemGroup>

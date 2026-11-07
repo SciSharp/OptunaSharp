@@ -43,13 +43,14 @@
   <ItemGroup>
     <!-- The ONLY external dependency: pythonnet. The version is a RANGE and both ends matter:
 
-         FLOOR 3.0.5 — (a) it is what we compile against, and pythonnet bumps its strong-name
+         FLOOR 3.2.1 — (a) it is what we compile against, and pythonnet bumps its strong-name
          AssemblyVersion every patch, so a lower runtime is a hard FileNotFoundException while a higher
          one rolls forward fine; (b) NuGet resolves the LOWEST applicable version, so the floor IS the
-         out-of-box experience. 3.0.5 drives Python 3.7-3.13 (a strict superset of 3.0.0-3.0.4); a
-         Python 3.14 host needs 3.1.0 (opt in with your own PackageReference).
+         out-of-box experience. 3.2.1 drives Python 3.11-3.15 (and free-threaded 3.14). Raised from 3.0.5
+         on 2026-11-07 with the dependabot bump: pythonnet 3.1.0 removed Python 3.7-3.9 and 3.2.0 raised
+         its minimum to 3.11, so a Python 3.7-3.10 host is no longer supported by this package.
          CAP <4.0.0 — keep a future pythonnet 4.x (possible API break) from being auto-resolved. -->
-    <PackageReference Include="pythonnet" Version="[3.0.5,4.0.0)" />
+    <PackageReference Include="pythonnet" Version="[3.2.1, 4.0.0)" />
   </ItemGroup>
 
   <ItemGroup>

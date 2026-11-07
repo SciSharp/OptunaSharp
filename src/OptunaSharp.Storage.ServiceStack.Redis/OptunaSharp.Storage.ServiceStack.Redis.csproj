@@ -25,7 +25,7 @@
 
   <ItemGroup>
     <!-- COMMERCIAL LICENSE: ServiceStack.Redis' free tier is request-quota-limited. See the README. -->
-    <PackageReference Include="ServiceStack.Redis" Version="10.1.4" />
+    <PackageReference Include="ServiceStack.Redis" Version="10.2.0" />
   </ItemGroup>
 
   <!-- Optional Microsoft.Extensions.DependencyInjection wire-up (OptunaSharp.Storages.Journal.Extensions).
