@@ -11,6 +11,9 @@ using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Internal;
 using OptunaSharp.Storages.SqlAlchemy;
+// NumSharp 0.80.0 ships its own UnicodeDecodeError in the NumSharp namespace imported above, which made
+// the doc references below ambiguous (CS0419); this file means OptunaSharp's, psycopg2's error.
+using UnicodeDecodeError = OptunaSharp.Internal.UnicodeDecodeError;
 
 namespace OptunaSharp.Storages.EFCore;
 

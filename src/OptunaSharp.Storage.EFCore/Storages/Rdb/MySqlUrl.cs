@@ -9,6 +9,9 @@ using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Internal;
 using OptunaSharp.Storages.SqlAlchemy;
+// NumSharp 0.80.0 ships its own UnicodeEncodeError in the NumSharp namespace imported above, which made
+// the doc reference below ambiguous (CS0419); this file means OptunaSharp's, PyMySQL's error.
+using UnicodeEncodeError = OptunaSharp.Internal.UnicodeEncodeError;
 
 namespace OptunaSharp.Storages.EFCore;
 
