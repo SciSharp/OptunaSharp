@@ -1,7 +1,19 @@
+# Navigation for every page under integrations/ (DocFX compiles it to integrations/toc.json).
+#
+# Every group below carries `expanded: true`, so all of them start OPEN on every integrations
+# page, instead of only the branch that holds the current page. DocFX's modern template reads the
+# key straight from toc.json (its toc.ts: `isExpanded = ... || expanded === true`); no script of
+# ours is involved.
+# - A group added here without `expanded: true` starts collapsed: give every new group the key.
+# - A reader can still collapse a group. templates/optunasharp/public/main.js remembers that choice
+#   for 48h and re-collapses the group on later pages, but never on the open page's own branch.
+# - The Integrations copy inside docs/toc.yml is a separate tree (the one Docs pages show); these
+#   keys do not change it.
 - name: Integrations
   href: index.md
 - name: Model training
   href: training/index.md
+  expanded: true
   items:
     - name: Native scikit-learn-style search
       href: training/scikit-learn.md
@@ -13,6 +25,7 @@
       href: training/pruning.md
 - name: Storage
   href: storage/index.md
+  expanded: true
   items:
     - name: SQLite
       href: storage/sqlite.md
@@ -20,6 +33,7 @@
       href: storage/ef-core.md
     - name: Redis
       href: storage/redis/index.md
+      expanded: true
       items:
         - name: StackExchange.Redis
           href: storage/redis/stackexchange-redis.md
@@ -29,6 +43,7 @@
           href: storage/redis/servicestack-redis.md
     - name: gRPC
       href: storage/grpc/index.md
+      expanded: true
       items:
         - name: Client
           href: storage/grpc/client.md
@@ -38,6 +53,7 @@
           href: storage/grpc/cross-language.md
 - name: Python bridges
   href: python/index.md
+  expanded: true
   items:
     - name: Python.NET runtime
       href: python/pythonnet.md
@@ -51,6 +67,7 @@
       href: python/pymoo.md
 - name: Cloud artifacts
   href: artifacts/index.md
+  expanded: true
   items:
     - name: Amazon S3
       href: artifacts/s3.md
@@ -61,6 +78,7 @@
     - name: Cloudflare R2
       href: artifacts/r2.md
 - name: Visualization
+  expanded: true
   items:
     - name: Plotly.NET
       href: visualization/plotly.md
