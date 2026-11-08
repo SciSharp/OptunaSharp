@@ -394,8 +394,8 @@ Rules every workflow follows:
   commit with deterministic `/_/` paths. It outputs `publishable`. The job uploads the `nuget-packages`
   artifact.
 - **Release pipeline** (on `v*` tags): `validate-release` (needs every test job and `package`; the tag
-  must be SemVer, on the repository's default branch, `main` on both SciSharp/OptunaSharp and the
-  mirror, and equal to the packed version) → `create-release` (the only
+  must be SemVer, on the repository's default branch, `main` on SciSharp/OptunaSharp and `master` on
+  the Nucs mirror, and equal to the packed version) → `create-release` (the only
   `contents: write` job; GitHub Release with every package plus checksums) and `publish-nuget`.
   `publish-nuget` runs in the `nuget` environment, which holds it until a required reviewer approves the
   deployment ("Review deployments" on the run; only `v*` tags may deploy there, and admins cannot bypass
@@ -508,10 +508,11 @@ the equivalent Optuna Python snippet + output as the source of truth).
 
 ## Conventions
 
-- **Branch from `main`**; releases are tagged `v*` on it. This clone, the Nucs mirror and
-  SciSharp/OptunaSharp all call the branch `main` (since 2026-11-08; the local `master` is a stale
-  leftover of the old name, do not push it). Push to both remotes: `git push origin main && git push
-  scisharp main`.
+- **Branch from `main`**; releases are tagged `v*` on it. Since 2026-11-08, `origin` (and its alias
+  `scisharp`) in this clone point at SciSharp/OptunaSharp, and the local `main` tracks `origin/main`:
+  push with `git push origin main`. The local `master` is a stale leftover of the old setup; do not
+  push it. The private Nucs mirror (github.com/Nucs/OptunaSharp, branch `master`) is no longer a
+  remote here.
 - **Conventional-commit prefixes** as in the history (`feat`, `fix`, `chore`, `docs`, with optional
   scope: `chore(infra):`, `docs(readme):`, `feat(branding):`). Extensive commit bodies for future
   reference.
@@ -519,7 +520,8 @@ the equivalent Optuna Python snippet + output as the source of truth).
   code. Name public types after their Optuna counterparts so the two cross-reference.
 - **Remotes:** the canonical public repository is `github.com/SciSharp/OptunaSharp` (what
   `RepositoryUrl` names, and the only place a release may publish from; default branch `main`, remote
-  `scisharp` in this clone); CI also runs on a private mirror (`origin`, branch `main`), from which
+  `origin` and `scisharp` in this clone); CI also runs on a private mirror (github.com/Nucs/OptunaSharp,
+  branch `master`, no longer a remote in this clone), from which
   `publish-nuget` refuses to push (`verify_packages.cs` reports it non-publishable). Links into the
   repository use `blob/main`.
 
