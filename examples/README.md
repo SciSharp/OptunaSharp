@@ -59,6 +59,7 @@ classes).
 | [`0_PressureVesselParetoReport.cs`](0_PressureVesselParetoReport.cs) | NSGA-II, mixed directions, constraints, Pareto + hypervolume charts | pressure-vessel cost vs. capacity under the ASME thickness rules (RE23) |
 | [`0_SpamFilterTimeBudget.cs`](0_SpamFilterTimeBudget.cs) | TPE with only a `timeout`, `show_progress_bar` | a naive-Bayes spam filter tuned inside a fixed ten-second slot |
 | [`0_DistributedJournalHyperband.cs`](0_DistributedJournalHyperband.cs) | 3 processes × `n_jobs=2` on one `JournalFileBackend`, `HyperbandPruner` | SGD ridge house-price model; Hyperband's brackets span all six workers through the shared file |
+| [`0_ChurnScorecardTerminator.cs`](0_ChurnScorecardTerminator.cs) | `report_cross_validation_scores` + default `TerminatorCallback` | stop tuning a churn scorecard when the GP regret bound drops below the CV noise; compared with a full run |
 | [`0_ContainerLoadingStopAtBound.cs`](0_ContainerLoadingStopAtBound.cs) | `enqueue_trial(skip_if_exists=True)`, `study.stop()` from a callback | a bin-packing heuristic for trailer loading, warm-started from planners' rules, stopped at the lower bound |
 
 Notes from running them:
