@@ -1172,6 +1172,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         var userByTrial = LoadTrialAttrs("trial_user_attributes", "trial_user_attribute_id", trialIds);
         var systemByTrial = LoadTrialAttrs("trial_system_attributes", "trial_system_attribute_id", trialIds);
 
+        // One parse per distinct distribution text for this load (plan 13, item S9 as measured): a 40-parameter study
+        // repeats 40 texts, and parsing every parameter row was 40 % of a 10,000-trial cold load, where the attribute
+        // JSON lazy decoding would have deferred was 3-4 %. The journal storage's cache (plan 10, item 2.7) shares the
+        // parsed object, which equals a fresh parse; it is local to this call, so no thread ever shares it.
+        var distributionCache = new OptunaSharp.Storages.Journal.JournalDistributionCache();
         var result = new List<FrozenTrial>(trialRows.Count);
         foreach (var row in trialRows)
         {
@@ -1181,7 +1186,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
                 valuesByTrial.GetValueOrDefault(row.TrialId),
                 intermediateByTrial.GetValueOrDefault(row.TrialId),
                 userByTrial.GetValueOrDefault(row.TrialId),
-                systemByTrial.GetValueOrDefault(row.TrialId)));
+                systemByTrial.GetValueOrDefault(row.TrialId),
+                distributionCache));
         }
         return result;
     }
@@ -1197,7 +1203,11 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     /// <param name="intermediateRows">Intermediate-report rows indexed by step, or null when absent.</param>
     /// <param name="userRows">Serialized user attributes for the trial, or null when absent.</param>
     /// <param name="systemRows">Serialized system attributes for the trial, or null when absent.</param>
+    /// <param name="distributionCache">
+    ///     Parses each distinct distribution text once for the whole load; the distributions it returns equal fresh parses.
+    /// </param>
     /// <returns>A detached snapshot carrying the supplied trial data.</returns>
+    /// <exception cref="ValueError">A stored distribution text is not a valid distribution.</exception>
     private FrozenTrial BuildFrozenTrial(
         int trialId,
         int number,
@@ -1208,7 +1218,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         List<(int Objective, double? Value, string Type)>? valueRows,
         List<(long Step, double? Value, string Type)>? intermediateRows,
         List<(string Key, string Json)>? userRows,
-        List<(string Key, string Json)>? systemRows)
+        List<(string Key, string Json)>? systemRows,
+        OptunaSharp.Storages.Journal.JournalDistributionCache distributionCache)
     {
         List<double>? values = null;
         if (valueRows is { Count: > 0 })
@@ -1224,7 +1235,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         {
             foreach (var (_, name, value, distJson) in paramRows.OrderBy(p => p.ParamId))
             {
-                var distribution = Distribution.FromJson(distJson);
+                var distribution = distributionCache.FromJson(distJson);
                 @params[name] = distribution.ToExternalRepr(value);
                 distributions[name] = distribution;
             }

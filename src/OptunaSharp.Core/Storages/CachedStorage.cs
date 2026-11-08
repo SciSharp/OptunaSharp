@@ -85,6 +85,22 @@ public class CachedStorage : BaseStorage, IBaseHeartbeat
         // Trial number to corresponding FrozenTrial.
         /// <summary>Cached trials keyed by their per-study number.</summary>
         internal readonly Dictionary<int, FrozenTrial> Trials = new();
+
+        /// <summary>
+        ///     The same cached records indexed by trial number (Rustuna plan 13, item S10), so reads walk them in number
+        ///     order instead of sorting the dictionary on every call. A number not cached yet holds a null placeholder,
+        ///     counted in <see cref="MissingNumbers" />: a local create can cache trial n + 1 before a sync brings in a
+        ///     trial n another worker created.
+        /// </summary>
+        /// <remarks>
+        ///     Elements are only ever replaced by whole records the backend returned, never changed in place, and
+        ///     placeholders are only appended or filled, never written over a record. That is what lets
+        ///     <see cref="GetTrialsPrefixView" /> wrap this list without the lock.
+        /// </remarks>
+        internal readonly List<FrozenTrial> ByNumber = new();
+
+        /// <summary>How many null placeholders <see cref="ByNumber" /> holds; zero means it is the whole cache in order.</summary>
+        internal int MissingNumbers;
         // Trials which require storage access to read latest attributes.
         /// <summary>Trial identifiers that must be refreshed because their state can still change.</summary>
         internal readonly HashSet<int> UnfinishedTrialIds = new();
@@ -368,13 +384,56 @@ public class CachedStorage : BaseStorage, IBaseHeartbeat
         {
             var study = _studies[studyId];
             // We need to sort trials by their number because some samplers assume this behavior.
-
-            IEnumerable<FrozenTrial> trials = states is not null
-                ? study.Trials.Values.Where(t => states.Contains(t.State))
-                : study.Trials.Values;
-            var sorted = trials.OrderBy(t => t.Number).ToList();
+            List<FrozenTrial> sorted;
+            if (study.MissingNumbers == 0)
+            {
+                // The number-ordered mirror is the whole cache in order (plan 13, item S10): the same records in the same
+                // order as the sort below, without sorting on every read.
+                sorted = new List<FrozenTrial>(study.ByNumber.Count);
+                foreach (var trial in study.ByNumber)
+                {
+                    if (states is null || states.Contains(trial.State))
+                        sorted.Add(trial);
+                }
+            }
+            else
+            {
+                IEnumerable<FrozenTrial> trials = states is not null
+                    ? study.Trials.Values.Where(t => states.Contains(t.State))
+                    : study.Trials.Values;
+                sorted = trials.OrderBy(t => t.Number).ToList();
+            }
             return deepcopy ? sorted.Select(t => t.DeepCopy()).ToList() : sorted;
         }
+    }
+
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <inheritdoc />
+    /// <remarks>
+    ///     <para>
+    ///         Synchronizes with the backend exactly as <see cref="GetAllTrials" /> does, then wraps the number-ordered
+    ///         cache in a <see cref="TrialsPrefixView" /> instead of sorting and copying it (Rustuna plan 13, item S10):
+    ///         the genetic samplers take this view on every ask, which made each ask O(n log n) on a database storage.
+    ///         The view holds the same records <c>GetAllTrials(deepcopy: false)</c> would return, in the same order;
+    ///         a later synchronization can replace an unfinished trial's record with a fresher one, which a read of the
+    ///         view then returns, as the view's contract says.
+    ///     </para>
+    ///     <para>
+    ///         When a trial number is not cached yet (another worker's trial a sync has not brought in), the view could
+    ///         not be indexed by number, so the copying read is used instead, as before.
+    ///     </para>
+    /// </remarks>
+    public override IReadOnlyList<FrozenTrial> GetTrialsPrefixView(int studyId)
+    {
+        ReadTrialsFromRemoteStorage(studyId);
+
+        lock (_lock)
+        {
+            var study = _studies[studyId];
+            if (study.MissingNumbers == 0)
+                return new TrialsPrefixView(study.ByNumber, study.ByNumber.Count);
+        }
+        return GetAllTrials(studyId, deepcopy: false);
     }
 
     /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
@@ -422,6 +481,24 @@ public class CachedStorage : BaseStorage, IBaseHeartbeat
             _trialIdToStudyIdAndNumber[trial.TrialId] = (studyId, trial.Number);
             _studyIdAndNumberToTrialId[(studyId, trial.Number)] = trial.TrialId;
             study.Trials[trial.Number] = trial;
+
+            // The number-ordered mirror (item S10): placeholders for numbers not cached yet, then this record.
+            var byNumber = study.ByNumber;
+            while (byNumber.Count < trial.Number)
+            {
+                byNumber.Add(null!);
+                study.MissingNumbers++;
+            }
+            if (byNumber.Count == trial.Number)
+            {
+                byNumber.Add(trial);
+            }
+            else
+            {
+                if (byNumber[trial.Number] is null)
+                    study.MissingNumbers--;
+                byNumber[trial.Number] = trial;
+            }
         }
     }
 

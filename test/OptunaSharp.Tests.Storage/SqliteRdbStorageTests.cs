@@ -56,6 +56,55 @@ public class SqliteRdbStorageTests
     private static OrderedDict<string, BaseDistribution> QuadDist() =>
         new() { ["x"] = new FloatDistribution(-10, 10) };
 
+    // ------------------------------------------------------------------ plan 13: one parse per distribution text
+
+    /// <summary>
+    ///     Plan 13 (docs/plans/13-rustuna-derived-performance.md), item S9 as measured: a load parses each distinct
+    ///     distribution text once. Reloading a study gives every trial of a parameter the same distribution object, equal
+    ///     to a fresh parse of its stored text; a different text (a -0.0 bound, another range, a categorical) is its own
+    ///     object, and the deprecated types are never shared, so their warnings fire per use as before.
+    /// </summary>
+    [TestMethod]
+    public void Reload_ParsesEachDistributionTextOnce_SharingOnlyTheCurrentTypes()
+    {
+        string path = TempDbPath();
+        string url = $"sqlite:///{path.Replace('\\', '/')}";
+        int studyId;
+        using (var storage = new RDBStorage(url))
+        {
+            studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "shared-distributions");
+            for (int n = 0; n < 6; n++)
+            {
+                int id = storage.CreateNewTrial(studyId);
+                storage.SetTrialParam(id, "x", 0.25 * n, new FloatDistribution(0, 2));
+                storage.SetTrialParam(id, "c", n % 2, new CategoricalDistribution(new CategoricalChoice[] { "a", "b" }));
+                storage.SetTrialParam(id, "z", 0.5, n < 3 ? new FloatDistribution(0.0, 1) : new FloatDistribution(-0.0, 1));
+#pragma warning disable CS0618 // the deprecated family is the point of this case
+                storage.SetTrialParam(id, "u", 0.5, new UniformDistribution(0, 1));
+#pragma warning restore CS0618
+                storage.SetTrialStateValues(id, TrialState.Complete, new[] { (double)n });
+            }
+        }
+
+        using var reopened = new RDBStorage(url);
+        List<FrozenTrial> trials = reopened.GetAllTrials(studyId, deepcopy: false);
+        trials.Should().HaveCount(6);
+        foreach (FrozenTrial trial in trials)
+        {
+            trial.Distributions["x"].Should().BeSameAs(trials[0].Distributions["x"]);
+            trial.Distributions["c"].Should().BeSameAs(trials[0].Distributions["c"]);
+            foreach (var (name, distribution) in trial.Distributions)
+                distribution.Should().Be(Distribution.FromJson(Distribution.ToJson(distribution)), name);
+        }
+        trials[0].Distributions["z"].Should().BeSameAs(trials[2].Distributions["z"]);
+        trials[3].Distributions["z"].Should().BeSameAs(trials[5].Distributions["z"]);
+        trials[0].Distributions["z"].Should().NotBeSameAs(trials[3].Distributions["z"], "-0.0 is stored as its own text");
+        trials[3].Distributions["z"].ToString().Should().Contain("low=-0.0");
+        trials[0].Distributions["u"].Should().NotBeSameAs(trials[1].Distributions["u"], "deprecated types are never shared");
+        trials.Select(t => t.Params["x"]).Should().Equal(0.0, 0.25, 0.5, 0.75, 1.0, 1.25);
+        trials.Select(t => t.Params["c"]).Should().Equal("a", "b", "a", "b", "a", "b");
+    }
+
     // ------------------------------------------------------------------ schema / version pins
 
     [TestMethod]

@@ -17,6 +17,7 @@ using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
 using OptunaSharp.Logging;
 using OptunaSharp.Storages;
+using OptunaSharp.Storages.Journal;
 
 namespace OptunaSharp.Storages.EFCore;
 
@@ -1269,6 +1270,10 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             .Select(a => new { a.TrialId, a.Key, a.ValueJson })
             .AsEnumerable().GroupBy(a => a.TrialId!.Value).ToDictionary(g => g.Key, g => g.ToList());
 
+        // One parse per distinct distribution text for this load (plan 13, item S9 as measured on SQLite: parsing every
+        // parameter row was 40 % of a 10,000-trial cold load). The journal storage's cache (plan 10, item 2.7) shares
+        // the parsed object, which equals a fresh parse; it is local to this call, so no thread ever shares it.
+        var distributionCache = new JournalDistributionCache();
         var result = new List<FrozenTrial>(trialRows.Count);
         foreach (var row in trialRows)
         {
@@ -1286,7 +1291,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             {
                 foreach (var p in paramRows)
                 {
-                    var distribution = Distribution.FromJson(p.DistributionJson!);
+                    var distribution = distributionCache.FromJson(p.DistributionJson!);
                     @params[p.ParamName!] = distribution.ToExternalRepr(p.ParamValue!.Value);
                     distributions[p.ParamName!] = distribution;
                 }
