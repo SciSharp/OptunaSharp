@@ -397,9 +397,14 @@ Rules every workflow follows:
   must be SemVer, on the repository's default branch — `main` on SciSharp/OptunaSharp, `master` on the
   mirror — and equal to the packed version) → `create-release` (the only
   `contents: write` job; GitHub Release with every package plus checksums) and `publish-nuget`.
-  `publish-nuget` runs in the `nuget` environment, where an approval gate can be added. It soft-skips
-  without `secrets.NUGETAPIKEY` and refuses a non-publishable feed (a release from the private mirror).
-  It pushes Core first.
+  `publish-nuget` runs in the `nuget` environment, where an approval gate can be added. It publishes with
+  **NuGet Trusted Publishing** (as NumSharp does): no API key is stored; `NuGet/login` trades the job's
+  GitHub OIDC token (`id-token: write`) for a one-hour key under the nuget.org policy owned by SciSharp
+  (repo SciSharp/OptunaSharp, `build-and-release.yml`, environment `nuget`, scope "Push new packages and
+  package versions", glob `OptunaSharp*`). The `NUGET_USER` repo secret holds the nuget.org user name
+  that created the policy. It soft-skips without `NUGET_USER` and refuses a non-publishable feed (a
+  release from the private mirror). It pushes Core first, then every other package, and fails at the
+  end naming each refusal.
 
 ### `docs.yml`
 DocFX (pinned 2.78.4) build → GitHub Pages. The `build` job runs for PRs too, as a gate (metadata must

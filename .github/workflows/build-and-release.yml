@@ -851,10 +851,25 @@ jobs:
     needs: [validate-release, package]
     if: needs.validate-release.outputs.is_valid == 'true'
     runs-on: ubuntu-24.04
-    # The `nuget` environment is the place for a manual approval gate before this irreversible push.
-    # Add required reviewers in Settings -> Environments -> nuget, and optionally move NUGETAPIKEY into
-    # it as an environment secret. Until rules exist, the environment only records each deployment.
+    # The `nuget` environment is the place for a manual approval gate before this irreversible push
+    # (Settings -> Environments -> nuget -> required reviewers). It is also named by the Trusted
+    # Publishing policy below, so only a job running in this environment can obtain a publish key.
     environment: nuget
+
+    # Trusted Publishing (OIDC), as NumSharp publishes: no long-lived API key exists anywhere. GitHub mints
+    # a short-lived, signed OIDC token for this job (id-token: write). NuGet/login sends it to nuget.org,
+    # which checks its repository owner, repository, workflow file and environment claims against the
+    # Trusted Publishing policy registered under the SciSharp owner: SciSharp/OptunaSharp, workflow file
+    # build-and-release.yml (nuget.org takes the file name only), environment `nuget`, scope "Push new
+    # packages and package versions", glob OptunaSharp*. It answers with an API key valid for one hour.
+    #
+    # A job-level permissions block replaces the workflow's top-level `contents: read` for this job, so
+    # everything it needs is listed: id-token:write for the OIDC token, contents:read (harmless, no
+    # checkout here), and actions:read so download-artifact can read this run's nuget-packages artifact.
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
 
     steps:
     - name: Download NuGet Packages
@@ -868,35 +883,70 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
-    # Two refusals before the irreversible push:
-    #   - no NUGETAPIKEY: soft-skip with a warning. The rest of the release (gates, GitHub Release) still
-    #     runs and is asserted, so a v* tag on a repository without the secret goes green.
+    # Two refusals before anything is pushed:
+    #   - no NUGET_USER: soft-skip with a warning. NuGet/login cannot exchange the token without the
+    #     nuget.org user name, and the rest of the release (gates, GitHub Release) still runs and is
+    #     asserted, so a v* tag on a repository without the secret (the private mirror) goes green.
     #   - not publishable: hard error. The packages' SourceLink points at the repository this build ran
     #     in, and their <repository> at the canonical one. When they differ (a private mirror), users of
-    #     the published packages could not step into the sources, so the push is refused even with a key.
-    # Core is pushed first so the satellites' dependency on it resolves as soon as they are indexed.
-    - name: Push to NuGet
+    #     the published packages could not step into the sources, so the push is refused.
+    - name: Check the release can be published
+      id: gate
       shell: bash
       env:
-        NUGET_KEY: ${{ secrets.NUGETAPIKEY }}
+        NUGET_USER: ${{ secrets.NUGET_USER }}
         PUBLISHABLE: ${{ needs.package.outputs.publishable }}
         CANONICAL: ${{ needs.package.outputs.canonical_repository }}
-        VERSION: ${{ needs.validate-release.outputs.version }}
       run: |
-        if [ -z "$NUGET_KEY" ]; then
-          echo "::warning::NUGETAPIKEY is not configured — skipping the nuget.org publish (soft skip). Set the repo secret to enable publishing."
+        if [ -z "$NUGET_USER" ]; then
+          echo "::warning::NUGET_USER is not configured — skipping the nuget.org publish (soft skip). Set the repo secret to the nuget.org user name that created the Trusted Publishing policy."
+          echo "publish=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         if [ "$PUBLISHABLE" != "true" ]; then
           echo "::error::refusing to publish from ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}: the packages name ${CANONICAL} as their repository, so their SourceLink would point at sources users cannot reach. Tag the release in ${CANONICAL}."
           exit 1
         fi
+        echo "publish=true" >> "$GITHUB_OUTPUT"
+
+    # `user` is the nuget.org USER NAME (profile name, not an email) of the account that created the
+    # Trusted Publishing policy, not the SciSharp organization that owns it. The key is requested right
+    # before the push so its hour cannot run out, and NuGet/login masks it (core.setSecret) before it
+    # becomes an output, so the push below never prints it.
+    - name: NuGet login (OIDC trusted publishing)
+      if: steps.gate.outputs.publish == 'true'
+      id: nuget-login
+      uses: NuGet/login@v1
+      with:
+        user: ${{ secrets.NUGET_USER }}
+
+    # Core goes first so the satellites' dependency on it resolves as soon as they are indexed. Every
+    # package is pushed even when one is refused, and the step fails at the end naming each refusal:
+    # stopping at the first would leave every package after it unpublished (NumSharp's 0.80.0-beta1
+    # release hit exactly that). A refused NEW id means the policy lacks the scope "Push new packages and
+    # package versions" or a glob that matches it.
+    - name: Push to NuGet
+      if: steps.gate.outputs.publish == 'true'
+      shell: bash
+      env:
+        NUGET_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        VERSION: ${{ needs.validate-release.outputs.version }}
+      run: |
         CORE="artifacts/OptunaSharp.${VERSION}.nupkg"
         [ -f "$CORE" ] || { echo "::error::$CORE is missing from the release artifact"; exit 1; }
+        failed=""
         for package in "$CORE" $(ls artifacts/*.nupkg | grep -vxF "$CORE"); do
           echo "Pushing $package..."
-          dotnet nuget push "$package" \
-            --api-key "$NUGET_KEY" \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
+          # `if !` keeps a refusal from ending the loop: the step's bash runs with -e, which does not
+          # exit on a command whose status is tested.
+          if ! dotnet nuget push "$package" \
+              --api-key "$NUGET_KEY" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate; then
+            failed="$failed $(basename "$package")"
+          fi
         done
+        if [ -n "$failed" ]; then
+          echo "::error::nuget.org refused:$failed. A new package id needs the Trusted Publishing policy's scope \"Push new packages and package versions\" and a glob that matches it."
+          exit 1
+        fi
