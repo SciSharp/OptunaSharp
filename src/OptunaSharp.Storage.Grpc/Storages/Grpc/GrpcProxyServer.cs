@@ -40,7 +40,13 @@ public static class GrpcProxyServer
     ///     <see cref="RunGrpcProxyServer" /> instead.
     /// </summary>
     /// <param name="storage">The storage to proxy.</param>
-    /// <param name="host">Hostname to listen on (<c>localhost</c>, <c>0.0.0.0</c>, an IP, or a DNS name).</param>
+    /// <param name="host">
+    ///     Hostname to listen on (<c>localhost</c>, <c>0.0.0.0</c>, an IP, or a DNS name). <c>localhost</c> listens on
+    ///     both loopbacks, <c>[::1]</c> and <c>127.0.0.1</c>, as grpc's <c>add_insecure_port</c> does, so a client that
+    ///     tries IPv6 first connects at once; with port <c>0</c> it listens on <c>127.0.0.1</c> only, because Kestrel
+    ///     cannot give two addresses one dynamic port. Any other DNS name listens on one address: its first IPv4
+    ///     address, else its first address.
+    /// </param>
     /// <param name="port">Port to listen on.</param>
     /// <param name="configureGrpc">Optional: tweak the server's <see cref="GrpcServiceOptions" /> after the
     ///   defaults (interceptors, <c>EnableDetailedErrors</c>, compression, max message sizes, ...).</param>
@@ -61,7 +67,15 @@ public static class GrpcProxyServer
         builder.WebHost.ConfigureKestrel(options =>
         {
             // Cleartext HTTP/2 (h2c) — the analog of grpc.server(...).add_insecure_port(f"{host}:{port}").
-            options.Listen(ResolveEndpoint(host, port), listen => listen.Protocols = HttpProtocols.Http2);
+            // grpc binds every address the host resolves to, so "localhost" listens on both [::1] and 127.0.0.1
+            // (checked on grpcio 1.78.0: both accept). Kestrel's ListenLocalhost does the same. Binding 127.0.0.1
+            // alone made each new connection from a client that tries ::1 first — .NET's and grpc's on Windows —
+            // wait about 2 s for the refused IPv6 connect before it fell back to IPv4. Kestrel cannot share one
+            // dynamic port between two addresses (ListenLocalhost refuses port 0), so port 0 keeps the IPv4 loopback.
+            if (host == "localhost" && port != 0)
+                options.ListenLocalhost(port, listen => listen.Protocols = HttpProtocols.Http2);
+            else
+                options.Listen(ResolveEndpoint(host, port), listen => listen.Protocols = HttpProtocols.Http2);
         });
 
         builder.Services.AddGrpc(options =>
@@ -111,7 +125,10 @@ public static class GrpcProxyServer
         app.WaitForShutdown();
     }
 
-    /// <summary>Resolve <paramref name="host" /> (a name, an IP, <c>0.0.0.0</c>, or <c>::</c>) to a bind endpoint.</summary>
+    /// <summary>
+    ///     Resolve <paramref name="host" /> (a name, an IP, <c>0.0.0.0</c>, or <c>::</c>) to one bind endpoint. Used for
+    ///     every host except <c>localhost</c> on a fixed port, which <see cref="MakeServer" /> binds on both loopbacks.
+    /// </summary>
     /// <param name="host">The server hostname or literal IP address.</param>
     /// <param name="port">The server TCP port, or its provider default when nullable and omitted.</param>
     /// <returns>The resolved address and requested port.</returns>

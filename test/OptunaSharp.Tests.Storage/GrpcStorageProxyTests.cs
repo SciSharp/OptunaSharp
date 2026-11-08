@@ -410,8 +410,10 @@ public class GrpcStorageProxyTests
 
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
+        // Both loopbacks, as MakeServer binds "localhost": the client below dials "localhost", which resolves to ::1
+        // first, and against an IPv4-only listener every Windows connect waited about 2 s for the refused IPv6 attempt.
         builder.WebHost.ConfigureKestrel(o =>
-            o.Listen(IPAddress.Loopback, port, l => l.Protocols = HttpProtocols.Http2));
+            o.ListenLocalhost(port, l => l.Protocols = HttpProtocols.Http2));
         builder.Services.AddOptunaStorageProxy(backend);
         var app = builder.Build();
         app.MapOptunaStorageProxy();
@@ -428,6 +430,37 @@ public class GrpcStorageProxyTests
             app.StopAsync().GetAwaiter().GetResult();
             app.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
+    }
+
+    /// <summary>
+    ///     A server made for <c>"localhost"</c> accepts on both loopbacks, as grpc's <c>add_insecure_port("localhost:…")</c>
+    ///     does (grpcio 1.78.0 accepts on <c>[::1]</c> and <c>127.0.0.1</c>). It used to listen on <c>127.0.0.1</c> alone,
+    ///     and a client that resolves localhost to <c>::1</c> first, .NET's and grpc's on Windows, then waited about 2 s
+    ///     for the refused IPv6 connect on every new connection: this class took 61 s on a Windows runner against 2 s on
+    ///     Linux, where a refused loopback connect returns at once.
+    /// </summary>
+    /// <exception cref="AssertInconclusiveException">The machine has no IPv6 loopback, so only IPv4 can be checked.</exception>
+    [TestMethod]
+    public void Server_Localhost_AcceptsOnBothLoopbacks_LikeGrpc()
+    {
+        using (var v4 = new TcpClient(AddressFamily.InterNetwork))
+        {
+            v4.Connect(IPAddress.Loopback, _port);
+            v4.Connected.Should().BeTrue("127.0.0.1 is the loopback every client can fall back to");
+        }
+
+        using var v6 = new TcpClient(AddressFamily.InterNetworkV6);
+        try
+        {
+            v6.Connect(IPAddress.IPv6Loopback, _port);
+        }
+        catch (SocketException e) when (e.SocketErrorCode != SocketError.ConnectionRefused)
+        {
+            // No IPv6 loopback on this host (a container without IPv6, say): Kestrel then listens on IPv4 alone, which
+            // is all it can do. A refused connect is the regression itself and is left to fail the test.
+            Assert.Inconclusive($"No IPv6 loopback here ({e.SocketErrorCode}); only the IPv4 listener was checked.");
+        }
+        v6.Connected.Should().BeTrue("a client that tries ::1 first must not wait for a refused connect");
     }
 
     /// <summary>
