@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The child process of the interop suite's process-killing scenarios (catalog Open item 28). GilAwareMonitorTests
+    runs it as `dotnet OptunaSharp.Tests.Interop.ChildProcess.dll <mode>` from its own output folder, where the project
+    reference below the suite's csproj copies it, the pattern the CLI suite uses for OptunaSharp.Cli.dll.
+
+    Why a process of its own: a CPython sub-interpreter changes the whole process for good (CPython turns its
+    PyGILState_Check off), and the bug these scenarios pin ends the process with a CPython fatal error. Run inside the
+    suite, either would take every later interop test with it.
+
+    Not a test project and not packable: CI's satellite job skips this folder by name (build-and-release.yml), and
+    pack_all.sh only packs src/.
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>OptunaSharp.Tests.Interop.ChildProcess</RootNamespace>
+    <!-- Strong-naming is set repo-wide in ../../Directory.Build.props. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The shipped bridge: the hooks under test are the ones PythonRuntime.Initialize installs into Core. -->
+    <ProjectReference Include="..\..\src\OptunaSharp.Interop.pythonnet\OptunaSharp.Interop.pythonnet.csproj" />
+  </ItemGroup>
+
+</Project>

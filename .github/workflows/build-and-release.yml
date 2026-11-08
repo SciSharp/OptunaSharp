@@ -208,7 +208,8 @@ jobs:
   # their own (Interop below; PackageParity in package-parity.yml). That covers Storage, Artifacts, Cli,
   # Hosting, Importance.Booster, Importance.Forests, Integration.LightGbm, Integration.ML.NET and
   # Benchmark.VolleyEval: about 600 tests over the satellite packages the release ships, which no
-  # workflow ran before.
+  # workflow ran before. Interop.ChildProcess is skipped too: it holds no tests, it is the console app the
+  # interop suite runs in a process of its own (catalog Open item 28), and that suite's build builds it.
   #
   # Services (Linux only: Windows and macOS runners cannot run Linux containers):
   #   - Redis (Storage journal backends), from test/OptunaSharp.Tests.Storage/docker-compose.yml;
@@ -306,7 +307,7 @@ jobs:
       run: |
         set -euo pipefail
         for proj in test/OptunaSharp.Tests.*/*.csproj; do
-          case "$proj" in */OptunaSharp.Tests.Interop/*|*/OptunaSharp.Tests.PackageParity/*) continue ;; esac
+          case "$proj" in */OptunaSharp.Tests.Interop/*|*/OptunaSharp.Tests.Interop.ChildProcess/*|*/OptunaSharp.Tests.PackageParity/*) continue ;; esac
           echo "::group::build $proj"
           dotnet build "$proj" --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
           echo "::endgroup::"
@@ -324,7 +325,7 @@ jobs:
         if [[ "$RUNNER_OS" != "Windows" ]]; then FILTER="$FILTER&TestCategory!=WindowsOnly"; fi
         failed=()
         for proj in test/OptunaSharp.Tests.*/*.csproj; do
-          case "$proj" in */OptunaSharp.Tests.Interop/*|*/OptunaSharp.Tests.PackageParity/*) continue ;; esac
+          case "$proj" in */OptunaSharp.Tests.Interop/*|*/OptunaSharp.Tests.Interop.ChildProcess/*|*/OptunaSharp.Tests.PackageParity/*) continue ;; esac
           for TFM in ${{ needs.setup.outputs.tfms_space }}; do
             echo "::group::$proj ($TFM)"
             if ! dotnet test "$proj" --configuration Release --no-build --framework "$TFM" \

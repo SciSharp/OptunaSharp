@@ -58,6 +58,10 @@
          and drive an OptunaSharp study with them. Shares this project's embedded CPython engine; the
          tests self-skip when optunahub or the refs/optunahub-registry submodule is absent. -->
     <ProjectReference Include="..\..\src\OptunaSharp.Interop.pythonnet\OptunaSharp.Interop.pythonnet.csproj" />
+    <!-- The child process of the scenarios that change CPython for good or end the process (catalog Open item 28: a
+         sub-interpreter turns PyGILState_Check off). GilAwareMonitorTests runs it as `dotnet <its dll> <mode>` from this
+         output folder, where this reference copies it with its runtimeconfig, as the CLI suite does with the CLI. -->
+    <ProjectReference Include="..\OptunaSharp.Tests.Interop.ChildProcess\OptunaSharp.Tests.Interop.ChildProcess.csproj" />
     <!-- The BoTorch bridge (OptunaSharp.Interop.BoTorch): BoTorchSamplerParityTests runs an OptunaSharp
          study with the native BoTorchSampler and asserts byte-exact parity against a replay through the
          real optuna_integration.BoTorchSampler in this project's embedded CPython. Self-skips when

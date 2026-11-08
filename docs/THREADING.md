@@ -21,7 +21,9 @@
   (v2) about 20 times faster to save and 17 times faster to restore, trials share their distribution objects,
   and the Redis snapshot interval is Optuna's 100 in both read modes (§7.3) (plan 10, item 2.7);
 - 2026-11-08: the `ConcurrencyGun` test harness fires dedicated threads into the same code at the same instant,
-  and four test classes built on it pin the guarantees of §5–§6 (§11).
+  and four test classes built on it pin the guarantees of §5–§6 (§11);
+- 2026-11-08: the GIL-aware hooks read GIL ownership from the thread's own CPython thread state, not from
+  `PyGILState_Check`, which a sub-interpreter turns off for the whole process (§8; catalog Open item 28).
 
 No threading item is open. §12 lists the known limits.
 
@@ -899,10 +901,25 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
     `Internal/MonitorGate`, and runs the `nJobs` waits for its workers through `MonitorGate.Wait`.
     `PythonRuntime.Initialize` installs `GilAwareMonitor` as the gate's hooks, also when the host started
     CPython itself. The hook tries the monitor first, so an uncontended call costs one `TryEnter`. Only
-    when the monitor is contended and the thread holds the GIL (CPython's `PyGILState_Check`) does it
-    release the GIL around the wait, as `Py_BEGIN_ALLOW_THREADS` does, and take it back once the monitor
-    is held. The wait hook releases the GIL around the whole wait, as Python's own
-    `concurrent.futures.wait` does. Without a bridge both hooks are absent and Core behaves as before.
+    when the monitor is contended and the thread holds the GIL does it release the GIL around the wait, as
+    `Py_BEGIN_ALLOW_THREADS` does, and take it back once the monitor is held. The wait hook releases the
+    GIL around the whole wait, as Python's own `concurrent.futures.wait` does. Without a bridge both hooks
+    are absent and Core behaves as before.
+  - **Which thread holds the GIL** (catalog Open item 28, fixed 2026-11-08). The hooks and the Python
+    thread's hand-off (`PythonThread.Await`) ask whether the calling thread has a current CPython thread
+    state: `PyThreadState_GetUnchecked` (exported from 3.13 on) or `_PyThreadState_UncheckedGet` (3.11 and
+    3.12; each version exports one of the two). A thread holds the GIL exactly when it has one, and
+    `PyEval_SaveThread`, the release, requires one.
+    - They used to ask `PyGILState_Check`. Once any sub-interpreter has existed in the process
+      (`concurrent.interpreters`, `_interpreters`, `_xxsubinterpreters`), CPython turns that check off for
+      good, and it answers 1 on every thread. A thread without the GIL then released one, and the process
+      ended: `Fatal Python error: PyEval_SaveThread: … the current Python thread state is NULL` on 3.12,
+      an access violation in `PyEval_SaveThread` on 3.14. That happened in `Optimize(nJobs > 1)` (the wait
+      for the workers), at every bridge call from a .NET thread, and at every contended monitor.
+    - Measured on CPython 3.11.15, 3.12.12, 3.13.7, 3.14.2 and free-threaded 3.14.2: `PyGILState_Check`
+      answers 1 on every thread after `create()` and still does after `destroy()`; the thread-state export
+      answers correctly throughout. `PyGILState_Check` remains the last resort, for a build that exports
+      neither name.
   - Measured with a scratch probe of the shapes `GilAwareMonitorTests` pins: an objective inside
     `Py.GIL()` at `nJobs: 4` over a GIL-taking sampler, or pruner, hung after 4 of 60 trials without the
     hooks and finished all 60 in about 3 s with them; `Optimize(nJobs: 4)` called inside `Py.GIL()` hung
@@ -1059,7 +1076,7 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `StorageDisposalEdgeTests` (Storage suite) | a scoped SQLite storage, gRPC proxy or EF Core storage, disposed through both of its DI registrations, synchronously or asynchronously, closes its connection, channel or owned data source |
 | `JournalMixedFleetInteropTests` (Interop suite) | C# and Python workers on one journal file (both lock protocols), on Redis, and with CMA-ES, compared with a Python-only fleet |
 | `CmaEsMixedFleetInteropTests` (Interop suite) | C# and Python workers taking turns on one CMA-ES study, with and without margin, run the study Python runs alone |
-| `GilAwareMonitorTests` (Interop suite) | P3-1: `PythonRuntime.Initialize` installs the gate's hooks; three deterministic two-thread deadlocks (a GIL holder against a sampler, trial or pruner monitor held by a thread that needs the GIL), recovered by `Thread.Interrupt` if they regress; an objective inside `Py.GIL()` at `nJobs: 4` over a GIL-taking sampler and pruner, on dedicated threads and on the thread-pool executor; `Optimize(nJobs: 4)` called inside `Py.GIL()`; four ask-and-tell threads holding the GIL |
+| `GilAwareMonitorTests` (Interop suite) | P3-1: `PythonRuntime.Initialize` installs the gate's hooks; three deterministic two-thread deadlocks (a GIL holder against a sampler, trial or pruner monitor held by a thread that needs the GIL), recovered by `Thread.Interrupt` if they regress; an objective inside `Py.GIL()` at `nJobs: 4` over a GIL-taking sampler and pruner, on dedicated threads and on the thread-pool executor; `Optimize(nJobs: 4)` called inside `Py.GIL()`; four ask-and-tell threads holding the GIL. Catalog Open item 28: after a sub-interpreter, threads without the GIL never release it, at the `nJobs` wait, a contended sampler monitor and a bridge call from the main thread, plus a control without one; each in a child process (`test/OptunaSharp.Tests.Interop.ChildProcess`), because a sub-interpreter changes CPython for the rest of its process and a regression ends it |
 | `PythonThreadTests` (Interop suite) | plan 10, item 2.5: calls from six .NET threads run on one Python thread whose `threading.local` keeps its value between them; a nested `Run` runs inline; a caller holding the GIL completes; the caller's culture and `AsyncLocal` flow into the body; the body's exception reaches the caller unchanged; the Python thread reserves 16 MB (Windows); `PymooSampler` off its thread and at `nJobs: 4` completes every trial (review item 19b); torch imported from one thread and used from others does not hang; the P3-1 deadlock shape through `Run` completes |
 | `OptunaHubBridgeParityTests` (Interop suite) | the real hub sampler at `nJobs: 8`; the real hub sampler and median pruner with an objective inside `Py.GIL()` at `nJobs: 4` |
 
@@ -1073,7 +1090,10 @@ or lets `catch` swallow the run's cancellation (2 cases). On the old `PythonRunt
 test failed (the calls ran on different Python threads, and the `threading.local` lost its value), and the
 stack read 1.5 MB instead of 16. Item 2.7's parity suites caught four deliberate bugs: a restore that kept the
 UTC instant instead of converting it to local time (10 cases failed), a repeated key keeping its first value (1),
-parameters written in their external representation (9), and studies written in id order (9).
+parameters written in their external representation (9), and studies written in id order (9). On the old
+`GilAwareMonitor`, the Open item 28 test passed its control and failed its three sub-interpreter modes, each with
+`Fatal Python error: PyEval_SaveThread` (CPython 3.12.12, exit 0xC0000409); the same build crashed in all three on
+3.14.2 and free-threaded 3.14.2 too.
 
 **The `ConcurrencyGun`** (`test/OptunaSharp.Tests/Concurrency/`, 2026-11-08) is the harness behind the last four
 unit-test classes in the table:
@@ -1126,7 +1146,7 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
 | Optuna (Python) | OptunaSharp |
 |---|---|
 | The GIL serializes Python code | Monitors: sampler, pruner, trial, tell stripes, storages |
-| A thread blocked on a lock or in `wait()` has released the GIL | `MonitorGate`: with a Python bridge loaded, a thread holding the GIL releases it while it waits for a tell stripe, trial, sampler or pruner monitor, or for its `nJobs` workers (P3-1, fixed 2026-11-06) |
+| A thread blocked on a lock or in `wait()` has released the GIL | `MonitorGate`: with a Python bridge loaded, a thread holding the GIL releases it while it waits for a tell stripe, trial, sampler or pruner monitor, or for its `nJobs` workers (P3-1, fixed 2026-11-06). Whether a thread holds the GIL is read from its own CPython thread state, which no sub-interpreter changes (Open item 28, fixed 2026-11-08) |
 | numpy's `RandomState` locks each draw | The sampler monitor; MT19937 itself takes no lock |
 | `ThreadPoolExecutor(max_workers=n_jobs)`, threads reused within the call | By default OptunaSharp's own dedicated threads, reused across trials and calls (P3-4, fixed 2026-11-06); on request the .NET thread pool (§3.5) |
 | The executor is fixed | `TrialExecutorOptions`, chosen per call, per study, per DI container or for the process, and read once when the call starts (§3.5) |
@@ -1134,7 +1154,7 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
 | The `with ThreadPoolExecutor(...)` exit | `WaitForAllWithoutRaising` |
 | Executor threads start without the caller's `contextvars`; the locale is process-wide | Workers inherit the caller's `ExecutionContext`: its culture and `AsyncLocal` values |
 | The interpreter waits for executor threads before it exits | Workers are background threads: `Optimize` waits for them, a process that ends does not |
-| `KeyboardInterrupt` in the objective fails the running trial (`n_jobs=1`), or the running trials finish (more workers); then it propagates | Ctrl+C ends the process; the trials in flight stay `RUNNING` |
+| `KeyboardInterrupt` in the objective fails the running trial (`n_jobs=1`), or the running trials finish (more workers); then it propagates | Cancelling `Optimize`'s `ct` is the counterpart (§3.4): no trial starts, the trials in flight finish (an objective that observes the token is stored `FAIL`), then `OperationCanceledException`. Ctrl+C reaches the token only through the opt-in `StopSignals` or a host's `ApplicationStopping`; otherwise it ends the process, and the trials in flight stay `RUNNING` |
 | `study._thread_local` | `Study.ThreadLocal` (`ThreadLocal<ThreadLocalStudyAttribute>`) |
 | `worker_id = prefix + threading.get_ident()` | `prefix + Environment.CurrentManagedThreadId` |
 | Heartbeat on a `threading.Thread`; `threading.excepthook` reports its failure | A background `Thread`; the same report, written to standard error |

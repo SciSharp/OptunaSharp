@@ -1,12 +1,16 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using OptunaSharp;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
 using OptunaSharp.Interop.PythonNet;
 using OptunaSharp.Pruners;
 using OptunaSharp.Samplers;
+using OptunaSharp.Tests.Interop.ChildProcess;
 using Python.Runtime;
 
 namespace OptunaSharp.Tests.Interop;
@@ -28,6 +32,10 @@ namespace OptunaSharp.Tests.Interop;
 ///     ask-and-tell tests reproduce the real-world shapes at <c>nJobs = 4</c>. Where the objective holds the GIL a
 ///     regression cannot be recovered and fails through the watchdog; an <c>Optimize</c> called while holding the GIL is
 ///     recovered like the parked tests. All of them self-skip (Inconclusive) without a usable Python engine.</para>
+///     <para>The hook must also know which thread holds the GIL. Catalog Open item 28: once a CPython sub-interpreter has
+///     existed, <c>PyGILState_Check()</c> answers 1 on every thread, and a hook that trusted it released a GIL its thread
+///     did not hold, which ends the process. That test runs each scenario in a child process, because a sub-interpreter
+///     changes CPython for the rest of its process.</para>
 /// </remarks>
 [TestClass]
 public class GilAwareMonitorTests
@@ -306,7 +314,106 @@ public class GilAwareMonitorTests
         Assert.IsTrue(study.Trials.All(t => t.State == TrialState.Complete), "every trial must complete");
     }
 
+    /// <summary>
+    ///     Pins catalog Open item 28. Once a CPython sub-interpreter has existed in the process, CPython's
+    ///     <c>PyGILState_Check()</c> answers 1 on every thread. The hooks used to trust it, so a thread that held no GIL
+    ///     released one, and CPython ended the process: "Fatal Python error: PyEval_SaveThread: … the current Python thread
+    ///     state is NULL". Each sub-interpreter mode exercises one of the three places that decide whether a thread holds the
+    ///     GIL (the <c>nJobs</c> wait, a contended monitor, the Python thread's hand-off); the control runs all three without
+    ///     a sub-interpreter.
+    /// </summary>
+    /// <param name="mode">A mode of <see cref="ChildProcessProtocol" />.</param>
+    /// <remarks>
+    ///     Every mode runs in a child process (<c>OptunaSharp.Tests.Interop.ChildProcess</c>) on this suite's libpython: a
+    ///     sub-interpreter changes CPython for the rest of its process, and a regression ends the process, which must not
+    ///     take this suite with it. Before the fix, on CPython 3.12.12, the control passed and the three sub-interpreter
+    ///     modes ended with that fatal error.
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(ChildProcessProtocol.Control)]
+    [DataRow(ChildProcessProtocol.SubInterpreterOptimize)]
+    [DataRow(ChildProcessProtocol.SubInterpreterMonitor)]
+    [DataRow(ChildProcessProtocol.SubInterpreterBridge)]
+    public void AfterASubInterpreter_ThreadsWithoutTheGil_NeverReleaseIt(string mode)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        ChildRun run = RunChildProcess(mode);
+
+        Assert.IsTrue(
+            run.ExitCode == 0 && run.Stdout.Contains(ChildProcessProtocol.DoneMarker),
+            $"mode {mode}: the child process exited with {run.ExitCode} (0x{run.ExitCode:X8}) before it finished." +
+            $"{Environment.NewLine}stdout:{Environment.NewLine}{run.Stdout}" +
+            $"{Environment.NewLine}stderr:{Environment.NewLine}{run.Stderr}");
+    }
+
     // ---- helpers --------------------------------------------------------------------------------
+
+    /// <summary>
+    ///     How long one child process may run. Its own scenarios time out after 60 s per wait and report why, so this only
+    ///     catches a child that hangs where it cannot report (the engine's start, say).
+    /// </summary>
+    private static readonly TimeSpan ChildWatchdog = TimeSpan.FromMinutes(3);
+
+    /// <summary>The outcome of one child process.</summary>
+    /// <param name="ExitCode">The process exit code; 0 once a mode has finished.</param>
+    /// <param name="Stdout">Its standard output, ending with <see cref="ChildProcessProtocol.DoneMarker" /> on success.</param>
+    /// <param name="Stderr">Its standard error: CPython's fatal error, or an unhandled exception, on failure.</param>
+    private sealed record ChildRun(int ExitCode, string Stdout, string Stderr);
+
+    /// <summary>
+    ///     Runs <c>OptunaSharp.Tests.Interop.ChildProcess</c> in <paramref name="mode" /> on this suite's libpython and waits
+    ///     for it to end.
+    /// </summary>
+    /// <param name="mode">A mode of <see cref="ChildProcessProtocol" />.</param>
+    /// <returns>The child's exit code and output.</returns>
+    /// <exception cref="AssertFailedException">
+    ///     The child's assembly or runtimeconfig is missing from this output folder, or the child ran past
+    ///     <see cref="ChildWatchdog" /> (it is killed first).
+    /// </exception>
+    /// <remarks>
+    ///     <c>PYTHONNET_PYDLL</c> is set to the libpython this process loaded, so the child runs the same CPython even when this
+    ///     suite found it by probing <c>python</c> on <c>PATH</c>. The host is <c>DOTNET_HOST_PATH</c>, which <c>dotnet test</c>
+    ///     sets, or else <c>dotnet</c>, as the CLI suite starts the CLI.
+    /// </remarks>
+    private static ChildRun RunChildProcess(string mode)
+    {
+        string child = Path.Combine(AppContext.BaseDirectory, "OptunaSharp.Tests.Interop.ChildProcess.dll");
+        Assert.IsTrue(
+            File.Exists(child) && File.Exists(Path.ChangeExtension(child, ".runtimeconfig.json")),
+            $"{child} and its runtimeconfig must be in the test output folder; the suite's project reference copies them");
+
+        string host = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") is { Length: > 0 } h ? h : "dotnet";
+        var start = new ProcessStartInfo(host)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add(child);
+        start.ArgumentList.Add(mode);
+        if (Runtime.PythonDLL is { Length: > 0 } pythonDll)
+            start.Environment["PYTHONNET_PYDLL"] = pythonDll;
+
+        using Process process = Process.Start(start)!;
+        // Both pipes are drained at once: a child that fills one while this side waits on the other would block forever.
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(ChildWatchdog))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            Assert.Fail(
+                $"mode {mode}: the child process ran past {ChildWatchdog} and was killed." +
+                $"{Environment.NewLine}stdout:{Environment.NewLine}{stdout.GetAwaiter().GetResult()}" +
+                $"{Environment.NewLine}stderr:{Environment.NewLine}{stderr.GetAwaiter().GetResult()}");
+        }
+
+        // The parameterless wait also waits for the redirected streams to reach their end.
+        process.WaitForExit();
+        return new ChildRun(process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
+    }
 
     /// <summary>
     ///     Skips the test without a usable Python engine, then makes sure the bridge's runtime (and so the
