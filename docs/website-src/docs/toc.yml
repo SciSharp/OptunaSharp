@@ -46,6 +46,8 @@
       href: logging.md
     - name: Exceptions
       href: exceptions.md
+    - name: Performance and Compatibility
+      href: performance.md
 - name: Recipes
   items:
     - name: Overview

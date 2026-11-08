@@ -1,8 +1,10 @@
 # Plan 13 — Rustuna-derived performance: compatible speedups first, opt-in paths where results would change
 
-> **Status: DESIGN (2026-11-08).** Nothing here is built yet. A scratch prototype of the CMA-ES part exists (session
-> `5417a82e`, a patched copy of `d0558f5`) and is measured below; Phase 1 ports it. Background, benchmarks and the
-> full Rustuna read-through: catalog note `optunasharp/notes/rustuna-comparison-2026-11-08.md`.
+> **Status: BUILT (2026-11-09), except S8 and S12 (§10).** Phases 1-4 are on `main`: `8f8ce3e` (S1-S3, D1),
+> `605806c` (S4, S7), `dce5885` (S3, S5, S6), `656ab94` (S10, S9 as measured). S11 was measured and changes nothing;
+> D2 awaits the owner with both of its numbers. §10 records what was built, how it was gated, and the before/after
+> measurements. Background, benchmarks and the full Rustuna read-through: catalog note
+> `optunasharp/notes/rustuna-comparison-2026-11-08.md`.
 
 ---
 
@@ -346,3 +348,69 @@ protocol is what lets Python workers share OptunaSharp's studies.
 - D3 (trial queue) and D4 (discarding) after S12's memory numbers.
 - D2's default once S6 and its fast variant are measured.
 - §5.5's switch shape for future switches; D1 uses a constructor parameter.
+
+## 10. Implementation record (2026-11-08/09)
+
+Every item below keeps OptunaSharp's results to the bit unless it says otherwise. The gates, each run per phase:
+the unit suite's CI filter on net8.0 and net10.0; the live-Python interop suite on net10.0 with the engine required;
+the documentation gate; a before/after hash of seeded studies (every trial's parameters and values by bits) built from
+the `de495f8` snapshot and the working tree; and, for the concurrency-sensitive items, `ConcurrencyGun` cases.
+
+| Item | Commit | What was built | Measured |
+|---|---|---|---|
+| S1, S2 | `8f8ce3e` | `CmaTrialHistory` folds finished trials once; the optimizer restored from a state is cached by its holder trial and dropped after each tell | CMA-ES 40-D 100k trials: see the proof table |
+| S3 | `8f8ce3e`, `dce5885` | `Study.GetTrialsForSampler` (zero-copy view in memory, Optuna's read elsewhere) for the intersection space and CMA-ES; TPE's constant-liar read skips the current trial without reading it; QMC stops at the first finished trial instead of sorting; the group-decomposed space filters while scanning | QMC 3,000 trials 2.23 → 1.23 s |
+| D1 | `8f8ce3e` | `CmaEsSampler(..., reuseToldOptimizer: false)`, opt-in | ~15 % on 40-D; results differ from generation 3 (§2.4) |
+| S4 | `605806c` | `InMemoryStorage` writes a running trial in place while no reader holds it (`FrozenTrial.StorageExclusive`, `HandOut`, `WritableTrialUnlocked`); the view reads unfinished records under the lock | 40,000 MOTPE suggestions: 71.5 ms of `SetTrialParam` in total |
+| S7 | `605806c` | Bitwise-identical float/int distributions and parameter names shared per study | CMA-ES 100k peak working set ~2.5 GB → 1.44 GB (with S4) |
+| S5 | `dce5885` | `TpeSplitCache`: the last split reused for the very same records | MOTPE 1,000: one split per trial instead of 40 |
+| S6 | `dce5885` | Fused continuous log-pdf (per-pair precomputation, `Vector<double>` lanes per kernel, scalar order kept), pooled grids and matrix, span `LogGaussMass`/`Ndtr`/`Erf.ComputeArray`, `StableArgsort`, presized `GetInternalRepr` | TPE 1,000: 10.08 → 3.93 s steady; MOTPE 1,000: 41.07 → 15.77 s |
+| S10 | `656ab94` | `CachedStorage` keeps its cache in number order (`ByNumber`, placeholders for unsynced numbers); `GetAllTrials` stops sorting and `GetTrialsPrefixView` wraps the cache | O(n log n) → O(n) per read, O(1) view |
+| S9 | `656ab94` | Measured first: attribute JSON is 3-4 % of a 10k-trial SQLite cold load, so lazy decoding was not built. Parsing each `distribution_json` row was ~40 %: both RDB storages now parse each distinct text once per load (`JournalDistributionCache`) | Cold load 2.1 → 1.4-1.5 s, 1.22 GB → 479 MB |
+| S11 | none | Measured: at 10-D and 40-D CMA-ES and 6-D GP the OpenBLAS thread count changes no result, but at 100-D every count gives a different (deterministic) result, as NumPy's does. Pinning one thread at `nJobs: 1` would break parity with Python's default-thread NumPy, so the automatic policy stays (pin only when `nJobs > 1`). One thread was 12 % faster at 40-D and 24-35 % at 100-D: available through `TrialExecutorOptions.BlasThreads = 1`, at the cost of parity | — |
+| S8 | not built | The bulk attribute API adds public surface Optuna lacks; after S4 an in-memory attribute write is already in place (O(1)), and the measured database cost is dominated by per-suggestion parameter writes, which no attribute API can batch. Left for the owner | — |
+| S12 | not built | Measured instead: S4 and S7 took the 100k-trial CMA-ES study from ~2.5 GB to 1.44 GB peak working set. The rest is per-trial dictionaries and boxed values plus the generation pickles (UTF-16 strings); compacting them means materializing `FrozenTrial` contents on read, a larger change with its own risks. Left for the owner with these numbers (and D4 with it) | — |
+| D2 | pending | Scoring still takes 41 % of a 1,000-trial TPE run and 49 % of a 1,000-trial MOTPE run after S6 (profiles, 2026-11-09). A fast kernel could at best roughly halve that share; §2.4's noise harness bounds the decision risk. Asked of the owner with these numbers | — |
+
+**Findings along the way.**
+- The CMA-ES pickle stores only C's upper triangle; keeping the told optimizer instead of a restore is therefore
+  observable (§2.4), which is why S1 drops its cache after every tell and D1 is opt-in.
+- `GetNTrials` in Optuna's base storage counts through `GetAllTrials(deepcopy: false)`, so a count hands out every
+  running record; kept as Optuna has it (nothing in `src/` calls it).
+- Profiles taken with `dotnet-trace`'s sampled thread time put whole seconds into `Monitor.Enter`'s slow path and
+  `PollGC` in single-threaded runs: the sampler's thread suspensions surface there. A stopwatch around
+  `SetTrialParam` measured 1.8 µs per call where the profile implied 66 µs.
+- `OptunaHubBridgeParityTests.BenchmarkBridge_ToyProblem_ExposesSpaceAndOptimizes` asserted a bound on an unseeded TPE
+  study and failed in a few percent of runs; it is seeded now (`dce5885`).
+
+### 10.1 Before/after proof
+
+Gate C. `scratchpad/proof/Program.cs` (session `5417a82e`) built twice in Release: against the `de495f8` snapshot
+(before) and against `656ab94` (after). 40 float parameters in [-10, 10], seed 0, sampler defaults; objective
+`sum((x - 1)^2)`, or `sum(x^2)` and `sum((x - 2)^2)` for two objectives. i9-13900K, Windows 11, .NET 10, power throttling
+opted out, OpenBLAS at its default thread count. Each workload ran before then after, back to back, 2026-11-09
+00:39-01:03, while other sessions loaded the machine to 30-90 % CPU, so both columns are slower than §2.1's quieter
+run (CMA-ES 100k before: 988 s here, 812 s there). Rep 0 includes the JIT; rep 1 is a second study in the same
+process. The hash covers every trial's parameters and values by their bits.
+
+| Workload | Before rep 0 / rep 1 | After rep 0 / rep 1 | Speed-up | Allocated before → after | Peak working set | Hash |
+|---|---|---|---|---|---|---|
+| Random, 10,000 | 5.79 / 4.92 s | 4.72 / 3.96 s | 1.2× | 3.6 → 2.3 GB | 216 → 256 MB | same |
+| QMC, 10,000 | 4.76 / 3.43 s | 2.47 / 1.05 s | 1.9× / 3.3× | 3.7 → 1.6 GB | 285 → 258 MB | same |
+| NSGA-II, 10,000 | 3.82 / 2.75 s | 2.88 / 1.77 s | 1.3× / 1.6× | 2.9 → 1.2 GB | 230 → 205 MB | same |
+| TPE, 1,000 | 10.53 / 9.37 s | 5.01 / 4.11 s | 2.1× / 2.3× | 4.4 → 1.6 GB (gen-2 GCs 254 → 2) | 98 → 107 MB | same |
+| MOTPE, 1,000 | 47.42 s | 18.07 s | 2.6× | 28.7 → 3.4 GB (gen-2 594 → 2) | 82 → 79 MB | same |
+| CMA-ES, 10,000 | 25.35 / 23.05 s | 4.49 / 2.64 s | 5.6× / 8.7× | 10.9 → 1.8 GB | 340 → 317 MB | same |
+| NSGA-II, 100,000 | 73.17 s | 22.16 s | 3.3× | 63.4 → 12.4 GB | 1,527 → 750 MB | same |
+| CMA-ES, 100,000 | 987.71 s | 27.49 s | 35.9× | 519 → 17.4 GB | 2,680 → 1,876 MB | same |
+| CMA-ES, 10,000, `reuseToldOptimizer: true` (D1) | — | 3.43 / 2.04 s | 1.3× over after | 1.5 GB | 304 MB | differs, by design |
+| CMA-ES, 100,000, `reuseToldOptimizer: true` (D1) | — | 18.18 s | 1.5× over after | 15.2 GB | 1,758 MB | differs, by design |
+
+Against Rustuna 0.2.1 (§2.1, quieter machine): TPE 1k 1.36 s, MOTPE 1k 6.30 s, CMA-ES 10k 1.59 s and 100k 13.6 s,
+NSGA-II 10k 0.82 s and 100k 19.4 s. The §7 targets were "about half" for NSGA-II and MOTPE and 2.6 / 26 s for CMA-ES:
+met or beaten except CMA-ES 10k's first rep, which carries the JIT (2.64 s steady).
+
+The README's sampler table (benchmark 14's C# probes, rebuilt against `656ab94`, three fresh processes each) moved
+where the change is beyond the busy machine's noise: random over 1,000 parameters 13.5 → 3.2 s (now faster than
+Python's 8.4 s), CMA-ES 200-D 2.8 → 1.2 s, CMA-ES 6-D 1.75 → 0.91 s, QMC 0.64 → 0.39 s, random 6-D 1.34 → 0.98 s,
+TPE 100-D 2.4 → 2.1 s. GP was rerun interleaved against a `de495f8` build: the same within noise.
