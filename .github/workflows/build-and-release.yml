@@ -851,9 +851,10 @@ jobs:
     needs: [validate-release, package]
     if: needs.validate-release.outputs.is_valid == 'true'
     runs-on: ubuntu-24.04
-    # The `nuget` environment is the place for a manual approval gate before this irreversible push
-    # (Settings -> Environments -> nuget -> required reviewers). It is also named by the Trusted
-    # Publishing policy below, so only a job running in this environment can obtain a publish key.
+    # The `nuget` environment holds this irreversible push until a required reviewer approves it on the
+    # run ("Review deployments"). Configured in Settings -> Environments -> nuget: only `v*` tags may
+    # deploy to it, and admins cannot bypass the review. It is also named by the Trusted Publishing
+    # policy below, so only a job running in this environment can obtain a publish key.
     environment: nuget
 
     # Trusted Publishing (OIDC), as NumSharp publishes: no long-lived API key exists anywhere. GitHub mints

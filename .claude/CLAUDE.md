@@ -397,7 +397,9 @@ Rules every workflow follows:
   must be SemVer, on the repository's default branch — `main` on SciSharp/OptunaSharp, `master` on the
   mirror — and equal to the packed version) → `create-release` (the only
   `contents: write` job; GitHub Release with every package plus checksums) and `publish-nuget`.
-  `publish-nuget` runs in the `nuget` environment, where an approval gate can be added. It publishes with
+  `publish-nuget` runs in the `nuget` environment, which holds it until a required reviewer approves the
+  deployment ("Review deployments" on the run; only `v*` tags may deploy there, and admins cannot bypass
+  the review), so a tag's release pauses before anything reaches nuget.org. It publishes with
   **NuGet Trusted Publishing** (as NumSharp does): no API key is stored; `NuGet/login` trades the job's
   GitHub OIDC token (`id-token: write`) for a one-hour key under the nuget.org policy owned by SciSharp
   (repo SciSharp/OptunaSharp, `build-and-release.yml`, environment `nuget`, scope "Push new packages and
