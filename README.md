@@ -135,6 +135,86 @@ how it was ported, phase by phase.
   tests on **net8.0** and **net10.0** across Windows, Linux and macOS, behind strong-naming and package
   gates, and all 20 packages release together from one tag.
 
+## Performance
+
+Measured on 2026-11-08 at commit `d0558f5`, on an Intel Core i9-13900K (8 performance and 16 efficiency
+cores, 32 logical CPUs) under Windows 11: OptunaSharp in .NET 10 Release builds, and Python 3.12.12 with
+Optuna 5.0.0 on the same machine. Each configuration ran in its own process, and times are medians of
+three runs unless a table says otherwise. Every benchmark process opted out of Windows power throttling,
+which otherwise moves a busy console process onto the efficiency cores after a few seconds. Absolute
+times depend on the hardware, so compare within a row.
+
+### Parallel trials
+
+64 trials of a CPU-bound objective that takes about 50 ms on one core, with `RandomSampler`. Each
+language's loop was calibrated to ~50 ms on its own; OptunaSharp ran the sweep twice.
+
+| `nJobs` | OptunaSharp | Speedup | Python Optuna 5.0 |
+|---|---|---|---|
+| 1 | 3.21-3.24 s | 1.0× | 3.05 s |
+| 2 | 1.60-1.61 s | 2.0× | 3.08 s |
+| 4 | 0.82 s | 3.9× | 3.09 s |
+| 8 | 0.47-0.49 s | 6.6-6.9× | 3.12 s |
+| 16 | 0.34-0.36 s | 9.0-9.4× | 3.09 s |
+
+Python's time stays flat because the GIL runs one Python thread at a time. Trials that wait rather than
+compute run all at once in both: 640 trials sleeping 100 ms took 1.26 s at `nJobs: 64`, and 1,280 took
+1.27 s at `nJobs: 128` (Python: 1.06 s and 1.13 s; ideal 1.0 s).
+
+### Samplers
+
+One trial at a time, the same seeded study in both languages, on a cheap sphere objective so that the
+sampler's own work dominates. OptunaSharp's times include the .NET JIT warming up.
+
+| Study | OptunaSharp | Python Optuna 5.0 |
+|---|---|---|
+| TPE, 6 parameters, 500 trials | 1.12 s | 2.52 s |
+| TPE multivariate, 6 parameters, 500 trials | 1.14 s | 2.42 s |
+| TPE, 100 parameters, 150 trials | 2.4 s | 19.1 s |
+| GP, 6 parameters, 100 trials | 3.47 s | 17.55 s |
+| CMA-ES, 6 parameters, 3,000 trials | 1.75 s | 5.21 s |
+| CMA-ES, 200 parameters, 100 trials | 2.8 s | 3.3 s |
+| NSGA-II, 6 parameters, 3,000 trials | 0.60 s | 3.39 s |
+| QMC, 6 parameters, 3,000 trials | 0.64 s | 3.49 s |
+| Random, 6 parameters, 5,000 trials | 1.34 s | 1.36 s |
+| Random, 1,000 parameters, 200 trials | 13.5 s | 8.4 s |
+| Random, 4 parameters, 50,000 trials: each block of 10,000 | 0.7-0.9 s (the first 1.7 s) | 1.9-2.1 s |
+
+Random sampling over 1,000 parameters is the one measured case where OptunaSharp is slower.
+
+### Executors
+
+Trials run on [OptunaSharp's own dedicated threads by default, or on the .NET ThreadPool][parallel-executor]
+(`TrialExecutorKind.DedicatedThreads` or `TrialExecutorKind.ThreadPool`). Three runs of each:
+
+| Workload | Dedicated threads | ThreadPool |
+|---|---|---|
+| 5,000 cheap Random trials, `nJobs: 8` | 9.5k-10.2k trials/s | 9.2k-10.0k trials/s |
+| 2,000 TPE trials, `nJobs: 8` | 512-570 trials/s | 499-526 trials/s |
+| 200 calls of `Optimize(nTrials: 8, nJobs: 8)` | 1,035-1,115 calls/s | 973-1,131 calls/s |
+| 128 trials blocking 1.5 s, `nJobs: 64` (ideal 3.0 s) | 3.2 s | 6.2 s |
+| Longest delay before other `Task.Run` work started, `nJobs: 64` / `32` | 2.2 ms / 2.4 ms | 1.6 s / 0.74 s |
+
+The two match on throughput. Once `nJobs` reaches the pool's ready threads (32 on this machine), the
+ThreadPool runs fewer trials at once and delays the rest of the application, so it suits an `nJobs` well
+below the core count.
+
+### Per-worker samplers
+
+`nJobs: 8`, best of three runs: one sampler shared by every worker, taking one call at a time
+(`SamplerConcurrency.Shared`, Optuna's behaviour and the default), against
+[one sampler per worker][parallel-sampling] (`SamplerConcurrency.PerWorker`):
+
+| Study | Shared | PerWorker |
+|---|---|---|
+| TPE multivariate, 10 parameters, 600 trials, 5 ms objective | 1.39 s | 1.15 s |
+| CMA-ES, 40 parameters, 2,000 trials, cheap objective | 2.17 s | 0.82 s |
+| TPE, 3 parameters, 400 trials, 20 ms objective | 1.54 s | 1.54 s |
+
+A sampler per worker pays where sampling dominates and changes nothing when the objective does. Slow
+model-based samplers stay shared: a `GPSampler` study of 120 trials with a 20 ms objective took 7.53 s at
+`nJobs: 1` and 9.30 s at `nJobs: 8`.
+
 ## Install
 
 ```bash
