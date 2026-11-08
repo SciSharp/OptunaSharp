@@ -123,6 +123,14 @@ public class SamplerNJobsSweepTests
     ///     every point is covered before the sampler stops the study. Concurrent workers can take one point twice while
     ///     it is still running, as Optuna documents for both, so the trial count may exceed 90.
     /// </summary>
+    /// <remarks>
+    ///     BruteForce runs with <c>avoidPrematureStop: true</c>, Optuna's strict exhaustive search. Its default stop
+    ///     criterion counts running trials as covering their points and, as Optuna documents, "may result in incomplete
+    ///     coverage of the search space" (optuna#5780). Measured on this exact space at <c>n_jobs=8</c> (2026-11-08):
+    ///     Optuna 5.0.0 with the default left 1 point unsampled in 7 of 150 runs, and OptunaSharp on 2 cores in 4 of 300
+    ///     (down to 88 points); with the strict search both covered all 90 every time (150 and 300 runs). With the
+    ///     default this case failed in about 1 of 75 runs on 2 busy cores, although the port behaved as Optuna does.
+    /// </remarks>
     /// <param name="name"><c>grid</c> or <c>bruteforce</c>.</param>
     [TestMethod]
     [DataRow("grid")]
@@ -136,7 +144,7 @@ public class SamplerNJobsSweepTests
                 ["y"] = Enumerable.Range(0, 5).Select(i => CategoricalChoice.From((long)i)).ToList(),
                 ["c"] = new[] { "a", "b" }.Select(s => CategoricalChoice.From(s)).ToList(),
             }, seed: 1)
-            : new BruteForceSampler(seed: 1);
+            : new BruteForceSampler(seed: 1, avoidPrematureStop: true);
         var study = Optuna.CreateStudy(sampler: sampler);
 
         study.Optimize(t =>

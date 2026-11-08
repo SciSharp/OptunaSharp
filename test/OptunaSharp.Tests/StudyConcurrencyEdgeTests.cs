@@ -73,16 +73,27 @@ public class StudyConcurrencyEdgeTests
     ///     best value is never worse than any completed trial the reader saw just before (Optuna 5.0: 300 trials at
     ///     <c>n_jobs=8</c> with the same reader: no error).
     /// </summary>
+    /// <remarks>
+    ///     Trial 0 holds the run open until the reader has completed one full read, and the reader starts once trial 0
+    ///     runs, so at least one read overlaps the run while the other seven workers write. Without that handshake the
+    ///     300 trivial trials (about 40 ms) could all finish before a starved reader thread was first scheduled: with two
+    ///     test processes on 2 cores the reader once made 0 reads, and the test failed on scheduling alone.
+    /// </remarks>
     [TestMethod]
     public void AReader_DuringAnNJobsRun_AlwaysSeesAConsistentStudy()
     {
         var study = Optuna.CreateStudy(sampler: new RandomSampler(42));
         var errors = new ConcurrentQueue<Exception>();
         using var finished = new ManualResetEventSlim();
+        // The handshake that makes a read overlap the run: trial 0 signals that the run is underway, then waits until the
+        // reader has completed a read. Both waits are bounded, so a regression fails the assertions below, not the run.
+        using var runStarted = new ManualResetEventSlim();
+        using var firstReadDone = new ManualResetEventSlim();
         int reads = 0;
 
         var reader = new Thread(() =>
         {
+            runStarted.Wait(TimeSpan.FromSeconds(30));
             while (!finished.IsSet)
             {
                 try
@@ -103,10 +114,13 @@ public class StudyConcurrencyEdgeTests
                         study.BestTrial.State.Should().Be(TrialState.Complete);
                     }
                     Interlocked.Increment(ref reads);
+                    firstReadDone.Set();
                 }
                 catch (Exception e)
                 {
                     errors.Enqueue(e);
+                    // Release trial 0 too: the error is asserted after the run, which must not wait out the timeout.
+                    firstReadDone.Set();
                     return;
                 }
             }
@@ -115,7 +129,15 @@ public class StudyConcurrencyEdgeTests
 
         try
         {
-            study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 300, nJobs: 8);
+            study.Optimize(t =>
+            {
+                if (t.Number == 0)
+                {
+                    runStarted.Set();
+                    firstReadDone.Wait(TimeSpan.FromSeconds(30));
+                }
+                return t.SuggestFloat("x", 0, 1);
+            }, nTrials: 300, nJobs: 8);
         }
         finally
         {
