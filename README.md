@@ -49,41 +49,53 @@
 
 ---
 
-## Status
+## Features
 
-OptunaSharp has ported the **core algorithm surface** of Optuna 5.x and much of its ecosystem. The
-build/test/package/release pipeline gates every push, and the port grows against it
-module-by-module — [`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md) is the governing roadmap.
+The port of **Optuna 5.x is complete**: every Optuna module is ported (`study`, `trial`,
+`distributions`, `samplers`, `pruners`, `storages`, `search_space`, `importance`, `terminator`,
+`visualization`, `artifacts`, `integration`, `exceptions` and `logging`), with Optuna's names, defaults,
+edge cases and error messages. [`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md) records how it was
+ported, phase by phase.
 
-In place today:
-
-- **Core (pure-managed)** — Study / Trial / FrozenTrial (`suggest_*`, `optimize`, multi-objective
-  directions), float/int/categorical distributions, search-space inference, in-memory + journal
-  storage, exceptions and logging.
-- **Samplers** — Random, Grid, TPE, CMA-ES, GP, QMC, BruteForce, PartialFixed, NSGA-II, NSGA-III,
-  plus samplers Optuna does not have: AGE-MOEA-2, SMS-EMOA, MOEA/D, RVEA, LM-CMA, VkD-CMA,
-  differential evolution, PSO, the natural evolution strategies (OpenAI-ES, SNES, xNES), TuRBO,
-  REMBO, SAASBO and JANUS.
-- **Pruners** — Median, Percentile, SuccessiveHalving, Hyperband, Threshold, Patient, Wilcoxon, Nop.
-- **Importance** — fANOVA, MeanDecreaseImpurity, PED-ANOVA, SHAP (pure-managed, byte-exact) — plus a
-  scikit-learn-style `OptunaSearchCV`.
-- **Terminator** and the **visualization** data layer (all 12 `plot_*`).
-- **Satellite packages** (foreign-runtime, opt-in like `NumSharp.Interop.OpenBLAS`): SQLite / EF Core
-  / gRPC / Redis storage, cloud artifact stores (S3 / GCS / Azure Blob / R2), Plotly visualization,
-  LightGBM / ML.NET integration, an `optunasharp` CLI tool, and pythonnet interop bridges (OptunaHub,
-  BoTorch, PyCma, Pymoo).
-
-`Optimize(nJobs: n)` runs objectives truly in parallel. Measured on 32 logical CPUs, 64 trials of a ~50 ms
-CPU-bound objective finished 6.7× faster at `nJobs: 8` and 9.2× faster at `nJobs: 16` than at `nJobs: 1`;
-Python Optuna 5.0 gains about 1.1× at any `n_jobs`, because the GIL runs one Python thread at a time.
-Sampling stays serial per sampler, so the gain is in the objective. [`docs/THREADING.md`](docs/THREADING.md)
-has the design, its guarantees and its limits.
-
-Reproducibility under a fixed seed is **bit-identical to Python** wherever the path is deterministic,
-enforced by a live-Optuna parity harness (pythonnet) that asks real Optuna to compute answers
-in-process and asserts OptunaSharp matches. The whole pipeline runs on **net8.0** and **net10.0**
-across Windows / Linux / macOS, behind strong-naming and package gates, and a tag-driven NuGet
-release of all 20 packages.
+- **Define-by-run API** — `Study`, `Trial` and `FrozenTrial` with every `suggest_*`, `Optimize`,
+  ask-and-tell, enqueued trials, multi-objective directions, constraints, user attributes and
+  callbacks; float, int and categorical distributions with search-space inference. All of it lives in
+  the pure-managed Core package, built on NumSharp.
+- **Samplers** — Optuna's Random, Grid, TPE, CMA-ES, GP, QMC, BruteForce, PartialFixed, NSGA-II and
+  NSGA-III, plus samplers Optuna does not have: AGE-MOEA-2, SMS-EMOA, MOEA/D, RVEA, LM-CMA, VkD-CMA,
+  differential evolution, PSO, the natural evolution strategies (OpenAI-ES, SNES, xNES), TuRBO, REMBO,
+  SAASBO and JANUS (with its DE and multi-objective variants).
+- **Pruners** — Median, Percentile, SuccessiveHalving, Hyperband, Threshold, Patient, Wilcoxon and Nop.
+- **Analysis** — parameter importance (fANOVA, mean decrease impurity, PED-ANOVA and SHAP, all
+  pure-managed and byte-exact), terminators, and the data behind all 12 `plot_*` functions, which the
+  Plotly.NET package draws as interactive figures.
+- **Storage** — in-memory and journal-file storage in Core; SQLite, PostgreSQL, MySQL, Redis journals
+  and a gRPC storage proxy as companion packages. Python Optuna can work on the same study through
+  the journal file, any of the databases, Redis or the gRPC proxy. On the SQLite, PostgreSQL and MySQL
+  storages, heartbeats with `RetryFailedTrialCallback` retry the trials of a worker that died.
+- **Artifacts** — a file-system store in Core; Amazon S3, Google Cloud Storage, Azure Blob Storage and
+  Cloudflare R2 as companion packages.
+- **Parallel and thread-safe** — `Optimize(nJobs: n)` runs n trials at once, with no GIL in the way.
+  Measured on 32 logical CPUs, 64 trials of a ~50 ms CPU-bound objective finished 6.7× faster at
+  `nJobs: 8` and 9.2× faster at `nJobs: 16` than at `nJobs: 1`; Python Optuna 5.0 gains about 1.1× at
+  any `n_jobs`, because the GIL runs one Python thread at a time.
+  - Trials run on OptunaSharp's own dedicated threads by default, or on the .NET ThreadPool.
+  - Sampling is serial per sampler, as in Optuna, unless `SamplerConcurrency.PerWorker` gives each
+    worker its own Random, TPE, CMA-ES, VkD-CMA or Grid sampler.
+  - A `CancellationToken`, or `StopSignals` for Ctrl+C and SIGTERM, stops a run gracefully: no new
+    trial starts, and the trials in flight finish and are stored.
+  - Studies, trials, samplers, pruners and storages are safe to share between threads;
+    [`docs/THREADING.md`](docs/THREADING.md) has the design, its guarantees and its limits.
+- **Integrations** — a native scikit-learn-style `OptunaSearchCV`, `LightGBMTuner`, ML.NET,
+  training-loop pruning callbacks, Microsoft.Extensions.DependencyInjection registrations, and the
+  `optunasharp` command-line tool, a port of the `optuna` CLI.
+- **Python bridges** — OptunaHub packages, BoTorch, pycma and pymoo, driven in-process through
+  pythonnet.
+- **Reproducible and tested** — a seeded run is **bit-identical to Python** wherever the path is
+  deterministic, enforced by a live-Optuna parity harness (pythonnet) that asks real Optuna for each
+  answer in-process and asserts that OptunaSharp matches. Everything builds and tests on **net8.0** and
+  **net10.0** across Windows, Linux and macOS, behind strong-naming and package gates, and all 20
+  packages release together from one tag.
 
 ## Install
 
@@ -140,45 +152,75 @@ The C# quick start above is the same study, written against the same define-by-r
 `snake_case` names become `PascalCase` (`suggest_float` → `SuggestFloat`, `n_trials` → `nTrials`),
 while parameter order, defaults and error messages are kept as Optuna has them.
 
-## Repository layout
-
-```
-OptunaSharp/
-├── src/
-│   ├── OptunaSharp.Core/            # the OptunaSharp package — the pure-managed library (refs NumSharp)
-│   └── OptunaSharp.*/               # optional satellite packages (Storage.*, Visualization.Plotly, Integration.*, Interop.*, Artifacts.*, Cli)
-├── test/
-│   ├── OptunaSharp.Tests/           # unit tests (MSTest v3 + AwesomeAssertions)
-│   ├── OptunaSharp.Tests.Interop/   # live-Optuna parity harness (pythonnet)
-│   ├── OptunaSharp.Tests.*/         # satellite suites (Storage, Artifacts, Cli, Integration.*, PackageParity, …)
-│   └── OptunaSharp.Benchmark/       # BenchmarkDotNet harness (template; grows with the ops)
-├── examples/                        # runnable .NET 10 file-based apps (see examples/README.md)
-├── refs/                            # reference-only pinned submodules (Optuna v5.0.0, NumSharp, …) — never built
-├── docs/
-│   ├── PORTING_PLAN.md · THREADING.md
-│   └── website-src/                 # DocFX site (docfx.json, conceptual docs, generated API ref)
-├── .github/
-│   ├── workflows/                   # build-and-release · package-parity · docs · documentation · examples · benchmark
-│   ├── scripts/                     # pack_all.sh · verify_strong_name.cs · verify_packages.cs · check_documentation.cs
-│   ├── ISSUE_TEMPLATE/ · PULL_REQUEST_TEMPLATE.md · FUNDING.yml · dependabot.yml
-├── Directory.Build.props            # strong-naming + shared metadata
-├── Open.snk                         # Microsoft's published OSS key (shared with the SciSharp STACK)
-├── SECURITY.md · CITATION.cff · CONTRIBUTING.md · CODE_OF_CONDUCT.md
-└── SciSharp.OptunaSharp.sln
-```
-
 ## Documentation
 
-The documentation site is built with **DocFX** from `docs/website-src/` and deployed to GitHub Pages
-by `.github/workflows/docs.yml`. Build it locally:
+The documentation site, [scisharp.github.io/OptunaSharp](https://scisharp.github.io/OptunaSharp/):
 
-```bash
-dotnet tool install -g docfx
-docfx docs/website-src/docfx.json --serve   # http://localhost:8080
-```
-
-It renders the conceptual docs (`docs/website-src/docs/`) plus an API reference generated from
-`OptunaSharp.Core`.
+- **Start here** —
+  [Introduction](https://scisharp.github.io/OptunaSharp/docs/intro.html) ·
+  [Getting Started](https://scisharp.github.io/OptunaSharp/docs/getting-started.html) ·
+  [Key Features](https://scisharp.github.io/OptunaSharp/docs/key-features/index.html) ·
+  [FAQ](https://scisharp.github.io/OptunaSharp/docs/faq.html)
+- **Guides** —
+  [Study and Trials](https://scisharp.github.io/OptunaSharp/docs/study-and-trials.html) ·
+  [Distributions](https://scisharp.github.io/OptunaSharp/docs/distributions.html) ·
+  [Search Spaces](https://scisharp.github.io/OptunaSharp/docs/search-spaces.html) ·
+  [Samplers](https://scisharp.github.io/OptunaSharp/docs/samplers.html) ·
+  [Pruners](https://scisharp.github.io/OptunaSharp/docs/pruners.html) ·
+  [Multi-objective Optimization](https://scisharp.github.io/OptunaSharp/docs/multi-objective.html) ·
+  [Storage](https://scisharp.github.io/OptunaSharp/docs/storage.html) ·
+  [Artifacts](https://scisharp.github.io/OptunaSharp/docs/artifacts.html) ·
+  [Terminators](https://scisharp.github.io/OptunaSharp/docs/terminators.html) ·
+  [Parameter Importance](https://scisharp.github.io/OptunaSharp/docs/importance.html) ·
+  [Visualization](https://scisharp.github.io/OptunaSharp/docs/visualization.html) ·
+  [Logging](https://scisharp.github.io/OptunaSharp/docs/logging.html) ·
+  [Exceptions](https://scisharp.github.io/OptunaSharp/docs/exceptions.html)
+- **Recipes** —
+  [Overview](https://scisharp.github.io/OptunaSharp/docs/recipes/index.html) ·
+  [Saving/Resuming with RDB](https://scisharp.github.io/OptunaSharp/docs/recipes/rdb.html) ·
+  [Multi-objective Optimization](https://scisharp.github.io/OptunaSharp/docs/recipes/multi-objective.html) ·
+  [User Attributes](https://scisharp.github.io/OptunaSharp/docs/recipes/attributes.html) ·
+  [Command-Line Interface](https://scisharp.github.io/OptunaSharp/docs/recipes/cli.html) ·
+  [User-Defined Sampler](https://scisharp.github.io/OptunaSharp/docs/recipes/user-defined-sampler.html) ·
+  [User-Defined Pruner](https://scisharp.github.io/OptunaSharp/docs/recipes/user-defined-pruner.html) ·
+  [Callback for Study.Optimize](https://scisharp.github.io/OptunaSharp/docs/recipes/callback.html) ·
+  [Specify Hyperparameters Manually](https://scisharp.github.io/OptunaSharp/docs/recipes/specify-params.html) ·
+  [Ask-and-Tell Interface](https://scisharp.github.io/OptunaSharp/docs/recipes/ask-and-tell.html) ·
+  [Re-use the Best Trial](https://scisharp.github.io/OptunaSharp/docs/recipes/reuse-best-trial.html) ·
+  [Journal-File Storage](https://scisharp.github.io/OptunaSharp/docs/recipes/journal-storage.html) ·
+  [Artifacts](https://scisharp.github.io/OptunaSharp/docs/recipes/artifacts.html) ·
+  [Wilcoxon Pruner](https://scisharp.github.io/OptunaSharp/docs/recipes/wilcoxon-pruner.html) ·
+  [Ablation Study with Brute Force](https://scisharp.github.io/OptunaSharp/docs/recipes/ablation-study.html)
+- **Integrations** — [Overview](https://scisharp.github.io/OptunaSharp/integrations/index.html)
+  - Model training —
+    [scikit-learn-style search](https://scisharp.github.io/OptunaSharp/integrations/training/scikit-learn.html) ·
+    [ML.NET](https://scisharp.github.io/OptunaSharp/integrations/training/ml-net.html) ·
+    [LightGBM](https://scisharp.github.io/OptunaSharp/integrations/training/lightgbm.html) ·
+    [Training-loop pruning](https://scisharp.github.io/OptunaSharp/integrations/training/pruning.html)
+  - Storage —
+    [SQLite](https://scisharp.github.io/OptunaSharp/integrations/storage/sqlite.html) ·
+    [EF Core (PostgreSQL / MySQL)](https://scisharp.github.io/OptunaSharp/integrations/storage/ef-core.html) ·
+    [Redis](https://scisharp.github.io/OptunaSharp/integrations/storage/redis/index.html) ·
+    [gRPC](https://scisharp.github.io/OptunaSharp/integrations/storage/grpc/index.html)
+  - Python bridges —
+    [Python.NET runtime](https://scisharp.github.io/OptunaSharp/integrations/python/pythonnet.html) ·
+    [OptunaHub](https://scisharp.github.io/OptunaSharp/integrations/python/optunahub.html) ·
+    [BoTorch](https://scisharp.github.io/OptunaSharp/integrations/python/botorch.html) ·
+    [PyCma](https://scisharp.github.io/OptunaSharp/integrations/python/pycma.html) ·
+    [pymoo](https://scisharp.github.io/OptunaSharp/integrations/python/pymoo.html)
+  - Cloud artifacts —
+    [Amazon S3](https://scisharp.github.io/OptunaSharp/integrations/artifacts/s3.html) ·
+    [Google Cloud Storage](https://scisharp.github.io/OptunaSharp/integrations/artifacts/gcs.html) ·
+    [Azure Blob Storage](https://scisharp.github.io/OptunaSharp/integrations/artifacts/azure-blob.html) ·
+    [Cloudflare R2](https://scisharp.github.io/OptunaSharp/integrations/artifacts/r2.html)
+  - Tools —
+    [Plotly.NET figures](https://scisharp.github.io/OptunaSharp/integrations/visualization/plotly.html) ·
+    [Command-line tool](https://scisharp.github.io/OptunaSharp/integrations/cli.html)
+- **Methods** — [Overview](https://scisharp.github.io/OptunaSharp/docs/methods/index.html): a page per
+  algorithm, each with its paper — the samplers, pruners, importance evaluators and terminators, and
+  the operators and kernels they are built from.
+- **API reference** — [OptunaSharp](https://scisharp.github.io/OptunaSharp/api/index.html), generated
+  from the XML documentation of the Core package.
 
 ## The NumSharp reference
 
@@ -215,26 +257,6 @@ dotnet pack src/OptunaSharp.Core/OptunaSharp.Core.csproj -c Release -o packages
 Test categories (`OpenBugs`, `Misaligned`, `RequiresPython`, `HighMemory`, `WindowsOnly`, `Slow`) are typed
 attributes in `test/OptunaSharp.Tests/TestCategory.cs`, so CI filter strings stay stable as the
 suite grows.
-
-## Roadmap — Optuna modules
-
-Tracking Optuna's own module layout. The core surface is in place;
-[`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md) is the authoritative, phase-by-phase roadmap.
-
-| Optuna module | Role | OptunaSharp status |
-|---------------|------|--------------------|
-| `distributions` | Search-space distributions (float/int/categorical) | ✅ ported |
-| `trial` | Trial + FrozenTrial, `suggest_*` | ✅ ported |
-| `study` | Study, `optimize`, directions, storage glue | ✅ ported |
-| `samplers` | Random, Grid, TPE, CMA-ES, GP, QMC, BruteForce, NSGA-II/III, … | ✅ ported |
-| `pruners` | Median, Hyperband, successive halving, … | ✅ ported |
-| `storages` | In-memory + journal (Core); RDB (SQLite/EF Core), gRPC, Redis (satellites) | ✅ ported |
-| `search_space` | Search-space inference | ✅ ported |
-| `importance` | Hyperparameter importance (fANOVA, MDI, PED-ANOVA, SHAP) | ✅ ported |
-| `terminator` | Automated termination | ✅ ported |
-| `visualization` | Optimization-history plots (data layer + Plotly) | ✅ ported |
-| `exceptions` / `logging` | Framework exceptions + logging | ✅ ported |
-| `integration` / `artifacts` | LightGBM/ML.NET/sklearn; S3/GCS/Azure/R2 artifacts; OptunaHub/BoTorch/PyCma bridges | ✅ ported |
 
 ## Scripting with `dotnet run` (.NET 10 file-based apps)
 
