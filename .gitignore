@@ -93,4 +93,6 @@ docs/website/
 docs/website-src/api/*.yml
 docs/website-src/api/.manifest
 docs/website-src/llms.txt
-docs/papers/
+docs/papers/*
+!docs/papers/paper-gateway/
+/docs/papers/paper-gateway
