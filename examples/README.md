@@ -20,6 +20,58 @@ hosts. Run them with `dotnet run --project examples/projects/<Name>`.
 | [`TuningWorker`](projects/TuningWorker/README.md) | **Distributed optimization** from a Generic Host worker: several processes, and the Python Optuna worker next to it, share one TuningService study over gRPC |
 | [`MLNetModelTuning`](projects/MLNetModelTuning/README.md) | **Real in-process training**: `OptunaSearchCV` cross-validates ML.NET FastTree models, with a resumable SQLite study, a held-out score, fANOVA importance and Plotly charts |
 
+## Real-world use cases (`0_*.cs`)
+
+One file per real-world job, each with a different sampler / pruner / storage setup and an objective that
+does real work: a simulation, an analytic engineering model, a real codec or pipeline, child processes, or
+in-process training. The `0_` prefix keeps them together. Where a run was compared against live Optuna 5.0.0
+the result is in the last column (**bit-exact** = every trial identical; tolerance = the documented erf/GP
+classes).
+
+| Example | Setup | The job |
+|---|---|---|
+| [`0_PidControllerTuning.cs`](0_PidControllerTuning.cs) | CMA-ES, `x0`/`sigma0`, `enqueue_trial` — **bit-exact** (150 trials) | tune a DC-motor PID loop on a closed-loop simulation with actuator limits and anti-windup |
+| [`0_CloudRightSizing.cs`](0_CloudRightSizing.cs) | TPE multivariate, `Trial.set_constraint` | cheapest instance fleet meeting a p99 SLO (Erlang C), a memory floor and AZ-loss headroom |
+| [`0_LogCompressionTradeoff.cs`](0_LogCompressionTradeoff.cs) | NSGA-II, 2 objectives, resumable `JournalStorage` file | archive size vs. throughput over real Brotli/GZip/ZLib/Deflate runs; re-run to resume |
+| [`0_ChurnModelHyperband.cs`](0_ChurnModelHyperband.cs) | TPE + `HyperbandPruner` | a hand-written MLP churn model trained per epoch; held-out test score at the end |
+| [`0_ReactionYieldBayesOpt.cs`](0_ReactionYieldBayesOpt.cs) | `GPSampler`, `create_trial` + `add_trial`, constraint | batch-reactor yield (Arrhenius kinetics) warm-started from a lab notebook, impurity spec |
+| [`0_AnnealingSolverConfig.cs`](0_AnnealingSolverConfig.cs) | TPE + `WilcoxonPruner` | algorithm configuration of a simulated-annealing TSP solver over 24 instances |
+| [`0_InventoryPolicyQmc.cs`](0_InventoryPolicyQmc.cs) | random vs. scrambled-Sobol `QMCSampler` vs. TPE — QMC/random **bit-exact** | (s, S) inventory policy on a noisy Monte Carlo, plus the winner's-curse re-check |
+| [`0_DotnetRuntimeKnobs.cs`](0_DotnetRuntimeKnobs.cs) | ask-and-tell, `TrialState.FAIL` | real `DOTNET_*` runtime switches, timed on child processes of the same program |
+| [`0_CrashTolerantSqliteWorkers.cs`](0_CrashTolerantSqliteWorkers.cs) | SQLite `RDBStorage`, heartbeats, `RetryHeartbeatStaleTrialCallback` | three worker processes, one killed mid-trial; its trial is failed and retried; Python reads the `.db` |
+| [`0_CarSideImpactNsga3.cs`](0_CarSideImpactNsga3.cs) | NSGA-III, 3 objectives, 10 constraints — **bit-exact** (600 trials) | car side-impact design (RE41) under the side-crash safety limits |
+| [`0_RecommenderParallelAsha.cs`](0_RecommenderParallelAsha.cs) | `n_jobs=4`, `SuccessiveHalvingPruner`, TPE constant liar | matrix-factorization recommender trained by SGD, tuned on four threads |
+| [`0_CreditFeatureSelection.cs`](0_CreditFeatureSelection.cs) | TPE multivariate over 16 booleans, fANOVA, `trials_dataframe` | which credit-bureau attributes are worth buying for a logistic scorecard |
+| [`0_PipelineGridSearch.cs`](0_PipelineGridSearch.cs) | `GridSampler` (stops the study itself) | channel capacity × consumers × batch size of a real `System.Threading.Channels` pipeline |
+| [`0_DemandForecastArtifacts.cs`](0_DemandForecastArtifacts.cs) | TPE + `MedianPruner`, `FileSystemArtifactStore` | Holt-Winters demand forecast with rolling-origin CV; every model uploaded, the best downloaded |
+| [`0_DenoiseFilterTwoStage.cs`](0_DenoiseFilterTwoStage.cs) | TPE, then `PartialFixedSampler` | two-stage tuning of a median + bilateral denoising pipeline (PSNR) |
+| [`0_FastChargingProtocol.cs`](0_FastChargingProtocol.cs) | `GPSampler`, 2 objectives + constraint — tolerance (~1e-5) | EV fast-charging protocol: charge time vs. cycle life under a temperature limit |
+| [`0_GpsKalmanStudyLifecycle.cs`](0_GpsKalmanStudyLifecycle.cs) | `copy_study`, `load_study`, summaries, `delete_study`, metric names | a GPS Kalman filter's study, from notebook prototype to the team's SQLite store |
+| [`0_GpuFineTunePlanner.cs`](0_GpuFineTunePlanner.cs) | `catch=`, NaN → FAIL, `n_jobs=2`, `timeout`, `MaxTrialsCallback`, `FixedTrial` | fit a 7B LoRA fine-tune on one 24 GB GPU for the most tokens/s |
+| [`0_AdBiddingReport.cs`](0_AdBiddingReport.cs) | TPE + `MedianPruner`, nine Plotly charts | a real-time-bidding strategy on a 14-day auction simulation, with the stakeholder report |
+| [`0_MicrogridSizingCmaMargin.cs`](0_MicrogridSizingCmaMargin.cs) | CMA-ES `with_margin` (mixed integer) — tolerance (≤ 3e-14) | off-grid PV + battery + diesel sizing over 8,760 hourly steps (LCOE) |
+| [`0_KnnExperimentTracking.cs`](0_KnnExperimentTracking.cs) | rich user attrs through journal → SQLite → Python | k-NN classifier search whose per-fold metadata must survive every storage hop |
+| [`0_LoanDefaultLightGbmTunerCv.cs`](0_LoanDefaultLightGbmTunerCv.cs) | `LightGBMTunerCV` (ML.NET LightGBM) | Optuna's stepwise LightGBM tuner on a loan-default model, trained for real |
+| [`0_TrussCrossoverShootout.cs`](0_TrussCrossoverShootout.cs) | NSGA-II × six crossovers — all **bit-exact** (2,400 trials) | four-bar truss (RE21): volume vs. displacement, crossover operators compared by hypervolume |
+| [`0_CachePolicyBruteForce.cs`](0_CachePolicyBruteForce.cs) | `BruteForceSampler` on a conditional space — **bit-exact** order | every LRU/FIFO/LFU/TTL cache configuration replayed against a drifting Zipf trace |
+| [`0_ServerlessPowerTuningMotpe.cs`](0_ServerlessPowerTuningMotpe.cs) | multi-objective TPE + constraint | Lambda-style memory / arch / batch / AOT: cost per million vs. p99 latency |
+| [`0_RateLimiterHostedService.cs`](0_RateLimiterHostedService.cs) | Generic Host + DI (`AddOptunaStudyFactory` …), cancellation | a `BackgroundService` re-tunes an API gateway's token bucket every telemetry window |
+| [`0_PressureVesselParetoReport.cs`](0_PressureVesselParetoReport.cs) | NSGA-II, mixed directions, constraints, Pareto + hypervolume charts | pressure-vessel cost vs. capacity under the ASME thickness rules (RE23) |
+
+Notes from running them:
+
+- Every one runs with `dotnet run -c Release examples/<name>.cs`. The SQLite, Plotly, LightGBM and hosting
+  examples pull their extra package through `#:project` / `#:package`. The SQLite examples also read the
+  database back from Python when a `python` with `optuna` is on `PATH`, and skip that step otherwise.
+- A file-based app needs `#:property PublishAot=false`. The .NET 10 default (`PublishAot=true`) turns off
+  dynamic code, and NumSharp's IL kernels then throw `PlatformNotSupportedException` on the first
+  suggestion.
+- `0_LoanDefaultLightGbmTunerCv` sets LightGBM's `seed` explicitly. Without one, the ML.NET adapter is not
+  reproducible: native LightGBM falls back to fixed default seeds, the adapter draws a random one. That is
+  an open bug, tracked by `LightGbmRealWorldBugTests`.
+- `0_GpuFineTunePlanner` fails most of its trials on purpose. Samplers learn nothing from a FAIL trial, so
+  record a predictable failure with `SetConstraint` instead (as `0_CloudRightSizing` does).
+
 ## Ported from real-world gists
 
 | Example | Source gist | ★ | What it does |
