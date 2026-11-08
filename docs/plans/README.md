@@ -46,6 +46,7 @@ numeric prefix is the recommended execution order.
 | [10](10-threading.md) | Threading: a configurable `nJobs` executor, then seven follow-ups | the reused worker threads of `9cfcb12` (done) | N | ★★ / medium |
 | [11](11-threading-round-2.md) | Threading, round 2: sampler per worker, OpenBLAS threads, locked log handlers, the async question | plan 10 (done) | N | ★★ / medium |
 | [12](12-parallel-read-duplicates.md) | Parallel reads never hand one point to two trials: per-sampler fixes and tests, the bridges pinned | plan 11 (done) | N | ★★ / medium |
+| [13](13-rustuna-derived-performance.md) | Rustuna-derived performance: compatible speedups as the only path, opt-in switches where results would change | plans 10-12 (done) | N | ★★★ / high |
 
 **Threading workstream (10, 11, 12).** Unrelated to JANUS. Plan 12 (done 2026-11-08) makes every Core sampler give
 trials that ask at once different points, without changing sequential runs, and pins what the four Python bridges
@@ -56,6 +57,14 @@ Phase 1, built on 2026-11-07, adds an opt-in thread-pool executor next to the de
 through an options class at four levels. Phase 2, done only after Phase 1, closes six open items of
 [`docs/THREADING.md`](../THREADING.md) §12: OS seed width, the terminator lock, Redis round trips and
 `DedicatedThreads`, cancellation, `PymooSampler` on any thread, and ML.NET search under `nJobs`.
+
+**Performance workstream (13).** Designed with the owner on 2026-11-08, not started. Rustuna, the Optuna team's
+Rust port, runs its announcement's workloads 3-60x faster than OptunaSharp. Plan 13 adopts each of its techniques that
+keeps every result identical as the only implementation; a scratch prototype took CMA-ES at 100,000 trials from 812 s
+to 26 s that way, byte-identical. The techniques that would change results are measured, and the owner decides each
+one: CMA-ES reusing its told optimizer is opt-in with Optuna's path as the default; TPE fast numerics waits for the exact
+fused kernel; the trial queue and trial discarding are deferred, with compact storage of finished trials proposed
+instead of discarding.
 
 **Tier-X pymoo-interop workstream (08–09).** Separate from the Tier-N native ports above: unlocked by the
 2026-09-10 pymoo-on-numpy-2.4.2 migration (pymoo now runs in the interop interpreter, commit `9c7aec2`),
