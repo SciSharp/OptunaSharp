@@ -18,15 +18,13 @@
 </p>
 
 <p align="center">
-  OptunaSharp is a .NET port of <a href="https://github.com/optuna/optuna">Optuna</a>, the
-  define-by-run hyperparameter optimization framework — studies, trials, samplers, pruners,
-  distributions and storages — for C# and F#, built on top of
-  <a href="https://github.com/SciSharp/NumSharp">NumSharp</a> for numerical work.
+  <strong>OptunaSharp</strong> is a faithful and complete .NET port of <a href="https://github.com/optuna/optuna">Optuna</a>, an automatic hyperparameter optimization software framework, particularly designed for machine learning. 
 </p>
 
 <p align="center">
-  The compatibility target is <strong>Optuna 5.x</strong>. When OptunaSharp behavior and Optuna
-  behavior differ, Optuna is treated as the source of truth and OptunaSharp aligns to it.
+  OptunaSharp is <strong>thread-safe and truly parallel.</strong><br>
+  <code>nJobs</code> runs trials on all your cores at once, with no GIL in the way, and workers on <br>many machines share one study, Python Optuna workers included.<br>
+ OptunaSharp supports parallelism scheme of: single-threaded, reused dedicated threads <br>and ThreadPool async-await.
 </p>
 
 <p align="center">
@@ -44,13 +42,10 @@
 </p>
 
 <p align="center">
-  OptunaSharp is <a href="docs/THREADING.md"><strong>thread-safe and truly parallel</strong></a>:
-  <code>nJobs</code> runs trials on all your cores at once, with no GIL in the way, and workers on many
-  machines share one study, Python Optuna workers included.<br>
-  By default its <code>nJobs</code> workers are dedicated threads, reused across trials and <code>Optimize</code>
-  calls instead of taken from the .NET ThreadPool, which stays free for your app (the ThreadPool is one option
-  away); <code>Ask</code> and <code>Tell</code> work from any thread, ThreadPool threads included.
+  The compatibility target is <strong>Optuna 5.x</strong>. When OptunaSharp behavior and Optuna
+  <br>behavior differ, Optuna is treated as the source of truth and OptunaSharp aligns to it.
 </p>
+
 
 ---
 
