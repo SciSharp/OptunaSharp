@@ -11,3 +11,7 @@
 #
 # Rename docs/algorithms -> docs/methods (pure R100 move, no content change)
 9c01b34bd41a7d57dda734968fba33d0528bd6b1
+
+# docs(repo): correct b0e725d's remotes/branch wording (.claude/CLAUDE.md prose + one workflow
+# comment, no code). Its lines blame to b0e725d, the commit it corrects.
+ba3f1749d7c022688345a10d775e140b75683d37
