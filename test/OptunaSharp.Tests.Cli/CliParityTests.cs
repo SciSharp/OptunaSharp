@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using AwesomeAssertions;
 using OptunaSharp.Cli;
 
@@ -93,68 +96,82 @@ public class CliParityTests
     [TestCategory("RequiresPython")]
     public void StudyNames_AllTextFormats()
     {
+        var checks = new ParityBatch();
         foreach (var f in TextFormats)
-            AssertParity(_soUrl, "study-names", "-f", f);
+            checks.Add(_soUrl, "study-names", "-f", f);
+        checks.AssertAll();
     }
 
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void Studies_AllTextFormats_PlainAndFlatten()
     {
+        var checks = new ParityBatch();
         foreach (var f in TextFormats)
         {
-            AssertParity(_soUrl, "studies", "-f", f);
-            AssertParity(_soUrl, "studies", "-f", f, "--flatten");
+            checks.Add(_soUrl, "studies", "-f", f);
+            checks.Add(_soUrl, "studies", "-f", f, "--flatten");
         }
+        checks.AssertAll();
     }
 
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void Trials_SingleObjective_AllTextFormats_PlainAndFlatten()
     {
+        var checks = new ParityBatch();
         foreach (var f in TextFormats)
         {
-            AssertParity(_soUrl, "trials", "--study-name", "demo", "-f", f);
-            AssertParity(_soUrl, "trials", "--study-name", "demo", "-f", f, "--flatten");
+            checks.Add(_soUrl, "trials", "--study-name", "demo", "-f", f);
+            checks.Add(_soUrl, "trials", "--study-name", "demo", "-f", f, "--flatten");
         }
+        checks.AssertAll();
     }
 
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void BestTrial_SingleObjective_AllTextFormats()
     {
+        var checks = new ParityBatch();
         foreach (var f in TextFormats)
-            AssertParity(_soUrl, "best-trial", "--study-name", "demo", "-f", f, "--flatten");
+            checks.Add(_soUrl, "best-trial", "--study-name", "demo", "-f", f, "--flatten");
+        checks.AssertAll();
     }
 
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void Trials_MultiObjective_ValuesColumns_AllTextFormats()
     {
+        var checks = new ParityBatch();
         foreach (var f in TextFormats)
         {
-            AssertParity(_moUrl, "trials", "--study-name", "mo", "-f", f);
-            AssertParity(_moUrl, "trials", "--study-name", "mo", "-f", f, "--flatten");
+            checks.Add(_moUrl, "trials", "--study-name", "mo", "-f", f);
+            checks.Add(_moUrl, "trials", "--study-name", "mo", "-f", f, "--flatten");
         }
+        checks.AssertAll();
     }
 
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void BestTrials_MultiObjective_ParetoFront_AllTextFormats()
     {
+        var checks = new ParityBatch();
         foreach (var f in TextFormats)
-            AssertParity(_moUrl, "best-trials", "--study-name", "mo", "-f", f);
+            checks.Add(_moUrl, "best-trials", "--study-name", "mo", "-f", f);
+        checks.AssertAll();
     }
 
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void Studies_WithUserAttrs_AllTextFormats_PlainAndFlatten()
     {
+        var checks = new ParityBatch();
         foreach (var f in TextFormats)
         {
-            AssertParity(_attrsUrl, "studies", "-f", f);
-            AssertParity(_attrsUrl, "studies", "-f", f, "--flatten");
+            checks.Add(_attrsUrl, "studies", "-f", f);
+            checks.Add(_attrsUrl, "studies", "-f", f, "--flatten");
         }
+        checks.AssertAll();
     }
 
     [TestMethod]
@@ -162,19 +179,23 @@ public class CliParityTests
     public void Trials_WithPrunedAndFailedTrials_AllTextFormats()
     {
         // The pruned/failed trials have a None objective value and no datetime_complete/duration.
+        var checks = new ParityBatch();
         foreach (var f in TextFormats)
         {
-            AssertParity(_attrsUrl, "trials", "--study-name", "attrs", "-f", f);
-            AssertParity(_attrsUrl, "trials", "--study-name", "attrs", "-f", f, "--flatten");
+            checks.Add(_attrsUrl, "trials", "--study-name", "attrs", "-f", f);
+            checks.Add(_attrsUrl, "trials", "--study-name", "attrs", "-f", f, "--flatten");
         }
+        checks.AssertAll();
     }
 
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void EmptyStudy_Trials_AllTextFormats()
     {
+        var checks = new ParityBatch();
         foreach (var f in TextFormats)
-            AssertParity(_emptyUrl, "trials", "--study-name", "empty", "-f", f);
+            checks.Add(_emptyUrl, "trials", "--study-name", "empty", "-f", f);
+        checks.AssertAll();
     }
 
     [TestMethod]
@@ -182,11 +203,13 @@ public class CliParityTests
     public void JournalStorage_StudiesAndTrials_AllTextFormats()
     {
         // Reads omit --storage-class: both CLIs must guess journal-file from the existing file.
+        var checks = new ParityBatch();
         foreach (var f in TextFormats)
         {
-            AssertParity(_journalPath, "studies", "-f", f);
-            AssertParity(_journalPath, "trials", "--study-name", "j", "-f", f);
+            checks.Add(_journalPath, "studies", "-f", f);
+            checks.Add(_journalPath, "trials", "--study-name", "j", "-f", f);
         }
+        checks.AssertAll();
     }
 
     [TestMethod]
@@ -196,26 +219,30 @@ public class CliParityTests
         // A fresh, identical study on each side + a seeded RandomSampler => the suggested parameter is
         // bit-identical, so `ask`'s stdout must match exactly.
         string[] create = { "create-study", "--study-name", "q" };
+        var checks = new ParityBatch();
         foreach (var f in new[] { "json", "value", "table" })
-            AssertFreshStudyParity(create, new[]
+            checks.AddFresh(create, new[]
             {
                 "ask", "--study-name", "q", "--sampler", "RandomSampler", "--sampler-kwargs", "{\"seed\": 0}",
                 "--search-space", FloatSpace, "-f", f,
             });
-        AssertFreshStudyParity(create, new[]
+        checks.AddFresh(create, new[]
         {
             "ask", "--study-name", "q", "--sampler", "RandomSampler", "--sampler-kwargs", "{\"seed\": 0}",
             "--search-space", FloatSpace, "-f", "json", "--flatten",
         });
+        checks.AssertAll();
     }
 
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void CreateStudy_PrintsStudyName()
     {
-        AssertFreshStudyParity(Array.Empty<string>(), new[] { "create-study", "--study-name", "made" });
-        AssertFreshStudyParity(Array.Empty<string>(),
+        var checks = new ParityBatch();
+        checks.AddFresh(Array.Empty<string>(), new[] { "create-study", "--study-name", "made" });
+        checks.AddFresh(Array.Empty<string>(),
             new[] { "create-study", "--study-name", "mo2", "--directions", "minimize", "maximize" });
+        checks.AssertAll();
     }
 
     /// <summary>
@@ -233,7 +260,8 @@ public class CliParityTests
             "{\"x\": {\"name\": \"FloatDistribution\", \"attributes\": {\"step\": null, \"low\": -10.0, \"high\": 10.0, \"log\": false}}}";
 
         // (1) `ask` with the recipe's exact search space must match optuna byte-for-byte.
-        AssertFreshStudyParity(
+        var checks = new ParityBatch();
+        checks.AddFresh(
             new[] { "create-study", "--study-name", "recipe-demo" },
             new[]
             {
@@ -242,47 +270,107 @@ public class CliParityTests
             });
 
         // (2) create → ask → tell(--values 0.7 --state complete): OptunaSharp writes it; both CLIs read it identically.
+        // The writes finish before any reference process starts: AssertAll launches them, after finalizing the
+        // connections these writes leaked.
         string url = FreshDbUrl("recipe-workflow");
         RunInProcess("create-study", "--study-name", "recipe-demo", "--storage", url);
         RunInProcess("ask", "--study-name", "recipe-demo", "--storage", url,
             "--sampler", "RandomSampler", "--sampler-kwargs", "{\"seed\": 0}", "--search-space", recipeSpace);
         RunInProcess("tell", "--study-name", "recipe-demo", "--storage", url,
             "--trial-number", "0", "--values", "0.7", "--state", "complete");
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
 
         foreach (var f in TextFormats)
         {
-            AssertParity(url, "trials", "--study-name", "recipe-demo", "-f", f);
-            AssertParity(url, "best-trial", "--study-name", "recipe-demo", "-f", f);
+            checks.Add(url, "trials", "--study-name", "recipe-demo", "-f", f);
+            checks.Add(url, "best-trial", "--study-name", "recipe-demo", "-f", f);
         }
+        checks.AssertAll();
     }
 
     // ------------------------------------------------------------------ helpers
 
-    // For mutating commands (ask/create-study) that cannot share a DB: run `setup` then `command` on a
-    // fresh DB per engine, and compare the command's stdout. The engines produce identical results
-    // because the study is fresh and identical and the RNG is seeded.
-    private static void AssertFreshStudyParity(string[] setup, string[] command)
+    /// <summary>
+    ///     One test's parity checks, collected first and asserted together, so that their reference <c>optuna</c>
+    ///     processes run at the same time instead of one after another.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Each check still runs one fresh <c>optuna</c> process, exactly as before; only the waiting overlaps.
+    ///         Starting the interpreter and importing optuna costs about 1.3 s per command on a Windows runner, which
+    ///         was most of this class's time (87 s for 13 tests there, against 36 s on Linux). The commands of one test
+    ///         never depend on each other: each reads a fixture study, or writes a fresh database of its own.
+    ///     </para>
+    ///     <para>
+    ///         OptunaSharp's side still runs in-process and one command at a time, because <see cref="RunInProcess" />
+    ///         captures <see cref="Console.Out" />, which is process-wide. The checks are compared in the order they were
+    ///         added, so the first mismatch reported is the one a sequential run reported.
+    ///     </para>
+    /// </remarks>
+    private sealed class ParityBatch
     {
-        if (_optunaCli is null)
-            Assert.Inconclusive("The `optuna` CLI was not found on PATH (set OPTUNASHARP_OPTUNA_CLI to enable).");
+        /// <summary>Per check: the command as written (for the message), and each CLI's full arguments.</summary>
+        private readonly List<(string[] Command, string[] Reference, string[] Ours)> _checks = new();
 
-        string pyDb = FreshDbUrl("fresh-py");
-        string csDb = FreshDbUrl("fresh-cs");
-        if (setup.Length > 0)
+        /// <summary>Starts an empty batch, or skips the test when the reference CLI is missing.</summary>
+        /// <exception cref="AssertInconclusiveException">The <c>optuna</c> CLI was not found.</exception>
+        public ParityBatch()
         {
-            RunInProcess(WithStorage(setup, pyDb));
-            RunInProcess(WithStorage(setup, csDb));
+            // Before any setup work, as the per-check helpers this replaced skipped before touching a database.
+            if (_optunaCli is null)
+                Assert.Inconclusive("The `optuna` CLI was not found on PATH (set OPTUNASHARP_OPTUNA_CLI to enable).");
         }
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
 
-        string optuna = Normalize(RunOptuna(WithStorage(command, pyDb)));
-        string ours = Normalize(RunInProcess(WithStorage(command, csDb)));
-        ours.Should().Be(optuna, $"`optunasharp {string.Join(" ", command)}` must match `optuna` exactly");
+        /// <summary>Adds a read command that both CLIs run against the same storage.</summary>
+        /// <param name="storageUrl">The fixture storage both CLIs read.</param>
+        /// <param name="command">The command and its options, without <c>--storage</c>.</param>
+        public void Add(string storageUrl, params string[] command)
+        {
+            string[] full = WithStorage(command, storageUrl);
+            _checks.Add((command, full, full));
+        }
+
+        /// <summary>
+        ///     Adds a mutating command (ask, create-study), which cannot share a database: each CLI gets a fresh database,
+        ///     prepared now by OptunaSharp with <paramref name="setup" />. The studies are identical and the samplers
+        ///     seeded, so both CLIs print the same.
+        /// </summary>
+        /// <param name="setup">Commands run in-process on both fresh databases first; empty for none.</param>
+        /// <param name="command">The command compared, without <c>--storage</c>.</param>
+        public void AddFresh(string[] setup, string[] command)
+        {
+            string pyDb = FreshDbUrl("fresh-py");
+            string csDb = FreshDbUrl("fresh-cs");
+            if (setup.Length > 0)
+            {
+                RunInProcess(WithStorage(setup, pyDb));
+                RunInProcess(WithStorage(setup, csDb));
+            }
+            _checks.Add((command, WithStorage(command, pyDb), WithStorage(command, csDb)));
+        }
+
+        /// <summary>Starts every reference process, then runs OptunaSharp's side and compares, check by check.</summary>
+        /// <exception cref="AssertFailedException">A check's output differs from <c>optuna</c>'s.</exception>
+        public void AssertAll()
+        {
+            // SQLite connections leaked by the in-process setup must be finalized (closed) before optuna opens the same
+            // files, as the per-check helper did before each reference run.
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+
+            var references = _checks.Select(c => RunOptunaAsync(c.Reference)).ToArray();
+            for (int i = 0; i < _checks.Count; i++)
+            {
+                string ours = Normalize(RunInProcess(_checks[i].Ours));
+                string optuna = Normalize(references[i].GetAwaiter().GetResult());
+                ours.Should().Be(optuna, $"`optunasharp {string.Join(" ", _checks[i].Command)}` must match `optuna` exactly");
+            }
+        }
     }
 
+    /// <summary>Appends <c>--storage <paramref name="storageUrl" /></c> to a command.</summary>
+    /// <param name="args">The command and its options.</param>
+    /// <param name="storageUrl">The storage URL or journal path.</param>
+    /// <returns>A new array: <paramref name="args" />, then <c>--storage</c> and the URL.</returns>
     private static string[] WithStorage(string[] args, string storageUrl)
     {
         var full = new string[args.Length + 2];
@@ -290,21 +378,6 @@ public class CliParityTests
         full[^2] = "--storage";
         full[^1] = storageUrl;
         return full;
-    }
-
-    private static void AssertParity(string storageUrl, params string[] command)
-    {
-        if (_optunaCli is null)
-            Assert.Inconclusive("The `optuna` CLI was not found on PATH (set OPTUNASHARP_OPTUNA_CLI to enable).");
-
-        var full = new string[command.Length + 2];
-        Array.Copy(command, full, command.Length);
-        full[^2] = "--storage";
-        full[^1] = storageUrl;
-
-        string optuna = Normalize(RunOptuna(full));
-        string ours = Normalize(RunInProcess(full));
-        ours.Should().Be(optuna, $"`optunasharp {string.Join(" ", command)}` must match `optuna` exactly");
     }
 
     private static string RunInProcess(params string[] args)
@@ -323,7 +396,15 @@ public class CliParityTests
         return buffer.ToString();
     }
 
-    private static string RunOptuna(string[] args)
+    /// <summary>
+    ///     Runs the real <c>optuna</c> CLI as its own process and returns its stdout. Asynchronous so that a test's
+    ///     reference commands run at the same time without holding a thread each (a few blocked pool threads would
+    ///     have waited for the pool to grow on a 2-core runner).
+    /// </summary>
+    /// <param name="args">The full command line, <c>--storage</c> included.</param>
+    /// <returns>Everything the process wrote to stdout; stderr is drained and ignored, as before.</returns>
+    /// <exception cref="System.ComponentModel.Win32Exception">The <c>optuna</c> executable could not be started.</exception>
+    private static async Task<string> RunOptunaAsync(string[] args)
     {
         var psi = new ProcessStartInfo(_optunaCli!)
         {
@@ -335,10 +416,12 @@ public class CliParityTests
         foreach (var a in args)
             psi.ArgumentList.Add(a);
         using var process = Process.Start(psi)!;
-        string stdout = process.StandardOutput.ReadToEnd();
-        process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return stdout;
+        // Both pipes drain at once: a child that fills the stderr pipe while only stdout is read would block forever.
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync().ConfigureAwait(false);
+        await stderr.ConfigureAwait(false);
+        return await stdout.ConfigureAwait(false);
     }
 
     private static string Normalize(string s) => s.Replace("\r\n", "\n").TrimEnd('\n');
