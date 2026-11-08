@@ -326,4 +326,83 @@ public class TpeSamplerParityTests : OptunaInteropTestBase
         for (int i = 0; i < 10; i++)
             csState.Trials[i].ParamsInternal["x"].Should().Be(pyState.Trials[i].ParamsInternal["x"]);
     }
+
+    /// <summary>
+    ///     Plan 13 gate (docs/plans/13-rustuna-derived-performance.md, phase 0): the default single-objective TPE
+    ///     (multivariate, constant liar) over 40 float parameters for 1,000 trials, the workload whose scoring kernel
+    ///     item S6 rewrote. The whole trajectory stays in lock-step with live Optuna, within the erf tolerance of the
+    ///     other TPE cases, so the fused kernel, the pooled buffers and the sort that replaced LINQ changed nothing a
+    ///     thousand trials of compounding would show.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
+    public void LongRun_Multivariate40D_1000Trials_TrajectoryMatches()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(storage: new InMemoryStorage(), sampler: new TPESampler(seed: 0), studyName: "tpe");
+        csStudy.Optimize(t =>
+        {
+            double s = 0;
+            for (int i = 0; i < 40; i++)
+            {
+                double v = t.SuggestFloat($"x{i}", -10, 10);
+                s += (v - 1) * (v - 1);
+            }
+            return s;
+        }, nTrials: 1000);
+
+        AssertTrajectoryParity(csStudy,
+            "study = optuna.create_study(study_name='tpe', sampler=optuna.samplers.TPESampler(seed=0))\n" +
+            "def _obj(t):\n" +
+            "    s = 0.0\n" +
+            "    for i in range(40):\n" +
+            "        v = t.suggest_float(f'x{i}', -10, 10)\n" +
+            "        s += (v - 1) * (v - 1)\n" +
+            "    return s\n" +
+            "study.optimize(_obj, n_trials=1000)\n");
+    }
+
+    /// <summary>
+    ///     Plan 13 gate (phase 0): the default two-objective TPE (independent, constant liar) over 40 float parameters
+    ///     for 300 trials, the workload of items S3 (the constant-liar read that skips the current trial), S5 (one split per
+    ///     trial instead of per parameter) and S6. Every trial stays in lock-step with live Optuna within the erf
+    ///     tolerance.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
+    public void LongRun_MultiObjective40D_300Trials_TrajectoryMatches()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), sampler: new TPESampler(seed: 0), studyName: "tpe",
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+        csStudy.Optimize(t =>
+        {
+            double a = 0, b = 0;
+            for (int i = 0; i < 40; i++)
+            {
+                double v = t.SuggestFloat($"x{i}", -10, 10);
+                a += v * v;
+                b += (v - 2) * (v - 2);
+            }
+            return new[] { a, b };
+        }, nTrials: 300);
+
+        AssertTrajectoryParity(csStudy,
+            "study = optuna.create_study(study_name='tpe', directions=['minimize', 'minimize'], " +
+            "sampler=optuna.samplers.TPESampler(seed=0))\n" +
+            "def _obj(t):\n" +
+            "    a = 0.0\n" +
+            "    b = 0.0\n" +
+            "    for i in range(40):\n" +
+            "        v = t.suggest_float(f'x{i}', -10, 10)\n" +
+            "        a += v * v\n" +
+            "        b += (v - 2) * (v - 2)\n" +
+            "    return a, b\n" +
+            "study.optimize(_obj, n_trials=300)\n");
+    }
 }

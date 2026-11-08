@@ -316,7 +316,7 @@ internal sealed class ParzenEstimator
         // sorted_indices = np.argsort(mus). Stable — exact for distinct mus. NumPy 2.x sorts float64
         // with x86-simd-sort, whose tie order is not portably reproducible; see the class remark for
         // the (documented) divergence this leaves on repeated numerical observations.
-        var sortedIndices = Enumerable.Range(0, n).OrderBy(i => mus[i]).ToArray();
+        var sortedIndices = StableArgsort(mus);
 
         // sorted_mus_with_endpoints = [low, *sorted_mus, high].
         var swe = new double[n + 2];
@@ -356,6 +356,44 @@ internal sealed class ParzenEstimator
         for (int t = 0; t < n; t++)
             sigmas[t] = MathUtil.Clip(sigmas[t], minsigma, maxsigma);
         return sigmas;
+    }
+
+    /// <summary>
+    ///     The stable argsort <see cref="ComputeSigmas" /> uses: the permutation
+    ///     <c>Enumerable.Range(0, n).OrderBy(i => values[i])</c> returns, with ties in index order, computed by
+    ///     <see cref="Array.Sort{TKey, TValue}(TKey[], TValue[])" /> and an index sort of each run of equal keys.
+    /// </summary>
+    /// <param name="values">The values to order; not modified.</param>
+    /// <returns>The indices of <paramref name="values" /> in ascending order of value, equal values by index.</returns>
+    /// <remarks>
+    ///     Why not the LINQ sort it replaces (Rustuna plan 13, item S6): it compares through a delegate and allocated
+    ///     its key buffers per call, about 0.8 s of a 1,000-trial, 40-parameter TPE run. The result is the same
+    ///     permutation: <see cref="Array.Sort{TKey, TValue}(TKey[], TValue[])" /> orders doubles as
+    ///     <see cref="double.CompareTo(double)" /> does (NaN first, -0.0 equal to 0.0), which is what the LINQ sort's
+    ///     default comparer used, and its only freedom, the order inside a run of equal keys, is undone by sorting each
+    ///     run's indices.
+    /// </remarks>
+    internal static int[] StableArgsort(double[] values)
+    {
+        int n = values.Length;
+        var keys = (double[])values.Clone();
+        var indices = new int[n];
+        for (int i = 0; i < n; i++)
+            indices[i] = i;
+        Array.Sort(keys, indices);
+
+        int runStart = 0;
+        for (int i = 1; i <= n; i++)
+        {
+            // A run ends where the key changes by CompareTo, which groups NaNs together and -0.0 with 0.0.
+            if (i == n || keys[i].CompareTo(keys[runStart]) != 0)
+            {
+                if (i - runStart > 1)
+                    Array.Sort(indices, runStart, i - runStart);
+                runStart = i;
+            }
+        }
+        return indices;
     }
 
     /// <summary>Python <c>_ParzenEstimator._call_weights_func</c>.</summary>

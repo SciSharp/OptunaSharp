@@ -99,8 +99,13 @@ internal sealed class GroupDecomposedSearchSpace
             ? new[] { TrialState.Complete, TrialState.Pruned }
             : new[] { TrialState.Complete };
 
-        foreach (var trial in study.GetTrialsInternal(deepcopy: false, states: statesOfInterest, useCache: useCache))
-            _searchSpace.AddDistributions(trial.DistributionsDict);
+        // The same trials in the same (number) order as study._get_trials(deepcopy=False, states, use_cache), filtered
+        // here instead of in a copied list: on an in-memory storage the read is the zero-copy view (plan 13, item S3).
+        foreach (var trial in study.GetTrialsForSampler(useCache))
+        {
+            if (System.Array.IndexOf(statesOfInterest, trial.State) >= 0)
+                _searchSpace.AddDistributions(trial.DistributionsDict);
+        }
 
         return _searchSpace.DeepCopy();
     }

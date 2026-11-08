@@ -321,3 +321,91 @@ internal static class TpeTrialSplit
         return referencePoint;
     }
 }
+
+/// <summary>
+///     The last below/above split a TPE sampler computed, reused while the same trial records are split again (Rustuna
+///     plan 13, item S5). Independent TPE (the default for several objectives) splits the history once per parameter, and
+///     every parameter of a trial sees the same records, so a 40-parameter trial computed the same split 40 times: about
+///     a quarter of a multi-objective run, in the non-domination ranks and the hypervolume tie-break.
+/// </summary>
+/// <remarks>
+///     <para>
+///         <b>Why the records themselves are the key.</b> <see cref="TpeTrialSplit.SplitTrials" /> is a function of the
+///         records it is given (their state, values, intermediate values and constraints), the study's directions and
+///         <c>n_below</c>. A finished record never changes, and a record changes reference whenever its trial is written
+///         after a reader got it: storages publish a new record on every state change, and <c>InMemoryStorage</c>
+///         copies a handed-out record before writing it. So the same references in the same order, of the same study,
+///         with the same <c>n_below</c>, split the same way, and a cached split is returned only then. Anything else
+///         (a new trial, another study, a running trial written by another worker under constant liar, a storage that
+///         builds new records per read) misses and splits afresh, which is what the sampler did every time before.
+///     </para>
+///     <para>
+///         Not thread-safe: the sampler calls it under its own monitor (THREADING.md §6.3), and a
+///         <see cref="SamplerConcurrency.PerWorker" /> worker instance gets a cache of its own.
+///     </para>
+/// </remarks>
+internal sealed class TpeSplitCache
+{
+    private OptunaSharp.Storages.BaseStorage? _storage;
+    private int _studyId;
+    private int _nBelow;
+    private FrozenTrial[] _trials = Array.Empty<FrozenTrial>();
+    private List<FrozenTrial> _below = new();
+    private List<FrozenTrial> _above = new();
+
+    /// <summary>How many splits were computed rather than reused: a diagnostic the tests read.</summary>
+    internal int Computed { get; private set; }
+
+    /// <summary>
+    ///     <see cref="TpeTrialSplit.SplitTrials" /> for these records, reused when the previous call split the very same
+    ///     records of the same study with the same <paramref name="nBelow" />.
+    /// </summary>
+    /// <param name="study">The study the records belong to; its storage and id are part of the key.</param>
+    /// <param name="trials">The records to split, in the order the sampler read them.</param>
+    /// <param name="nBelow">The number of trials the preferred group should hold.</param>
+    /// <returns>New lists the caller may change, holding the preferred and the remaining records by trial number.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="study" /> or <paramref name="trials" /> is null.</exception>
+    /// <exception cref="Exception">Whatever <see cref="TpeTrialSplit.SplitTrials" /> throws on a miss; nothing is cached then.</exception>
+    internal (List<FrozenTrial> Below, List<FrozenTrial> Above) Split(Study study, IReadOnlyList<FrozenTrial> trials, int nBelow)
+    {
+        ArgumentNullException.ThrowIfNull(study);
+        ArgumentNullException.ThrowIfNull(trials);
+
+        if (!Matches(study, trials, nBelow))
+        {
+            var (below, above) = TpeTrialSplit.SplitTrials(study, trials, nBelow);
+            // Stored only after the split succeeded, so a throwing split leaves the previous entry consistent.
+            var key = new FrozenTrial[trials.Count];
+            for (int i = 0; i < key.Length; i++)
+                key[i] = trials[i];
+            _storage = study.Storage;
+            _studyId = study.StudyId;
+            _nBelow = nBelow;
+            _trials = key;
+            _below = below;
+            _above = above;
+            Computed++;
+        }
+
+        // Copies: the cached lists must survive a caller that changes what it was given.
+        return (new List<FrozenTrial>(_below), new List<FrozenTrial>(_above));
+    }
+
+    /// <summary>Whether the cached split was computed from exactly these records of this study with this size.</summary>
+    /// <param name="study">The study being sampled.</param>
+    /// <param name="trials">The records about to be split.</param>
+    /// <param name="nBelow">The requested size of the preferred group.</param>
+    /// <returns>True when every key part matches, the records compared by reference and in order.</returns>
+    private bool Matches(Study study, IReadOnlyList<FrozenTrial> trials, int nBelow)
+    {
+        if (_storage is null || !ReferenceEquals(_storage, study.Storage) || _studyId != study.StudyId
+            || _nBelow != nBelow || _trials.Length != trials.Count)
+            return false;
+        for (int i = 0; i < _trials.Length; i++)
+        {
+            if (!ReferenceEquals(_trials[i], trials[i]))
+                return false;
+        }
+        return true;
+    }
+}

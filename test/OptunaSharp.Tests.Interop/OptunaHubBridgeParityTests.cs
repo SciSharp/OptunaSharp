@@ -42,7 +42,10 @@ public class OptunaHubBridgeParityTests
             Assert.IsInstanceOfType(problem.SearchSpace["n"], typeof(IntDistribution));
             Assert.IsInstanceOfType(problem.SearchSpace["c"], typeof(CategoricalDistribution));
 
-            var study = Optuna.CreateStudy(directions: problem.Directions);
+            // Seeded: an unseeded TPE study draws its seed from OS entropy, and 40 trials then end above the bound
+            // below in a few percent of runs (one did on 2026-11-09, best 1.018; eight reruns passed). The test is about
+            // the bridge, not TPE's luck, so the sampler is seeded and the outcome fixed.
+            var study = Optuna.CreateStudy(directions: problem.Directions, sampler: new OptunaSharp.Samplers.TPESampler(seed: 0));
             study.Optimize(problem.SingleObjective, nTrials: 40);
 
             Assert.AreEqual(40, study.Trials.Count);

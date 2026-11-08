@@ -340,183 +340,301 @@ internal sealed class MixtureOfProductDistribution
         int nSamples = x.GetLength(0);
         int dim = x.GetLength(1);
         int nKernels = Weights.Length;
-        var weightedLogPdf = new double[nSamples, nKernels];
-
-        var contDists = new List<BatchedNumericalDistributions>();
-        var contCols = new List<int>();
-
-        for (int i = 0; i < dim; i++)
+        // weighted_log_pdf, (n_samples, n_kernels) row-major in a rented buffer (plan 13, item S6): at TPE's 24 candidates
+        // and a thousand kernels it is 192 KB, a large-object-heap allocation per call, which kept background GCs busy
+        // and made the sampler wait for them. Every element is cleared, then accumulated in the same order as before.
+        double[] weightedLogPdf = System.Buffers.ArrayPool<double>.Shared.Rent(Math.Max(nSamples * nKernels, 1));
+        try
         {
-            switch (Distributions[i])
+            Array.Clear(weightedLogPdf, 0, nSamples * nKernels);
+
+            var contDists = new List<BatchedNumericalDistributions>();
+            var contCols = new List<int>();
+
+            for (int i = 0; i < dim; i++)
             {
-                case BatchedCategoricalDistributions cat:
+                switch (Distributions[i])
                 {
-                    // xi = x[:, i, None, None].astype(int64); += log(take_along_axis(weights, xi))[..., 0].
-                    for (int s = 0; s < nSamples; s++)
+                    case BatchedCategoricalDistributions cat:
                     {
-                        long xi = (long)x[s, i];
-                        for (int k = 0; k < nKernels; k++)
-                            weightedLogPdf[s, k] += Math.Log(cat.Weights[k, xi]);
+                        // xi = x[:, i, None, None].astype(int64); += log(take_along_axis(weights, xi))[..., 0].
+                        for (int s = 0; s < nSamples; s++)
+                        {
+                            long xi = (long)x[s, i];
+                            for (int k = 0; k < nKernels; k++)
+                                weightedLogPdf[s * nKernels + k] += Math.Log(cat.Weights[k, xi]);
+                        }
+                        break;
                     }
-                    break;
-                }
 
-                case BatchedNumericalDistributions num when num.Step == 0.0:
-                    // Continuous kind: collected and processed together after the loop.
-                    contDists.Add(num);
-                    contCols.Add(i);
-                    break;
+                    case BatchedNumericalDistributions num when num.Step == 0.0:
+                        // Continuous kind: collected and processed together after the loop.
+                        contDists.Add(num);
+                        contCols.Add(i);
+                        break;
 
-                case BatchedNumericalDistributions dtn:
-                {
-                    // Discrete kind (truncated normal or log-normal).
-                    bool isLog = dtn.IsLog;
-                    double step = dtn.Step;
-                    var xcol = new double[nSamples];
-                    for (int s = 0; s < nSamples; s++)
-                        xcol[s] = x[s, i];
-
-                    var (xiUniq, xiInv) = UniqueInverse1d(xcol);
-                    var (muUniq, sigmaUniq, msInv) = UniqueInverse2d(dtn.Mu, dtn.Sigma);
-                    int nXi = xiUniq.Length;
-                    int nMs = muUniq.Length;
-
-                    var a = new double[nXi * nMs];
-                    var b = new double[nXi * nMs];
-                    for (int p = 0; p < nXi; p++)
+                    case BatchedNumericalDistributions dtn:
                     {
-                        double left = isLog ? Math.Log(xiUniq[p] - step / 2.0) : xiUniq[p] - step / 2.0;
-                        double right = isLog ? Math.Log(xiUniq[p] + step / 2.0) : xiUniq[p] + step / 2.0;
+                        // Discrete kind (truncated normal or log-normal).
+                        bool isLog = dtn.IsLog;
+                        double step = dtn.Step;
+                        var xcol = new double[nSamples];
+                        for (int s = 0; s < nSamples; s++)
+                            xcol[s] = x[s, i];
+
+                        var (xiUniq, xiInv) = UniqueInverse1d(xcol);
+                        var (muUniq, sigmaUniq, msInv) = UniqueInverse2d(dtn.Mu, dtn.Sigma);
+                        int nXi = xiUniq.Length;
+                        int nMs = muUniq.Length;
+
+                        var a = new double[nXi * nMs];
+                        var b = new double[nXi * nMs];
+                        for (int p = 0; p < nXi; p++)
+                        {
+                            double left = isLog ? Math.Log(xiUniq[p] - step / 2.0) : xiUniq[p] - step / 2.0;
+                            double right = isLog ? Math.Log(xiUniq[p] + step / 2.0) : xiUniq[p] + step / 2.0;
+                            for (int qi = 0; qi < nMs; qi++)
+                            {
+                                a[p * nMs + qi] = (left - muUniq[qi]) / sigmaUniq[qi];
+                                b[p * nMs + qi] = (right - muUniq[qi]) / sigmaUniq[qi];
+                            }
+                        }
+
+                        var logMass = LogGaussMassUnique(a, b);  // shape (nXi, nMs), row-major.
+                        for (int s = 0; s < nSamples; s++)
+                        {
+                            int row = xiInv[s] * nMs;
+                            for (int k = 0; k < nKernels; k++)
+                                weightedLogPdf[s * nKernels + k] += logMass[row + msInv[k]];
+                        }
+
+                        var normLow = new double[nMs];
+                        var normHigh = new double[nMs];
                         for (int qi = 0; qi < nMs; qi++)
                         {
-                            a[p * nMs + qi] = (left - muUniq[qi]) / sigmaUniq[qi];
-                            b[p * nMs + qi] = (right - muUniq[qi]) / sigmaUniq[qi];
+                            normLow[qi] = (dtn.AdaptedLow - muUniq[qi]) / sigmaUniq[qi];
+                            normHigh[qi] = (dtn.AdaptedHigh - muUniq[qi]) / sigmaUniq[qi];
                         }
+                        var norm = TruncNorm.LogGaussMass(normLow, normHigh);
+                        for (int s = 0; s < nSamples; s++)
+                        {
+                            for (int k = 0; k < nKernels; k++)
+                                weightedLogPdf[s * nKernels + k] -= norm[msInv[k]];
+                        }
+                        break;
                     }
 
-                    var logMass = LogGaussMassUnique(a, b);  // shape (nXi, nMs), row-major.
-                    for (int s = 0; s < nSamples; s++)
-                    {
-                        int row = xiInv[s] * nMs;
-                        for (int k = 0; k < nKernels; k++)
-                            weightedLogPdf[s, k] += logMass[row + msInv[k]];
-                    }
-
-                    var normLow = new double[nMs];
-                    var normHigh = new double[nMs];
-                    for (int qi = 0; qi < nMs; qi++)
-                    {
-                        normLow[qi] = (dtn.AdaptedLow - muUniq[qi]) / sigmaUniq[qi];
-                        normHigh[qi] = (dtn.AdaptedHigh - muUniq[qi]) / sigmaUniq[qi];
-                    }
-                    var norm = TruncNorm.LogGaussMass(normLow, normHigh);
-                    for (int s = 0; s < nSamples; s++)
-                    {
-                        for (int k = 0; k < nKernels; k++)
-                            weightedLogPdf[s, k] -= norm[msInv[k]];
-                    }
-                    break;
+                    default:
+                        throw new InvalidOperationException("Unknown batched distribution kind.");
                 }
-
-                default:
-                    throw new InvalidOperationException("Unknown batched distribution kind.");
             }
+
+            if (contDists.Count > 0)
+                AddContinuousLogPdf(x, weightedLogPdf, contDists, contCols);
+
+            // weighted_log_pdf += np.log(self.weights[np.newaxis]). Each kernel's log weight is the same for every sample,
+            // so it is taken once per kernel (plan 13, item S6); Math.Log is deterministic, so the sums keep their bits.
+            var logWeights = new double[nKernels];
+            for (int k = 0; k < nKernels; k++)
+                logWeights[k] = Math.Log(Weights[k]);
+            for (int s = 0; s < nSamples; s++)
+            {
+                for (int k = 0; k < nKernels; k++)
+                    weightedLogPdf[s * nKernels + k] += logWeights[k];
+            }
+
+            // np.log(np.exp(weighted_log_pdf - max_[:, None]).sum(axis=1)) + max_, with -inf max_ -> 0.
+            var result = new double[nSamples];
+            var expBuf = new double[nKernels];
+            for (int s = 0; s < nSamples; s++)
+            {
+                double max = double.NegativeInfinity;
+                for (int k = 0; k < nKernels; k++)
+                    max = Math.Max(max, weightedLogPdf[s * nKernels + k]);
+                if (double.IsNegativeInfinity(max))
+                    max = 0.0;
+                for (int k = 0; k < nKernels; k++)
+                    expBuf[k] = Math.Exp(weightedLogPdf[s * nKernels + k] - max);
+                result[s] = Math.Log(MathUtil.PairwiseSum(expBuf)) + max;
+            }
+            return result;
         }
-
-        if (contDists.Count > 0)
-            AddContinuousLogPdf(x, weightedLogPdf, contDists, contCols);
-
-        // weighted_log_pdf += np.log(self.weights[np.newaxis]).
-        for (int s = 0; s < nSamples; s++)
+        finally
         {
-            for (int k = 0; k < nKernels; k++)
-                weightedLogPdf[s, k] += Math.Log(Weights[k]);
+            System.Buffers.ArrayPool<double>.Shared.Return(weightedLogPdf);
         }
-
-        // np.log(np.exp(weighted_log_pdf - max_[:, None]).sum(axis=1)) + max_, with -inf max_ -> 0.
-        var result = new double[nSamples];
-        var expBuf = new double[nKernels];
-        for (int s = 0; s < nSamples; s++)
-        {
-            double max = double.NegativeInfinity;
-            for (int k = 0; k < nKernels; k++)
-                max = Math.Max(max, weightedLogPdf[s, k]);
-            if (double.IsNegativeInfinity(max))
-                max = 0.0;
-            for (int k = 0; k < nKernels; k++)
-                expBuf[k] = Math.Exp(weightedLogPdf[s, k] - max);
-            result[s] = Math.Log(MathUtil.PairwiseSum(expBuf)) + max;
-        }
-        return result;
     }
 
     /// <summary>
     ///     The continuous branch of <c>log_pdf</c>: <c>_truncnorm.logpdf</c> over all continuous dims,
     ///     summed over dims and added to <paramref name="weightedLogPdf" />. The Gaussian-mass grid is
-    ///     computed once over the <c>(n_kernels, n_cont)</c> standardized bounds, exactly as NumPy does,
-    ///     so the <see cref="Erf" /> array-size threshold is exercised identically.
+    ///     computed once over the <c>n_kernels × n_cont</c> standardized bounds, as NumPy does, so the
+    ///     <see cref="Erf" /> array-size threshold is exercised identically.
     /// </summary>
     /// <param name="x">Input numerical coordinates or observation rows.</param>
-    /// <param name="weightedLogPdf">Log densities including each mixture component weight.</param>
+    /// <param name="weightedLogPdf">
+    ///     Log densities including each mixture component weight, (n_samples, n_kernels) row-major; at least
+    ///     n_samples × n_kernels long (a rented buffer may be longer).
+    /// </param>
     /// <param name="contDists">Continuous numerical coordinate distributions.</param>
     /// <param name="contCols">Original coordinate indices of continuous numerical distributions.</param>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Fused, same bits (Rustuna plan 13, item S6).</b> Everything that depends only on a (kernel, dim)
+    ///         pair is computed once per call instead of once per candidate: the standardized bounds, their log
+    ///         Gaussian mass and <c>log(sigma)</c>, which the per-candidate loop used to take 24 times per pair (more
+    ///         than half of a 1,000-trial, 40-parameter TPE run). Each value is the same expression on the same
+    ///         operands, and <c>Math.Log</c> is deterministic, so it has the same bits.
+    ///     </para>
+    ///     <para>
+    ///         The grids are laid out by dimension (<c>[c * n_kernels + k]</c>) so the kernel loop is contiguous.
+    ///         <see cref="TruncNorm.LogGaussMass" /> is elementwise, and the vectorized-<c>erf</c> switch depends only
+    ///         on how many elements it gets (see <see cref="Erf.ComputeArray" />), so evaluating the same elements in
+    ///         another order changes no element.
+    ///     </para>
+    ///     <para>
+    ///         <see cref="AccumulateDimension" /> adds one dimension's term to every kernel's sum, dimension after
+    ///         dimension, so each kernel's sum is still <c>((0 + t0) + t1) + …</c> in dimension order; vector lanes
+    ///         hold different kernels and never mix. .NET never contracts a multiply and an add into a fused
+    ///         multiply-add on its own, so a lane computes exactly what the scalar loop computes.
+    ///     </para>
+    /// </remarks>
     private void AddContinuousLogPdf(
-        double[,] x, double[,] weightedLogPdf,
+        double[,] x, double[] weightedLogPdf,
         List<BatchedNumericalDistributions> contDists, List<int> contCols)
     {
         int nSamples = x.GetLength(0);
         int nKernels = Weights.Length;
         int nCont = contDists.Count;
+        int gridSize = nKernels * nCont;
 
-        // x_cont[c][s] = log(x[s, col]) if is_log else x[s, col].
-        var xCont = new double[nCont][];
+        // Every buffer below is fully written before it is read, so none is zeroed first: zeroing the grids was a tenth
+        // of a 1,000-trial, 40-parameter TPE run, and allocating them put four large-object-heap arrays per call on the
+        // GC. The grids are rented, and every use goes through a span of the logical length: LogGaussMass and the
+        // vectorized-erf switch depend on the length they are given, never on a rented buffer's size.
+        // x_cont = log(x[:, col]) where is_log else x[:, col], one row per sample ([s * nCont + c]).
+        var xCont = GC.AllocateUninitializedArray<double>(nSamples * nCont);
         for (int c = 0; c < nCont; c++)
         {
             bool isLog = contDists[c].IsLog;
             int col = contCols[c];
-            var arr = new double[nSamples];
             for (int s = 0; s < nSamples; s++)
-                arr[s] = isLog ? Math.Log(x[s, col]) : x[s, col];
-            xCont[c] = arr;
+                xCont[s * nCont + c] = isLog ? Math.Log(x[s, col]) : x[s, col];
         }
 
-        // Standardized bounds a, b over (n_kernels, n_cont), raveled row-major (k outer, c inner).
-        var aGrid = new double[nKernels * nCont];
-        var bGrid = new double[nKernels * nCont];
-        for (int k = 0; k < nKernels; k++)
+        // Standardized bounds a, b, log(sigma) and the log Gaussian mass per (kernel, dim): one rented buffer cut into
+        // four grids, each one row per dim over the kernels.
+        double[] gridBuffer = System.Buffers.ArrayPool<double>.Shared.Rent(4 * gridSize);
+        try
         {
+            var aGrid = new Span<double>(gridBuffer, 0, gridSize);
+            var bGrid = new Span<double>(gridBuffer, gridSize, gridSize);
+            var logSigma = new Span<double>(gridBuffer, 2 * gridSize, gridSize);
+            var logGaussMass = new Span<double>(gridBuffer, 3 * gridSize, gridSize);
             for (int c = 0; c < nCont; c++)
             {
                 var nd = contDists[c];
-                double sigma = nd.Sigma[k];
-                aGrid[k * nCont + c] = (nd.AdaptedLow - nd.Mu[k]) / sigma;
-                bGrid[k * nCont + c] = (nd.AdaptedHigh - nd.Mu[k]) / sigma;
+                // AdaptedLow / AdaptedHigh recompute a logarithm per access on the log kinds: the same value every time.
+                double adaptedLow = nd.AdaptedLow, adaptedHigh = nd.AdaptedHigh;
+                double[] mu = nd.Mu, sigma = nd.Sigma;
+                int row = c * nKernels;
+                for (int k = 0; k < nKernels; k++)
+                {
+                    aGrid[row + k] = (adaptedLow - mu[k]) / sigma[k];
+                    bGrid[row + k] = (adaptedHigh - mu[k]) / sigma[k];
+                    logSigma[row + k] = Math.Log(sigma[k]);
+                }
             }
-        }
-        var logGaussMass = TruncNorm.LogGaussMass(aGrid, bGrid);
+            TruncNorm.LogGaussMass(aGrid, bGrid, logGaussMass);
 
-        for (int s = 0; s < nSamples; s++)
-        {
-            for (int k = 0; k < nKernels; k++)
+            var sums = GC.AllocateUninitializedArray<double>(nKernels);
+            for (int s = 0; s < nSamples; s++)
             {
-                double sum = 0.0;
+                // Each kernel's sum starts at +0.0 for every candidate, as the scalar loop's `double sum = 0.0` did.
+                Array.Clear(sums);
                 for (int c = 0; c < nCont; c++)
                 {
                     var nd = contDists[c];
-                    double mu = nd.Mu[k];
-                    double sigma = nd.Sigma[k];
-                    int gi = k * nCont + c;
-                    double xstd = (xCont[c][s] - mu) / sigma;
-                    double val = TruncNorm.NormLogPdf(xstd) - logGaussMass[gi] - Math.Log(sigma);
-                    // np.select([a == b, (x < a) | (x > b)], [nan, -inf], default=out).
-                    if (aGrid[gi] == bGrid[gi])
-                        val = double.NaN;
-                    else if (xstd < aGrid[gi] || xstd > bGrid[gi])
-                        val = double.NegativeInfinity;
-                    sum += val;
+                    int row = c * nKernels;
+                    AccumulateDimension(
+                        xCont[s * nCont + c], nd.Mu, nd.Sigma,
+                        aGrid.Slice(row, nKernels), bGrid.Slice(row, nKernels),
+                        logGaussMass.Slice(row, nKernels), logSigma.Slice(row, nKernels),
+                        sums);
                 }
-                weightedLogPdf[s, k] += sum;
+                for (int k = 0; k < nKernels; k++)
+                    weightedLogPdf[s * nKernels + k] += sums[k];
             }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<double>.Shared.Return(gridBuffer);
+        }
+    }
+
+    /// <summary>
+    ///     Adds one continuous dimension's truncated-normal log density at <paramref name="x" /> to every kernel's sum:
+    ///     <c>(norm_logpdf((x - mu) / sigma) - log_gauss_mass) - log(sigma)</c>, NaN where the kernel's standardized
+    ///     interval is empty (<c>a == b</c>) and <c>-inf</c> where <c>x</c> falls outside it, as
+    ///     <c>np.select([a == b, (x &lt; a) | (x &gt; b)], [nan, -inf], default=out)</c>.
+    /// </summary>
+    /// <param name="x">The candidate's coordinate in this dimension, log-transformed already for the log kinds.</param>
+    /// <param name="mu">The kernels' centers in this dimension.</param>
+    /// <param name="sigma">The kernels' standard deviations in this dimension.</param>
+    /// <param name="a">The kernels' standardized lower bounds.</param>
+    /// <param name="b">The kernels' standardized upper bounds.</param>
+    /// <param name="logGaussMass">The kernels' log Gaussian mass between <paramref name="a" /> and <paramref name="b" />.</param>
+    /// <param name="logSigma">The kernels' <c>log(sigma)</c>.</param>
+    /// <param name="sums">One running sum per kernel; this dimension's term is added to each.</param>
+    /// <remarks>
+    ///     The vector path computes every lane with the scalar path's operations in the scalar path's order: the same
+    ///     division (never a multiplication by the reciprocal), the same subtraction order, the NaN and <c>-inf</c>
+    ///     overrides applied last. The only freedom it takes is the sign of zero in <c>-(z * z)</c>, which the
+    ///     subtraction of the normal's log constant right after removes. The tail that does not fill a vector takes
+    ///     the scalar path.
+    /// </remarks>
+    private static void AccumulateDimension(
+        double x, double[] mu, double[] sigma,
+        ReadOnlySpan<double> a, ReadOnlySpan<double> b, ReadOnlySpan<double> logGaussMass, ReadOnlySpan<double> logSigma,
+        double[] sums)
+    {
+        int n = sums.Length;
+        int k = 0;
+        if (System.Numerics.Vector.IsHardwareAccelerated && n >= System.Numerics.Vector<double>.Count)
+        {
+            int width = System.Numerics.Vector<double>.Count;
+            var xv = new System.Numerics.Vector<double>(x);
+            var two = new System.Numerics.Vector<double>(2.0);
+            var logC = new System.Numerics.Vector<double>(TruncNorm.NormPdfLogC);
+            var nan = new System.Numerics.Vector<double>(double.NaN);
+            var negativeInfinity = new System.Numerics.Vector<double>(double.NegativeInfinity);
+            for (; k <= n - width; k += width)
+            {
+                var muV = new System.Numerics.Vector<double>(mu, k);
+                var sigmaV = new System.Numerics.Vector<double>(sigma, k);
+                var aV = new System.Numerics.Vector<double>(a[k..]);
+                var bV = new System.Numerics.Vector<double>(b[k..]);
+                var xstd = (xv - muV) / sigmaV;
+                var normLogPdf = -(xstd * xstd) / two - logC;
+                var val = (normLogPdf - new System.Numerics.Vector<double>(logGaussMass[k..]))
+                          - new System.Numerics.Vector<double>(logSigma[k..]);
+                val = System.Numerics.Vector.ConditionalSelect(
+                    System.Numerics.Vector.LessThan(xstd, aV) | System.Numerics.Vector.GreaterThan(xstd, bV),
+                    negativeInfinity, val);
+                val = System.Numerics.Vector.ConditionalSelect(System.Numerics.Vector.Equals(aV, bV), nan, val);
+                (new System.Numerics.Vector<double>(sums, k) + val).CopyTo(sums, k);
+            }
+        }
+
+        for (; k < n; k++)
+        {
+            double xstd = (x - mu[k]) / sigma[k];
+            double val = TruncNorm.NormLogPdf(xstd) - logGaussMass[k] - logSigma[k];
+            if (a[k] == b[k])
+                val = double.NaN;
+            else if (xstd < a[k] || xstd > b[k])
+                val = double.NegativeInfinity;
+            sums[k] += val;
         }
     }
 

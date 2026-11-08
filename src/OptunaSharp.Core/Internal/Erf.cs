@@ -256,11 +256,25 @@ internal static class Erf
     internal static double[] ComputeArray(double[] x)
     {
         var result = new double[x.Length];
+        ComputeArray(x, result);
+        return result;
+    }
+
+    /// <summary>
+    ///     <see cref="ComputeArray(double[])" /> into a caller's buffer, for callers that reuse scratch memory (Rustuna
+    ///     plan 13, item S6). The path is chosen by <paramref name="x" />'s length exactly as the array overload chooses
+    ///     it by the array's length, so a caller must pass a span of the logical length, never a larger rented buffer.
+    /// </summary>
+    /// <param name="x">The numerical input values; its length selects the exact or the vectorized path.</param>
+    /// <param name="result">Receives one value per element of <paramref name="x" />; at least as long, and not overlapping it.</param>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="result" /> is shorter than <paramref name="x" />.</exception>
+    internal static void ComputeArray(ReadOnlySpan<double> x, Span<double> result)
+    {
         if (x.Length < 2000)
         {
             for (int i = 0; i < x.Length; i++)
                 result[i] = Compute(x[i]);
-            return result;
+            return;
         }
 
         for (int i = 0; i < x.Length; i++)
@@ -313,7 +327,6 @@ internal static class Erf
             }
             result[i] = Math.Sign(v) * outVal;
         }
-        return result;
     }
 
     /// <summary>

@@ -318,4 +318,45 @@ public class NsgaiiSamplerParityTests : OptunaInteropTestBase
             "    return (x * x + y * y, x - y)\n" +
             "study.optimize(_obj, n_trials=20)\n");
     }
+
+    /// <summary>
+    ///     Plan 13 gate (docs/plans/13-rustuna-derived-performance.md, phase 0): the default NSGA-II over 40 float
+    ///     parameters for 2,000 trials (40 generations of 50), the workload whose suggestions item S4 now writes in place.
+    ///     Every trial's full state, generations and parent caches included, is bit-identical to live Optuna's.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
+    public void LongRun_40Parameters_2000Trials_FullState_IsBitIdentical()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "nsga", sampler: new NSGAIISampler(seed: 0),
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize });
+        csStudy.Optimize(t =>
+        {
+            double a = 0, b = 0;
+            for (int i = 0; i < 40; i++)
+            {
+                double v = t.SuggestFloat($"x{i}", -10, 10);
+                a += v * v;
+                b += (v - 2) * (v - 2);
+            }
+            return new[] { a, b };
+        }, nTrials: 2000);
+
+        AssertFullParity(csStudy,
+            "study = optuna.create_study(study_name='nsga', directions=['minimize', 'minimize'], " +
+            "sampler=optuna.samplers.NSGAIISampler(seed=0))\n" +
+            "def _obj(t):\n" +
+            "    a = 0.0\n" +
+            "    b = 0.0\n" +
+            "    for i in range(40):\n" +
+            "        v = t.suggest_float(f'x{i}', -10, 10)\n" +
+            "        a += v * v\n" +
+            "        b += (v - 2) * (v - 2)\n" +
+            "    return a, b\n" +
+            "study.optimize(_obj, n_trials=2000)\n");
+    }
 }

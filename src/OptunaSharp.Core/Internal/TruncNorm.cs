@@ -55,14 +55,41 @@ internal static class TruncNorm
     /// <returns>Elementwise standard-normal cumulative probabilities.</returns>
     private static double[] Ndtr(double[] a)
     {
-        var scaled = new double[a.Length];
-        for (int i = 0; i < a.Length; i++)
-            scaled[i] = a[i] / Sqrt2;
-        var erf = Erf.ComputeArray(scaled);
         var result = new double[a.Length];
-        for (int i = 0; i < a.Length; i++)
-            result[i] = 0.5 + 0.5 * erf[i];
+        Ndtr(a, result);
         return result;
+    }
+
+    /// <summary>
+    ///     <see cref="Ndtr(double[])" /> into a caller's buffer, with its two temporaries rented from the shared pool
+    ///     (Rustuna plan 13, item S6): the same per-element arithmetic, and the vectorized-<c>erf</c> switch still sees the
+    ///     logical length, because the rented buffers are passed on as spans of exactly <paramref name="a" />'s length.
+    /// </summary>
+    /// <param name="a">The standardized arguments.</param>
+    /// <param name="result">Receives one probability per element of <paramref name="a" />; at least as long.</param>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="result" /> is shorter than <paramref name="a" />.</exception>
+    private static void Ndtr(ReadOnlySpan<double> a, Span<double> result)
+    {
+        int n = a.Length;
+        double[] scaledBuffer = System.Buffers.ArrayPool<double>.Shared.Rent(n);
+        double[] erfBuffer = System.Buffers.ArrayPool<double>.Shared.Rent(n);
+        try
+        {
+            var scaled = new Span<double>(scaledBuffer, 0, n);
+            for (int i = 0; i < n; i++)
+                scaled[i] = a[i] / Sqrt2;
+            var erf = new Span<double>(erfBuffer, 0, n);
+            Erf.ComputeArray(scaled, erf);
+            for (int i = 0; i < n; i++)
+                result[i] = 0.5 + 0.5 * erf[i];
+        }
+        finally
+        {
+            // Returned on every path: a rented buffer that is never returned only costs the pool, but this keeps the
+            // pool's buckets warm for the next call of the same size.
+            System.Buffers.ArrayPool<double>.Shared.Return(scaledBuffer);
+            System.Buffers.ArrayPool<double>.Shared.Return(erfBuffer);
+        }
     }
 
     /// <summary>Python <c>_log_ndtr_single(a)</c>.</summary>
@@ -112,43 +139,74 @@ internal static class TruncNorm
     /// <returns>The log standard-normal probability mass inside each corresponding interval.</returns>
     internal static double[] LogGaussMass(double[] a, double[] b)
     {
+        var outArr = new double[a.Length];
+        LogGaussMass(a, b, outArr);
+        return outArr;
+    }
+
+    /// <summary>
+    ///     <see cref="LogGaussMass(double[], double[])" /> into a caller's buffer, with every temporary rented from the
+    ///     shared pool (Rustuna plan 13, item S6). TPE calls it with tens of thousands of elements per estimator, and the
+    ///     array version's temporaries landed on the large-object heap each time.
+    /// </summary>
+    /// <param name="a">The standardized lower truncation bound for each interval.</param>
+    /// <param name="b">The standardized upper truncation bound for each interval; as long as <paramref name="a" />.</param>
+    /// <param name="result">Receives one log mass per interval; at least as long as <paramref name="a" />, every element written.</param>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="b" /> or <paramref name="result" /> is shorter than <paramref name="a" />.</exception>
+    /// <remarks>
+    ///     Same values as the array version, element by element: the central elements are gathered in index order into
+    ///     buffers of exactly the central count, so <see cref="Erf.ComputeArray(ReadOnlySpan{double}, Span{double})" />
+    ///     picks its exact or vectorized path from the same count as before.
+    /// </remarks>
+    internal static void LogGaussMass(ReadOnlySpan<double> a, ReadOnlySpan<double> b, Span<double> result)
+    {
         int n = a.Length;
-        var outArr = new double[n];
 
         // case_left = b <= 0; case_right = a > 0; case_central = ~(left | right). NumPy assigns
         // left, then right (overwriting), then central — so a > 0 wins the left/right overlap.
-        var centralIdx = new System.Collections.Generic.List<int>();
-        for (int i = 0; i < n; i++)
+        int[] centralBuffer = System.Buffers.ArrayPool<int>.Shared.Rent(Math.Max(n, 1));
+        double[] scratch = System.Buffers.ArrayPool<double>.Shared.Rent(Math.Max(4 * n, 1));
+        try
         {
-            if (!(a[i] > 0.0) && !(b[i] <= 0.0))
-                centralIdx.Add(i);
-        }
-
-        if (centralIdx.Count > 0)
-        {
-            var ac = new double[centralIdx.Count];
-            var negB = new double[centralIdx.Count];
-            for (int k = 0; k < centralIdx.Count; k++)
+            int central = 0;
+            for (int i = 0; i < n; i++)
             {
-                ac[k] = a[centralIdx[k]];
-                negB[k] = -b[centralIdx[k]];
+                if (!(a[i] > 0.0) && !(b[i] <= 0.0))
+                    centralBuffer[central++] = i;
             }
-            var ndtrAc = Ndtr(ac);
-            var ndtrNegB = Ndtr(negB);
-            for (int k = 0; k < centralIdx.Count; k++)
-                outArr[centralIdx[k]] = MathUtil.Log1p(-ndtrAc[k] - ndtrNegB[k]);
-        }
 
-        for (int i = 0; i < n; i++)
+            if (central > 0)
+            {
+                // Four views of one rented buffer, each exactly the central count long.
+                var ac = new Span<double>(scratch, 0, central);
+                var negB = new Span<double>(scratch, central, central);
+                var ndtrAc = new Span<double>(scratch, 2 * central, central);
+                var ndtrNegB = new Span<double>(scratch, 3 * central, central);
+                for (int k = 0; k < central; k++)
+                {
+                    ac[k] = a[centralBuffer[k]];
+                    negB[k] = -b[centralBuffer[k]];
+                }
+                Ndtr(ac, ndtrAc);
+                Ndtr(negB, ndtrNegB);
+                for (int k = 0; k < central; k++)
+                    result[centralBuffer[k]] = MathUtil.Log1p(-ndtrAc[k] - ndtrNegB[k]);
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                if (a[i] > 0.0)
+                    // mass_case_right(a, b) = mass_case_left(-b, -a).
+                    result[i] = LogDiff(LogNdtrSingle(-a[i]), LogNdtrSingle(-b[i]));
+                else if (b[i] <= 0.0)
+                    result[i] = LogDiff(LogNdtrSingle(b[i]), LogNdtrSingle(a[i]));
+            }
+        }
+        finally
         {
-            if (a[i] > 0.0)
-                // mass_case_right(a, b) = mass_case_left(-b, -a).
-                outArr[i] = LogDiff(LogNdtrSingle(-a[i]), LogNdtrSingle(-b[i]));
-            else if (b[i] <= 0.0)
-                outArr[i] = LogDiff(LogNdtrSingle(b[i]), LogNdtrSingle(a[i]));
+            System.Buffers.ArrayPool<int>.Shared.Return(centralBuffer);
+            System.Buffers.ArrayPool<double>.Shared.Return(scratch);
         }
-
-        return outArr;
     }
 
     // ------------------------------------------------------------------------------------------

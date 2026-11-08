@@ -55,6 +55,16 @@ public class TPESampler : BaseSampler
     private readonly bool _constantLiar;
     private readonly Func<FrozenTrial, IEnumerable<double>>? _constraintsFunc;
 
+    /// <summary>
+    ///     The last below/above split, reused while the same records are split again (plan 13, item S5). Initialized
+    ///     here, so the public constructors and the per-worker copy constructor each give an instance its own: the cache
+    ///     is guarded by this sampler's monitor, which a worker instance does not share.
+    /// </summary>
+    private readonly TpeSplitCache _splitCache = new();
+
+    /// <summary>The split cache, for the tests that count how many splits were computed rather than reused.</summary>
+    internal TpeSplitCache SplitCache => _splitCache;
+
     /// <param name="considerPrior">Deprecated (v4.3.0). Falls back to <c>true</c>.</param>
     /// <param name="priorWeight">Deprecated (v4.9.0). Falls back to <c>1.0</c>.</param>
     /// <param name="considerMagicClip">Deprecated (v4.9.0). Falls back to <c>true</c>.</param>
@@ -400,24 +410,42 @@ public class TPESampler : BaseSampler
     private OrderedDict<string, double[]> GetInternalRepr(
         IReadOnlyList<FrozenTrial> trials, OrderedDict<string, BaseDistribution> searchSpace, Study study)
     {
-        var values = new Dictionary<string, List<double>>();
-        foreach (var name in searchSpace.Keys)
-            values[name] = new List<double>();
+        // One column per search-space parameter, by position, sized for every trial up front (plan 13, item S6): the
+        // per-trial LINQ closure, the dictionary lookup per value and the list regrowth were a fifth of a 1,000-trial
+        // multi-objective run, which converts the whole history once per parameter. The values and their order are the
+        // same: every trial in order, each column in search-space order.
+        int nParams = searchSpace.Count;
+        var names = new string[nParams];
+        var distributions = new BaseDistribution[nParams];
+        var columns = new double[nParams][];
+        int p = 0;
+        foreach (var (name, distribution) in searchSpace)
+        {
+            names[p] = name;
+            distributions[p] = distribution;
+            columns[p] = new double[trials.Count];
+            p++;
+        }
 
+        int rows = 0;
         foreach (var trial in trials)
         {
             var @params = GetParams(trial, study);
             // search_space.keys() <= params.keys(): the trial must carry every search-space param.
-            if (searchSpace.Keys.All(k => @params.ContainsKey(k)))
+            bool carriesAll = true;
+            for (int i = 0; i < nParams && carriesAll; i++)
+                carriesAll = @params.ContainsKey(names[i]);
+            if (carriesAll)
             {
-                foreach (var (name, distribution) in searchSpace)
-                    values[name].Add(distribution.ToInternalRepr(@params[name]));
+                for (int i = 0; i < nParams; i++)
+                    columns[i][rows] = distributions[i].ToInternalRepr(@params[names[i]]);
+                rows++;
             }
         }
 
-        var result = new OrderedDict<string, double[]>(searchSpace.Count);
-        foreach (var name in searchSpace.Keys)
-            result[name] = values[name].ToArray();
+        var result = new OrderedDict<string, double[]>(nParams);
+        for (int i = 0; i < nParams; i++)
+            result[names[i]] = rows == trials.Count ? columns[i] : columns[i][..rows];
         return result;
     }
 
@@ -433,11 +461,24 @@ public class TPESampler : BaseSampler
             ? new[] { TrialState.Complete, TrialState.Pruned, TrialState.Running }
             : new[] { TrialState.Complete, TrialState.Pruned };
         bool useCache = !_constantLiar;
-        var trials = study.GetTrialsInternal(deepcopy: false, states: states, useCache: useCache);
+        List<FrozenTrial> trials;
+        if (_constantLiar && study.Storage.HasZeroCopyTrialsView)
+        {
+            // For constant_liar, filter out the current trial: here by never reading its record (plan 13, item S3). The
+            // read below returns the stored records themselves, and a running record that is read must be copied before
+            // its next write (InMemoryStorage, item S4); reading the current trial's record only to drop it made every
+            // suggestion of an independent-TPE trial copy that trial. The zero-copy view yields the same records in the
+            // same (trial number) order as GetAllTrials(deepcopy: false, states), minus the current trial.
+            trials = ReadOtherTrials(study, trial.Number, states);
+        }
+        else
+        {
+            trials = study.GetTrialsInternal(deepcopy: false, states: states, useCache: useCache);
 
-        if (_constantLiar)
-            // For constant_liar, filter out the current trial.
-            trials = trials.Where(t => trial.Number != t.Number).ToList();
+            if (_constantLiar)
+                // For constant_liar, filter out the current trial.
+                trials = trials.Where(t => trial.Number != t.Number).ToList();
+        }
 
         // Divide data into below and above.
         if (_gamma is null)
@@ -447,7 +488,9 @@ public class TPESampler : BaseSampler
 
         int n = trials.Count(t => t.State != TrialState.Running);  // Ignore running trials.
 
-        var (belowTrials, aboveTrials) = TpeTrialSplit.SplitTrials(study, trials, _gamma(n));
+        // The same split as TpeTrialSplit.SplitTrials, reused while the same records are split again: every parameter
+        // of an independent-TPE trial splits the same history (plan 13, item S5; see TpeSplitCache).
+        var (belowTrials, aboveTrials) = _splitCache.Split(study, trials, _gamma(n));
 
         var mpeBelow = BuildParzenEstimator(study, searchSpace, belowTrials, handleBelow: true);
         var mpeAbove = BuildParzenEstimator(study, searchSpace, aboveTrials, handleBelow: false);
@@ -460,6 +503,37 @@ public class TPESampler : BaseSampler
         foreach (var (name, dist) in searchSpace)
             result[name] = dist.ToExternalRepr(ret[name]);
 
+        return result;
+    }
+
+    /// <summary>
+    ///     The constant-liar history read for a storage whose
+    ///     <see cref="OptunaSharp.Storages.BaseStorage.GetTrialsPrefixView" /> is zero-copy:
+    ///     every trial in <paramref name="states" /> by trial number, except trial <paramref name="currentNumber" />, whose
+    ///     record is never read.
+    /// </summary>
+    /// <param name="study">The study being sampled; its storage has a zero-copy view.</param>
+    /// <param name="currentNumber">The number of the trial being sampled, which constant liar leaves out.</param>
+    /// <param name="states">The states to keep.</param>
+    /// <returns>The records <c>GetAllTrials(deepcopy: false, states)</c> returns, without the current trial's.</returns>
+    /// <remarks>
+    ///     In-memory trial numbers are positions in the study's trial list, which is the view's index, so skipping a
+    ///     position skips the trial without reading it. Each other position is read once, as the view reads it: a finished
+    ///     record without the lock, a running one under it. Another worker's running trial is read, and so copied before
+    ///     that worker's next write, as before: constant liar uses those records.
+    /// </remarks>
+    private static List<FrozenTrial> ReadOtherTrials(Study study, int currentNumber, TrialState[] states)
+    {
+        IReadOnlyList<FrozenTrial> view = study.Storage.GetTrialsPrefixView(study.StudyId);
+        var result = new List<FrozenTrial>(view.Count);
+        for (int i = 0; i < view.Count; i++)
+        {
+            if (i == currentNumber)
+                continue;
+            FrozenTrial other = view[i];
+            if (Array.IndexOf(states, other.State) >= 0)
+                result.Add(other);
+        }
         return result;
     }
 

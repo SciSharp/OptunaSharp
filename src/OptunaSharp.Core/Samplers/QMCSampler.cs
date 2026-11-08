@@ -87,12 +87,38 @@ public class QMCSampler : BaseSampler
     /// <inheritdoc />
     public override void ReseedRng() => _independentSampler.ReseedRng();
 
+    /// <summary>
+    ///     The study's lowest-numbered COMPLETE or PRUNED trial, or null when there is none: what Optuna reads as
+    ///     <c>sorted(past_trials, key=lambda t: t.number)[0]</c> after
+    ///     <c>study._get_trials(deepcopy=False, states=(COMPLETE, PRUNED), use_cache=True)</c>.
+    /// </summary>
+    /// <param name="study">The study being sampled.</param>
+    /// <returns>The first finished-and-suggested trial in number order, or null.</returns>
+    /// <remarks>
+    ///     Reads through <see cref="Study.GetTrialsForSampler" /> and stops at the first match (Rustuna plan 13, item S3):
+    ///     the history is in number order, so the first match is the minimum. On an in-memory storage that read is the
+    ///     zero-copy view and the first trial is usually the answer, so an ask costs O(1) instead of a copy and a sort
+    ///     of the whole history; elsewhere it is Optuna's read, cache included.
+    /// </remarks>
+    private static FrozenTrial? FirstSuggestedTrial(Study study)
+    {
+        foreach (FrozenTrial past in study.GetTrialsForSampler(useCache: true))
+        {
+            if (Array.IndexOf(SuggestedStates, past.State) >= 0)
+                return past;
+        }
+        return null;
+    }
+
     /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
-        var pastTrials = study.GetTrialsInternal(deepcopy: false, states: SuggestedStates, useCache: true);
+        // Optuna takes past_trials = every COMPLETE or PRUNED trial, then the first of them by number. The history is
+        // in number order, so that is the first such trial met, and the scan stops there (plan 13, item S3): the copied
+        // and sorted history made each ask of a long QMC study O(n log n) for one record.
+        FrozenTrial? firstTrial = FirstSuggestedTrial(study);
         // The initial trial is sampled by the independent sampler.
-        if (pastTrials.Count == 0)
+        if (firstTrial is null)
         {
             var pendingTrials = study.GetTrialsInternal(
                 deepcopy: false, states: new[] { TrialState.Running }, useCache: true);
@@ -120,7 +146,6 @@ public class QMCSampler : BaseSampler
         }
 
         // If an initial trial was already made, construct the search space from the first trial.
-        var firstTrial = pastTrials.OrderBy(t => t.Number).First();
         var result = new OrderedDict<string, BaseDistribution>();
         foreach (var (name, dist) in firstTrial.DistributionsDict)
             result[name] = dist;
@@ -131,7 +156,8 @@ public class QMCSampler : BaseSampler
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
-        if (study.GetTrialsInternal(deepcopy: false, states: SuggestedStates, useCache: true).Count > 0)
+        // Optuna asks whether any trial is COMPLETE or PRUNED; the first one found answers it (plan 13, item S3).
+        if (FirstSuggestedTrial(study) is not null)
         {
             if (_warnIndependentSampling)
                 LogIndependentSampling(trial, paramName);
