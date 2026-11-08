@@ -394,8 +394,8 @@ Rules every workflow follows:
   commit with deterministic `/_/` paths. It outputs `publishable`. The job uploads the `nuget-packages`
   artifact.
 - **Release pipeline** (on `v*` tags): `validate-release` (needs every test job and `package`; the tag
-  must be SemVer, on the repository's default branch — `main` on SciSharp/OptunaSharp, `master` on the
-  mirror — and equal to the packed version) → `create-release` (the only
+  must be SemVer, on the repository's default branch, `main` on both SciSharp/OptunaSharp and the
+  mirror, and equal to the packed version) → `create-release` (the only
   `contents: write` job; GitHub Release with every package plus checksums) and `publish-nuget`.
   `publish-nuget` runs in the `nuget` environment, which holds it until a required reviewer approves the
   deployment ("Review deployments" on the run; only `v*` tags may deploy there, and admins cannot bypass
@@ -508,9 +508,10 @@ the equivalent Optuna Python snippet + output as the source of truth).
 
 ## Conventions
 
-- **Branch from `master` locally**; releases are tagged `v*` on it. The canonical repository calls
-  the same history `main`: this clone and the Nucs mirror keep `master`, and it is published with
-  `git push scisharp master:main` (outside contributors branch from `main`).
+- **Branch from `main`**; releases are tagged `v*` on it. This clone, the Nucs mirror and
+  SciSharp/OptunaSharp all call the branch `main` (since 2026-11-08; the local `master` is a stale
+  leftover of the old name, do not push it). Push to both remotes: `git push origin main && git push
+  scisharp main`.
 - **Conventional-commit prefixes** as in the history (`feat`, `fix`, `chore`, `docs`, with optional
   scope: `chore(infra):`, `docs(readme):`, `feat(branding):`). Extensive commit bodies for future
   reference.
@@ -518,7 +519,7 @@ the equivalent Optuna Python snippet + output as the source of truth).
   code. Name public types after their Optuna counterparts so the two cross-reference.
 - **Remotes:** the canonical public repository is `github.com/SciSharp/OptunaSharp` (what
   `RepositoryUrl` names, and the only place a release may publish from; default branch `main`, remote
-  `scisharp` in this clone); CI also runs on a private mirror (`origin`, branch `master`), from which
+  `scisharp` in this clone); CI also runs on a private mirror (`origin`, branch `main`), from which
   `publish-nuget` refuses to push (`verify_packages.cs` reports it non-publishable). Links into the
   repository use `blob/main`.
 
