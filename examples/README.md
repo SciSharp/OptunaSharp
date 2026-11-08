@@ -58,6 +58,7 @@ classes).
 | [`0_RateLimiterHostedService.cs`](0_RateLimiterHostedService.cs) | Generic Host + DI (`AddOptunaStudyFactory` …), cancellation | a `BackgroundService` re-tunes an API gateway's token bucket every telemetry window |
 | [`0_PressureVesselParetoReport.cs`](0_PressureVesselParetoReport.cs) | NSGA-II, mixed directions, constraints, Pareto + hypervolume charts | pressure-vessel cost vs. capacity under the ASME thickness rules (RE23) |
 | [`0_SpamFilterTimeBudget.cs`](0_SpamFilterTimeBudget.cs) | TPE with only a `timeout`, `show_progress_bar` | a naive-Bayes spam filter tuned inside a fixed ten-second slot |
+| [`0_DistributedJournalHyperband.cs`](0_DistributedJournalHyperband.cs) | 3 processes × `n_jobs=2` on one `JournalFileBackend`, `HyperbandPruner` | SGD ridge house-price model; Hyperband's brackets span all six workers through the shared file |
 | [`0_ContainerLoadingStopAtBound.cs`](0_ContainerLoadingStopAtBound.cs) | `enqueue_trial(skip_if_exists=True)`, `study.stop()` from a callback | a bin-packing heuristic for trailer loading, warm-started from planners' rules, stopped at the lower bound |
 
 Notes from running them:
