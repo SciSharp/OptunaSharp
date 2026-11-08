@@ -73,7 +73,7 @@ jobs:
 
   # Deploy is gated on the `ENABLE_PAGES` repo variable: GitHub Pages requires a paid plan for PRIVATE
   # repos, so on a private mirror the variable stays unset and only `build` runs (the meaningful gate).
-  # Set ENABLE_PAGES=true on the public repo to deploy from master.
+  # Set ENABLE_PAGES=true on the public repo to deploy from its default branch (`main`).
   #
   # The `github-pages` environment is attached HERE, not to the build. Pages restricts that environment
   # to the default branch, so a pull-request job that names it is rejected by the protection rules,

@@ -167,7 +167,7 @@ The interop suite covers both directions against real PostgreSQL/MySQL servers. 
 
 ## Implementation and verification
 
-- [Storage implementation](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.EFCore/Storages/Rdb/RDBStorage.cs), [options](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.EFCore/Storages/Rdb/EFCoreRdbOptions.cs), and [schema](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.EFCore/Storages/Rdb/RdbSchema.cs)
-- [Database, configuration, and heartbeat tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/EFCoreRdbStorageTests.cs)
-- [URL parsing tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/EFCoreRdbUrlTests.cs)
-- [Python/PostgreSQL/MySQL interoperability](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/EFCoreRdbInteropParityTests.cs)
+- [Storage implementation](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.EFCore/Storages/Rdb/RDBStorage.cs), [options](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.EFCore/Storages/Rdb/EFCoreRdbOptions.cs), and [schema](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.EFCore/Storages/Rdb/RdbSchema.cs)
+- [Database, configuration, and heartbeat tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/EFCoreRdbStorageTests.cs)
+- [URL parsing tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/EFCoreRdbUrlTests.cs)
+- [Python/PostgreSQL/MySQL interoperability](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/EFCoreRdbInteropParityTests.cs)

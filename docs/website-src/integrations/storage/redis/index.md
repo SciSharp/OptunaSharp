@@ -170,9 +170,9 @@ The adapters' URL and `ConfigurationOptions` constructors therefore turn on Stac
 
 ## Implementation and verification
 
-- [Shared URL parser](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.Redis/Storages/Journal/RedisEndpoint.cs) and [journal protocol](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.Redis/Storages/Journal/RedisJournalProtocol.cs)
-- [Journal replay and snapshot implementation](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Core/Storages/Journal/JournalStorage.cs)
-- [Adapter configuration tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/RedisBackendTests.cs) and [URL tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/RedisUrlTests.cs)
-- [Backend contract, snapshot, and cluster-branch tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/JournalBackendContractTests.cs)
-- [Round-trip count, snapshot interval, and `DedicatedThreads` tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/RedisJournalCostAndThreadsTests.cs)
-- [Cross-library byte parity](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/CrossLibraryParityTests.cs) and [Python journal interoperability](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/JournalRedisInteropTests.cs)
+- [Shared URL parser](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.Redis/Storages/Journal/RedisEndpoint.cs) and [journal protocol](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.Redis/Storages/Journal/RedisJournalProtocol.cs)
+- [Journal replay and snapshot implementation](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Core/Storages/Journal/JournalStorage.cs)
+- [Adapter configuration tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/RedisBackendTests.cs) and [URL tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/RedisUrlTests.cs)
+- [Backend contract, snapshot, and cluster-branch tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/JournalBackendContractTests.cs)
+- [Round-trip count, snapshot interval, and `DedicatedThreads` tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/RedisJournalCostAndThreadsTests.cs)
+- [Cross-library byte parity](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/CrossLibraryParityTests.cs) and [Python journal interoperability](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/JournalRedisInteropTests.cs)

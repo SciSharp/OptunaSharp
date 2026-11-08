@@ -144,7 +144,7 @@ configurable backends compose into the container model (Redis via `OPTUNASHARP_R
 - The release pipeline runs on `v*` tags.
 
 The other workflows:
-- **docs**: DocFX compiles Core. The build job gates PRs; a separate `deploy` job deploys from master.
+- **docs**: DocFX compiles Core. The build job gates PRs; a separate `deploy` job deploys from the default branch (`main`).
 - **benchmark**: build-smoke always; full run manual.
 - **package-parity**: build→package→deploy→test-in-container.
 - **documentation**: the in-code doc gate.

@@ -162,13 +162,13 @@ Dispose modules, samplers, pruners and problems after their last use, as in the 
 provides advanced access inside a GIL scope. Its borrowed module must not be disposed or allowed to
 escape the callback.
 
-The existing [bridge tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/OptunaHubBridgeParityTests.cs)
+The existing [bridge tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/OptunaHubBridgeParityTests.cs)
 exercise a local mixed-distribution toy benchmark, the registry's `RandomSampler`, and a median pruner
 that actually prunes trials. These are behavioral integration checks, not a registry-wide parity
 guarantee. They report inconclusive when Python, required packages or the pinned registry checkout
 are missing.
 
-Source: [module factories](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.pythonnet/OptunaHubModule.cs),
-[sampler](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.pythonnet/OptunaHubSampler.cs),
-[pruner](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.pythonnet/OptunaHubPruner.cs),
-[problem](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.pythonnet/OptunaHubProblem.cs).
+Source: [module factories](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/OptunaHubModule.cs),
+[sampler](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/OptunaHubSampler.cs),
+[pruner](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/OptunaHubPruner.cs),
+[problem](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/OptunaHubProblem.cs).

@@ -144,4 +144,4 @@ duplicate name raises `DuplicatedStudyError`, a write to a finished trial raises
 
 ## License
 
-MIT — see [LICENSE](https://github.com/SciSharp/OptunaSharp/blob/master/LICENSE).
+MIT — see [LICENSE](https://github.com/SciSharp/OptunaSharp/blob/main/LICENSE).

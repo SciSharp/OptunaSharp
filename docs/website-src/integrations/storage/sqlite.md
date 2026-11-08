@@ -125,7 +125,7 @@ Datetimes use naive UTC; infinite objective values and nonfinite intermediate va
 
 ## Implementation and verification
 
-- [RDB storage implementation](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.Sqlite/Storages/Rdb/RDBStorage.cs) and [all SQLite options](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.Sqlite/Storages/Rdb/SqliteRdbOptions.cs)
-- [Migration chain](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.Sqlite/Storages/Rdb/RDBStorage.Migrations.cs)
-- [Storage lifecycle tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/SqliteRdbStorageTests.cs) and [options/ownership tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/SqliteRdbOptionsTests.cs)
-- [Python interoperability](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/SqliteRdbInteropParityTests.cs) and [migration interoperability](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/SqliteRdbUpgradeInteropParityTests.cs)
+- [RDB storage implementation](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.Sqlite/Storages/Rdb/RDBStorage.cs) and [all SQLite options](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.Sqlite/Storages/Rdb/SqliteRdbOptions.cs)
+- [Migration chain](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.Sqlite/Storages/Rdb/RDBStorage.Migrations.cs)
+- [Storage lifecycle tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/SqliteRdbStorageTests.cs) and [options/ownership tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/SqliteRdbOptionsTests.cs)
+- [Python interoperability](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/SqliteRdbInteropParityTests.cs) and [migration interoperability](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/SqliteRdbUpgradeInteropParityTests.cs)

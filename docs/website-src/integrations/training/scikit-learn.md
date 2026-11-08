@@ -161,19 +161,19 @@ loop; setting a study pruner does not inject intermediate training reports into 
 
 ## Validation
 
-The [committed oracle tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests/Integration/Sklearn/SklearnOracleParityTests.cs)
+The [committed oracle tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests/Integration/Sklearn/SklearnOracleParityTests.cs)
 use values captured from scikit-learn 1.8.0 and Python's OptunaSearchCV integration. They compare
 forest predictions, metrics, folds, cross-validation scores and complete searches using integer
 parameter distributions. Those exact comparisons are pinned to x64 and become inconclusive on other
 architectures; Python is not needed to run the committed-oracle tests.
 
-[Component tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests/Integration/Sklearn/SklearnComponentTests.cs)
-and [search tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests/Integration/Sklearn/OptunaSearchCVSklearnTests.cs)
+[Component tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests/Integration/Sklearn/SklearnComponentTests.cs)
+and [search tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests/Integration/Sklearn/OptunaSearchCVSklearnTests.cs)
 check the managed usage and supported boundaries. Timing values are measured wall-clock results,
 not parity values. This evidence covers the implemented regression subset and tested configurations,
 not arbitrary scikit-learn estimators or platforms.
 
-Source: [search](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Core/Integration/OptunaSearchCV.cs),
-[estimator contract](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Core/Integration/ICrossValidationEstimator.cs),
-[native backend](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Core/Integration/Sklearn/SklearnEstimator.cs),
-[forest](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Core/Integration/Sklearn/Ensemble/RandomForestRegressor.cs).
+Source: [search](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Core/Integration/OptunaSearchCV.cs),
+[estimator contract](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Core/Integration/ICrossValidationEstimator.cs),
+[native backend](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Core/Integration/Sklearn/SklearnEstimator.cs),
+[forest](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Core/Integration/Sklearn/Ensemble/RandomForestRegressor.cs).

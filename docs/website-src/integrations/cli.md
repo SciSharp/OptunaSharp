@@ -113,9 +113,9 @@ the CLI too. The command-line interface does not broaden a backend's compatibili
 
 ## Implementation and verification
 
-The [command definitions](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Cli/CliProgram.cs),
-[storage resolver](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Cli/StorageResolver.cs),
-and [sampler factory](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Cli/SamplerFactory.cs)
+The [command definitions](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Cli/CliProgram.cs),
+[storage resolver](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Cli/StorageResolver.cs),
+and [sampler factory](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Cli/SamplerFactory.cs)
 define the supported surface. The
-[CLI tests](https://github.com/SciSharp/OptunaSharp/tree/master/test/OptunaSharp.Tests.Cli)
+[CLI tests](https://github.com/SciSharp/OptunaSharp/tree/main/test/OptunaSharp.Tests.Cli)
 cover command-output parity, storage resolution, sampler argument binding, and SQLite upgrades.

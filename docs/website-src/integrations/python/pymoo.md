@@ -204,7 +204,7 @@ problem, while this bridge evaluates in C#. pymoo's single-objective algorithm f
 methods and arbitrary custom operators are also outside this API. Some exposed evolutionary methods
 can still be used with one objective; that does not add all single-objective pymoo algorithms.
 
-The [behavioral tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/PymooSamplerParityTests.cs)
+The [behavioral tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/PymooSamplerParityTests.cs)
 exercise all eleven algorithms on a two-objective front. The same fixture checks selected seeded
 repeat runs, one- and three-objective examples, maximize directions, grids, logarithmic and categorical
 parameters, dynamic fallback, duplicate settings and required reference points. Direct numerical
@@ -217,8 +217,8 @@ establish equality to OptunaSharp's managed algorithms: for example, this pymoo 
 generational, while the managed `SmsEmoaSampler` uses a steady-state variant.
 
 Live tests become inconclusive without pymoo. Separate
-[API tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/PymooApiUnitTests.cs)
+[API tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/PymooApiUnitTests.cs)
 check the enum and construction families and the population-size guard.
-See [sampler/replay source](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.Pymoo/PymooSampler.cs),
-[algorithm options](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.Pymoo/PymooAlgorithm.cs)
-and [Python setup](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.Pymoo/Pythonic.cs).
+See [sampler/replay source](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.Pymoo/PymooSampler.cs),
+[algorithm options](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.Pymoo/PymooAlgorithm.cs)
+and [Python setup](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.Pymoo/Pythonic.cs).

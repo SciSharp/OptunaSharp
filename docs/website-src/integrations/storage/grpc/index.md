@@ -76,4 +76,4 @@ The client and blocking server runner emit experimental warnings, following the 
 - [Server hosting, backing storage, and endpoint configuration](server.md)
 - [Python and C# interoperability](cross-language.md)
 
-Implementation: [gRPC package and dependencies](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.Grpc/OptunaSharp.Storage.Grpc.csproj), [protobuf contract](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.Grpc/Protos/api.proto), and [server service](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.Grpc/Storages/Grpc/OptunaStorageProxyService.cs).
+Implementation: [gRPC package and dependencies](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.Grpc/OptunaSharp.Storage.Grpc.csproj), [protobuf contract](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.Grpc/Protos/api.proto), and [server service](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.Grpc/Storages/Grpc/OptunaStorageProxyService.cs).

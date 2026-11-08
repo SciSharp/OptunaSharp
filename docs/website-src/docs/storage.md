@@ -314,7 +314,7 @@ Limits and costs:
   samplers that derived a candidate from state that changes only when a trial finishes (JANUS, JANUS-DE, PSO,
   DE, LM-CMA, TuRBO's and SAASBO's startup designs, REMBO, the genetic samplers, BruteForce) now also look at
   the trials still running, which changes nothing in a run of one trial at a time
-  ([THREADING.md §6.3](https://github.com/SciSharp/OptunaSharp/blob/master/docs/THREADING.md)). Whole repeated
+  ([THREADING.md §6.3](https://github.com/SciSharp/OptunaSharp/blob/main/docs/THREADING.md)). Whole repeated
   points in 120 trials at `nJobs: 16` (in memory, three runs), against one trial at a time:
   - TPE, Random, CMA-ES, VkD-CMA, QMC, PartialFixed, OpenAI-ES, SNES, JANUS, JANUS-DE, GP, TuRBO and REMBO:
     none. JANUS used to repeat 30 without `nJobs` lanes, JANUS-DE 29, REMBO 51, LM-CMA 24 and TuRBO 4. xNES can

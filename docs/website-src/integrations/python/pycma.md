@@ -106,7 +106,7 @@ the configuration or independent sampler state on restart do not reproduce an un
 
 ## Validation and scope
 
-The [live parity tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/PyCmaSamplerParityTests.cs)
+The [live parity tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/PyCmaSamplerParityTests.cs)
 compare against Python `optuna_integration.PyCmaSampler`: two- and three-dimensional spheres, mixed
 float/integer spaces, categoricals, logarithmic and stepped parameters, maximization, startup counts,
 explicit means/scales, population sizes and reproducibility. They also check the one-dimensional
@@ -118,5 +118,5 @@ that pycma equals `cmaes`, that Python version upgrades preserve every trajector
 provides native AOT support. There is no constraint callback or multi-objective extension on this
 sampler's public API.
 
-Source: [sampler and generation replay](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.PyCma/PyCmaSampler.cs),
-[Python crossing](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.PyCma/PyCmaInterop.cs).
+Source: [sampler and generation replay](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.PyCma/PyCmaSampler.cs),
+[Python crossing](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.PyCma/PyCmaInterop.cs).

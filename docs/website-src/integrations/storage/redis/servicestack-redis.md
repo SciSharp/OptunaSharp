@@ -4,7 +4,7 @@
 
 ## Install and use
 
-Requires .NET 8 or .NET 10 and a reachable Redis server. The package's [dependency notice](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.ServiceStack.Redis/README.md) identifies ServiceStack.Redis as commercially licensed with a request-limited free tier. Review the dependency's applicable terms for your application; OptunaSharp's own license does not replace them.
+Requires .NET 8 or .NET 10 and a reachable Redis server. The package's [dependency notice](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.ServiceStack.Redis/README.md) identifies ServiceStack.Redis as commercially licensed with a request-limited free tier. Review the dependency's applicable terms for your application; OptunaSharp's own license does not replace them.
 
 ```bash
 dotnet add package OptunaSharp.Storage.ServiceStack.Redis
@@ -59,4 +59,4 @@ The adapter uses `GetValue`, `SetValue`, `SetValueIfNotExists`, and `IncrementVa
 
 `useCluster` selects that append algorithm; it does not provision a cluster or configure the manager's routing. Read the [Redis overview](index.md) for missing-record waits, prefix isolation, and the difference between interoperable logs and runtime-specific snapshots.
 
-Implementation: [ServiceStackJournalRedisBackend](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Storage.ServiceStack.Redis/Storages/Journal/ServiceStackJournalRedisBackend.cs). Verification covers [pool/endpoint/callback constructors](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/RedisBackendTests.cs), [cross-library bytes](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Storage/CrossLibraryParityTests.cs), and [Python read/write interoperability](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/JournalRedisInteropTests.cs).
+Implementation: [ServiceStackJournalRedisBackend](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Storage.ServiceStack.Redis/Storages/Journal/ServiceStackJournalRedisBackend.cs). Verification covers [pool/endpoint/callback constructors](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/RedisBackendTests.cs), [cross-library bytes](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Storage/CrossLibraryParityTests.cs), and [Python read/write interoperability](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/JournalRedisInteropTests.cs).

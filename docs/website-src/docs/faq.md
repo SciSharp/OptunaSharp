@@ -24,7 +24,7 @@ ecosystem rather than a trainer, the [Python bridges](../integrations/index.md) 
 [BoTorch](../integrations/python/botorch.md), [PyCma](../integrations/python/pycma.md),
 [pymoo](../integrations/python/pymoo.md), and [OptunaHub](../integrations/python/optunahub.md) modules
 from C#. Runnable, end-to-end programs (XGBoost via ML.NET, conditional search spaces, multi-objective
-Pareto, artifacts) are under the repository's [`examples/`](https://github.com/SciSharp/OptunaSharp/tree/master/examples)
+Pareto, artifacts) are under the repository's [`examples/`](https://github.com/SciSharp/OptunaSharp/tree/main/examples)
 directory.
 
 ## How to define objective functions that have own arguments?

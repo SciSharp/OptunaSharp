@@ -128,12 +128,12 @@ for another study. As with the other bridges, embedded CPython is a process-life
 
 ## Validation and limits
 
-The [sampler parity tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/BoTorchSamplerParityTests.cs)
+The [sampler parity tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/BoTorchSamplerParityTests.cs)
 compare sampled parameters and study state against live `optuna_integration.BoTorchSampler`, including
 continuous, integer and categorical parameters, several acquisition functions, multiple objectives
-and constraints. [Integration tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/BoTorchIntegrationParityTests.cs)
+and constraints. [Integration tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/BoTorchIntegrationParityTests.cs)
 cover pending points, the legacy constraint function and mixed parameter types.
-[Acquisition tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Interop/BoTorchApiParityTests.cs)
+[Acquisition tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/BoTorchApiParityTests.cs)
 cover the explicit acquisition suite, selection rules, float64 crossing and error cases.
 
 Byte comparisons are against the same installed Python stack and seeded CPU computation. CUDA has
@@ -142,6 +142,6 @@ report inconclusive when their dependencies are unavailable; missing CUDA likewi
 smoke test. Reproducibility across different BoTorch, torch, device or numerical-library versions is
 not established by these tests.
 
-Source: [sampler](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.BoTorch/BoTorchSampler.cs),
-[acquisition implementations](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.BoTorch/BoTorchCandidates.cs),
-[tensor crossing](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.BoTorch/BoTorchInterop.cs).
+Source: [sampler](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.BoTorch/BoTorchSampler.cs),
+[acquisition implementations](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.BoTorch/BoTorchCandidates.cs),
+[tensor crossing](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.BoTorch/BoTorchInterop.cs).

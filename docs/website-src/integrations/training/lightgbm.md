@@ -188,11 +188,11 @@ family intentionally.
 
 ## Implementation and verification
 
-The [tuner engine](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Integration.LightGbm/Tuner/LightGbmBaseTuner.cs),
-[trainer adapter](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Integration.LightGbm/Internal/MlNetLightGbmTrainer.cs),
-and [dataset](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Integration.LightGbm/Tuner/Dataset.cs)
+The [tuner engine](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Integration.LightGbm/Tuner/LightGbmBaseTuner.cs),
+[trainer adapter](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Integration.LightGbm/Internal/MlNetLightGbmTrainer.cs),
+and [dataset](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Integration.LightGbm/Tuner/Dataset.cs)
 define the behavior above. The
-[integration tests](https://github.com/SciSharp/OptunaSharp/tree/master/test/OptunaSharp.Tests.Integration.LightGbm)
+[integration tests](https://github.com/SciSharp/OptunaSharp/tree/main/test/OptunaSharp.Tests.Integration.LightGbm)
 exercise the tuning schedule, real training, multiclass/ranking support, persistence, importance,
 and pruning. Schedule parity uses a deterministic scorer to isolate the search from the training
 engine; it is not evidence that ML.NET and Python LightGBM fit identical models.

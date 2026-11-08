@@ -16,7 +16,7 @@ The project targets .NET 8 and .NET 10 and references NuGet `pythonnet` with the
 hosts are not supported: pythonnet 3.1.0 removed 3.7–3.9 and 3.2.0 raised its minimum to 3.11. This
 range does not install CPython or any Python library. The individual bridge packages have their own
 Python requirements.
-[Package definition](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj).
+[Package definition](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/OptunaSharp.Interop.pythonnet.csproj).
 
 Install dependencies into the interpreter that will host the process. For example, for OptunaHub:
 
@@ -132,5 +132,5 @@ or OptunaSharp exceptions. Diagnose a missing module using the embedded interpre
 then install the missing dependency into that environment; changing an unrelated system Python will
 not fix the running process.
 
-See the [runtime implementation](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.pythonnet/PythonRuntime.cs)
-and [conversion implementation](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Interop.pythonnet/PyConvert.cs).
+See the [runtime implementation](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/PythonRuntime.cs)
+and [conversion implementation](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/PyConvert.cs).

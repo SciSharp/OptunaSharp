@@ -65,12 +65,12 @@ jobs:
   #   * v* tag / manual dispatch -> all 3 OSes + both TFMs. Release confidence and the only place the
   #                                 macOS-specific paths (framework libpython resolution, brew libomp)
   #                                 are exercised.
-  #   * push to master           -> x64 OSes (ubuntu + windows) + both TFMs. macOS on GitHub is arm64
+  #   * push to main / master    -> x64 OSes (ubuntu + windows) + both TFMs. macOS on GitHub is arm64
   #                                 and SELF-SKIPS ~60% of the byte-exact parity suite (CMA-ES / linalg /
   #                                 AGE-MOEA-2 are x64-pinned), so its 10x-billed minutes buy almost no
   #                                 unique coverage — it is covered on tags/dispatch instead.
   #   * pull_request             -> x64 OSes + the modern TFM only (net10.0). net8.0 is a
-  #                                 compatibility leg re-checked on the post-merge master push.
+  #                                 compatibility leg re-checked on the post-merge push.
   # ---------------------------------------------------------------------------------------------
   setup:
     name: Decide CI scope
@@ -725,8 +725,9 @@ jobs:
         retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 5 }}
 
   # ---------------------------------------------------------------------------------------------
-  # Release pipeline — only on a v* tag pushed from master, and only after every test suite and the
-  # package gate passed for the tagged commit.
+  # Release pipeline — only on a v* tag on the repository's default branch (`main` on
+  # SciSharp/OptunaSharp), and only after every test suite and the package gate passed for the tagged
+  # commit.
   # ---------------------------------------------------------------------------------------------
   validate-release:
     needs: [test, satellite-tests, interop-test, package]
@@ -741,9 +742,14 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Verify tag is on master branch
+    - name: Verify tag is on the default branch
       id: check
       shell: bash
+      env:
+        # Read from the event rather than written as a literal: SciSharp/OptunaSharp releases from
+        # `main`, while the private mirror still calls the same history `master`. Passed through env,
+        # not spliced into the script, so a branch name can never become shell code.
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
         TAG_COMMIT=$(git rev-parse HEAD)
         VERSION="${GITHUB_REF#refs/tags/v}"
@@ -755,11 +761,18 @@ jobs:
           echo "is_valid=false" >> "$GITHUB_OUTPUT"
           exit 1
         fi
-        if git merge-base --is-ancestor "$TAG_COMMIT" origin/master; then
-          echo "Tag v$VERSION is on master branch"
+        # Without a default branch there is nothing to check the tag against, and `origin/` alone would
+        # fail merge-base with a less useful message.
+        if [ -z "$DEFAULT_BRANCH" ]; then
+          echo "::error::the event names no default branch, so the branch of v$VERSION cannot be verified"
+          echo "is_valid=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        if git merge-base --is-ancestor "$TAG_COMMIT" "origin/$DEFAULT_BRANCH"; then
+          echo "Tag v$VERSION is on the default branch ($DEFAULT_BRANCH)"
           echo "is_valid=true" >> "$GITHUB_OUTPUT"
         else
-          echo "::error::Tag v$VERSION is NOT on master branch. Releases must be tagged from master."
+          echo "::error::Tag v$VERSION is NOT on the default branch ($DEFAULT_BRANCH). Releases must be tagged from it."
           echo "is_valid=false" >> "$GITHUB_OUTPUT"
           exit 1
         fi

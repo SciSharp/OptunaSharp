@@ -47,4 +47,4 @@ The RDB packages map Optuna's SQLAlchemy schema; Redis shares its journal operat
 
 Storage shares study history, not the in-memory state of a sampler or a running objective. Configure each worker's sampler, pruner, and objective as part of the worker application.
 
-Implementation: [storage selection and automatic cache wrapping](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Core/Storages/StorageFunctions.cs).
+Implementation: [storage selection and automatic cache wrapping](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Core/Storages/StorageFunctions.cs).

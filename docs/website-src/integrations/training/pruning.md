@@ -88,9 +88,9 @@ to use framework terminology such as “epoch.”
 
 ## Implementation and verification
 
-The [callback implementation](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Core/Integration/PruningCallback.cs)
+The [callback implementation](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Core/Integration/PruningCallback.cs)
 contains both reporting styles. The
-[callback tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests/PruningCallbackTests.cs)
+[callback tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests/PruningCallbackTests.cs)
 cover immediate and deferred exceptions, a no-op check when no pruning occurred, and pruning
 inside a real `Study.Optimize` loop. See the [Pruners guide](../../docs/pruners.md) for choosing
 the decision rule.

@@ -74,7 +74,7 @@ ports.
 > 6.1 s, while dedicated threads ran 96 at once and took 2.0–2.3 s. If you hit this, go back to the
 > default `DedicatedThreads`, which reuses OptunaSharp's own threads, or raise the pool's minimum with
 > `ThreadPool.SetMinThreads`. The design is in
-> [THREADING.md](https://github.com/SciSharp/OptunaSharp/blob/master/docs/THREADING.md).
+> [THREADING.md](https://github.com/SciSharp/OptunaSharp/blob/main/docs/THREADING.md).
 
 ### Sampling in parallel, and OpenBLAS threads
 
@@ -105,7 +105,7 @@ finished trial already had (a child that copies its parent), and the Python brid
 OptunaHub) hand out what the Python code they drive hands out. BruteForce goes further than Optuna: in
 `avoidPrematureStop` mode it no longer hands out a point a running trial holds, so a point whose worker died is
 evaluated only once that trial is failed. Separate processes on one storage are kept apart only partly; the
-details are in [THREADING.md §6.3](https://github.com/SciSharp/OptunaSharp/blob/master/docs/THREADING.md).
+details are in [THREADING.md §6.3](https://github.com/SciSharp/OptunaSharp/blob/main/docs/THREADING.md).
 
 While several workers run, OptunaSharp also runs OpenBLAS (the linear algebra behind CMA-ES, GP and NSGA-III)
 single-threaded, so the workers do not fight for the cores: the 40-dimensional CMA-ES above took 5.22 s at

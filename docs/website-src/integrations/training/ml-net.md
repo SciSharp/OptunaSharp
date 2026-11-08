@@ -144,9 +144,9 @@ scikit-learn-compatible implementations; the ML.NET satellite is optional.
 
 ## Implementation and verification
 
-The [estimator](https://github.com/SciSharp/OptunaSharp/blob/master/src/OptunaSharp.Integration.ML.NET/Sklearn/MLNetEstimator.cs)
+The [estimator](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Integration.ML.NET/Sklearn/MLNetEstimator.cs)
 defines fold handling and refit behavior. The
-[end-to-end test](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Integration.ML.NET/MLNetEstimatorEndToEndTests.cs)
+[end-to-end test](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Integration.ML.NET/MLNetEstimatorEndToEndTests.cs)
 fits a real FastTree pipeline, searches its parameters, refits, predicts, and scores. The
-[search tests](https://github.com/SciSharp/OptunaSharp/blob/master/test/OptunaSharp.Tests.Integration.ML.NET/OptunaSearchCVTests.cs)
+[search tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Integration.ML.NET/OptunaSearchCVTests.cs)
 cover direction validation, reproducibility, result attributes, and refit options.

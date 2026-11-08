@@ -67,7 +67,7 @@ Use the typed attributes in `test/OptunaSharp.Tests/TestCategory.cs`:
 
 ## Pull requests
 
-1. Branch from `master`.
+1. Branch from `main`.
 2. Keep PRs focused — ideally one Optuna module (or a slice of one) at a time.
 3. Include tests derived from real Optuna behavior.
 4. Ensure `dotnet build` and the unit-test filter above are green.
