@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -275,6 +276,184 @@ public class InfrastructureConcurrencyCoverageTests
     }
 
     /// <summary>
+    ///     Every shooter uploads a file of its own to the same trial at once through one file-system artifact store
+    ///     (THREADING.md §10: uploads from concurrent trials do not interfere). Every upload gets its own artifact id and
+    ///     file, the trial records all of them, and each downloads back to the bytes its shooter uploaded.
+    /// </summary>
+    [TestMethod]
+    public void ArtifactUploads_ToOneTrialFromEveryThreadAtOnce_AreAllStoredAndRecorded()
+    {
+        const int rounds = 10;
+        string root = Path.Combine(Path.GetTempPath(), $"optunasharp-gun-artifacts-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            // The store, like Optuna's, writes into an existing directory and creates none.
+            string storePath = Directory.CreateDirectory(Path.Combine(root, "store")).FullName;
+            var store = new OptunaSharp.Artifacts.FileSystemArtifactStore(storePath);
+            var study = Optuna.CreateStudy(sampler: new RandomSampler(51));
+            string[] sources = Enumerable.Range(0, Threads).Select(t => Path.Combine(root, $"source-{t}.txt")).ToArray();
+            var ids = new string[Threads];
+            Trial trial = null!;
+
+            using var gun = new ConcurrencyGun(Threads);
+            GunReport report = gun.Fire(rounds,
+                shot => ids[shot.Thread] = OptunaSharp.Artifacts.ArtifactFunctions.UploadArtifact(store, sources[shot.Thread], trial),
+                beforeRound: r =>
+                {
+                    trial = study.Ask();
+                    for (int t = 0; t < Threads; t++)
+                        File.WriteAllText(sources[t], $"shooter {t}, round {r}");
+                },
+                afterRound: r =>
+                {
+                    ids.Should().OnlyHaveUniqueItems("round {0}: every upload gets its own artifact id", r);
+                    OptunaSharp.Artifacts.ArtifactFunctions.GetAllArtifactMeta(trial).Select(m => m.ArtifactId).Should().BeEquivalentTo(ids);
+                    for (int t = 0; t < Threads; t++)
+                    {
+                        string copy = Path.Combine(root, $"download-{r}-{t}.txt");
+                        OptunaSharp.Artifacts.ArtifactFunctions.DownloadArtifact(store, copy, ids[t]);
+                        File.ReadAllText(copy).Should().Be($"shooter {t}, round {r}");
+                    }
+                    return false;
+                });
+
+            report.AssertClean();
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A file still held by a straggling handle is left for the OS temp cleanup.
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Every shooter invokes one <see cref="OptunaSharp.Terminator.TerminatorCallback" /> at once, twenty times a round, as the
+    ///     callbacks of concurrent <c>nJobs</c> trials do. The callback runs its terminator one call at a time (THREADING.md
+    ///     §6.6), because the improvement evaluators keep a random generator across calls.
+    /// </summary>
+    [TestMethod]
+    public void TerminatorCallback_InvokedByEveryThreadAtOnce_RunsItsTerminatorOneCallAtATime()
+    {
+        const int rounds = 30, invocations = 20;
+        var terminator = new OverlapProbeTerminator();
+        var callback = new OptunaSharp.Terminator.TerminatorCallback(terminator);
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(52));
+        study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 1);
+        FrozenTrial last = study.Trials[0];
+
+        using var quiet = new QuietLogs();
+        using var gun = new ConcurrencyGun(Threads);
+        GunReport report = gun.Fire(rounds, _ =>
+        {
+            for (int k = 0; k < invocations; k++)
+                callback.Invoke(study, last);
+        });
+
+        report.AssertClean();
+        terminator.Calls.Should().Be(Threads * rounds * invocations);
+        terminator.PeakOverlap.Should().Be(1, "the callback admits one terminator call at a time");
+    }
+
+    /// <summary>
+    ///     Half the shooters subscribe to and unsubscribe from the warning hook over and over while the other half raise
+    ///     warnings. No warning raise fails on a concurrent subscription change, and a subscriber present throughout sees
+    ///     every warning.
+    /// </summary>
+    [TestMethod]
+    public void WarningHook_SubscribedAndUnsubscribedWhileOthersWarn_DeliversEveryWarning()
+    {
+        const int rounds = 30, operations = 50;
+        int seen = 0;
+        Action<string, OptunaSharp.Internal.WarningCategory> steady = (_, _) => Interlocked.Increment(ref seen);
+
+        // The warnings also go to the log, which would print every one of them.
+        using var quiet = new QuietLogs();
+        OptunaSharp.Internal.OptunaWarnings.WarningRaised += steady;
+        try
+        {
+            using var gun = new ConcurrencyGun(Threads);
+            GunReport report = gun.Fire(rounds, shot =>
+            {
+                if (shot.Thread % 2 == 0)
+                {
+                    Action<string, OptunaSharp.Internal.WarningCategory> mine = (_, _) => { };
+                    for (int k = 0; k < operations; k++)
+                    {
+                        OptunaSharp.Internal.OptunaWarnings.WarningRaised += mine;
+                        OptunaSharp.Internal.OptunaWarnings.WarningRaised -= mine;
+                    }
+                }
+                else
+                {
+                    for (int k = 0; k < operations; k++)
+                        OptunaSharp.Internal.OptunaWarnings.Warn($"gun warning {shot.Thread}/{k}");
+                }
+            });
+
+            report.AssertClean();
+            seen.Should().Be(Threads / 2 * rounds * operations);
+        }
+        finally
+        {
+            OptunaSharp.Internal.OptunaWarnings.WarningRaised -= steady;
+        }
+    }
+
+    /// <summary>
+    ///     Half the shooters ask, suggest and tell while the other half read the whole study in every way an application
+    ///     does: its trials, its best trial, its trials table and the storage's study summaries. No read fails, every
+    ///     snapshot of the trials is numbered without a gap, and no reader ever sees fewer trials than it saw before.
+    /// </summary>
+    [TestMethod]
+    public void WholeStudyReaders_WhileOthersWrite_NeverFail_AndSeeAGrowingContiguousStudy()
+    {
+        const int rounds = 20, trialsPerShot = 4, readsPerShot = 10;
+        var storage = new InMemoryStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(53));
+        // A best trial exists before the first reader asks for one.
+        study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 3);
+        int inconsistent = 0;
+
+        using var quiet = new QuietLogs();
+        using var gun = new ConcurrencyGun(Threads);
+        GunReport report = gun.Fire(rounds, shot =>
+        {
+            if (shot.Thread % 2 == 0)
+            {
+                for (int k = 0; k < trialsPerShot; k++)
+                {
+                    Trial trial = study.Ask();
+                    study.Tell(trial, trial.SuggestFloat("x", 0, 1));
+                }
+                return;
+            }
+            int lastCount = 0;
+            for (int k = 0; k < readsPerShot; k++)
+            {
+                var trials = study.Trials;
+                bool contiguous = trials.Select(t => t.Number).SequenceEqual(Enumerable.Range(0, trials.Count));
+                bool bestIsComplete = study.BestTrial.State == TrialState.Complete;
+                int rows = study.TrialsDataframe().RowCount;
+                int summarized = Optuna.GetAllStudySummaries(storage).Single().NTrials;
+                if (!contiguous || !bestIsComplete || trials.Count < lastCount || rows < trials.Count || summarized < rows)
+                    Interlocked.Increment(ref inconsistent);
+                lastCount = trials.Count;
+            }
+        });
+
+        report.AssertClean();
+        inconsistent.Should().Be(0, "every read is a consistent snapshot of a study that only grows");
+        study.Trials.Should().HaveCount(3 + Threads / 2 * rounds * trialsPerShot);
+    }
+
+    /// <summary>
     ///     How a shooter enters <paramref name="monitor" />: the same entry OptunaSharp's own code takes, wrapped so the
     ///     test body runs inside.
     /// </summary>
@@ -335,6 +514,42 @@ public class InfrastructureConcurrencyCoverageTests
     {
         Assert.AreEqual(index, (int)distribution.ToInternalRepr(values[index]), $"choice {index} maps to its index");
         Assert.AreEqual(index, (int)distribution.ToInternalRepr(distribution.ToExternalRepr(index)), $"index {index} maps back");
+    }
+
+    /// <summary>
+    ///     A terminator that never terminates and records the most calls that were ever inside it at once, which the
+    ///     <see cref="OptunaSharp.Terminator.TerminatorCallback" />'s lock keeps at 1.
+    /// </summary>
+    private sealed class OverlapProbeTerminator : OptunaSharp.Terminator.BaseTerminator
+    {
+        private int _inside;
+        private int _peakOverlap;
+        private int _calls;
+
+        /// <summary>The most calls that were inside the terminator at one instant.</summary>
+        internal int PeakOverlap => Volatile.Read(ref _peakOverlap);
+
+        /// <summary>How many times the terminator was asked.</summary>
+        internal int Calls => Volatile.Read(ref _calls);
+
+        /// <summary>Records the call and answers that the study should go on.</summary>
+        /// <param name="study">The study; unused.</param>
+        /// <returns>Always false, so the callback never stops the study.</returns>
+        public override bool ShouldTerminate(Study study)
+        {
+            Watermark.Raise(ref _peakOverlap, Interlocked.Increment(ref _inside));
+            try
+            {
+                Interlocked.Increment(ref _calls);
+                // Stay inside a little, so a second call let in would be seen.
+                Thread.SpinWait(300);
+                return false;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _inside);
+            }
+        }
     }
 
     /// <summary>A log handler that counts the records it receives, safely from any number of threads.</summary>

@@ -196,6 +196,11 @@ report.AssertClean();                                 // fails on any shot excep
   the same volley with the race removed, which must show nothing.
 - **Deadlocks** become a report, not a hung run: a round over its timeout is interrupted, and
   `report.Hung` / `HungThreads` / `RecoveredFromHang` say what happened. The gun is then spent.
+- **Widen a window the guard closes.** When a missing lock would only show under an unlucky preemption,
+  make the race likely on purpose: a storage subclass that delays the writer after its write
+  (`DelayedAttrStorage`), or one that counts the writes a step should make once (`WriteCountingStorage`).
+  Assert the defect's direct effect: "the view agrees with the storage" can hold by luck where a write count
+  cannot.
 - **Prove the test has teeth**: remove the guard it pins in a scratch `git worktree` (with the new tests
   copied in) and watch it fail. THREADING.md §11 lists what each class pins and the mutations it caught.
 

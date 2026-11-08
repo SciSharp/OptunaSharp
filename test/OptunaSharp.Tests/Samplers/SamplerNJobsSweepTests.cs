@@ -22,17 +22,25 @@ namespace OptunaSharp.Tests.Samplers;
 [TestClass]
 public class SamplerNJobsSweepTests
 {
-    private static readonly HashSet<string> MultiObjective = new()
+    /// <summary>
+    ///     The samplers of <see cref="Make" /> that need a multi-objective study (two minimized objectives). Shared with
+    ///     the gun's cross-study sweep (<c>Concurrency/SamplerSharingConcurrencyCoverageTests</c>), so both sweeps cover
+    ///     the same samplers the same way.
+    /// </summary>
+    internal static readonly HashSet<string> MultiObjective = new()
     {
         "moead", "nsga2", "nsga3", "nsga3cpt", "smsemoa", "agemoea2", "agemoea2cpt", "rvea",
         "janusmoo", "janussms", "janusage2", "janusage2cpt",
     };
 
-    /// <summary>Builds the named sampler with a fixed seed; the genetic ones use a small population.</summary>
+    /// <summary>
+    ///     Builds the named sampler with a fixed seed; the genetic ones use a small population. Shared with the gun's
+    ///     cross-study sweep, which serves several studies with one instance.
+    /// </summary>
     /// <param name="name">A key of the data rows below.</param>
     /// <returns>A new sampler instance.</returns>
     /// <exception cref="ArgumentException"><paramref name="name" /> names no sampler.</exception>
-    private static BaseSampler Make(string name) => name switch
+    internal static BaseSampler Make(string name) => name switch
     {
         "random" => new RandomSampler(seed: 1),
         "tpe" => new TPESampler(seed: 1),

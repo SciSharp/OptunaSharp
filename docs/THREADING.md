@@ -21,7 +21,7 @@
   (v2) about 20 times faster to save and 17 times faster to restore, trials share their distribution objects,
   and the Redis snapshot interval is Optuna's 100 in both read modes (§7.3) (plan 10, item 2.7);
 - 2026-11-08: the `ConcurrencyGun` test harness fires dedicated threads into the same code at the same instant,
-  and four test classes built on it pin the guarantees of §5–§6 (§11);
+  and seven test classes built on it pin the guarantees of §1.5 and §3–§7 (§11);
 - 2026-11-08: the GIL-aware hooks read GIL ownership from the thread's own CPython thread state, not from
   `PyGILState_Check`, which a sub-interpreter turns off for the whole process (§8; catalog Open item 28).
 
@@ -1062,7 +1062,10 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `ConcurrencyGunTests` | the harness below: shooters are dedicated threads, halted at the gate and released into the shot together; the callbacks run while every shooter is halted; failures are reported by round and thread. It catches a lost update in an unguarded read-modify-write and NumSharp's MT19937 tearing when drawn without the sampler monitor (§6.3), each with a control that must show nothing. A lock-order deadlock is reported as a hang, and its shooters are freed |
 | `TrialConcurrencyCoverageTests` | one trial driven by every shooter at once (§6.2, §6.4, §6.5): one report of a step stored, and the trial's view agrees with the storage; one name sampled once; distinct names each sampled once with distinct draws; several tells (through the `Trial` and through its number) store one result, refuse the rest, and run `AfterTrial` once; `skipIfFinished` tells all return the stored result; pruning decisions made on each trial's own values, one at a time |
 | `StudyConcurrencyCoverageTests` | one study used by every shooter at once (§6.1, §7.1), in memory, through one journal storage, and through one journal storage per thread: asks get distinct trials numbered without a gap; an enqueued trial goes to exactly one asker; a waiting trial claimed through the storage has one winner; `CreateStudy(loadIfExists: true)` creates the study once |
-| `InfrastructureConcurrencyCoverageTests` | the sampler, pruner, tell-stripe and `MonitorGate` monitors admit one thread at a time (§5); a reseed never tears a generator others draw from; one sampler serves a study per thread without repeating a draw (§1.5); a categorical index built on first use maps every choice; the worker scheduler runs every task queued at once exactly once, all in flight together (§3.5); log handlers changed while others log never cost a record (§6.6) |
+| `InfrastructureConcurrencyCoverageTests` | the sampler, pruner, tell-stripe and `MonitorGate` monitors admit one thread at a time (§5); a reseed never tears a generator others draw from; one sampler serves a study per thread without repeating a draw (§1.5); a categorical index built on first use maps every choice; the worker scheduler runs every task queued at once exactly once, all in flight together (§3.5); log handlers changed while others log never cost a record (§6.6); artifact uploads to one trial at once each get their own id, file and record (§10); `TerminatorCallback` runs its terminator one call at a time (§6.6); the warning hook delivers every warning while subscribers come and go; readers of trials, best trial, trials table and summaries during writes always see a consistent, growing study |
+| `StorageConcurrencyCoverageTests` | in memory and on a journal (§6.1, §7.1): a record read without a deep copy never changes under its reader while others write it; every write of concurrent writers lands, and a fresh journal replay sees what the live storage holds; the best trial stays the best of all concurrent tells, minimized and maximized; study user attributes set at once are all kept |
+| `OptimizeConcurrencyCoverageTests` | one `Study` object (§3.4, §4, §6.1): a sampler or pruner swapped without pause while others work runs every call on one instance; concurrent `Optimize` calls are never nested invocations, and `Stop()` outside a loop is refused; `Optimize(nJobs: 2)` from every thread at once gives one perfect study; one callback's `Stop()` stops every `Optimize` call on the object |
+| `SamplerSharingConcurrencyCoverageTests` | one sampler instance serving a study per thread at once, every study with id 0 (§1.5, §6.3): `PerStudyState` resolved for every study at once keeps one state per study; a genetic sampler gives each study the generations of a solo run; each of 29 Core samplers completes every trial of every study |
 | `MLNetEstimatorNJobsTests` (Integration.ML.NET suite) | `OptunaSearchCV(nJobs: 4)` over one `MLNetEstimator`: 16 trials that overlap in time, every fold score equal to a sequential evaluation and none NaN |
 | `StorageConcurrencyTestsBase` and its SQLite, PostgreSQL, MySQL and gRPC subclasses (Storage suite) | one storage under `nJobs: 8`, eight separate storages, enqueued pops, sixteen storages creating one study name |
 | `RedisJournalConcurrencyTests` (Storage suite) | separate storages on one study; `nJobs` at four times the pool's minimum does not starve the client; dispose races |
@@ -1095,7 +1098,7 @@ parameters written in their external representation (9), and studies written in 
 `Fatal Python error: PyEval_SaveThread` (CPython 3.12.12, exit 0xC0000409); the same build crashed in all three on
 3.14.2 and free-threaded 3.14.2 too.
 
-**The `ConcurrencyGun`** (`test/OptunaSharp.Tests/Concurrency/`, 2026-11-08) is the harness behind the last four
+**The `ConcurrencyGun`** (`test/OptunaSharp.Tests/Concurrency/`, 2026-11-08) is the harness behind the last seven
 unit-test classes in the table:
 - It allocates its own shooter threads (8 by default) and halts each on the round's `ManualResetEventSlim` gate with
   a blocking `Wait`. Once all are parked it opens the gate, and the woken shooters spin in a lineup until all are
@@ -1107,16 +1110,23 @@ unit-test classes in the table:
 - A test that expects a race calls `ConcurrencyGun.RequireParallelHardware()` first (inconclusive on one CPU) and has
   a control: the same volley without the race, which must show nothing.
 
-Each guard the coverage classes pin was removed in turn from a scratch copy of Core, and 7 of 8 such mutations failed
-the tests that pin them:
-- the trial monitor around `Report`, which then wrote one step several times;
-- the trial monitor around `Suggest`, which then sampled one name several times;
-- the sampler monitor (4 tests failed), and the tell stripe (3);
+Each guard the coverage classes pin was removed in turn from a scratch copy of Core, in two waves, and 15 of 16 such
+mutations failed the tests that pin them:
+- the trial monitor around `Report` (one step written several times), around `Suggest` (one name sampled several
+  times) and around `SetUserAttr` (the trial's view and the storage disagree);
+- the sampler monitor (4 tests failed), the tell stripe (3) and the terminator callback's lock;
+- a second read of `study.Sampler` inside the sampler monitor, which ran a call on the sampler it had not locked;
 - the scheduler starting one thread too few;
-- the in-memory storage letting a claim take a trial that is not waiting;
+- the in-memory storage letting a claim take a trial that is not waiting, writing a user-attribute dictionary in
+  place, and setting study attributes without its lock (211 of 1,600 keys kept);
+- `Trial.UserAttrs` handing out the live dictionary;
+- the optimize-loop flag shared by every thread;
+- `PerStudyState` keyed by study id alone, which only the direct test caught: a genetic sampler's trial anchor
+  rebuilds a state found under another study's key, so its generations stay right;
 - `Emit` iterating the live handler list.
 
-Publishing the categorical index before filling it passed. A missed lookup falls back to the linear scan, which still
+Two tests passed against their first mutation and were sharpened: the report test now counts storage writes, and the
+per-study keying got its own test. Publishing the categorical index before filling it passed. A missed lookup falls back to the linear scan, which still
 maps every choice correctly, so the bug costs only the fast path.
 
 ## 12. Known limits and open items

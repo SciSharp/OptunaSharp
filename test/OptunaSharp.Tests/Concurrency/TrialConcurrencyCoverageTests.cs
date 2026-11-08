@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using AwesomeAssertions;
 using NumSharp;
 using OptunaSharp.Samplers;
@@ -273,6 +274,117 @@ public class TrialConcurrencyCoverageTests
         report.AssertClean();
         pruner.Calls.Should().Be(Threads * Rounds);
         pruner.PeakOverlap.Should().Be(1, "the pruner monitor admits one decision at a time");
+    }
+
+    /// <summary>
+    ///     Half the shooters write one trial at once (user attributes and new parameters) while the other half read its
+    ///     <c>Params</c>, <c>Distributions</c> and <c>UserAttrs</c> over and over. Each read is a whole copy taken under the
+    ///     trial monitor (THREADING.md §6.2): enumerating it never throws, and a reader never sees a view smaller than one
+    ///     it saw before. Every write lands.
+    /// </summary>
+    [TestMethod]
+    public void TrialViews_ReadWhileOthersWriteTheTrial_AreWholeCopies_ThatNeverShrink()
+    {
+        const int rounds = 30, writes = 15, reads = 150;
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(31));
+        Trial trial = null!;
+        int shrunk = 0;
+
+        using var quiet = new QuietLogs();
+        using var gun = new ConcurrencyGun(Threads);
+        GunReport report = gun.Fire(rounds,
+            shot =>
+            {
+                if (shot.Thread % 2 == 0)
+                {
+                    for (int k = 0; k < writes; k++)
+                    {
+                        trial.SetUserAttr($"a{shot.Thread}-{k}", k);
+                        trial.SuggestFloat($"p{shot.Thread}-{k}", 0, 1);
+                    }
+                    return;
+                }
+                int lastAttrs = 0, lastParams = 0, lastDistributions = 0;
+                for (int k = 0; k < reads; k++)
+                {
+                    // Each view is enumerated in full: a live dictionary being written would throw here.
+                    int attrs = trial.UserAttrs.Count(kv => kv.Key.Length > 0);
+                    int parameters = trial.Params.Count(kv => kv.Key.Length > 0);
+                    int distributions = trial.Distributions.Count(kv => kv.Value is not null);
+                    if (attrs < lastAttrs || parameters < lastParams || distributions < lastDistributions)
+                        Interlocked.Increment(ref shrunk);
+                    (lastAttrs, lastParams, lastDistributions) = (attrs, parameters, distributions);
+                }
+            },
+            beforeRound: _ => trial = study.Ask(),
+            afterRound: r =>
+            {
+                int expected = Threads / 2 * writes;
+                trial.UserAttrs.Should().HaveCount(expected, "round {0}: every attribute write lands", r);
+                trial.Params.Should().HaveCount(expected);
+                study.Storage.GetTrial(trial.TrialId).Params.Should().HaveCount(expected);
+                study.Tell(trial, 0.0);
+                return false;
+            });
+
+        report.AssertClean();
+        shrunk.Should().Be(0, "a view is a copy of the trial at one instant, and the trial only grows");
+    }
+
+    /// <summary>
+    ///     Every shooter sets the same user attribute of one trial at once, each to its own value, through a storage that
+    ///     holds every writer a little after its write, longer for lower shooter indices. The trial's own view and the
+    ///     storage end with the same value: the trial monitor makes the storage write and the view write one step.
+    /// </summary>
+    /// <remarks>
+    ///     The delay is what gives this test its teeth. Without the trial monitor, writers still reach the storage one at
+    ///     a time, in some order, but then update the trial's view after delays of different lengths, so the view's last
+    ///     writer differs from the storage's. Without the delay that reordering needs a preemption at the wrong instant,
+    ///     which a test would rarely see.
+    /// </remarks>
+    [TestMethod]
+    public void SetUserAttr_OfOneKeyFromEveryThreadAtOnce_LeavesTheTrialViewEqualToTheStorage()
+    {
+        const int rounds = 40;
+        var storage = new DelayedAttrStorage();
+        var study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(32));
+        Trial trial = null!;
+
+        using var quiet = new QuietLogs();
+        using var gun = new ConcurrencyGun(Threads);
+        GunReport report = gun.Fire(rounds,
+            shot => trial.SetUserAttr("k", shot.Thread),
+            beforeRound: _ => trial = study.Ask(),
+            afterRound: r =>
+            {
+                object? stored = study.Storage.GetTrial(trial.TrialId).UserAttrs["k"];
+                trial.UserAttrs["k"].Should().Be(stored, "round {0}: the trial's view holds the value the storage kept", r);
+                study.Tell(trial, 0.0);
+                return false;
+            });
+
+        report.AssertClean();
+    }
+
+    /// <summary>
+    ///     An in-memory storage that, after storing a trial user attribute whose value is a shooter index, keeps the writer
+    ///     busy for a time that shrinks with the index. That reorders whatever a caller does right after the write.
+    /// </summary>
+    private sealed class DelayedAttrStorage : InMemoryStorage
+    {
+        /// <summary>Stores the attribute as <see cref="InMemoryStorage" /> does, then delays the writer by its index.</summary>
+        /// <param name="trialId">The trial's storage identifier.</param>
+        /// <param name="key">The attribute name.</param>
+        /// <param name="value">The attribute value; an <see cref="int" /> shooter index sets the delay.</param>
+        /// <exception cref="UpdateFinishedTrialError">The trial is already finished.</exception>
+        /// <exception cref="KeyError">The trial does not exist.</exception>
+        public override void SetTrialUserAttr(int trialId, string key, object? value)
+        {
+            base.SetTrialUserAttr(trialId, key, value);
+            // Lower indices wait longer, so a writer that reached the storage first tends to finish last.
+            if (value is int index)
+                Thread.SpinWait((Threads - index) * 4_000);
+        }
     }
 
     /// <summary>
