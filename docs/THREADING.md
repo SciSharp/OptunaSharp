@@ -1,6 +1,6 @@
 # OptunaSharp — Threading Design
 
-**Status:** describes the code at `f39763d` (2026-10-30), plus four changes since:
+**Status:** describes the code at `f39763d` (2026-10-30), plus these changes since:
 
 - 2026-11-06: the `nJobs` executor reuses its worker threads (review item P3-4, §3.5–3.6);
 - 2026-11-06: the GIL-aware monitor entry lets code that holds the Python GIL call OptunaSharp (review item
@@ -19,7 +19,9 @@
   (§2) (plan 10, item 2.5);
 - 2026-11-07: journal records parse from their UTF-8 bytes, OptunaSharp's journal snapshot is a binary format
   (v2) about 20 times faster to save and 17 times faster to restore, trials share their distribution objects,
-  and the Redis snapshot interval is Optuna's 100 in both read modes (§7.3) (plan 10, item 2.7).
+  and the Redis snapshot interval is Optuna's 100 in both read modes (§7.3) (plan 10, item 2.7);
+- 2026-11-08: the `ConcurrencyGun` test harness fires dedicated threads into the same code at the same instant,
+  and four test classes built on it pin the guarantees of §5–§6 (§11).
 
 No threading item is open. §12 lists the known limits.
 
@@ -1040,6 +1042,10 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `TerminatorTests` | `TerminatorCallback` at `nJobs: 8` runs its terminator one call at a time |
 | `ProgressBarTests` | the bar counts every `nJobs` trial once, in order |
 | `ConcurrentOrderedDictTests` | the contract of the internal concurrent collection (§5.1) |
+| `ConcurrencyGunTests` | the harness below: shooters are dedicated threads, halted at the gate and released into the shot together; the callbacks run while every shooter is halted; failures are reported by round and thread. It catches a lost update in an unguarded read-modify-write and NumSharp's MT19937 tearing when drawn without the sampler monitor (§6.3), each with a control that must show nothing. A lock-order deadlock is reported as a hang, and its shooters are freed |
+| `TrialConcurrencyCoverageTests` | one trial driven by every shooter at once (§6.2, §6.4, §6.5): one report of a step stored, and the trial's view agrees with the storage; one name sampled once; distinct names each sampled once with distinct draws; several tells (through the `Trial` and through its number) store one result, refuse the rest, and run `AfterTrial` once; `skipIfFinished` tells all return the stored result; pruning decisions made on each trial's own values, one at a time |
+| `StudyConcurrencyCoverageTests` | one study used by every shooter at once (§6.1, §7.1), in memory, through one journal storage, and through one journal storage per thread: asks get distinct trials numbered without a gap; an enqueued trial goes to exactly one asker; a waiting trial claimed through the storage has one winner; `CreateStudy(loadIfExists: true)` creates the study once |
+| `InfrastructureConcurrencyCoverageTests` | the sampler, pruner, tell-stripe and `MonitorGate` monitors admit one thread at a time (§5); a reseed never tears a generator others draw from; one sampler serves a study per thread without repeating a draw (§1.5); a categorical index built on first use maps every choice; the worker scheduler runs every task queued at once exactly once, all in flight together (§3.5); log handlers changed while others log never cost a record (§6.6) |
 | `MLNetEstimatorNJobsTests` (Integration.ML.NET suite) | `OptunaSearchCV(nJobs: 4)` over one `MLNetEstimator`: 16 trials that overlap in time, every fold score equal to a sequential evaluation and none NaN |
 | `StorageConcurrencyTestsBase` and its SQLite, PostgreSQL, MySQL and gRPC subclasses (Storage suite) | one storage under `nJobs: 8`, eight separate storages, enqueued pops, sixteen storages creating one study name |
 | `RedisJournalConcurrencyTests` (Storage suite) | separate storages on one study; `nJobs` at four times the pool's minimum does not starve the client; dispose races |
@@ -1068,6 +1074,30 @@ test failed (the calls ran on different Python threads, and the `threading.local
 stack read 1.5 MB instead of 16. Item 2.7's parity suites caught four deliberate bugs: a restore that kept the
 UTC instant instead of converting it to local time (10 cases failed), a repeated key keeping its first value (1),
 parameters written in their external representation (9), and studies written in id order (9).
+
+**The `ConcurrencyGun`** (`test/OptunaSharp.Tests/Concurrency/`, 2026-11-08) is the harness behind the last four
+unit-test classes in the table:
+- It allocates its own shooter threads (8 by default) and halts each on the round's `ManualResetEventSlim` gate with
+  a blocking `Wait`. Once all are parked it opens the gate, and the woken shooters spin in a lineup until all are
+  awake, so the shots of a round start about 1 µs apart (median, 32 logical CPUs).
+- `beforeRound` and `afterRound` run on the test's thread while every shooter is halted, so a test sets up and checks
+  each round without locks.
+- A round over its timeout is reported as a hang. The shooters still inside the shot are interrupted, and the report
+  names them.
+- A test that expects a race calls `ConcurrencyGun.RequireParallelHardware()` first (inconclusive on one CPU) and has
+  a control: the same volley without the race, which must show nothing.
+
+Each guard the coverage classes pin was removed in turn from a scratch copy of Core, and 7 of 8 such mutations failed
+the tests that pin them:
+- the trial monitor around `Report`, which then wrote one step several times;
+- the trial monitor around `Suggest`, which then sampled one name several times;
+- the sampler monitor (4 tests failed), and the tell stripe (3);
+- the scheduler starting one thread too few;
+- the in-memory storage letting a claim take a trial that is not waiting;
+- `Emit` iterating the live handler list.
+
+Publishing the categorical index before filling it passed. A missed lookup falls back to the linear scan, which still
+maps every choice correctly, so the bug costs only the fast path.
 
 ## 12. Known limits and open items
 

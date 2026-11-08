@@ -1,7 +1,7 @@
 ---
 name: testing
 description: How OptunaSharp is tested end-to-end — the six suites (unit, live-Optuna interop, isolated package-parity, Redis + cloud-artifact integration, benchmark), how to run each, the byte-exact parity framework (StudySnapshot / ParityScenario / Ask-Tell replay, bit-exact vs erf-tolerance), the RNG discipline that makes parity possible, test categories and the "green ≠ exercised" self-skip semantics, docker-compose external services, the 3-OS CI matrix, and the prerequisites (NumSharp+OpenBLAS from NuGet, Python+optuna, Docker). Use when running, adding, or debugging any OptunaSharp test, deciding where a test belongs, understanding why a suite skipped, or wiring CI.
-keywords: testing, run tests, dotnet test, parity, byte-exact, interop, pythonnet, docker-compose, integration test, test categories, self-skip, Inconclusive, RequiresPython, package parity, oracle replay, StudySnapshot, ParityScenario
+keywords: testing, run tests, dotnet test, parity, byte-exact, interop, pythonnet, docker-compose, integration test, test categories, self-skip, Inconclusive, RequiresPython, package parity, oracle replay, StudySnapshot, ParityScenario, concurrency test, ConcurrencyGun, race, deadlock, thread safety
 keywords-sparse: how to run the tests, why did the test skip, add a parity test, which suite, test the package, live optuna, redis test, artifact emulator, bit-exact, numsharp nuget
 ---
 
@@ -169,6 +169,35 @@ databases.
    divergence with `[Misaligned]`.
 
 To port tests from real-world GitHub Optuna usage specifically, use the **`interop-test-porting`** skill.
+
+## 8a. Concurrency tests — the ConcurrencyGun
+
+For anything that must hold when threads enter the same code together (a monitor, a check-then-write, a
+claim, a lazily built cache), use `ConcurrencyGun` (`test/OptunaSharp.Tests/Concurrency/`), not
+`Parallel.For` or `Task.Run`. Pool threads start one after another and rarely meet inside a short critical
+section; the gun's shooters are dedicated threads halted on a `ManualResetEventSlim` gate (a blocking
+`Wait`), released together and lined up, so their shots start about 1 µs apart, every round.
+
+```csharp
+using var gun = new ConcurrencyGun();                 // 8 shooters; roundTimeout defaults to 30 s
+Trial trial = null!;
+GunReport report = gun.Fire(rounds: 60,
+    shot => trial.Report(shot.Thread, step: 0),       // every shooter, same code, same instant
+    beforeRound: r => trial = study.Ask(),            // runs while every shooter is halted: no locks needed
+    afterRound: r => { /* assert the round's invariant */ return false; });   // true stops the volley
+report.AssertClean();                                 // fails on any shot exception, hang or stall
+```
+
+- **Invariant tests** (what must always hold) need nothing else; they pass on any machine. Watch monitors
+  with the probes in `ConcurrencyProbes.cs` (`OverlapProbeSampler`, `OverlapProbePruner` record any two calls
+  that overlap; `QuietLogs` mutes per-shot warnings).
+- **Race-expecting tests** (the gun must *catch* something) call `ConcurrencyGun.RequireParallelHardware()`
+  first (Inconclusive on one CPU), stop at the first round that shows the race, and come with a control:
+  the same volley with the race removed, which must show nothing.
+- **Deadlocks** become a report, not a hung run: a round over its timeout is interrupted, and
+  `report.Hung` / `HungThreads` / `RecoveredFromHang` say what happened. The gun is then spent.
+- **Prove the test has teeth**: remove the guard it pins in a scratch `git worktree` (with the new tests
+  copied in) and watch it fail. THREADING.md §11 lists what each class pins and the mutations it caught.
 
 ## 9. Current blockers to know
 
