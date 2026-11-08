@@ -589,11 +589,16 @@ and ends, around one native call to OpenBLAS).
 - The sampler monitor covers `BeforeTrial`, `InferRelativeSearchSpace` together with `SampleRelative`,
   `SampleIndependent`, `AfterTrial` and `ReseedRng`. `Trial`, `Study.Tell` and the `nJobs` workers take
   it.
-- Why: NumSharp's MT19937 takes no lock, where numpy's does.
-  - Two threads drawing at once produced identical parameters (1–7 duplicates per 400 trials at
-    `nJobs: 16`), and the samplers' caches raced.
-  - One unguarded generator drawn by 8 threads at once (200,000 draws each) repeated 30,000–40,000
-    values and threw 1–11 `IndexOutOfRangeException`s per run (measured 2026-10-30).
+- Why: Python runs one sampler call at a time under the GIL, and numpy's `RandomState` locks each draw.
+  .NET threads run in parallel, so the monitor supplies the GIL's half: a sampler's call is many draws
+  plus updates to its caches and state, and only the monitor keeps that whole call one at a time.
+  - Without it, the samplers' caches raced, and two threads drawing at once produced identical
+    parameters (1–7 duplicates per 400 trials at `nJobs: 16`).
+  - Before NumSharp 0.80.0 the generator itself took no lock either: one generator drawn by 8 threads
+    at once (200,000 draws each) repeated 30,000–40,000 values and threw 1–11
+    `IndexOutOfRangeException`s per run (measured 2026-10-30). Since 0.80.0 NumSharp holds the bit
+    generator's lock for every draw, as numpy does, and the same volley repeats nothing
+    (`ConcurrencyGunTests.NumSharpGenerator_DrawnWithoutTheSamplerMonitor_NeverTears`).
 - Consequence: the sampling of concurrent trials is serial, while their objectives run in parallel. At
   a high `nJobs`, a slow model-based sampler (GP, SAASBO, TPE over a long history) becomes the bottleneck.
 - Per-study state lives in `PerStudyState<T>`, keyed by the storage object (held weakly) and the study
@@ -1106,7 +1111,7 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
   their summation order fixed.
   - `NUMSHARP_MULTITHREADING=1`, or `np.multithreading(true)`, lets NumSharp split large kernels over
     thread-pool threads (`Parallel.For`, up to `NUMSHARP_NUM_THREADS`, 8 by default). In NumSharp
-    0.70.0 that covers only the large 1-D floating-point dot product.
+    0.80.0, as in 0.70.0, that covers only the large 1-D floating-point dot product.
   - The split changes the summation order, so the last bits of a result change and a run no longer
     matches Optuna. The split work also competes with the host's work for the pool (§7.2).
   - OptunaSharp never turns it on.
@@ -1146,20 +1151,22 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 - **Concurrency.** The sampler monitor admits one call per sampler at a time. Samplers of different
   studies, and per-worker instances (§6.3), can run linear algebra at the same time; OpenBLAS's own worker
   threads are one pool for the process, which is what the policy above manages.
-- **Random generators.** NumSharp's MT19937 takes no lock, where numpy's does, and concurrent draws
-  corrupt it (§6.3).
+- **Random generators.** Since NumSharp 0.80.0 each draw holds the bit generator's lock, as numpy's
+  does, so concurrent draws no longer corrupt a generator. Before 0.80.0 they did (§6.3).
   - Each of OptunaSharp's generators belongs to one object. A sampler draws its generators under its
     monitor. The others live for one computation (a forest fit, a cross-validation split), except the
     terminator evaluators', which outlive their calls (§6.6).
-  - NumSharp's `np.random` is one unguarded generator for the whole process. An objective ported from
-    Python that draws from `np.random` races under `nJobs`, where Python's global `np.random` is locked.
+  - NumSharp's `np.random` is one generator for the whole process, locked per draw like Python's global
+    `np.random`. An objective that draws from it under `nJobs` is safe, but every worker contends for
+    the one lock, and the workers' draws interleave in an order no run repeats.
 
 ## 10. Writing thread-safe code against OptunaSharp
 
 - **Objectives.** Under `nJobs` the objective runs on several threads at once, so the state it shares
   must be thread-safe. Each trial gets its own `Trial` object. Draw random numbers from a generator per
   thread or per trial (`Random.Shared`, or a generator seeded from `trial.Number`), never from one shared
-  `System.Random` or NumSharp's `np.random` (§9).
+  `System.Random`. NumSharp's `np.random` is safe to share since 0.80.0, but every worker contends for its
+  lock (§9).
 - **Callbacks** run on the worker thread, concurrently with other trials' callbacks. They may call
   `Stop()`. `TerminatorCallback` serializes its own calls (§6.6).
 - **Custom samplers and pruners.**
@@ -1245,7 +1252,7 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `TerminatorTests` | `TerminatorCallback` at `nJobs: 8` runs its terminator one call at a time |
 | `ProgressBarTests` | the bar counts every `nJobs` trial once, in order |
 | `ConcurrentOrderedDictTests` | the contract of the internal concurrent collection (§5.1) |
-| `ConcurrencyGunTests` | the harness below: shooters are dedicated threads, halted at the gate and released into the shot together; the callbacks run while every shooter is halted; failures are reported by round and thread. It catches a lost update in an unguarded read-modify-write and NumSharp's MT19937 tearing when drawn without the sampler monitor (§6.3), each with a control that must show nothing. A lock-order deadlock is reported as a hang, and its shooters are freed |
+| `ConcurrencyGunTests` | the harness below: shooters are dedicated threads, halted at the gate and released into the shot together; the callbacks run while every shooter is halted; failures are reported by round and thread. It catches a lost update in an unguarded read-modify-write, with a control that must show nothing, and pins that NumSharp's generator (0.80.0 and later) never tears when drawn without the sampler monitor (§6.3). A lock-order deadlock is reported as a hang, and its shooters are freed |
 | `TrialConcurrencyCoverageTests` | one trial driven by every shooter at once (§6.2, §6.4, §6.5): one report of a step stored, and the trial's view agrees with the storage; one name sampled once; distinct names each sampled once with distinct draws; several tells (through the `Trial` and through its number) store one result, refuse the rest, and run `AfterTrial` once; `skipIfFinished` tells all return the stored result; pruning decisions made on each trial's own values, one at a time |
 | `StudyConcurrencyCoverageTests` | one study used by every shooter at once (§6.1, §7.1), in memory, through one journal storage, and through one journal storage per thread: asks get distinct trials numbered without a gap; an enqueued trial goes to exactly one asker; a waiting trial claimed through the storage has one winner; `CreateStudy(loadIfExists: true)` creates the study once |
 | `InfrastructureConcurrencyCoverageTests` | the sampler, pruner, tell-stripe and `MonitorGate` monitors admit one thread at a time (§5); a reseed never tears a generator others draw from; one sampler serves a study per thread without repeating a draw (§1.5); a categorical index built on first use maps every choice; the worker scheduler runs every task queued at once exactly once, all in flight together (§3.5); log handlers changed while others log never cost a record (§6.6); each handler serves one record at a time while different handlers serve different threads at once (§6.6); artifact uploads to one trial at once each get their own id, file and record (§10); `TerminatorCallback` runs its terminator one call at a time (§6.6); the warning hook delivers every warning while subscribers come and go; readers of trials, best trial, trials table and summaries during writes always see a consistent, growing study |
@@ -1370,7 +1377,7 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
 |---|---|
 | The GIL serializes Python code | Monitors: sampler, pruner, trial, tell stripes, storages |
 | A thread blocked on a lock or in `wait()` has released the GIL | `MonitorGate`: with a Python bridge loaded, a thread holding the GIL releases it while it waits for a tell stripe, trial, sampler or pruner monitor, or for its `nJobs` workers (P3-1, fixed 2026-11-06). Whether a thread holds the GIL is read from its own CPython thread state, which no sub-interpreter changes (Open item 28, fixed 2026-11-08) |
-| numpy's `RandomState` locks each draw | The sampler monitor; MT19937 itself takes no lock |
+| numpy's `RandomState` locks each draw | NumSharp's `RandomState` locks each draw too, since 0.80.0; the sampler monitor keeps each sampler call (many draws plus state updates) whole |
 | `ThreadPoolExecutor(max_workers=n_jobs)`, threads reused within the call | By default OptunaSharp's own dedicated threads, reused across trials and calls (P3-4, fixed 2026-11-06); on request the .NET thread pool (§3.5) |
 | The executor is fixed | `TrialExecutorOptions`, chosen per call, per study, per DI container or for the process, and read once when the call starts (§3.5) |
 | `wait(FIRST_COMPLETED)`, then `f.result()` | `Task.WhenAny`, then the first failure's original exception |

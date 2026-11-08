@@ -77,7 +77,7 @@
        NOT part of the build. Bump this one value to move to a newer NumSharp release.
        ==================================================================================== -->
   <PropertyGroup>
-    <NumSharpVersion Condition="'$(NumSharpVersion)' == ''">0.70.0</NumSharpVersion>
+    <NumSharpVersion Condition="'$(NumSharpVersion)' == ''">0.80.0</NumSharpVersion>
   </PropertyGroup>
 
   <!-- ====================================================================================

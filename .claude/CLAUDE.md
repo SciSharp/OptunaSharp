@@ -92,7 +92,7 @@ OptunaSharp/
 │   │   ├── Version.cs               #   OptunaSharp.OptunaSharpVersion (the version constant)
 │   │   └── README.md                #   packed into the .nupkg
 │   └── OptunaSharp.*/               # optional satellite packages — Storage.{Sqlite,EFCore,Grpc,Redis,…}, Visualization.Plotly, Integration.{LightGbm,ML.NET}, Interop.{pythonnet,BoTorch,PyCma}, Artifacts.{S3,Gcs,AzureBlob,R2}, Cli
-├── refs/                            # reference-only pinned submodules (NOT built) — optuna @ v5.0.0 (01ddd17, the porting reference), NumSharp @ v0.70.0, optunahub @ v0.5.0, optuna-integration @ v5.0.0, shap, scikit-learn
+├── refs/                            # reference-only pinned submodules (NOT built) — optuna @ v5.0.0 (01ddd17, the porting reference), NumSharp @ v0.80.0, optunahub @ v0.5.0, optuna-integration @ v5.0.0, shap, scikit-learn
 ├── test/
 │   ├── OptunaSharp.Tests/           # unit tests — MSTest v3 + AwesomeAssertions
 │   ├── OptunaSharp.Tests.Interop/   # LIVE-Optuna parity harness (pythonnet)
@@ -133,7 +133,7 @@ package dependency** (see below), not a solution member.
 `OptunaSharp.Core` depends on **NumSharp** and its native LAPACK/CBLAS backend
 **NumSharp.Interop.OpenBLAS**, both consumed as **NuGet packages from nuget.org** (SciSharp STACK) —
 two plain `PackageReference`s in `OptunaSharp.Core.csproj`, versioned by the single-sourced
-`$(NumSharpVersion)` property in `Directory.Build.props` (currently `0.70.0`; bump that one value to
+`$(NumSharpVersion)` property in `Directory.Build.props` (currently `0.80.0`; bump that one value to
 move to a newer release). **Build and CI restore these from nuget.org, always** — there is no submodule
 init and no OpenBLAS-native staging step anymore.
 

@@ -49,8 +49,11 @@ public abstract class BaseSampler
     ///     <para>
     ///         <b>Why.</b> One sampler instance serves every thread of a study, and every study that shares it.
     ///         Python gets away without a lock: numpy's <c>RandomState</c> locks each draw and the GIL serializes
-    ///         the rest. NumSharp's generator takes no lock, so two threads drawing at once produced bit-identical
-    ///         parameters (1–7 duplicates per 400 trials at <c>n_jobs=16</c>), and samplers' own caches raced.
+    ///         the rest. .NET threads run in parallel, so the GIL's half is this monitor: without it samplers' own
+    ///         caches and state raced. The generator's half came with it too: NumSharp's generator took no lock before
+    ///         0.80.0, and two threads drawing at once produced bit-identical parameters (1–7 duplicates per 400 trials
+    ///         at <c>n_jobs=16</c>). Since 0.80.0 NumSharp locks each draw as numpy does, but a sampler's call is many
+    ///         draws plus state updates, and only this monitor keeps that whole call one at a time.
     ///     </para>
     ///     <para>
     ///         <b>Consequences.</b> One sampler serves one call at a time, so model-based sampling of concurrent

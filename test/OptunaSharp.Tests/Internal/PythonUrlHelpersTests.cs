@@ -5,6 +5,9 @@ using AwesomeAssertions;
 using NumSharp;
 using OptunaSharp.Internal;
 using OptunaSharp.Storages.SqlAlchemy;
+// NumSharp 0.80.0 ships its own UnicodeDecodeError / UnicodeEncodeError; these tests mean OptunaSharp's.
+using UnicodeDecodeError = OptunaSharp.Internal.UnicodeDecodeError;
+using UnicodeEncodeError = OptunaSharp.Internal.UnicodeEncodeError;
 
 namespace OptunaSharp.Tests.Internal;
 

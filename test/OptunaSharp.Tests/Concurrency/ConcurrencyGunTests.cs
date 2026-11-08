@@ -245,60 +245,57 @@ public class ConcurrencyGunTests
     }
 
     /// <summary>
-    ///     The gun catches the race the sampler monitor exists for (THREADING.md §6.3): NumSharp's MT19937 generator takes
-    ///     no lock, where numpy's does. Eight shooters drawing from one sampler's generator without
-    ///     <see cref="BaseSampler" />'s monitor tear its state: two shooters read the same key word and draw the same value,
-    ///     or the position runs past the key and a draw throws. Both count as caught, and the volley stops at the first
-    ///     round that shows either.
+    ///     Since NumSharp 0.80.0 every legacy <c>RandomState</c> draw holds its bit generator's lock, as numpy's does
+    ///     (<c>bit_generator.lock</c>), so eight shooters drawing from one sampler's generator without
+    ///     <see cref="BaseSampler" />'s monitor neither repeat a value nor throw. Against NumSharp 0.70.0 the same volley tore
+    ///     the generator in its first round: two shooters read the same key word and drew the same value, or the position
+    ///     ran past the key and a draw threw. This pins the guarantee, so a NumSharp that drops the lock fails here before
+    ///     any sampler shows it.
     /// </summary>
     /// <remarks>
     ///     Draws of a whole generator are 53-bit doubles, and 40,000 of them repeat a value with probability about 1e-7, so
-    ///     a repeat is the tear, not chance. Its control is
-    ///     <see cref="NumSharpGenerator_DrawnUnderTheSamplerMonitor_NeverRepeatsOrThrows" />.
+    ///     a repeat is a tear, not chance. The sampler monitor is still needed for the rest of a sampler's state
+    ///     (THREADING.md §6.3); the production path is <see cref="NumSharpGenerator_DrawnUnderTheSamplerMonitor_NeverRepeatsOrThrows" />,
+    ///     and the gun's own proof that it catches a race is <see cref="UnguardedReadModifyWrite_IsCaughtLosingUpdates" />.
     /// </remarks>
     [TestMethod]
-    public void NumSharpGenerator_DrawnWithoutTheSamplerMonitor_IsCaughtTearing()
+    public void NumSharpGenerator_DrawnWithoutTheSamplerMonitor_NeverTears()
     {
         ConcurrencyGun.RequireParallelHardware();
-        const int threads = 8, draws = 5_000, maxRounds = 50;
+        const int threads = 8, draws = 5_000, rounds = 20;
         var sampler = new RandomSampler(seed: 7);
         NumPyRandom rng = sampler.Rng.Rng;
         double[][] drawn = NewDrawBuffers(threads, draws);
-        int failedShots = 0, repeatedDraws = 0;
+        int repeatedDraws = 0;
 
         using var gun = new ConcurrencyGun(threads);
-        GunReport report = gun.Fire(maxRounds,
+        GunReport report = gun.Fire(rounds,
             shot =>
             {
                 double[] mine = drawn[shot.Thread];
-                try
-                {
-                    // No monitor: what every sampler did before BaseSampler.SyncRoot existed.
-                    for (int k = 0; k < draws; k++)
-                        mine[k] = (double)rng.rand();
-                }
-                catch (Exception)
-                {
-                    // A torn position runs past the key; that is the race caught too.
-                    Interlocked.Increment(ref failedShots);
-                }
+                // No sampler monitor: only NumSharp's own per-draw lock stands between the shooters. A throw escapes the
+                // shot, so the report names it with its stack.
+                for (int k = 0; k < draws; k++)
+                    mine[k] = (double)rng.rand();
             },
             beforeRound: _ => ClearDrawBuffers(drawn),
             afterRound: _ =>
             {
                 repeatedDraws += RepeatedDraws(drawn);
-                return repeatedDraws > 0 || failedShots > 0;
+                return false;
             });
 
-        Console.WriteLine($"{report}; {repeatedDraws} repeated draws, {failedShots} failed shots");
-        (repeatedDraws + failedShots).Should().BeGreaterThan(0, "an unguarded MT19937 drawn by eight shooters at once tears ({0})", report);
+        Console.WriteLine($"{report}; {repeatedDraws} repeated draws");
+        report.AssertClean();
+        repeatedDraws.Should().Be(0, "NumSharp holds the bit generator's lock for every draw ({0})", report);
     }
 
     /// <summary>
-    ///     The control of <see cref="NumSharpGenerator_DrawnWithoutTheSamplerMonitor_IsCaughtTearing" />, and the
-    ///     production path: the same volley with every draw taken under the sampler's monitor
+    ///     The production path: the same volley with every draw taken under the sampler's monitor
     ///     (<c>BaseSampler.Locked</c>, as <c>Trial</c> and the <c>nJobs</c> workers call it) never repeats a value and never
-    ///     throws, in any round.
+    ///     throws, in any round. Since NumSharp 0.80.0 the generator is safe on its own
+    ///     (<see cref="NumSharpGenerator_DrawnWithoutTheSamplerMonitor_NeverTears" />); the monitor still keeps a sampler's
+    ///     calls, and the state they share, one at a time.
     /// </summary>
     [TestMethod]
     public void NumSharpGenerator_DrawnUnderTheSamplerMonitor_NeverRepeatsOrThrows()
