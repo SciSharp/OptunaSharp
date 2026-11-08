@@ -224,7 +224,7 @@ Typed attributes in `test/OptunaSharp.Tests/TestCategory.cs` (so CI filter strin
 | `[RequiresPython]` | Needs live Optuna via pythonnet; self-skips (Inconclusive) when absent. | interop job only |
 | `[HighMemory]` | Resource-heavy. | **excluded** |
 | `[WindowsOnly]` | Windows-only API. | excluded off-Windows |
-| `[Slow]` | ~10 s+ each (REMBO/SAASBO claim runs; the BoTorch qEHVI family in the interop suite, `[TestCategory("Slow")]`). Runtime only — never to hide a failure. | **excluded** on push/PR; ubuntu `Test (slow)` step on `v*` tags + dispatch |
+| `[Slow]` | ~10 s+ each (REMBO/SAASBO claim runs; the BoTorch qEHVI family in the interop suite, `[TestCategory("Slow")]`). Runtime only — never to hide a failure. | **excluded** on push/PR; on `v*` tags + dispatch: the unit job's ubuntu `Test (slow)` step and the interop job's own `interop-test (ubuntu-24.04, slow)` leg |
 
 MSTest attribute namespaces are supplied globally via `GlobalUsings.cs` in each test project (`global
 using Microsoft.VisualStudio.TestTools.UnitTesting;`), so test files don't repeat the `using`. The
@@ -370,6 +370,10 @@ Rules every workflow follows:
   and Cli suites read.
 - **`interop-test`** — matrix; installs Python 3.12 + Optuna, resolves `PYTHONNET_PYDLL`, builds and
   tests `OptunaSharp.Tests.Interop` with `OPTUNASHARP_PYTHONNET_REQUIRE_ENGINE=1`.
+  - Its legs come from `setup`'s `interop` output: a `main` leg per OS (the live suite minus `Slow`, named
+    `interop-test (<os>)`), plus `interop-test (ubuntu-24.04, slow)` with the Slow BoTorch parity (net10.0)
+    whenever Slow runs (tags; dispatch with `run_slow`). The slow cases used to run after ubuntu's main
+    tests, which made that leg 24 min against 15–17 for the others; on their own leg they run beside them.
   - Like BoTorch, the OS-independent parity backends are gated on Linux only: one OS suffices when the
     SAME Python library runs on both sides. The pinned backends:
     - `cma==4.4.4` (pymoo's `cma==3.2.2` breaks under NumPy 2);

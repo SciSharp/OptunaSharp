@@ -55,6 +55,11 @@ jobs:
   # Emitted as job outputs the `test` / `satellite-tests` / `interop-test` matrices consume:
   #   oses        JSON array of runner OSes
   #   tfms_space  space-separated TFM list, for the `for TFM in ...` test loop
+  #   interop     JSON array of {os, part} legs for `interop-test`: a "main" leg per OS, plus an ubuntu
+  #               "slow" leg (the Slow BoTorch parity) whenever Slow runs. The slow leg used to be a step
+  #               at the end of ubuntu's main leg, which made that leg the run's critical path: 24 min
+  #               (7.3 min of interop tests, then 13.1 min of Slow) against 15-17 for every other leg
+  #               (dispatch 42399672195). As its own leg it runs beside them, for one more ~3.5 min setup.
   #
   # Policy (why each tier):
   #   * v* tag / manual dispatch -> all 3 OSes + both TFMs. Release confidence and the only place the
@@ -73,20 +78,31 @@ jobs:
     outputs:
       oses: ${{ steps.scope.outputs.oses }}
       tfms_space: ${{ steps.scope.outputs.tfms_space }}
+      interop: ${{ steps.scope.outputs.interop }}
     steps:
       - id: scope
         shell: bash
+        env:
+          # Whether the Slow category runs: on every v* tag, and on a manual dispatch unless `run_slow` is off.
+          # `inputs` is empty on other events, so this is `false` there.
+          RUN_SLOW: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.run_slow) }}
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            echo 'oses=["ubuntu-24.04","windows-2025","macos-26"]'      >> "$GITHUB_OUTPUT"
-            echo 'tfms_space=net8.0 net10.0'                             >> "$GITHUB_OUTPUT"
+            OSES='["ubuntu-24.04","windows-2025","macos-26"]'
+            TFMS='net8.0 net10.0'
           elif [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-            echo 'oses=["ubuntu-24.04","windows-2025"]'                 >> "$GITHUB_OUTPUT"
-            echo 'tfms_space=net8.0 net10.0'                             >> "$GITHUB_OUTPUT"
+            OSES='["ubuntu-24.04","windows-2025"]'
+            TFMS='net8.0 net10.0'
           else
-            echo 'oses=["ubuntu-24.04","windows-2025"]'                 >> "$GITHUB_OUTPUT"
-            echo 'tfms_space=net10.0'                                    >> "$GITHUB_OUTPUT"
+            OSES='["ubuntu-24.04","windows-2025"]'
+            TFMS='net10.0'
           fi
+          echo "oses=$OSES"       >> "$GITHUB_OUTPUT"
+          echo "tfms_space=$TFMS" >> "$GITHUB_OUTPUT"
+          # One "main" interop leg per OS, then the ubuntu "slow" leg when Slow runs (botorch is Linux-only).
+          INTEROP=$(jq -c --argjson slow "$RUN_SLOW" \
+            '[.[] | {os: ., part: "main"}] + (if $slow then [{os: "ubuntu-24.04", part: "slow"}] else [] end)' <<< "$OSES")
+          echo "interop=$INTEROP" >> "$GITHUB_OUTPUT"
           echo "Resolved CI scope:"; cat "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------------------------
@@ -345,10 +361,14 @@ jobs:
   # ---------------------------------------------------------------------------------------------
   interop-test:
     needs: setup
+    # The main legs keep the `interop-test (<os>)` name they have always had, so required checks and history stay
+    # keyed the same; the Slow BoTorch leg is `interop-test (ubuntu-24.04, slow)`.
+    name: ${{ matrix.part == 'slow' && format('interop-test ({0}, slow)', matrix.os) || format('interop-test ({0})', matrix.os) }}
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(needs.setup.outputs.oses) }}
+        # {os, part} legs from `setup`: "main" runs the live suite on each OS, "slow" the Slow category on ubuntu.
+        include: ${{ fromJSON(needs.setup.outputs.interop) }}
 
     runs-on: ${{ matrix.os }}
 
@@ -545,9 +565,10 @@ jobs:
       run: dotnet build test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj --configuration Release -p:NoWarn=${{ env.DOTNET_NOWARN }}
 
     # A real Redis for the Python <-> C# JournalRedis round-trips: the same compose service the Storage
-    # suite uses. Linux only; Windows and macOS runners cannot run Linux containers.
+    # suite uses. Linux only; Windows and macOS runners cannot run Linux containers. The slow leg runs only the
+    # BoTorch cases, none of which touch Redis.
     - name: Start Redis (Linux)
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && matrix.part == 'main'
       run: docker compose -p optunasharp-redis -f test/OptunaSharp.Tests.Storage/docker-compose.yml up -d --wait
 
     # The live suite grew ~3x since 2026-09-12 (≈600 cases): ~9-15 min per TFM on a desktop, so both TFMs
@@ -555,6 +576,7 @@ jobs:
     # because botorch's fused qLogEHVI kernel falls back to pure Python without a C++ toolchain) is excluded
     # here and runs in "Test (slow)" below.
     - name: Test
+      if: matrix.part == 'main'
       timeout-minutes: 60
       shell: bash
       run: |
@@ -573,9 +595,10 @@ jobs:
 
     # Slow BoTorch parity: botorch is installed on Linux only (see the install step), so this runs on ubuntu,
     # for v* tags and manual dispatch, and on net10.0 only — both sides of each case drive the same Python
-    # botorch, so a second TFM adds ~80 runner-minutes and no unique coverage.
+    # botorch, so a second TFM adds ~80 runner-minutes and no unique coverage. It runs on its own "slow" leg,
+    # which `setup` adds only when Slow runs, so it no longer lengthens ubuntu's main leg.
     - name: Test (slow)
-      if: runner.os == 'Linux' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.run_slow))
+      if: matrix.part == 'slow'
       timeout-minutes: 240
       shell: bash
       run: |
@@ -589,14 +612,15 @@ jobs:
           --filter "TestCategory=Slow" --logger "trx"
 
     - name: Stop Redis (Linux)
-      if: always() && runner.os == 'Linux'
+      if: always() && runner.os == 'Linux' && matrix.part == 'main'
       run: docker compose -p optunasharp-redis -f test/OptunaSharp.Tests.Storage/docker-compose.yml down -v || true
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v7
       if: always()
       with:
-        name: interop-test-results-${{ matrix.os }}
+        # Artifact names must be unique within a run, and ubuntu has two legs when Slow runs.
+        name: interop-test-results-${{ matrix.os }}${{ matrix.part == 'slow' && '-slow' || '' }}
         path: ${{ github.workspace }}/**/TestResults/**/*.trx
         retention-days: 5
 
