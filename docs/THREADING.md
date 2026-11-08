@@ -460,7 +460,7 @@ trial, and the others skip it.
 | Pruner monitor | `BasePruner.SyncRoot`, one per pruner instance | `Prune` and `FilterStudy` | yes |
 | Sampler-private locks | `BaseGASampler`, `JanusSampler`, `JanusDeSampler`, `MoeaDSampler`, `SmsEmoaSampler`, `RandomEmbeddingSampler`, `OptunaHubSampler` | per-study caches | taken inside the sampler monitor; `OptunaHubSampler`'s inside the GIL too |
 | The GIL | CPython | Python objects | taken by the bridges inside the sampler or pruner monitor; released by a thread that holds it while it waits for any lock above (§8) |
-| Storage monitors | `InMemoryStorage`, `JournalStorage`, `CachedStorage`, the SQLite `RDBStorage`, the gRPC client's trial cache | the storage's in-memory state | all but `InMemoryStorage`'s: the journal's spans every round trip of an operation, SQLite's every database call, and `CachedStorage`'s and the gRPC cache's the read of new and unfinished trials |
+| Storage monitors | `InMemoryStorage`, `JournalStorage`, `CachedStorage`, the SQLite `RDBStorage`, the gRPC client's trial cache | the storage's in-memory state; `InMemoryStorage`'s is also taken by its `GetTrialsPrefixView` for each unfinished record read through it (§6.1) | all but `InMemoryStorage`'s: the journal's spans every round trip of an operation, SQLite's every database call, and `CachedStorage`'s and the gRPC cache's the read of new and unfinished trials |
 | Journal file locks | `JournalFileBackend`'s offset-cache lock (short), and the lock file (`JournalFileSymlinkLock` or `JournalFileOpenLock`) around each append | the offset cache; one append at a time across processes | the lock file spans the write and its `fsync` |
 | Database locks | EF Core: `SELECT … FOR UPDATE` row locks and a PostgreSQL advisory lock for schema creation; SQLite's database lock | arbitration between storage instances and processes | yes |
 | Progress bar | `ProgressBar._updateLock` | the count and the line | reads the best trial |
@@ -568,9 +568,13 @@ and ends, around one native call to OpenBLAS).
   or an `UpdateFinishedTrialError`, and tries the next trial.
 - `EnqueueTrial(skipIfExists: true)` checks the existing trials and then enqueues, in two steps, as in
   Python. Two threads enqueueing the same parameters at the same moment can therefore both enqueue them.
-- `InMemoryStorage` replaces a trial's record on every update instead of changing it (copy-on-write), so
-  a record read with `deepcopy: false` never changes under its reader. Records read that way are the
-  storage's own, shared by every thread: never mutate them (§10).
+- A record read with `deepcopy: false` never changes under its reader. `InMemoryStorage` writes a running
+  trial's record in place only while no reader holds it (plan 13, item S4): every read that returns the
+  stored record (`GetTrial`, `GetAllTrials(deepcopy: false)`, the attribute reads, an unfinished record
+  read through `GetTrialsPrefixView`) marks it under the storage lock, and the next write copies it
+  first, as Optuna's copy-on-write does on every write. A finished record is never written again, so the
+  view reads it without the lock. Records read that way are the storage's own, shared by every thread:
+  never mutate them (§10).
 
 ### 6.2 Trial
 

@@ -58,9 +58,10 @@ public class StorageConcurrencyCoverageTests
     /// <summary>
     ///     Shooter 0 reads every trial without a deep copy, fingerprints each record, waits a moment, and fingerprints the
     ///     same record objects again, over and over. Meanwhile every other shooter writes its own trial (attributes,
-    ///     reports, parameters). The two fingerprints always match: the storage replaces a record on every update instead
-    ///     of changing it, so a record a reader holds is never changed under it, as Optuna documents for
-    ///     <c>deepcopy=False</c>.
+    ///     reports, parameters). The two fingerprints always match: a record a reader holds is never changed under it, as
+    ///     Optuna documents for <c>deepcopy=False</c>. The journal replaces a record on every update; the in-memory storage
+    ///     writes a running record in place only while no reader holds it, and the read marks it, so the next write copies
+    ///     it first (plan 13, item S4).
     /// </summary>
     /// <param name="setup"><c>memory</c> or <c>journal</c>.</param>
     [TestMethod]
@@ -116,6 +117,77 @@ public class StorageConcurrencyCoverageTests
         report.AssertClean();
         reads.Should().BeGreaterThan(0);
         changedUnderReader.Should().Be(0, "a record read without a deep copy is never changed under its reader");
+    }
+
+    /// <summary>
+    ///     Plan 13, item S4, through the two reads it added a hand-out to. The in-memory storage writes a running record in
+    ///     place while no reader holds it. Shooter 0 reads the round's trials through the zero-copy view
+    ///     (<see cref="BaseStorage.GetTrialsPrefixView" />) or through <see cref="BaseStorage.GetTrial" />, fingerprints the
+    ///     records it holds, waits a moment and fingerprints them again, over and over, while every other shooter writes
+    ///     its own trial. The two fingerprints always match, and the writers did copy records the reader held, so the race
+    ///     the hand-out guards against was in play.
+    /// </summary>
+    /// <param name="readPath"><c>view</c> or <c>get-trial</c>.</param>
+    [TestMethod]
+    [DataRow("view")]
+    [DataRow("get-trial")]
+    public void RecordReadThroughTheViewOrGetTrial_NeverChangesUnderItsReader_WhileOthersWriteInPlace(string readPath)
+    {
+        var storage = new InMemoryStorage();
+        Study study = Optuna.CreateStudy(storage: storage, sampler: new RandomSampler(22));
+        const int rounds = 30, writes = 30;
+        var trials = new Trial[Threads];
+        int changedUnderReader = 0, reads = 0, firstNumberOfRound = 0;
+
+        using var quiet = new QuietLogs();
+        using var gun = new ConcurrencyGun(Threads);
+        GunReport report = gun.Fire(rounds,
+            shot =>
+            {
+                if (shot.Thread == 0)
+                {
+                    for (int pass = 0; pass < writes * 4; pass++)
+                    {
+                        // Only this round's trials: older ones are finished and no longer written.
+                        List<FrozenTrial> records = readPath == "view"
+                            ? storage.GetTrialsPrefixView(study.StudyId).Skip(firstNumberOfRound).ToList()
+                            : trials.Skip(1).Select(t => storage.GetTrial(t.TrialId)).ToList();
+                        string[] before = records.Select(Fingerprint).ToArray();
+                        Thread.SpinWait(2_000);
+                        string[] after = records.Select(Fingerprint).ToArray();
+                        if (!before.SequenceEqual(after))
+                            Interlocked.Increment(ref changedUnderReader);
+                        Interlocked.Increment(ref reads);
+                    }
+                    return;
+                }
+                Trial trial = trials[shot.Thread];
+                for (int k = 0; k < writes; k++)
+                {
+                    trial.SetUserAttr($"a{k}", k);
+                    trial.Report(k, step: k);
+                    trial.SuggestFloat($"p{k}", 0, 1);
+                }
+            },
+            beforeRound: _ =>
+            {
+                for (int t = 1; t < Threads; t++)
+                    trials[t] = study.Ask();
+                firstNumberOfRound = trials[1].Number;
+            },
+            afterRound: _ =>
+            {
+                // Each round's trials finish, so the next round's reads look only at fresh running records.
+                for (int t = 1; t < Threads; t++)
+                    study.Tell(trials[t], 0.0);
+                return false;
+            });
+
+        report.AssertClean();
+        reads.Should().BeGreaterThan(0);
+        changedUnderReader.Should().Be(0, $"a record read through {readPath} is never changed under its reader");
+        storage.WriteCopyCount.Should().BeGreaterThan(rounds * (Threads - 1),
+            "beyond each trial's own read at Ask, the reader's hand-outs made the writers copy records it held");
     }
 
     /// <summary>

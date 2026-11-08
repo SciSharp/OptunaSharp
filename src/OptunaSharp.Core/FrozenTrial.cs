@@ -32,6 +32,26 @@ public class FrozenTrial : BaseTrial
     /// <summary>Storage identifier for this trial, separate from its per-study number.</summary>
     internal int TrialId;
 
+    /// <summary>
+    ///     Read and written only by <see cref="Storages.InMemoryStorage" />, under its lock: true while that storage
+    ///     holds the only reference to this record and the record owns every one of its dictionaries, so a write may
+    ///     change it in place instead of copying it (Rustuna plan 13, item S4).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         False for every record created any other way, which is the safe default: a write then copies, as
+    ///         Optuna's copy-on-write storage always does. The storage clears it the moment a reference leaves (any
+    ///         read that returns this object), so a caller that holds a record never sees it change. That is the
+    ///         invariant Optuna's copying protected, kept at a fraction of the cost: a trial's suggestions write its
+    ///         record repeatedly while nobody reads it, which made every suggestion copy both parameter dictionaries.
+    ///     </para>
+    ///     <para>
+    ///         Not copied by <see cref="ShallowCopy" /> or <see cref="DeepCopy" />: a shallow copy shares the
+    ///         dictionaries, and only the storage knows when it alone holds a record.
+    ///     </para>
+    /// </remarks>
+    internal bool StorageExclusive;
+
     // Lazy system-attrs loading used by Trial._get_latest_trial (Python: _LazyTrialSystemAttrs).
     private Func<OrderedDict<string, object?>>? _systemAttrsLoader;
 

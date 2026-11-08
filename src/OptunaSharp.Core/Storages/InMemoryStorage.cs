@@ -214,6 +214,9 @@ public class InMemoryStorage : BaseStorage
             _maxTrialId += 1;
             trial.SetNumber(_studies[studyId].Trials.Count);
             trial.TrialId = trialId;
+            // Both branches built a record with dictionaries nobody else holds, so its writes may go in place until a
+            // reader receives it (see FrozenTrial.StorageExclusive).
+            trial.StorageExclusive = true;
             _trialIdToStudyIdAndNumber[trialId] = (studyId, trial.Number);
             _studies[studyId].Trials.Add(trial);
             UpdateCache(trialId, studyId);
@@ -250,22 +253,89 @@ public class InMemoryStorage : BaseStorage
 
             CheckTrialIsUpdatable(trialId, trial.State);
 
-            int studyId = _trialIdToStudyIdAndNumber[trialId].StudyId;
+            var study = _studies[_trialIdToStudyIdAndNumber[trialId].StudyId];
             // Check param distribution compatibility with previous trial(s).
-            if (_studies[studyId].ParamDistribution.TryGetValue(paramName, out var existing))
+            if (study.ParamDistribution.TryGetValue(paramName, out var existing))
+            {
                 Distribution.CheckDistributionCompatibility(existing, distribution);
+                // Share one instance per parameter across the study's trials when the new one is the same distribution
+                // to the bit (plan 13, item S7): memory only, the trial still holds a distribution identical in every
+                // field. Bitwise, so a -0.0 bound or a categorical with equal-but-different choices (1 vs 1.0, which
+                // Python calls equal) keeps the caller's own instance and prints as Optuna would.
+                if (Distribution.IsBitwiseIdentical(existing, distribution))
+                    distribution = existing;
+            }
 
             // Set param distribution.
-            _studies[studyId].ParamDistribution[paramName] = distribution;
+            study.ParamDistribution[paramName] = distribution;
+            // One string instance per parameter name across the study (plan 13, S7): names built per call, such as
+            // $"x{i}", would otherwise keep a copy alive in every trial.
+            if (!study.ParamNames.TryGetValue(paramName, out string? name))
+                study.ParamNames[paramName] = name = paramName;
 
-            // Set param.
-            trial = trial.ShallowCopy();
-            trial.ParamsDict = trial.ParamsDict.ShallowClone();
-            trial.ParamsDict[paramName] = distribution.ToExternalRepr(paramValueInternal);
-            trial.DistributionsDict = trial.DistributionsDict.ShallowClone();
-            trial.DistributionsDict[paramName] = distribution;
-            SetTrial(trialId, trial);
+            // Set param. In place while the storage alone holds the record; otherwise an own copy first, as Optuna's
+            // copy-on-write does (WritableTrialUnlocked).
+            trial = WritableTrialUnlocked(trialId);
+            trial.ParamsDict[name] = distribution.ToExternalRepr(paramValueInternal);
+            trial.DistributionsDict[name] = distribution;
         }
+    }
+
+    /// <summary>
+    ///     The record of <paramref name="trialId" /> in a form this write may change: the stored object itself while the
+    ///     storage alone holds it, otherwise a copy that owns all of its dictionaries, stored in its place (Rustuna plan
+    ///     13, item S4).
+    /// </summary>
+    /// <param name="trialId">The trial being written; the caller holds the lock and has checked it is updatable.</param>
+    /// <returns>A record the caller may change in place; it stays the stored record.</returns>
+    /// <remarks>
+    ///     <para>
+    ///         Optuna copies the record and the dictionary it writes on every write, so a reader holding the old record
+    ///         never sees a change. The copy here happens only when a reader may hold the record (any read clears
+    ///         <see cref="FrozenTrial.StorageExclusive" />), and it clones all five dictionaries, because a later write
+    ///         may touch any of them in place. A trial's suggestions, which nobody reads between, then cost one copy
+    ///         instead of one per suggestion.
+    ///     </para>
+    ///     <para>
+    ///         State changes (<see cref="SetTrialStateValues" />) keep copying: a finished record is read without the
+    ///         lock through <see cref="GetTrialsPrefixView" />, so it must be published whole, never changed in place.
+    ///     </para>
+    /// </remarks>
+    private FrozenTrial WritableTrialUnlocked(int trialId)
+    {
+        var trial = GetTrialUnlocked(trialId);
+        if (trial.StorageExclusive)
+            return trial;
+
+        var own = trial.ShallowCopy();
+        own.ParamsDict = trial.ParamsDict.ShallowClone();
+        own.DistributionsDict = trial.DistributionsDict.ShallowClone();
+        own.UserAttrsDict = trial.UserAttrsDict.ShallowClone();
+        own.SystemAttrsDict = trial.SystemAttrsDict.ShallowClone();
+        own.IntermediateValues = trial.IntermediateValues.ShallowClone();
+        own.StorageExclusive = true;
+        SetTrial(trialId, own);
+        WriteCopyCount++;
+        return own;
+    }
+
+    /// <summary>
+    ///     How many writes had to copy a trial's record first because a reader may hold it (Rustuna plan 13, item S4):
+    ///     a diagnostic the tests read to prove that suggestions nobody reads between are written in place.
+    /// </summary>
+    /// <remarks>Counted under the storage's lock; read it while no write is running, or the value is approximate.</remarks>
+    internal int WriteCopyCount { get; private set; }
+
+    /// <summary>
+    ///     Marks a stored record as held by a reader, so the next write copies it first: every path that returns a
+    ///     stored record (rather than a copy) goes through here.
+    /// </summary>
+    /// <param name="trial">A record of this storage, read under the lock.</param>
+    /// <returns><paramref name="trial" />, for chaining at the return statement.</returns>
+    private static FrozenTrial HandOut(FrozenTrial trial)
+    {
+        trial.StorageExclusive = false;
+        return trial;
     }
 
     /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
@@ -317,7 +387,8 @@ public class InMemoryStorage : BaseStorage
                 throw new ValueError("No trials are completed yet.");
             if (_studies[studyId].Directions.Count > 1)
                 throw new RuntimeError("Best trial can be obtained only for single-objective optimization.");
-            return GetTrialUnlocked(bestTrialId.Value);
+            // A completed record is never written again, but handing it out keeps the rule uniform.
+            return HandOut(GetTrialUnlocked(bestTrialId.Value));
         }
     }
 
@@ -430,10 +501,8 @@ public class InMemoryStorage : BaseStorage
             var trial = GetTrialUnlocked(trialId);
             CheckTrialIsUpdatable(trialId, trial.State);
 
-            trial = trial.ShallowCopy();
-            trial.IntermediateValues = trial.IntermediateValues.ShallowClone();
-            trial.IntermediateValues[step] = intermediateValue;
-            SetTrial(trialId, trial);
+            // In place unless a reader may hold the record (WritableTrialUnlocked).
+            WritableTrialUnlocked(trialId).IntermediateValues[step] = intermediateValue;
         }
     }
 
@@ -449,10 +518,8 @@ public class InMemoryStorage : BaseStorage
             var trial = GetTrialUnlocked(trialId);
             CheckTrialIsUpdatable(trialId, trial.State);
 
-            trial = trial.ShallowCopy();
-            trial.UserAttrsDict = trial.UserAttrsDict.ShallowClone();
-            trial.UserAttrsDict[key] = value;
-            SetTrial(trialId, trial);
+            // In place unless a reader may hold the record (WritableTrialUnlocked).
+            WritableTrialUnlocked(trialId).UserAttrsDict[key] = value;
         }
     }
 
@@ -467,10 +534,8 @@ public class InMemoryStorage : BaseStorage
             var trial = GetTrialUnlocked(trialId);
             CheckTrialIsUpdatable(trialId, trial.State);
 
-            trial = trial.ShallowCopy();
-            trial.SystemAttrsDict = trial.SystemAttrsDict.ShallowClone();
-            trial.SystemAttrsDict[key] = value;
-            SetTrial(trialId, trial);
+            // In place unless a reader may hold the record (WritableTrialUnlocked).
+            WritableTrialUnlocked(trialId).SystemAttrsDict[key] = value;
         }
     }
 
@@ -480,7 +545,8 @@ public class InMemoryStorage : BaseStorage
     {
         lock (_lock)
         {
-            return GetTrialUnlocked(trialId);
+            // The caller receives the stored record itself, so later writes must copy it first.
+            return HandOut(GetTrialUnlocked(trialId));
         }
     }
 
@@ -517,7 +583,13 @@ public class InMemoryStorage : BaseStorage
         {
             CheckStudyId(studyId);
             List<FrozenTrial> trials = _studies[studyId].Trials;
-            return new TrialsPrefixView(trials, trials.Count);
+            // An unfinished record may be written in place while the storage alone holds it (WritableTrialUnlocked),
+            // so the view reads one under the lock and hands it out; finished records stay lock-free.
+            return new TrialsPrefixView(trials, trials.Count, index =>
+            {
+                lock (_lock)
+                    return HandOut(trials[index]);
+            });
         }
     }
 
@@ -568,7 +640,18 @@ public class InMemoryStorage : BaseStorage
             }
 
             if (deepcopy)
+            {
                 trials = trials.Select(t => t.DeepCopy()).ToList();
+            }
+            else
+            {
+                // The caller receives the stored records themselves. Finished ones are never written again; an
+                // unfinished one must be copied before its next write (WritableTrialUnlocked). Only those are marked,
+                // which keeps this pass to the few running and waiting trials' fields.
+                foreach (var trial in trials)
+                    if (!trial.State.IsFinished())
+                        HandOut(trial);
+            }
 
             return trials;
         }
@@ -607,6 +690,11 @@ public class InMemoryStorage : BaseStorage
         internal List<FrozenTrial> Trials { get; } = new();
         /// <summary>Previously recorded distributions used to validate parameters across trials.</summary>
         internal Dictionary<string, BaseDistribution> ParamDistribution { get; } = new();
+        /// <summary>
+        ///     The study's one string instance per parameter name, used as the key in every trial's dictionaries so
+        ///     names built per suggestion (<c>$"x{i}"</c>) do not keep a copy alive in each trial (plan 13, S7).
+        /// </summary>
+        internal Dictionary<string, string> ParamNames { get; } = new();
         /// <summary>Copy-on-write user attributes for the study.</summary>
         internal OrderedDict<string, object?> UserAttrs { get; set; } = new();
         /// <summary>Copy-on-write internal attributes for the study.</summary>

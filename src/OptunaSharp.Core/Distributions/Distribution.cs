@@ -161,6 +161,46 @@ public static class Distribution
             throw new ValueError(nameof(CategoricalDistribution) + " does not support dynamic value space.");
     }
 
+    /// <summary>
+    ///     Whether two distributions are interchangeable to the bit: the same runtime type and every field identical,
+    ///     doubles compared by their bits. Stricter than <see cref="BaseDistribution.Equals(object?)" /> on purpose, so a
+    ///     storage may keep one shared instance for both without any observable difference (Rustuna plan 13, item S7).
+    /// </summary>
+    /// <param name="a">One distribution.</param>
+    /// <param name="b">The other.</param>
+    /// <returns>
+    ///     True for the same instance, or for float or integer distributions of the same type whose bounds, step and log
+    ///     flag match exactly. False otherwise, including every categorical pair: equal categoricals may hold different
+    ///     choice objects (Python equality makes 1 and 1.0 equal), and swapping one for the other would change the
+    ///     values a trial reports.
+    /// </returns>
+    /// <remarks>
+    ///     Why bitwise: <c>Equals</c> treats -0.0 and 0.0 as one bound, and the repr of a distribution prints them
+    ///     differently. The runtime-type check keeps the deprecated <c>UniformDistribution</c> family, which derives from
+    ///     <see cref="FloatDistribution" />, from being swapped for a plain one.
+    /// </remarks>
+    internal static bool IsBitwiseIdentical(BaseDistribution a, BaseDistribution b)
+    {
+        if (ReferenceEquals(a, b))
+            return true;
+        if (a.GetType() != b.GetType())
+            return false;
+        return (a, b) switch
+        {
+            (FloatDistribution fa, FloatDistribution fb) =>
+                BitConverter.DoubleToInt64Bits(fa.Low) == BitConverter.DoubleToInt64Bits(fb.Low)
+                && BitConverter.DoubleToInt64Bits(fa.High) == BitConverter.DoubleToInt64Bits(fb.High)
+                && fa.Log == fb.Log
+                && (fa.Step is null
+                    ? fb.Step is null
+                    : fb.Step is not null
+                      && BitConverter.DoubleToInt64Bits(fa.Step.Value) == BitConverter.DoubleToInt64Bits(fb.Step.Value)),
+            (IntDistribution ia, IntDistribution ib) =>
+                ia.Low == ib.Low && ia.High == ib.High && ia.Step == ib.Step && ia.Log == ib.Log,
+            _ => false,
+        };
+    }
+
     /// <summary>Python <c>_get_single_value(distribution)</c>.</summary>
     /// <param name="distribution">Distribution defining the parameter representation and allowed values.</param>
     /// <returns>The numeric lower endpoint or the sole categorical value.</returns>
