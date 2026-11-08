@@ -73,3 +73,7 @@ What "async all the way" would take, counted on 2026-11-08:
 - Cheaper, if async objectives are the need: an `OptimizeAsync` overload that awaits a `Func<Trial, Task<double>>`
   on the existing worker threads (no `SynchronizationContext` there), which touches neither storages nor samplers.
   Not built; it is listed in THREADING.md §12.
+- A measured evaluation of those pieces, made the same day against async prototypes, is catalog Open item 30 (its
+  note `async-evaluation-2026-11-08.md`): an `OptimizeAsync` pays only with 1,000 or more trials waiting at once, and
+  only on a bounded scheduler that keeps the synchronous trial work off the thread pool; Redis cluster-mode reads
+  would gain 60–170× from pipelining. Its decisions are the owner's and still pending.

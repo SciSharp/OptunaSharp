@@ -1300,7 +1300,9 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
   `nJobs: 1` (18.7 s against 12.1 s, 120 trials of a 20 ms objective). Optuna has the same cap.
 - **No async API**: `Optimize`, the storages and the samplers are synchronous, as in Optuna; an async objective
   blocks its worker thread. The scope of a full async stack was evaluated on 2026-11-08 and not taken up
-  ([plan 11](plans/11-threading-round-2.md)).
+  ([plan 11](plans/11-threading-round-2.md)). A measured evaluation of the narrower pieces (an `OptimizeAsync` on a
+  bounded scheduler, pipelined Redis cluster reads, an O(1) submit loop) is catalog Open item 30, with the owner's
+  decisions pending.
 
 ## 13. Relationship to Optuna
 
