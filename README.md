@@ -24,7 +24,7 @@
 <p align="center">
   OptunaSharp is <strong>thread-safe and truly parallel.</strong><br>
   <code>nJobs</code> runs trials on all your cores at once, with no GIL in the way, and workers on <br>many machines share one study, Python Optuna workers included.<br>
- OptunaSharp supports parallelism scheme of: single-threaded, reused dedicated threads <br>and ThreadPool async-await.
+ OptunaSharp supports parallelism powered by:<br> single-threaded, reused dedicated threads and ThreadPool async-await.
 </p>
 
 <p align="center">
