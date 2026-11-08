@@ -40,6 +40,23 @@ public class PartialFixedSampler : BaseSampler
     /// <inheritdoc />
     public override void ReseedRng() => _baseSampler.ReseedRng();
 
+    /// <summary>
+    ///     A new <see cref="PartialFixedSampler" /> over a worker instance of the wrapped sampler, for a
+    ///     <see cref="SamplerConcurrency.PerWorker" /> worker; the fixed values are shared, being read only.
+    /// </summary>
+    /// <returns>
+    ///     A fresh instance, or <see langword="null" /> (shared access) when the wrapped sampler has no worker instance
+    ///     or this is a subclass: the wrapped sampler is called without its own monitor, so a shared one must stay
+    ///     behind this sampler's.
+    /// </returns>
+    internal override BaseSampler? CreateWorkerInstance()
+    {
+        if (GetType() != typeof(PartialFixedSampler))
+            return null;
+        BaseSampler? baseWorker = _baseSampler.CreateWorkerInstance();
+        return baseWorker is null ? null : new PartialFixedSampler(_fixedParams, baseWorker);
+    }
+
     /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {

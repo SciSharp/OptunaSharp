@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 
 namespace OptunaSharp.Logging;
 
@@ -73,6 +74,22 @@ public readonly struct LogRecord
 }
 
 /// <summary>Receives log records emitted through the Optuna logging seam.</summary>
+/// <remarks>
+///     <para>
+///         <b>One record at a time per handler.</b> OptunaSharp calls <see cref="Emit" /> of one handler instance for
+///         one record at a time, under a lock of that instance's own, as Python's <c>logging.Handler.handle</c> holds
+///         the handler's <c>lock</c> around <c>emit</c>. A handler therefore needs no lock of its own for what only
+///         <see cref="Emit" /> touches; state it shares with other code still needs one. Different handlers run at the
+///         same time, on whichever threads log.
+///     </para>
+///     <para>
+///         <b>Footguns.</b> <see cref="Emit" /> runs on the thread that logged, which may hold any OptunaSharp lock,
+///         storage monitors included, and other threads wait for the handler meanwhile. So it must be quick, must not
+///         throw (the exception surfaces in the operation that logged), must not call OptunaSharp (a record it logs
+///         would re-enter this handler on the same thread), and must not take the Python GIL or wait for another
+///         thread that does (THREADING.md §5.3).
+///     </para>
+/// </remarks>
 public interface ILogHandler
 {
     /// <summary>Receives a log record synchronously.</summary>
@@ -93,6 +110,13 @@ public interface ILogHandler
 ///     it keeps writing to that redirect afterwards. If the redirect is later disposed, writes fail — and,
 ///     exactly as in Python, the failure is reported on the current stderr ("--- Logging error ---")
 ///     instead of propagating, so a broken log stream never fails the optimization that was logging.
+///     <para>
+///         <b>Threads.</b> Each record is one write of its line and, when it has one, its exception, followed by a
+///         flush, as Python's <c>StreamHandler.emit</c> does since issue 35046; OptunaSharp emits one record at a time
+///         per handler (<see cref="ILogHandler" />). So records from parallel trials never interleave, even over a
+///         <see cref="TextWriter" /> that is not synchronized, as long as only this handler writes to it. A writer
+///         shared with other code still needs <see cref="TextWriter.Synchronized" />.
+///     </para>
 /// </remarks>
 public sealed class StreamLogHandler : ILogHandler
 {
@@ -113,9 +137,9 @@ public sealed class StreamLogHandler : ILogHandler
     }
 
     /// <summary>
-    ///     Writes the formatted event and optional exception to the configured writer. Never throws:
-    ///     a write failure (a disposed or broken writer) is reported on the current standard error the way
-    ///     Python's <c>logging.Handler.handleError</c> reports it, and the record is dropped.
+    ///     Writes the formatted event and optional exception to the configured writer in one write, then flushes it.
+    ///     Never throws: a write failure (a disposed or broken writer) is reported on the current standard error the
+    ///     way Python's <c>logging.Handler.handleError</c> reports it, and the record is dropped.
     /// </summary>
     /// <param name="record">Log record to deliver to the handler.</param>
     public void Emit(in LogRecord record)
@@ -124,9 +148,18 @@ public sealed class StreamLogHandler : ILogHandler
         {
             // Python asctime default format: "2021-10-31 05:35:17,232" (comma before milliseconds).
             var ts = record.Timestamp.ToString("yyyy-MM-dd HH:mm:ss,fff", System.Globalization.CultureInfo.InvariantCulture);
-            _writer.WriteLine($"[{record.LevelChar} {ts}] {record.Message}");
-            if (record.Exception is not null)
-                _writer.WriteLine(record.Exception.ToString());
+            // Python's StreamHandler.emit writes `msg + terminator` in one stream.write (issue 35046 merged its two
+            // writes), the formatted traceback included. One Write call matters here too: Console.Error locks per
+            // call, so a record written in two calls let another thread's line land between its line and its
+            // exception. The text is unchanged: the line and the exception each end with the writer's NewLine.
+            string newLine = _writer.NewLine;
+            string text = record.Exception is null
+                ? $"[{record.LevelChar} {ts}] {record.Message}{newLine}"
+                : $"[{record.LevelChar} {ts}] {record.Message}{newLine}{record.Exception}{newLine}";
+            _writer.Write(text);
+            // Python's emit flushes after every record (StreamHandler.flush), so a record reaches a file or a pipe
+            // before the next trial starts; a failed flush is a write failure like any other.
+            _writer.Flush();
         }
         catch (Exception error)
         {
@@ -203,6 +236,12 @@ public static class OptunaLogging
     private static readonly List<ILogHandler> _handlers = new();
     private static int _level = LogLevel.Info;
     private static bool _configured;
+
+    // Each handler's own lock, Python's Handler.lock (created with the handler; Handler.handle holds it around emit).
+    // Keyed by the handler instance and created on its first record, so the lock lives exactly as long as the handler:
+    // a handler removed and added again while another thread is still in its Emit keeps the same lock, and one
+    // registered handler never runs two records at once. Locks after every other OptunaSharp lock (THREADING.md §5.2).
+    private static readonly ConditionalWeakTable<ILogHandler, object> _handlerLocks = new();
 
     // Python: optuna's library root logger name.
     /// <summary>Python-compatible root logger name used by OptunaSharp components.</summary>
@@ -290,14 +329,20 @@ public static class OptunaLogging
 
     /// <summary>
     ///     Add a custom handler (the seam external logging adapters — e.g. the Tier X
-    ///     Microsoft.Extensions.Logging bridge — plug into).
+    ///     Microsoft.Extensions.Logging bridge — plug into). A handler already registered is not added again, so it
+    ///     receives each record once, as Python's <c>Logger.addHandler</c> ensures.
     /// </summary>
     /// <param name="handler">Handler instance to register or unregister; its lifetime remains caller-owned.</param>
     public static void AddHandler(ILogHandler handler)
     {
         ConfigureLibraryRootLogger();
         lock (_lock)
-            _handlers.Add(handler);
+        {
+            // Python's addHandler: `if not (hdlr in self.handlers): self.handlers.append(hdlr)`. Contains is the
+            // port of `in` (Equals, which is identity unless the handler overrides it, as `==` is in Python).
+            if (!_handlers.Contains(handler))
+                _handlers.Add(handler);
+        }
     }
 
     /// <summary>Remove a previously added handler.</summary>
@@ -319,11 +364,21 @@ public static class OptunaLogging
     }
 
     /// <param name="message">Text to include in the log record.</param>
-    /// <summary>Dispatches an enabled record to a snapshot of the registered handlers.</summary>
+    /// <summary>
+    ///     Dispatches an enabled record to a snapshot of the registered handlers, each under its own lock, so a handler
+    ///     receives one record at a time (Python's <c>Handler.handle</c>).
+    /// </summary>
     /// <param name="loggerName">Name of the component that emitted the record.</param>
     /// <param name="level">Numeric logging severity, using the LogLevel constants.</param>
     /// <param name="exception">Optional exception retained for handler formatting.</param>
     /// <exception cref="System.Exception">A handler fails; subsequent handlers are not invoked for this record.</exception>
+    /// <remarks>
+    ///     Footgun: the calling thread may hold any OptunaSharp lock, and it waits here while the handler serves another
+    ///     thread's record. The handler lock is a plain monitor, not a <c>MonitorGate</c> entry, on purpose: a storage
+    ///     monitor's holder logs (a new study, a journal warning), and such a holder must never wait for the Python GIL,
+    ///     which a GIL-releasing entry would make it do to take the GIL back. A handler that takes no lock and not the GIL
+    ///     (the rule for handlers) always finishes, so the wait is one record long.
+    /// </remarks>
     internal static void Emit(string loggerName, int level, string message, Exception? exception)
     {
         if (!IsEnabledFor(level))
@@ -336,7 +391,13 @@ public static class OptunaLogging
         // Invoke user handlers outside the configuration lock so handlers can change registration
         // without blocking unrelated configuration access during potentially slow output.
         foreach (var handler in handlers)
-            handler.Emit(record);
+        {
+            // Python's Handler.handle: `self.acquire(); try: self.emit(record) finally: self.release()`. Without it,
+            // parallel trials called one handler at once: the default handler's line and exception interleaved with
+            // other records, and a StreamLogHandler over an unsynchronized writer corrupted it (measured, 2026-11-08).
+            lock (_handlerLocks.GetOrCreateValue(handler))
+                handler.Emit(record);
+        }
     }
 }
 

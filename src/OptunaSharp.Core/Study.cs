@@ -39,6 +39,13 @@ public class Study
         internal bool InOptimizeLoop;
         /// <summary>Trial-history snapshot reused within one trial; cleared when the next trial is asked.</summary>
         internal List<FrozenTrial>? CachedAllTrials;
+
+        /// <summary>
+        ///     The worker's own sampler instance while this thread runs a trial of an <c>Optimize(nJobs)</c> call with
+        ///     <see cref="SamplerConcurrency.PerWorker" />; null otherwise, so <see cref="Sampler" /> serves. Set and
+        ///     restored by the worker around each trial (THREADING.md §4), since dedicated and pool threads are reused.
+        /// </summary>
+        internal Samplers.BaseSampler? SamplerOverride;
     }
 
     private readonly ThreadLocal<ThreadLocalStudyAttribute> _threadLocal =
@@ -61,6 +68,13 @@ public class Study
 
     /// <summary>The sampler in use.</summary>
     public BaseSampler Sampler { get; set; }
+
+    /// <summary>
+    ///     The sampler that serves a trial started on the calling thread: the worker's own instance during a trial of an
+    ///     <c>Optimize(nJobs)</c> call with <see cref="SamplerConcurrency.PerWorker" />, otherwise <see cref="Sampler" />.
+    ///     Read once per sampler call, like <see cref="Sampler" />, so the monitor taken belongs to the instance that runs.
+    /// </summary>
+    internal BaseSampler SamplerForCurrentThread => ThreadLocal.SamplerOverride ?? Sampler;
 
     /// <summary>The pruner in use.</summary>
     public BasePruner Pruner { get; set; }

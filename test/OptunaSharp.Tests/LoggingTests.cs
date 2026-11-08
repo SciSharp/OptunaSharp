@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using AwesomeAssertions;
 using OptunaSharp.Logging;
 
@@ -11,6 +12,9 @@ namespace OptunaSharp.Tests;
 ///     ("--- Logging error ---") and swallowed, never propagated: under Optuna a closed log stream cannot fail
 ///     the optimization that is logging, and before this port it did (an <see cref="ObjectDisposedException" />
 ///     escaped <see cref="Study.Optimize(Func{Trial, double}, int?, double?, int, Type[], System.Collections.Generic.IEnumerable{Action{Study, FrozenTrial}}, bool, bool, TrialExecutorOptions, System.Threading.CancellationToken)" />).
+///     <para>Also the handler contract Python's <c>logging</c> keeps: one record at a time per handler (the lock
+///     <c>Handler.handle</c> holds), one write and one flush per record, and a handler registered twice still receiving
+///     each record once.</para>
 ///     <para>These tests redirect <see cref="Console.Error" /> and rebuild the process-wide logging
 ///     configuration, so every test restores both in a <c>finally</c> (the project runs tests sequentially).</para>
 /// </summary>
@@ -142,6 +146,148 @@ public class LoggingTests
 
         messages.Should().Contain("Trial 0 pruned. ").And.Contain("Trial 1 pruned. custom");
         messages.Should().NotContain(m => m.Contains("was thrown"));
+    }
+
+    /// <summary>
+    ///     A record is one write and one flush, as Python's <c>StreamHandler.emit</c> since issue 35046: the line and the
+    ///     exception arrive together, so nothing another thread writes can land between them, and the text is the same
+    ///     as the two writes produced before.
+    /// </summary>
+    [TestMethod]
+    public void StreamLogHandler_WritesEachRecordInOneWrite_ThenFlushes()
+    {
+        var sink = new CountingWriter();
+        var handler = new StreamLogHandler(sink);
+        var error = new InvalidOperationException("boom");
+        var stamp = new DateTime(2021, 10, 31, 5, 35, 17, 232);
+
+        handler.Emit(new LogRecord("optuna.test", LogLevel.Warning, "failed", error, stamp));
+        handler.Emit(new LogRecord("optuna.test", LogLevel.Info, "plain", null, stamp));
+
+        sink.Writes.Should().Be(2, "one write per record, exception included");
+        sink.Flushes.Should().Be(2, "Python flushes after every record");
+        sink.ToString().Should().Be(
+            "[W 2021-10-31 05:35:17,232] failed" + Environment.NewLine + error + Environment.NewLine +
+            "[I 2021-10-31 05:35:17,232] plain" + Environment.NewLine);
+    }
+
+    /// <summary>
+    ///     Eight threads log failures with exceptions through one <see cref="StreamLogHandler" /> over a plain, unsynchronized
+    ///     writer, as the CLI's <c>--log-file</c> builds it. OptunaSharp calls a handler for one record at a time (Python's
+    ///     <c>Handler.handle</c> lock), so every record arrives whole: its line, then its own exception. Measured before the
+    ///     lock, over a plain <c>StreamWriter</c>: 412 of 40,000 records whole and 48,247 mangled lines.
+    /// </summary>
+    [TestMethod]
+    public void StreamLogHandler_OverAnUnsynchronizedWriter_KeepsEveryRecordWhole_WhenThreadsLogAtOnce()
+    {
+        const int threads = 8, perThread = 1_000;
+        int verbosity = OptunaLogging.GetVerbosity();
+        var sink = new StringWriter();
+        var handler = new StreamLogHandler(sink);
+        Logger logger = OptunaLogging.GetLogger("optuna.tests.handler_lock");
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        try
+        {
+            OptunaLogging.DisableDefaultHandler();
+            OptunaLogging.SetVerbosity(LogLevel.Warning);
+            OptunaLogging.AddHandler(handler);
+            using var start = new System.Threading.ManualResetEventSlim();
+            var workers = new System.Threading.Thread[threads];
+            for (int t = 0; t < threads; t++)
+            {
+                int thread = t;
+                workers[t] = new System.Threading.Thread(() =>
+                {
+                    try
+                    {
+                        start.Wait();
+                        for (int i = 0; i < perThread; i++)
+                            logger.Warning($"record {thread}-{i}", new InvalidOperationException($"boom {thread}-{i}"));
+                    }
+                    catch (Exception e)
+                    {
+                        failures.Enqueue(e);
+                    }
+                });
+                workers[t].Start();
+            }
+
+            start.Set();
+            foreach (var worker in workers)
+                worker.Join();
+        }
+        finally
+        {
+            OptunaLogging.RemoveHandler(handler);
+            OptunaLogging.EnableDefaultHandler();
+            OptunaLogging.SetVerbosity(verbosity);
+        }
+
+        failures.Should().BeEmpty("an unsynchronized StringBuilder appended to by two threads at once can throw");
+        string[] lines = sink.ToString().Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToArray();
+        lines.Should().HaveCount(2 * threads * perThread, "a header line and an exception line per record, none mangled");
+        for (int i = 0; i < lines.Length; i += 2)
+        {
+            // "[W <stamp>] record T-I" followed at once by "System.InvalidOperationException: boom T-I".
+            string id = lines[i][(lines[i].LastIndexOf(' ') + 1)..];
+            lines[i].Should().StartWith("[W ").And.EndWith($"] record {id}");
+            lines[i + 1].Should().Be($"System.InvalidOperationException: boom {id}");
+        }
+    }
+
+    /// <summary>
+    ///     Adding a handler that is already registered does nothing, so it still receives each record once, as Python's
+    ///     <c>Logger.addHandler</c> ensures (live Python: two <c>addHandler(h)</c> calls leave one <c>h</c> and one line);
+    ///     one removal then removes it.
+    /// </summary>
+    [TestMethod]
+    public void AddHandler_TheSameHandlerTwice_ReceivesEachRecordOnce_AsPython()
+    {
+        int verbosity = OptunaLogging.GetVerbosity();
+        var messages = new System.Collections.Generic.List<string>();
+        var handler = new CollectingHandler(messages);
+        Logger logger = OptunaLogging.GetLogger("optuna.tests.add_twice");
+        try
+        {
+            OptunaLogging.SetVerbosity(LogLevel.Warning);
+            OptunaLogging.AddHandler(handler);
+            OptunaLogging.AddHandler(handler);
+            logger.Warning("once?");
+            OptunaLogging.RemoveHandler(handler);
+            logger.Warning("removed");
+        }
+        finally
+        {
+            OptunaLogging.RemoveHandler(handler);
+            OptunaLogging.SetVerbosity(verbosity);
+        }
+
+        messages.Should().Equal("once?");
+    }
+
+    /// <summary>A string writer that counts the write and flush calls a handler makes.</summary>
+    private sealed class CountingWriter : StringWriter
+    {
+        /// <summary>How many times a string was written.</summary>
+        public int Writes { get; private set; }
+
+        /// <summary>How many times the writer was flushed.</summary>
+        public int Flushes { get; private set; }
+
+        /// <summary>Counts the write and appends the text.</summary>
+        /// <param name="value">The text written.</param>
+        public override void Write(string? value)
+        {
+            Writes++;
+            base.Write(value);
+        }
+
+        /// <summary>Counts the flush.</summary>
+        public override void Flush()
+        {
+            Flushes++;
+            base.Flush();
+        }
     }
 
     /// <summary>Collects the message of every record it receives, so a test can assert exact log text.</summary>

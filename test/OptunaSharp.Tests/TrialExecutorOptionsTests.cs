@@ -131,6 +131,67 @@ public class TrialExecutorOptionsTests
         options.Executor.Should().Be(TrialExecutorKind.DedicatedThreads);
     }
 
+    /// <summary>
+    ///     A new instance keeps Optuna's model for the sampler (one shared instance, one call at a time) and leaves
+    ///     OpenBLAS to the automatic policy (untouched with <c>nJobs: 1</c>, single-threaded otherwise).
+    /// </summary>
+    [TestMethod]
+    public void NewOptions_ShareTheSampler_AndLeaveOpenBlasToTheAutomaticPolicy()
+    {
+        var options = new TrialExecutorOptions();
+
+        options.SamplerConcurrency.Should().Be(SamplerConcurrency.Shared);
+        options.BlasThreads.Should().BeNull();
+    }
+
+    /// <summary>Only the two defined sampler concurrency modes are accepted; a refused value leaves the old one.</summary>
+    [TestMethod]
+    public void SamplerConcurrency_RefusesAnUndefinedMode()
+    {
+        var options = new TrialExecutorOptions { SamplerConcurrency = SamplerConcurrency.PerWorker };
+
+        var act = () => options.SamplerConcurrency = (SamplerConcurrency)5;
+
+        act.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be("value");
+        options.SamplerConcurrency.Should().Be(SamplerConcurrency.PerWorker);
+    }
+
+    /// <summary>
+    ///     An OpenBLAS thread count must be positive; zero is refused rather than read as "automatic", which is what
+    ///     <see langword="null" /> says. A refused value leaves the old one.
+    /// </summary>
+    /// <param name="threads">The refused count.</param>
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(-1)]
+    [DataRow(int.MinValue)]
+    public void BlasThreads_RefusesZeroAndNegativeCounts(int threads)
+    {
+        var options = new TrialExecutorOptions { BlasThreads = 3 };
+
+        var act = () => options.BlasThreads = threads;
+
+        act.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be("value");
+        options.BlasThreads.Should().Be(3);
+    }
+
+    /// <summary>
+    ///     Null (the automatic policy) and any positive count round-trip, the largest included: the stored form uses 0
+    ///     for null, so no positive count may collide with it.
+    /// </summary>
+    [TestMethod]
+    public void BlasThreads_AcceptsNullAndAnyPositiveCount()
+    {
+        var options = new TrialExecutorOptions { BlasThreads = 1 };
+        options.BlasThreads.Should().Be(1);
+
+        options.BlasThreads = int.MaxValue;
+        options.BlasThreads.Should().Be(int.MaxValue);
+
+        options.BlasThreads = null;
+        options.BlasThreads.Should().BeNull();
+    }
+
     // ------------------------------------------------------------------ which threads run the trials
 
     /// <summary>The thread-pool executor runs every trial on a pool thread.</summary>
@@ -486,6 +547,34 @@ public class TrialExecutorOptionsTests
         /// <summary>How many times <see cref="ThreadIdleTimeout" /> was read.</summary>
         public int TimeoutReads;
 
+        /// <summary>How many times <see cref="SamplerConcurrency" /> was read.</summary>
+        public int SamplerConcurrencyReads;
+
+        /// <summary>How many times <see cref="BlasThreads" /> was read.</summary>
+        public int BlasThreadsReads;
+
+        /// <summary>Always the shared sampler, the default; counts each read.</summary>
+        public override SamplerConcurrency SamplerConcurrency
+        {
+            get
+            {
+                Interlocked.Increment(ref SamplerConcurrencyReads);
+                return SamplerConcurrency.Shared;
+            }
+            set { }
+        }
+
+        /// <summary>Always the automatic policy, the default; counts each read.</summary>
+        public override int? BlasThreads
+        {
+            get
+            {
+                Interlocked.Increment(ref BlasThreadsReads);
+                return null;
+            }
+            set { }
+        }
+
         /// <summary>Always the thread pool; counts each read.</summary>
         public override TrialExecutorKind Executor
         {
@@ -523,6 +612,8 @@ public class TrialExecutorOptionsTests
 
         options.ExecutorReads.Should().Be(1);
         options.TimeoutReads.Should().Be(1);
+        options.SamplerConcurrencyReads.Should().Be(1);
+        options.BlasThreadsReads.Should().Be(1);
     }
 
     /// <summary>A derived class that returns values the setters would refuse.</summary>
@@ -530,14 +621,24 @@ public class TrialExecutorOptionsTests
     {
         private readonly TrialExecutorKind _executor;
         private readonly TimeSpan _timeout;
+        private readonly SamplerConcurrency _samplerConcurrency;
+        private readonly int? _blasThreads;
 
         /// <summary>Creates options whose getters return the given values unchecked.</summary>
         /// <param name="executor">The executor kind the getter returns.</param>
         /// <param name="timeout">The idle timeout the getter returns.</param>
-        public InvalidOptions(TrialExecutorKind executor, TimeSpan timeout)
+        /// <param name="samplerConcurrency">The sampler concurrency mode the getter returns.</param>
+        /// <param name="blasThreads">The OpenBLAS thread count the getter returns.</param>
+        public InvalidOptions(
+            TrialExecutorKind executor,
+            TimeSpan timeout,
+            SamplerConcurrency samplerConcurrency = SamplerConcurrency.Shared,
+            int? blasThreads = null)
         {
             _executor = executor;
             _timeout = timeout;
+            _samplerConcurrency = samplerConcurrency;
+            _blasThreads = blasThreads;
         }
 
         /// <summary>The configured kind, unchecked.</summary>
@@ -545,6 +646,12 @@ public class TrialExecutorOptionsTests
 
         /// <summary>The configured timeout, unchecked.</summary>
         public override TimeSpan ThreadIdleTimeout { get => _timeout; set { } }
+
+        /// <summary>The configured sampler concurrency mode, unchecked.</summary>
+        public override SamplerConcurrency SamplerConcurrency { get => _samplerConcurrency; set { } }
+
+        /// <summary>The configured OpenBLAS thread count, unchecked.</summary>
+        public override int? BlasThreads { get => _blasThreads; set { } }
     }
 
     /// <summary>
@@ -563,9 +670,17 @@ public class TrialExecutorOptionsTests
             executorOptions: new InvalidOptions((TrialExecutorKind)9, TimeSpan.FromSeconds(1)));
         var badTimeout = () => study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 4, nJobs: nJobs,
             executorOptions: new InvalidOptions(TrialExecutorKind.DedicatedThreads, TimeSpan.Zero));
+        var badConcurrency = () => study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 4, nJobs: nJobs,
+            executorOptions: new InvalidOptions(TrialExecutorKind.DedicatedThreads, TimeSpan.FromSeconds(1),
+                samplerConcurrency: (SamplerConcurrency)9));
+        var badBlasThreads = () => study.Optimize(t => t.SuggestFloat("x", 0, 1), nTrials: 4, nJobs: nJobs,
+            executorOptions: new InvalidOptions(TrialExecutorKind.DedicatedThreads, TimeSpan.FromSeconds(1),
+                blasThreads: 0));
 
         badKind.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be(nameof(TrialExecutorOptions.Executor));
         badTimeout.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be(nameof(TrialExecutorOptions.ThreadIdleTimeout));
+        badConcurrency.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be(nameof(TrialExecutorOptions.SamplerConcurrency));
+        badBlasThreads.Should().Throw<ArgumentOutOfRangeException>().Which.ParamName.Should().Be(nameof(TrialExecutorOptions.BlasThreads));
         study.Trials.Should().BeEmpty();
     }
 

@@ -196,9 +196,10 @@ internal static class TellHelpers
         try
         {
             // Sampler defined trial post-processing, serialized with the sampler's other calls from concurrent
-            // trials (see BaseSampler.SyncRoot).
+            // trials (see BaseSampler.SyncRoot). A worker of a SamplerConcurrency.PerWorker call tells its trial on its
+            // own thread, so its own instance, the one that sampled the trial, gets AfterTrial.
             var filteredStudy = PrunerHelpers.FilterStudy(study, frozenTrial);
-            var sampler = study.Sampler;
+            var sampler = study.SamplerForCurrentThread;
             sampler.Locked(() => sampler.AfterTrial(filteredStudy, frozenTrial, state!.Value, finalValues));
         }
         finally

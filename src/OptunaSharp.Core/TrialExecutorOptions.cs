@@ -44,6 +44,63 @@ public enum TrialExecutorKind
 }
 
 /// <summary>
+///     How the workers of one <c>Study.Optimize(nJobs: …)</c> call reach the study's sampler. With <c>nJobs: 1</c>, and
+///     for every <c>Ask</c>/<c>Tell</c> outside <c>Optimize</c>, the study's own sampler serves every trial, whatever is
+///     chosen here.
+/// </summary>
+/// <remarks>
+///     Optuna has no counterpart: its <c>n_jobs</c> threads share the study's one sampler object, which is what
+///     <see cref="Shared" /> ports. Several samplers sampling in parallel exist in Optuna only as several processes on
+///     one storage, and that is what <see cref="PerWorker" /> reproduces inside one process.
+/// </remarks>
+public enum SamplerConcurrency
+{
+    /// <summary>
+    ///     Every worker samples through the study's one sampler instance, one call at a time (the sampler's monitor,
+    ///     THREADING.md §6.3). The default, and Optuna's model: a seeded sampler draws from one generator, and samplers
+    ///     that propose from shared state (QMC's sequence, the evolution strategies' generations) never hand two trials
+    ///     the same point because of the parallelism. The cost: sampling is serial, so a sampler whose proposals are
+    ///     slow caps the throughput at one proposal per sampling time, whatever <c>nJobs</c> is (measured 2026-11-08:
+    ///     GPSampler ran 120 trials of a 20 ms objective in 18.7 s at <c>nJobs: 8</c> against 12.1 s at
+    ///     <c>nJobs: 1</c>).
+    /// </summary>
+    Shared = 0,
+
+    /// <summary>
+    ///     Each worker samples with an instance of its own: made from the study's sampler (same configuration), reseeded
+    ///     from fresh OS entropy before each of its trials as Optuna reseeds a worker, and reused by that worker for
+    ///     later trials of the call. The instances share only the storage, so they sample in parallel, exactly like
+    ///     separate processes on one storage.
+    ///     <para>
+    ///         <b>When it pays.</b> Only when sampling, not the objective, limits the run. Measured 2026-11-08 at
+    ///         <c>nJobs: 8</c> on 32 cores: a multivariate TPE over 10 parameters (600 trials, 5 ms objective) took
+    ///         1.20 s against 1.95 s shared, and a 40-dimensional CMA-ES (2,000 trials, no sleep) 1.46 s against
+    ///         3.68 s; a univariate TPE over 3 parameters with a 20 ms objective gained nothing (1.54 s against 1.56 s).
+    ///     </para>
+    ///     <para>
+    ///         <b>Only samplers that produce no duplicate samples this way take part</b>: <c>RandomSampler</c>,
+    ///         <c>TPESampler</c> (multivariate or not), <c>CmaEsSampler</c>, <c>VkdCmaSampler</c>, <c>GridSampler</c>,
+    ///         and <c>PartialFixedSampler</c> over one of them. Every other sampler keeps <see cref="Shared" /> access,
+    ///         one call at a time, because separate instances propose the same point: measured with eight instances on
+    ///         one study (three rounds of 64 trials, fewer for the slow model-based samplers), QMC repeated 4–20 points
+    ///         a round, the NES samplers 21–29, JANUS and JANUS-DE 49–54, PSO, TuRBO, REMBO, SAASBO and BruteForce 2–32,
+    ///         and GPSampler one point in eleven rounds of 24 trials (none shared): instances that see the same
+    ///         history optimize the same acquisition function. A sampler written outside OptunaSharp also keeps
+    ///         <see cref="Shared" /> access.
+    ///     </para>
+    ///     <para>
+    ///         <b>Footguns.</b> Functions passed to a taking-part sampler (TPE's <c>gamma</c>, <c>weights</c> and
+    ///         <c>constraintsFunc</c>, for example) now run on several workers at once, so they must be thread-safe.
+    ///         Trials of one call no longer draw from one generator, so a seeded sampler's parallel run is no more
+    ///         reproducible than before (it never was, THREADING.md §3.2). The study's own sampler instance is not used
+    ///         by the workers of such a call, so state it keeps in memory (TPE's caches, CMA-ES's) is not updated by
+    ///         them.
+    ///     </para>
+    /// </summary>
+    PerWorker = 1,
+}
+
+/// <summary>
 ///     Options for the executor that runs the trials of <c>Study.Optimize(nJobs: …)</c>. Optuna has no counterpart;
 ///     with no options set anywhere, trials run on OptunaSharp's reused dedicated threads, as before these options
 ///     existed.
@@ -61,9 +118,10 @@ public enum TrialExecutorKind
 ///         <item><see cref="Default" />, the process-wide default.</item>
 ///     </list>
 ///     <para>
-///         <b>Snapshot.</b> A call reads <see cref="Executor" /> and <see cref="ThreadIdleTimeout" /> of the resolved
-///         instance once, when it starts, and runs with those values to the end. Changing an instance, or
-///         <see cref="Default" />, affects only calls that start afterwards.
+///         <b>Snapshot.</b> A call reads <see cref="Executor" />, <see cref="ThreadIdleTimeout" />,
+///         <see cref="SamplerConcurrency" /> and <see cref="BlasThreads" /> of the resolved instance once, when it
+///         starts, and runs with those values to the end. Changing an instance, or <see cref="Default" />, affects only
+///         calls that start afterwards.
 ///     </para>
 ///     <para>
 ///         <b>Inheritable.</b> The class is not sealed and its properties are virtual. A derived class may compute
@@ -87,10 +145,17 @@ public class TrialExecutorOptions
     // long are atomic everywhere; a TimeSpan field is not).
     private long _threadIdleTimeoutTicks = DefaultThreadIdleTimeout.Ticks;
     private int _executor = (int)TrialExecutorKind.DedicatedThreads;
+    private int _samplerConcurrency = (int)OptunaSharp.SamplerConcurrency.Shared;
+
+    // 0 encodes null (the automatic policy): every valid explicit count is at least 1, and an int is read and written
+    // atomically, where an int? field is not.
+    private int _blasThreads;
 
     /// <summary>
-    ///     Creates options with the defaults: <see cref="TrialExecutorKind.DedicatedThreads" /> and a
-    ///     <see cref="ThreadIdleTimeout" /> of 30 seconds, the behavior of a study with no options set anywhere.
+    ///     Creates options with the defaults: <see cref="TrialExecutorKind.DedicatedThreads" />, a
+    ///     <see cref="ThreadIdleTimeout" /> of 30 seconds, <see cref="OptunaSharp.SamplerConcurrency.Shared" /> and
+    ///     <see cref="BlasThreads" /> <see langword="null" /> (the automatic policy), the behavior of a study with no
+    ///     options set anywhere.
     /// </summary>
     public TrialExecutorOptions()
     {
@@ -139,6 +204,73 @@ public class TrialExecutorOptions
     }
 
     /// <summary>
+    ///     How the call's <c>nJobs</c> workers reach the study's sampler: <see cref="OptunaSharp.SamplerConcurrency.Shared" />
+    ///     (the default, Optuna's model: one instance, one call at a time) or
+    ///     <see cref="OptunaSharp.SamplerConcurrency.PerWorker" /> (an instance per worker, for the samplers that produce
+    ///     no duplicate samples that way). Ignored with <c>nJobs: 1</c>. Read the footguns on
+    ///     <see cref="OptunaSharp.SamplerConcurrency.PerWorker" /> before choosing it.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is not a defined <see cref="OptunaSharp.SamplerConcurrency" />.</exception>
+    public virtual SamplerConcurrency SamplerConcurrency
+    {
+        get => (SamplerConcurrency)Volatile.Read(ref _samplerConcurrency);
+        set
+        {
+            ValidateSamplerConcurrency(value, nameof(value));
+            Volatile.Write(ref _samplerConcurrency, (int)value);
+        }
+    }
+
+    /// <summary>
+    ///     The OpenBLAS thread count for the duration of the call. <see langword="null" /> (the default) is the automatic
+    ///     policy: with <c>nJobs: 1</c> OpenBLAS keeps its own setting (one thread per CPU unless configured otherwise,
+    ///     as NumPy's), and with any other <c>nJobs</c> it runs single-threaded while the call lasts, so parallel workers
+    ///     do not oversubscribe the cores. A positive value is applied for the duration of any call, <c>nJobs: 1</c>
+    ///     included. When the call ends the count in effect before it is restored.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Why.</b> OpenBLAS's threads are one pool for the whole process, sized for one caller. With several
+    ///         workers in linear algebra at once (CMA-ES's eigendecomposition, the GP stack's Cholesky) they fight for
+    ///         the same cores. Measured 2026-11-08 on 32 cores: 2,000 trials of a 40-dimensional CMA-ES at
+    ///         <c>nJobs: 8</c> took 5.22 s with OpenBLAS's own 24 threads and 3.58 s pinned to one, against 4.50 s at
+    ///         <c>nJobs: 1</c>; unpinned, the parallel run was the slowest of the three. A GP study showed no difference
+    ///         (18.66 s against 18.68 s): its matrices are too small for OpenBLAS to thread. Optuna's own GPSampler
+    ///         limits its BLAS and torch threads to one for the same reason (<c>optuna/_gp/thread_limiting.py</c>). A
+    ///         parallel run is not reproducible anyway (its workers reseed from OS entropy), so pinning there costs no
+    ///         reproducibility; <c>nJobs: 1</c> keeps byte parity with a default NumPy, whose results depend on the
+    ///         thread count too.
+    ///     </para>
+    ///     <para>
+    ///         <b>Footguns.</b> The count is process-wide: while a call holds it, every OpenBLAS call in the process runs
+    ///         with it, the host's own included, and a call that holds no count (<c>nJobs: 1</c> on the automatic
+    ///         policy) runs with whatever another call holds. Concurrent calls take the smallest count any of them asks
+    ///         for, and the last to end restores the original. Changing the count goes through NumSharp's OpenBLAS
+    ///         threading knob, which also writes <c>OPENBLAS_NUM_THREADS</c> into the process environment and the C
+    ///         runtime's copy of it; OptunaSharp removes the process-environment variable again on restore when it was
+    ///         not set before (the C runtime's copy keeps the restored count, the one OpenBLAS was already using). The
+    ///         memory OpenBLAS commits for its threads at load (measured: 788 MB of private bytes with 24 threads, 50 MB
+    ///         with one; the working set stays near 44 MB either way) is not returned: only
+    ///         <c>OPENBLAS_NUM_THREADS=1</c> set before the process starts avoids it. Without a loaded OpenBLAS the
+    ///         setting does nothing.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The value is zero or negative; use <see langword="null" /> for the automatic policy.</exception>
+    public virtual int? BlasThreads
+    {
+        get
+        {
+            int stored = Volatile.Read(ref _blasThreads);
+            return stored == 0 ? null : stored;
+        }
+        set
+        {
+            ValidateBlasThreads(value, nameof(value));
+            Volatile.Write(ref _blasThreads, value ?? 0);
+        }
+    }
+
+    /// <summary>
     ///     The process-wide default, used by every <c>Optimize</c> call whose argument and study leave the executor
     ///     unset. Starts as a new <see cref="TrialExecutorOptions" />: <see cref="TrialExecutorKind.DedicatedThreads" />.
     /// </summary>
@@ -163,6 +295,28 @@ public class TrialExecutorOptions
         if (executor is not (TrialExecutorKind.DedicatedThreads or TrialExecutorKind.ThreadPool))
             throw new ArgumentOutOfRangeException(paramName, executor,
                 "Executor must be TrialExecutorKind.DedicatedThreads or TrialExecutorKind.ThreadPool.");
+    }
+
+    /// <summary>Rejects a value that is not one of the defined sampler concurrency modes.</summary>
+    /// <param name="concurrency">The mode to check.</param>
+    /// <param name="paramName">The parameter or property name reported in the exception.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="concurrency" /> is not a defined <see cref="OptunaSharp.SamplerConcurrency" />.</exception>
+    internal static void ValidateSamplerConcurrency(SamplerConcurrency concurrency, string paramName)
+    {
+        if (concurrency is not (OptunaSharp.SamplerConcurrency.Shared or OptunaSharp.SamplerConcurrency.PerWorker))
+            throw new ArgumentOutOfRangeException(paramName, concurrency,
+                "SamplerConcurrency must be SamplerConcurrency.Shared or SamplerConcurrency.PerWorker.");
+    }
+
+    /// <summary>Rejects an OpenBLAS thread count that is not <see langword="null" /> or positive.</summary>
+    /// <param name="threads">The count to check; <see langword="null" /> is the automatic policy.</param>
+    /// <param name="paramName">The parameter or property name reported in the exception.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="threads" /> is zero or negative.</exception>
+    internal static void ValidateBlasThreads(int? threads, string paramName)
+    {
+        if (threads is <= 0)
+            throw new ArgumentOutOfRangeException(paramName, threads,
+                "BlasThreads must be null (the automatic policy) or a positive thread count.");
     }
 
     /// <summary>Rejects an idle timeout a worker thread cannot wait for.</summary>

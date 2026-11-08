@@ -44,9 +44,12 @@ numeric prefix is the recommended execution order.
 | [08](08-pymoo-interop-sampler-bridge.md) | pymoo sampler bridge (`Interop.Pymoo`) | pythonnet interop | **X** | ★★★ / med-high |
 | [09](09-pymoo-live-parity-gate.md) | Live pymoo parity gate (AGE-MOEA-2) | AGE-MOEA-2 (done) | **X** | ★★ / low |
 | [10](10-threading.md) | Threading: a configurable `nJobs` executor, then seven follow-ups | the reused worker threads of `9cfcb12` (done) | N | ★★ / medium |
+| [11](11-threading-round-2.md) | Threading, round 2: sampler per worker, OpenBLAS threads, locked log handlers, the async question | plan 10 (done) | N | ★★ / medium |
 
-**Threading workstream (10).** Unrelated to JANUS. Decided with the owner on 2026-11-07. Phase 1, built on
-2026-11-07, adds an opt-in thread-pool executor next to the default reused dedicated threads, configured
+**Threading workstream (10, 11).** Unrelated to JANUS. Plan 11 (done 2026-11-08) adds the per-worker sampler
+mode and the OpenBLAS thread policy to `TrialExecutorOptions`, locks each log handler as Python does, and records
+the evaluation of a full async stack, which was not built. Plan 10 was decided with the owner on 2026-11-07.
+Phase 1, built on 2026-11-07, adds an opt-in thread-pool executor next to the default reused dedicated threads, configured
 through an options class at four levels. Phase 2, done only after Phase 1, closes six open items of
 [`docs/THREADING.md`](../THREADING.md) §12: OS seed width, the terminator lock, Redis round trips and
 `DedicatedThreads`, cancellation, `PymooSampler` on any thread, and ML.NET search under `nJobs`.

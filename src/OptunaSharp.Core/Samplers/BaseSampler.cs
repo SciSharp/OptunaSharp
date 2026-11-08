@@ -178,6 +178,34 @@ public abstract class BaseSampler
     {
     }
 
+    /// <summary>
+    ///     A new instance with this sampler's configuration and state of its own, for one worker of an
+    ///     <c>Optimize(nJobs)</c> call with <see cref="SamplerConcurrency.PerWorker" />; or <see langword="null" /> when the
+    ///     sampler must stay shared, sampled one call at a time.
+    /// </summary>
+    /// <returns>
+    ///     A fresh instance (its own generator, caches and monitor), or <see langword="null" />, the default, which keeps
+    ///     <see cref="SamplerConcurrency.Shared" /> access for this sampler.
+    /// </returns>
+    /// <remarks>
+    ///     <para>
+    ///         <b>When to override.</b> Only when separate instances working on one study produce no duplicate samples:
+    ///         each must keep its algorithm state in the storage (or none), and draw from its own generator. Samplers
+    ///         that propose from shared deterministic state (a QMC sequence, an evolution strategy's generation) hand
+    ///         several workers the same point, and so can samplers that maximize the same acquisition function from the
+    ///         same data (GP); they must return <see langword="null" />. Measured per sampler in
+    ///         <see cref="SamplerConcurrency.PerWorker" />.
+    ///     </para>
+    ///     <para>
+    ///         <b>Contract.</b> Build the instance without the public constructor's warnings (the user configured the
+    ///         prototype once), share only immutable configuration with it, and return <see langword="null" /> for a
+    ///         runtime type other than the overriding class, so a subclass is never silently replaced by its base. The
+    ///         executor reseeds the instance from OS entropy before each of its trials (<see cref="ReseedRng" />); a sampler
+    ///         wrapping another must return <see langword="null" /> unless the wrapped one returns an instance.
+    ///     </para>
+    /// </remarks>
+    internal virtual BaseSampler? CreateWorkerInstance() => null;
+
     /// <summary>Rejects a multi-objective study for samplers that require a scalar objective.</summary>
     /// <param name="study">Study whose objective count is checked.</param>
     /// <exception cref="ValueError">The study has more than one objective.</exception>

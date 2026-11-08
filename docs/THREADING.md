@@ -23,7 +23,12 @@
 - 2026-11-08: the `ConcurrencyGun` test harness fires dedicated threads into the same code at the same instant,
   and seven test classes built on it pin the guarantees of §1.5 and §3–§7 (§11);
 - 2026-11-08: the GIL-aware hooks read GIL ownership from the thread's own CPython thread state, not from
-  `PyGILState_Check`, which a sub-interpreter turns off for the whole process (§8; catalog Open item 28).
+  `PyGILState_Check`, which a sub-interpreter turns off for the whole process (§8; catalog Open item 28);
+- 2026-11-08: three options and one fix from the second threading round ([plan 11](plans/11-threading-round-2.md)):
+  `TrialExecutorOptions.SamplerConcurrency` lets each `nJobs` worker sample with an instance of its own, for the
+  samplers that produce no duplicate samples that way (§6.3); `TrialExecutorOptions.BlasThreads` runs OpenBLAS
+  single-threaded while several workers run (§9); and every log handler serves one record at a time under a lock
+  of its own, as Python's `Handler.handle` does, with one write per record (§6.6).
 
 No threading item is open. §12 lists the known limits.
 
@@ -270,8 +275,9 @@ Everything else is the same on both executors:
 the executor.
 
 **Choosing.** A `TrialExecutorOptions` object holds the choice in two settings, `Executor` and
-`ThreadIdleTimeout`. The class is mutable, has a public parameterless constructor, and is not sealed. Each
-`Optimize` call uses the first of four levels that is set:
+`ThreadIdleTimeout`, and two more that shape the call's workers rather than their threads:
+`SamplerConcurrency` (§6.3) and `BlasThreads` (§9). The class is mutable, has a public parameterless
+constructor, and is not sealed. Each `Optimize` call uses the first of four levels that is set:
 
 1. the call's `executorOptions` argument;
 2. the study's `ExecutorOptions` property. It is `null` until set. It belongs to the `Study` object, not to
@@ -284,13 +290,14 @@ the executor.
 
 Optuna has no counterpart: Python always runs `ThreadPoolExecutor(max_workers=n_jobs)`.
 
-**The snapshot.** When the call starts, the winning object's `Executor` and `ThreadIdleTimeout` getters are
-each called exactly once. A derived class's overrides are therefore honored, and a computed value is
-computed once. Changing an options object, or replacing `Default`, affects later calls and never a running
-one.
+**The snapshot.** When the call starts, the winning object's four getters (`Executor`,
+`ThreadIdleTimeout`, `SamplerConcurrency`, `BlasThreads`) are each called exactly once. A derived class's
+overrides are therefore honored, and a computed value is computed once. Changing an options object, or
+replacing `Default`, affects later calls and never a running one.
 
-The values are validated at that point, as the setters validate theirs. An undefined `Executor` raises
-`ArgumentOutOfRangeException` before any trial, and so does a `ThreadIdleTimeout` that is any of:
+The values are validated at that point, as the setters validate theirs. An undefined `Executor` or
+`SamplerConcurrency` raises `ArgumentOutOfRangeException` before any trial, and so does a `BlasThreads` of
+zero or less (`null` is the automatic policy) and a `ThreadIdleTimeout` that is any of:
 
 - zero;
 - negative, other than `Timeout.InfiniteTimeSpan`;
@@ -298,7 +305,8 @@ The values are validated at that point, as the setters validate theirs. An undef
 
 These are .NET exceptions, not Python ones, because the settings have no Optuna counterpart. The setters
 and `Default` may be used from any thread: they use volatile reads and writes. The timeout is stored as
-64-bit ticks, so a 32-bit process never reads a torn value.
+64-bit ticks, so a 32-bit process never reads a torn value; `SamplerConcurrency` and `BlasThreads` are stored
+as 32-bit integers (0 encodes a null `BlasThreads`, which no valid count can be).
 
 **The pool's limits are documented, not handled** (the owner's decision, 2026-11-07). A trial blocks its
 thread for the whole trial. Once `nJobs` reaches the pool's minimum worker count (`ThreadPool.GetMinThreads`,
@@ -402,7 +410,7 @@ The built executors, re-measured on 2026-11-07 on the same 32-CPU machine (pool 
 ## 4. Per-thread state
 
 **`Study.ThreadLocal`** is a `ThreadLocal<ThreadLocalStudyAttribute>`, one per `Study` object, the port
-of Python's `study._thread_local`. It holds two fields:
+of Python's `study._thread_local`. It holds two fields, and a third of OptunaSharp's own:
 
 - **`InOptimizeLoop`** is true while this thread runs an objective or a callback of this study.
   - It refuses a nested `Optimize` on the same thread (``Nested invocation of `Study.optimize` method
@@ -412,13 +420,19 @@ of Python's `study._thread_local`. It holds two fields:
     flags of its own.
 - **`CachedAllTrials`** is one coherent snapshot of the study's trials. A sampler may read it many times
   while it suggests one trial. `Ask` and every tell clear it, so every trial starts from fresh history.
+- **`SamplerOverride`** is the worker's own sampler instance while the thread runs a trial of an
+  `Optimize(nJobs)` call with `SamplerConcurrency.PerWorker` (§6.3), and null otherwise. A `Trial` created on
+  the thread binds it, and the tell on the thread reaches it (`Study.SamplerForCurrentThread`).
 
 **Reused threads.** A worker's thread outlives its trial on both executors (§3.5). A dedicated thread runs
 later trials of any study, and a pool thread goes back to the host's other work. Each worker therefore
 leaves its thread as it found it:
 
 - it puts back the `InOptimizeLoop` value it found (`restoreLoopFlag`);
-- it drops its `CachedAllTrials` snapshot.
+- it drops its `CachedAllTrials` snapshot;
+- it puts back the `SamplerOverride` it found and returns its sampler instance to the call's pool, so a
+  reused thread never samples a later trial with an instance from an earlier call
+  (`PerWorker_LeavesNoWorkerInstanceOnTheReusedThreads`).
 
 The next trial, or the host's next work item, then sees no state of this study. On the pool this is pinned
 by `ThreadPool_AfterARun_PoolThreadsCarryNoOptimizeLoopState`: a later `Optimize` on any pool thread is not
@@ -447,6 +461,9 @@ trial, and the others skip it.
 | Database locks | EF Core: `SELECT … FOR UPDATE` row locks and a PostgreSQL advisory lock for schema creation; SQLite's database lock | arbitration between storage instances and processes | yes |
 | Progress bar | `ProgressBar._updateLock` | the count and the line | reads the best trial |
 | Logging configuration | `OptunaLogging._lock` | the level and the handler list | no: handlers run outside it |
+| Log handler locks | `OptunaLogging._handlerLocks`, one per handler instance (Python's `Handler.lock`) | one record at a time per handler | yes: the handler's write |
+| Sampler worker pool | `SamplerWorkerPool._gate`, one per `Optimize` call with `SamplerConcurrency.PerWorker` | renting and returning worker instances | no |
+| OpenBLAS thread count | `BlasThreadPolicy._gate` (static) | the counts held by running calls, and the native setting | no; one native call when the smallest count changes |
 | Python start-up | `PythonRuntime._gate` | starting the engine | once |
 
 Every monitor is a .NET monitor, so a thread can re-enter a monitor it already holds. The four that come
@@ -502,7 +519,14 @@ Outermost first. A thread that holds a lock takes only locks further down the li
 
 The progress bar takes its lock before it reads the study. Log handlers are called outside the logging
 lock, but on the thread that logs, which may hold any of the locks above: a journal storage logs a new
-study from inside its monitor.
+study from inside its monitor. Each handler runs under its own lock, the last in the order: its holder runs
+only the handler, which takes no lock and not the GIL (§5.3). It is a plain monitor on purpose, not a
+`MonitorGate` entry: a storage monitor's holder logs, and a GIL-releasing entry would make that holder wait to
+take the GIL back, which no storage-lock holder may do.
+
+Three locks stand outside the order because their holders take no other lock: the worker pool's `_gate`
+(taken before a trial and after it, never inside one) and `BlasThreadPolicy._gate` (taken when a call starts
+and ends, around one native call to OpenBLAS).
 
 ### 5.3 Rules that follow from the order
 
@@ -521,7 +545,8 @@ study from inside its monitor.
   sampler.
 - **Log handlers must not throw, call OptunaSharp, or take the GIL.** They can run under any lock
   above, and warnings reach them the same way. `Emit` does not catch, so a handler's exception
-  surfaces in the operation that logged: a storage call, a tell, the optimize loop.
+  surfaces in the operation that logged: a storage call, a tell, the optimize loop. Other threads that log
+  wait for the handler meanwhile (its lock), so a slow handler slows every thread that logs.
 
 ## 6. What each layer guarantees
 
@@ -600,6 +625,63 @@ study from inside its monitor.
   REMBO, JANUS-DE, LM-CMA, TuRBO, the genetic samplers, Grid, BruteForce and QMC. The Storage page lists
   them with counts.
 
+**Per-worker sampler instances** (opt-in, [plan 11](plans/11-threading-round-2.md), 2026-11-08).
+`TrialExecutorOptions.SamplerConcurrency` chooses how the workers of one `Optimize(nJobs)` call reach the
+sampler:
+
+- **`Shared`, the default, is Optuna's model.** Python's `n_jobs` threads share the study's one sampler object,
+  and the sampler monitor above makes its calls one at a time, so the sampling is serial.
+- **`PerWorker` gives each worker an instance of its own** for the samplers that take part. The call keeps a
+  `SamplerWorkerPool`. Before its trial a worker rents an instance made from the study's sampler (read once,
+  so a sampler swapped onto the study mid-run gets instances of its own), reseeds it from fresh OS entropy as
+  Optuna reseeds a worker, and binds it to the thread (`SamplerOverride`, §4). The `Trial` created on that
+  thread keeps the instance for all its calls, so `BeforeTrial`, the sampling and the tell's `AfterTrial` all
+  reach the instance whose state sampled the trial. After the trial the worker returns the instance for a later
+  trial of the call; a call holds at most `nJobs` instances. Each instance has its own monitor, so the workers
+  sample in parallel, exactly as separate processes on one storage do. `nJobs: 1` ignores the setting.
+- **Which samplers take part.** A sampler takes part by returning an instance from the internal
+  `BaseSampler.CreateWorkerInstance`; the others return null and keep the shared instance, one call at a time,
+  and the pool remembers that after the first ask. A sampler written outside OptunaSharp cannot override the
+  member, so it always stays shared; so does a subclass of a taking-part sampler, whose copy would drop what the
+  subclass adds. The rule: a sampler takes part only when eight per-worker instances on one study never
+  proposed the same point twice in any round. Measured 2026-11-08, three rounds of 64 trials (24 for GP, TuRBO
+  and REMBO, 16 for SAASBO, 90 for Grid and BruteForce), repeated points per round:
+
+  | Sampler | Shared (one instance) | Per worker | Takes part |
+  |---|---|---|---|
+  | `RandomSampler`, `TPESampler` (both modes), `CmaEsSampler`, `VkdCmaSampler`, `GridSampler`, `PartialFixedSampler` over TPE | 0, 0, 0 | 0, 0, 0 | yes |
+  | `QMCSampler` (Sobol', scrambled or not) | 0, 0, 0 | 4–20 | no: every instance walks the same sequence |
+  | `OpenAiEsSampler`, `SnesSampler`, `XnesSampler` | 0, 0, 0 | 21–29 | no: every instance starts the same generation |
+  | `JanusSampler`, `JanusDeSampler` | 6–18 | 49–54 | no |
+  | `PsoSampler`, `TurboSampler`, `RandomEmbeddingSampler`, `SaasboSampler`, `BruteForceSampler` | 0–7 | 2–32 | no |
+  | `GPSampler` | 0, 0, 0 | 0, 1, 0, then 0 in eight more rounds | no: instances that see the same history optimize the same acquisition function |
+  | `LmCmaSampler`, the genetic and many-objective samplers (NSGA-II/III, SMS-EMOA, AGE-MOEA-2, RVEA, MOEA/D, DE, the JANUS hosts) | 0–11 (by design, above) | 0–15 | no: they repeat points in both modes, so per-worker gains nothing safe |
+
+  `OnlyTheListedSamplers_MakeWorkerInstances` pins the list, and
+  `TakingPartSamplers_UnderPerWorker_ProposeNoPointTwice` pins the "no repeat" property for each of them at
+  `nJobs: 8` (CMA-ES and VkD-CMA tolerate one repeat: each trial seeds the optimizer with a draw from 1 to
+  65535 plus the trial number, so two trials of one generation repeat a point when those collide, about once in
+  65,535 pairs, in both modes, as in Optuna).
+- **What each instance shares.** Only immutable configuration (parameters, the grid, `x0`, warm-start
+  trials). Generators, search-space caches and model state are new per instance, and the CMA family's
+  independent sampler is copied too (a CMA-ES whose independent sampler cannot be copied stays shared).
+- **Footguns.** Functions handed to a taking-part sampler (TPE's `gamma`, `weights`, `constraintsFunc`) run on
+  several workers at once and must be thread-safe. The study's own sampler instance is not used by such a call's
+  workers, so caches it keeps in memory are not updated by them. A trial asked inside an objective and told on
+  another thread is told to the study's sampler, not to the worker instance that sampled it.
+- **What it buys.** The shared monitor caps throughput at one proposal per sampling time, so `PerWorker`
+  pays only when sampling, not the objective, limits the run (`PerWorker_SamplesOnEveryWorkerAtOnce_EachWithItsOwnInstance`
+  pins that the workers do sample at once). Measured 2026-11-08 at `nJobs: 8` on 32 cores, best of three:
+
+  | Run | `Shared` | `PerWorker` |
+  |---|---|---|
+  | multivariate TPE, 10 parameters, 600 trials, 5 ms objective | 1.95 s | 1.20 s |
+  | CMA-ES, 40 dimensions, 2,000 trials, no sleep | 3.68 s | 1.46 s |
+  | univariate TPE, 3 parameters, 400 trials, 20 ms objective | 1.56 s | 1.54 s |
+
+  The slowest samplers to propose do not take part: `GPSampler` ran 120 trials of a 20 ms objective in 18.7 s
+  at `nJobs: 8` against 12.1 s at `nJobs: 1`, and stays so.
+
 ### 6.4 Pruners
 
 - The pruner monitor covers `Prune`, called from `ShouldPrune`, and `FilterStudy`, called from the trial
@@ -638,12 +720,24 @@ study from inside its monitor.
     lock, 8 without it.
   - Wrapping the callback in a lock of your own is no longer needed.
 - **Logging.** The level and the handler list are guarded by one lock. `Emit` copies the handler list
-  and calls the handlers outside that lock, from whichever thread logs. A handler must therefore be
-  thread-safe, and it must not throw: `Emit` does not catch.
-  - The default `StreamLogHandler` writes to `Console.Error`, which serializes each write. A record with
-    an exception is two writes, so another thread's line can land between them. The handler catches its
-    own write failures, as Python's `StreamHandler` does.
-  - A `StreamLogHandler` over your own `TextWriter` needs a synchronized writer (`TextWriter.Synchronized`).
+  and calls the handlers outside that lock, from whichever thread logs, each under **a lock of its own**
+  (2026-11-08): Python's `Handler.handle` holds the handler's `lock` around `emit`, so one handler serves one
+  record at a time while different handlers serve different threads at once. A handler needs no lock for what
+  only its `Emit` touches, and it must not throw: `Emit` does not catch.
+  - Why: the handlers were not safe without it. Measured with 8 threads logging 5,000 failed-trial warnings
+    each (40,000 records, each with an exception): over `Console.Error` only 3,698 records arrived whole (the
+    line followed by its own exception); over a plain `StreamWriter`, as the CLI's `--log-file` builds it, 412
+    did and 48,247 lines were mangled. With the lock and the single write below, 40,000 of 40,000 in both.
+  - The lock is a plain monitor, last in the lock order (§5.2), and its key is the handler instance
+    (`ConditionalWeakTable`), so a handler removed and added again while another thread is still inside it
+    keeps the same lock.
+  - The default `StreamLogHandler` writes each record in one write, line and exception together, then
+    flushes, as Python's `StreamHandler.emit` does since issue 35046. It catches its own write failures, as
+    Python's `StreamHandler` does.
+  - A `StreamLogHandler` over your own `TextWriter` needs no synchronized writer any more, unless other code
+    writes to the same writer (then `TextWriter.Synchronized`).
+  - Adding a handler that is already registered does nothing, as Python's `Logger.addHandler` ensures; before,
+    it was registered twice and received every record twice.
 - **Warnings** go through the logger, on the thread that warns.
 - **The progress bar** updates under one lock per bar. Each worker's update counts once and writes its
   line whole, in order. A bar with only a timeout is not supported with `nJobs` other than 1: `Optimize`
@@ -963,16 +1057,40 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
   - OptunaSharp never turns it on.
 - **The linear algebra** (CMA-ES's eigendecomposition, the GP stack's Cholesky, NSGA-III's hyperplane
   solve) goes through `NumSharp.Interop.OpenBLAS`.
-  - OptunaSharp sets no OpenBLAS thread count, so the library's default applies, as it does in NumPy.
+  - With `nJobs: 1` OptunaSharp sets no OpenBLAS thread count, so the library's default applies, as it does
+    in NumPy. That is what keeps a sequential run byte-identical to Python.
   - The low bits of a result depend on that count (NumSharp measured four different answers at 1, 2, 4
     and 24 threads) and on the CPU kernel OpenBLAS dispatches.
-  - To pin the count, set `OPENBLAS_NUM_THREADS` in the shell before the process starts, or call
-    `OpenBlasEngine.Enable(threads: n)`. `Environment.SetEnvironmentVariable` inside the process does not
-    reach the native library.
+  - To pin the count for the whole process, set `OPENBLAS_NUM_THREADS` in the shell before the process
+    starts, or call `OpenBlasEngine.Enable(threads: n)`. `Environment.SetEnvironmentVariable` inside the
+    process does not reach the native library.
   - A byte-parity run against Python needs the same count there, set before `import numpy`.
+- **The OpenBLAS thread policy** (`TrialExecutorOptions.BlasThreads`, [plan 11](plans/11-threading-round-2.md),
+  2026-11-08). OpenBLAS's worker threads are one pool for the process, sized for one caller, and `nJobs`
+  workers in linear algebra at once oversubscribe the cores.
+  - **`null`, the default, is the automatic policy:** OpenBLAS untouched with `nJobs: 1`, single-threaded while
+    an `nJobs` call with several workers runs. A positive count is held for the duration of any call,
+    `nJobs: 1` included.
+  - Measured 2026-11-08 on 32 cores (OpenBLAS starts with 24 threads), 2,000 trials of a 40-dimensional CMA-ES:
+    4.50 s at `nJobs: 1`; at `nJobs: 8`, 5.22 s with OpenBLAS's 24 threads and 3.58 s single-threaded. A GP
+    study showed no difference (18.66 s against 18.68 s): its matrices are too small for OpenBLAS to thread.
+  - `Internal/BlasThreadPolicy` keeps one list of the counts held by running calls. The count in effect is the
+    smallest, so concurrent calls never oversubscribe; the count before the first holder is restored when the
+    last one releases, on every path out of `Optimize`, the objective's exceptions included. The native setting
+    is touched only on the first hold, a change of the smallest count and the last release, so calls that agree
+    never call OpenBLAS while another call's workers are inside it.
+  - It changes the count through NumSharp's threading knob, which also writes `OPENBLAS_NUM_THREADS` into the
+    process environment and the C runtime's copy; the policy removes the process variable again on restore
+    when it was not set before.
+  - The count is process-wide: while a call holds it, every OpenBLAS call in the process runs with it, the
+    host's own included, and an `nJobs: 1` call on the automatic policy runs with whatever another call holds.
+  - It saves no memory: OpenBLAS commits memory for its threads when it loads (788 MB of private bytes with 24
+    threads against 50 MB with one, measured; the working set stays near 44 MB), and only
+    `OPENBLAS_NUM_THREADS=1` set before the process starts avoids that.
+  - Without a loaded OpenBLAS the policy does nothing, and no failure in it fails an optimization.
 - **Concurrency.** The sampler monitor admits one call per sampler at a time. Samplers of different
-  studies can run linear algebra at the same time; OpenBLAS's own worker threads are one pool for the
-  process.
+  studies, and per-worker instances (§6.3), can run linear algebra at the same time; OpenBLAS's own worker
+  threads are one pool for the process, which is what the policy above manages.
 - **Random generators.** NumSharp's MT19937 takes no lock, where numpy's does, and concurrent draws
   corrupt it (§6.3).
   - Each of OptunaSharp's generators belongs to one object. A sampler draws its generators under its
@@ -1003,8 +1121,16 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 - **Custom storages.** Every operation must be safe for concurrent calls on one instance: the workers,
   the heartbeat thread and readers all call it. `TellLockFor` comes from `BaseStorage`. Make `Dispose`
   idempotent.
-- **Log handlers** must be thread-safe, must not throw, and must not call OptunaSharp or take the GIL
-  (§5.3).
+- **Log handlers** receive one record at a time per handler (§6.6), so they need a lock only for state
+  they share with other code. They must not throw, must not call OptunaSharp or take the GIL, and should be
+  quick: other threads that log wait for them (§5.3).
+- **Choosing `SamplerConcurrency`** (§6.3). Keep `Shared`, Optuna's model, unless sampling limits your
+  `nJobs` run (a multivariate TPE over many parameters, a high-dimensional CMA-ES, a fast objective). Then
+  `PerWorker` lets the samplers that take part propose in parallel; the others stay shared on their own. Make
+  the functions you hand to such a sampler thread-safe.
+- **Choosing `BlasThreads`** (§9). Keep the automatic policy (`null`) unless the host runs its own OpenBLAS
+  work while a study optimizes and needs more threads for it, or you want one count everywhere (set it
+  before the process starts instead).
 - **Trial records.** `GetTrials(deepcopy: false)` returns the storage's own records, shared by every
   thread. Read them, never mutate them, as Optuna documents for `deepcopy=False`. `Trials` and
   `GetTrials()` return copies.
@@ -1049,7 +1175,10 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `OptimizeEdgeCaseTests` | the stop, timeout and error rules of §3.3–3.4, each first observed on Optuna 5.0: timeouts; `Stop()` from an objective, a callback or another thread; `MaxTrialsCallback`; `catch`; failing callbacks and sampler hooks; unacceptable results; a nested `Optimize` in a worker; a failing final write and a trial failed as stale under its objective (both `[Misaligned]`); the timeout-only progress bar |
 | `OptimizeCancellationTests` | plan 10, item 2.4: an already cancelled token runs no trial; a cancellation mid-run finishes the trials in flight and then throws, carrying the token (`nJobs` 1 and 8, both executors); an objective observing the token is stored FAIL whatever `catch` holds, and the callbacks skip it; workers observing it leave no trial RUNNING; an objective ignoring it finishes COMPLETE; a cancellation exception of another token is an ordinary failure; a linked token is reported with the caller's; `Trial.CancellationToken` in `Optimize` and for asked trials; `Stop()` unchanged; a cancelled run on a journal leaves no trial RUNNING |
 | `StopSignalsTests` | the first SIGINT or SIGTERM is held and cancels the token, a second falls through; after `Dispose` signals fall through and the token stays readable; a throwing token callback does not escape the handler; a signal during `Optimize(nJobs: 4)` stops it gracefully; a real SIGTERM sent to the process cancels the token (Linux and macOS) |
-| `TrialExecutorOptionsTests` | the executor of §3.5: new options are dedicated threads with a 30 s idle timeout; both settings and `Default` refuse invalid values; `ThreadPool` runs every trial on a pool thread and `DedicatedThreads` none; `nJobs: 1` runs on the caller's thread whatever the executor; `nJobs` trials at once on the pool below its minimum; an `Optimize` called from a pool thread never runs a trial on that thread; pool threads keep no loop state afterwards; Python's error and stop rules on both executors; the caller's culture and `AsyncLocal` values reach workers and callbacks on both; the order of the four levels; a new `Default` reaching a study that never chose; `CreateStudy` and `LoadStudy` leaving the study setting unset; the snapshot (a change during a run does not reach it; a derived class's getters are read once, and its invalid values are refused before any trial); equal idle timeouts sharing one thread set; a short timeout retiring its threads, which then restart; the DI factory giving every study its options |
+| `TrialExecutorOptionsTests` | the executor of §3.5: new options are dedicated threads with a 30 s idle timeout; both settings and `Default` refuse invalid values; `ThreadPool` runs every trial on a pool thread and `DedicatedThreads` none; `nJobs: 1` runs on the caller's thread whatever the executor; `nJobs` trials at once on the pool below its minimum; an `Optimize` called from a pool thread never runs a trial on that thread; pool threads keep no loop state afterwards; Python's error and stop rules on both executors; the caller's culture and `AsyncLocal` values reach workers and callbacks on both; the order of the four levels; a new `Default` reaching a study that never chose; `CreateStudy` and `LoadStudy` leaving the study setting unset; the snapshot (a change during a run does not reach it; a derived class's four getters are read once, and its invalid values are refused before any trial); equal idle timeouts sharing one thread set; a short timeout retiring its threads, which then restart; the DI factory giving every study its options; new options share the sampler and leave OpenBLAS to the automatic policy; `SamplerConcurrency` and `BlasThreads` refuse invalid values |
+| `SamplerConcurrencyModeTests` | §6.3's `SamplerConcurrency`: by default every call reaches the study's sampler one at a time and no worker instance is made; `PerWorker` has four workers sampling at the same instant, one instance each, the study's own serving none; each trial is set up, sampled and told by one instance, reseeded before it; a sampler without worker instances stays shared and is asked once; `nJobs: 1` ignores the setting; no reused thread (dedicated or pool) keeps a worker's instance; the pool reuses instances per sampler and never hands an old sampler's out for a new one; exactly the listed samplers make instances (reflection), exact copies only; each taking-part sampler at `nJobs: 8` never proposes a point twice |
+| `BlasThreadPolicyTests` | §9's OpenBLAS policy, from a known count of 3: untouched at `nJobs: 1`; single-threaded at `nJobs: 4` on both executors, then restored with the variable removed; an explicit count at any `nJobs`; a variable set before the call kept; the count restored when the objective throws; two concurrent calls running with the smallest count, the survivor getting its own back, the last restoring; holds nesting by count, a null hold doing nothing |
+| `LoggingTests` | §6.6: one write and one flush per record, text unchanged; eight threads logging failures through one `StreamLogHandler` over an unsynchronized writer keep every record whole; a handler added twice receives each record once, as Python |
 | `StudyConcurrencyEdgeTests` | two threads optimizing one study; many threads asking and telling; a consistent reader during a run; enqueued trials run once and first, also when callbacks enqueue them; two tells of one trial; one sampler shared by two studies on two threads |
 | `JournalConcurrencyTests` | both lock protocols under contention; stale-lock takeover after the grace period; mixed protocols on one journal; separate storages on one study; a shared backend's offset cache; many studies on one journal; enqueued trials popped once; one trial's concurrent reports, suggestions and constraints; the create race |
 | `HeartbeatTests` | heartbeat threads beat and stop; a failed write ends only its thread, reported like `threading.excepthook`; trials complete when every heartbeat write fails; `FailStaleTrials` and the retry callback; `Ask`'s warning outside `Optimize` |
@@ -1062,7 +1191,7 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `ConcurrencyGunTests` | the harness below: shooters are dedicated threads, halted at the gate and released into the shot together; the callbacks run while every shooter is halted; failures are reported by round and thread. It catches a lost update in an unguarded read-modify-write and NumSharp's MT19937 tearing when drawn without the sampler monitor (§6.3), each with a control that must show nothing. A lock-order deadlock is reported as a hang, and its shooters are freed |
 | `TrialConcurrencyCoverageTests` | one trial driven by every shooter at once (§6.2, §6.4, §6.5): one report of a step stored, and the trial's view agrees with the storage; one name sampled once; distinct names each sampled once with distinct draws; several tells (through the `Trial` and through its number) store one result, refuse the rest, and run `AfterTrial` once; `skipIfFinished` tells all return the stored result; pruning decisions made on each trial's own values, one at a time |
 | `StudyConcurrencyCoverageTests` | one study used by every shooter at once (§6.1, §7.1), in memory, through one journal storage, and through one journal storage per thread: asks get distinct trials numbered without a gap; an enqueued trial goes to exactly one asker; a waiting trial claimed through the storage has one winner; `CreateStudy(loadIfExists: true)` creates the study once |
-| `InfrastructureConcurrencyCoverageTests` | the sampler, pruner, tell-stripe and `MonitorGate` monitors admit one thread at a time (§5); a reseed never tears a generator others draw from; one sampler serves a study per thread without repeating a draw (§1.5); a categorical index built on first use maps every choice; the worker scheduler runs every task queued at once exactly once, all in flight together (§3.5); log handlers changed while others log never cost a record (§6.6); artifact uploads to one trial at once each get their own id, file and record (§10); `TerminatorCallback` runs its terminator one call at a time (§6.6); the warning hook delivers every warning while subscribers come and go; readers of trials, best trial, trials table and summaries during writes always see a consistent, growing study |
+| `InfrastructureConcurrencyCoverageTests` | the sampler, pruner, tell-stripe and `MonitorGate` monitors admit one thread at a time (§5); a reseed never tears a generator others draw from; one sampler serves a study per thread without repeating a draw (§1.5); a categorical index built on first use maps every choice; the worker scheduler runs every task queued at once exactly once, all in flight together (§3.5); log handlers changed while others log never cost a record (§6.6); each handler serves one record at a time while different handlers serve different threads at once (§6.6); artifact uploads to one trial at once each get their own id, file and record (§10); `TerminatorCallback` runs its terminator one call at a time (§6.6); the warning hook delivers every warning while subscribers come and go; readers of trials, best trial, trials table and summaries during writes always see a consistent, growing study |
 | `StorageConcurrencyCoverageTests` | in memory and on a journal (§6.1, §7.1): a record read without a deep copy never changes under its reader while others write it; every write of concurrent writers lands, and a fresh journal replay sees what the live storage holds; the best trial stays the best of all concurrent tells, minimized and maximized; study user attributes set at once are all kept |
 | `OptimizeConcurrencyCoverageTests` | one `Study` object (§3.4, §4, §6.1): a sampler or pruner swapped without pause while others work runs every call on one instance; concurrent `Optimize` calls are never nested invocations, and `Stop()` outside a loop is refused; `Optimize(nJobs: 2)` from every thread at once gives one perfect study; one callback's `Stop()` stops every `Optimize` call on the object |
 | `SamplerSharingConcurrencyCoverageTests` | one sampler instance serving a study per thread at once, every study with id 0 (§1.5, §6.3): `PerStudyState` resolved for every study at once keeps one state per study; a genetic sampler gives each study the generations of a solo run; each of 29 Core samplers completes every trial of every study |
@@ -1129,6 +1258,22 @@ Two tests passed against their first mutation and were sharpened: the report tes
 per-study keying got its own test. Publishing the categorical index before filling it passed. A missed lookup falls back to the linear scan, which still
 maps every choice correctly, so the bug costs only the fast path.
 
+The tests of plan 11 (2026-11-08) were checked the same way, with 18 mutations in three scratch builds, and every one
+of them failed at least one test it should:
+- the handler lock removed: eight threads inside one handler, and 1,595 of 16,000 log lines lost over a `StringWriter`
+  (`Destination is too short` inside the writer); one lock for every handler instead: the per-handler test timed out;
+  a record written in two halves, and the duplicate check in `AddHandler`: their tests failed;
+- the automatic OpenBLAS policy gone, `Max` for `Min`, the variable never removed, and a null policy that always pins
+  (`BlasThreads ?? 1`): the policy tests failed (the trials saw 3 threads instead of 1, 2 instead of 1, a stale
+  variable, 1 at `nJobs: 1`); the count not validated: the derived-options test failed, and the 0 it let through was
+  held for ever, since an empty lease is 0, so `Hold` now ignores counts below 1;
+- the worker pool never created: the four first sampling calls missed their rendezvous; the tell reaching the study's
+  sampler, the override left on the thread, a pool for `nJobs: 1`, the pool ignoring which sampler an instance belongs
+  to, `GridSampler`'s instance removed, a `RandomSampler` copy made for subclasses with a fixed seed while the worker
+  reseeded the study's sampler instead of its own, and `PerWorker` as the default: their tests failed, the last but
+  one with 40 repeated points for `RandomSampler` and 7 each for CMA-ES and VkD-CMA (whose copied independent
+  samplers then shared a stream).
+
 ## 12. Known limits and open items
 
 [Plan 10](plans/10-threading.md) (decided 2026-11-07) schedules the work on these items. Its Phase 1, the
@@ -1150,6 +1295,12 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
   releases the GIL (torch kernels, large numpy operations) no longer overlaps across studies. A
   `PythonRuntime.Run` body must not wait for a thread that may be waiting for the Python thread.
 - **Repeated candidates** by design in some samplers (§6.3).
+- **Serial sampling for the samplers that do not take part in `PerWorker`** (§6.3): GP, SAASBO and the other
+  slow model-based samplers still propose one at a time per study, so at `nJobs: 8` a GP study ran slower than at
+  `nJobs: 1` (18.7 s against 12.1 s, 120 trials of a 20 ms objective). Optuna has the same cap.
+- **No async API**: `Optimize`, the storages and the samplers are synchronous, as in Optuna; an async objective
+  blocks its worker thread. The scope of a full async stack was evaluated on 2026-11-08 and not taken up
+  ([plan 11](plans/11-threading-round-2.md)).
 
 ## 13. Relationship to Optuna
 
@@ -1169,5 +1320,8 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
 | `worker_id = prefix + threading.get_ident()` | `prefix + Environment.CurrentManagedThreadId` |
 | Heartbeat on a `threading.Thread`; `threading.excepthook` reports its failure | A background `Thread`; the same report, written to standard error |
 | `RandomState()` and `RandomState.seed()` take 128 bits of OS entropy for the whole key | The same construction, ported: a `SeedSequence` expanded into the key, numpy's starting position, the position kept by a reseed (plan 10, 2.1; §6.3) |
-| Logging handlers take their own lock per record | Handlers are called concurrently and must be thread-safe |
+| Logging handlers take their own lock per record (`Handler.handle`), and `StreamHandler` writes a record in one write | The same since 2026-11-08: a lock per handler instance, one write and one flush per record (§6.6) |
+| `Logger.addHandler` ignores a handler already registered | The same since 2026-11-08 |
+| `n_jobs` threads share the study's one sampler; samplers sample in parallel only as separate processes | `SamplerConcurrency.Shared`, the default, is the same; `PerWorker` gives each worker an instance of its own, as separate processes would have, for the samplers that propose no point twice that way (§6.3) |
+| GPSampler limits its own OpenBLAS and torch threads to one (`optuna/_gp/thread_limiting.py`) | `BlasThreads`: OpenBLAS single-threaded while several `nJobs` workers run, whatever the sampler; untouched at `nJobs: 1` (§9) |
 | Two tells of one trial: the GIL makes one practically always win | The tell stripe guarantees it |

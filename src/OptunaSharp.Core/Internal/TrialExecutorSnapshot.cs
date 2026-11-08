@@ -20,10 +20,15 @@ internal readonly struct TrialExecutorSnapshot
     /// <summary>Captures resolved values and the scheduler they select.</summary>
     /// <param name="kind">The executor kind the call uses.</param>
     /// <param name="threadIdleTimeout">The dedicated threads' idle timeout; kept for diagnostics on the pool.</param>
-    private TrialExecutorSnapshot(TrialExecutorKind kind, TimeSpan threadIdleTimeout)
+    /// <param name="samplerConcurrency">How the call's workers reach the study's sampler.</param>
+    /// <param name="blasThreads">The OpenBLAS thread count asked for, or null for the automatic policy.</param>
+    private TrialExecutorSnapshot(
+        TrialExecutorKind kind, TimeSpan threadIdleTimeout, SamplerConcurrency samplerConcurrency, int? blasThreads)
     {
         Kind = kind;
         ThreadIdleTimeout = threadIdleTimeout;
+        SamplerConcurrency = samplerConcurrency;
+        BlasThreads = blasThreads;
         if (kind == TrialExecutorKind.ThreadPool)
         {
             _scheduler = TaskScheduler.Default;
@@ -47,6 +52,23 @@ internal readonly struct TrialExecutorSnapshot
     /// <summary>The idle timeout of the dedicated threads; the pool ignores it.</summary>
     internal TimeSpan ThreadIdleTimeout { get; }
 
+    /// <summary>How the call's <c>nJobs</c> workers reach the study's sampler; <c>nJobs: 1</c> ignores it.</summary>
+    internal SamplerConcurrency SamplerConcurrency { get; }
+
+    /// <summary>
+    ///     The OpenBLAS thread count the options ask for, or null for the automatic policy (single-threaded when
+    ///     <c>nJobs</c> is not 1, untouched otherwise); see <see cref="BlasThreadsFor" />.
+    /// </summary>
+    internal int? BlasThreads { get; }
+
+    /// <summary>
+    ///     The OpenBLAS thread count this call should run with: the explicit <see cref="BlasThreads" /> if any, else 1 when
+    ///     several workers run, else none (OpenBLAS keeps its own setting).
+    /// </summary>
+    /// <param name="nJobs">The call's worker count after <c>-1</c> was resolved to the processor count.</param>
+    /// <returns>The count to hold for the call, or null to leave OpenBLAS alone.</returns>
+    internal int? BlasThreadsFor(int nJobs) => BlasThreads ?? (nJobs != 1 ? 1 : null);
+
     /// <summary>
     ///     Resolves the four levels of THREADING.md §3.5 and reads the winner once. Three are visible here: the call's
     ///     argument, the study's setting, and the process-wide default. The fourth, the DI default, arrives through the
@@ -56,20 +78,24 @@ internal readonly struct TrialExecutorSnapshot
     /// <param name="study">The study being optimized; its <see cref="Study.ExecutorOptions" /> is the second level.</param>
     /// <returns>The values the call runs with.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
-    ///     The winning options return an undefined executor kind or an invalid idle timeout; only a derived options
-    ///     class can, because the setters validate.
+    ///     The winning options return an undefined executor kind or sampler concurrency mode, an invalid idle timeout,
+    ///     or a non-positive OpenBLAS thread count; only a derived options class can, because the setters validate.
     /// </exception>
     internal static TrialExecutorSnapshot Resolve(TrialExecutorOptions? callOptions, Study study)
     {
         TrialExecutorOptions options = callOptions ?? study.ExecutorOptions ?? TrialExecutorOptions.Default;
 
         // Each getter exactly once: a derived class may compute its values, and the call must run with one
-        // consistent pair even if another thread changes the instance meanwhile.
+        // consistent set even if another thread changes the instance meanwhile.
         TrialExecutorKind kind = options.Executor;
         TimeSpan threadIdleTimeout = options.ThreadIdleTimeout;
+        SamplerConcurrency samplerConcurrency = options.SamplerConcurrency;
+        int? blasThreads = options.BlasThreads;
         TrialExecutorOptions.ValidateExecutor(kind, nameof(TrialExecutorOptions.Executor));
         TrialExecutorOptions.ValidateThreadIdleTimeout(threadIdleTimeout, nameof(TrialExecutorOptions.ThreadIdleTimeout));
-        return new TrialExecutorSnapshot(kind, threadIdleTimeout);
+        TrialExecutorOptions.ValidateSamplerConcurrency(samplerConcurrency, nameof(TrialExecutorOptions.SamplerConcurrency));
+        TrialExecutorOptions.ValidateBlasThreads(blasThreads, nameof(TrialExecutorOptions.BlasThreads));
+        return new TrialExecutorSnapshot(kind, threadIdleTimeout, samplerConcurrency, blasThreads);
     }
 
     /// <summary>Starts one n_jobs worker on this call's executor.</summary>

@@ -6,6 +6,7 @@ using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
 using OptunaSharp.Pruners;
+using OptunaSharp.Samplers;
 using OptunaSharp.Storages;
 
 namespace OptunaSharp;
@@ -70,6 +71,17 @@ public class Trial : BaseTrial
     // this monitor while it waits for a sampler whose holder needs the GIL (P3-1).
     private readonly object _syncRoot = new();
 
+    // The worker's own sampler instance when this trial was asked by a worker of an Optimize(nJobs) call with
+    // SamplerConcurrency.PerWorker, bound here so a trial handed to another thread still samples with the instance that
+    // ran its BeforeTrial; null otherwise, and then every call reads Study.Sampler afresh, as before.
+    private readonly BaseSampler? _workerSampler;
+
+    /// <summary>
+    ///     The sampler for this trial's next call: its worker's instance (<see cref="SamplerConcurrency.PerWorker" />), or
+    ///     <see cref="Study.Sampler" /> read now, so a sampler swapped on the study takes effect as it always has.
+    /// </summary>
+    private BaseSampler CurrentSampler => _workerSampler ?? Study.Sampler;
+
     // The record the current thread's study trial cache may hold for this trial, for MirrorIntoThreadCache: first
     // the storage's own object as of construction, then this trial's private copy once it replaced that object in
     // the cache. Python's Trial mutates the storage object it was created from; the port mutates a detached copy
@@ -101,11 +113,12 @@ public class Trial : BaseTrial
         FrozenTrial stored = Storage.GetTrial(TrialId);
         _cachedFrozenTrial = DetachedCopy(stored);
         _cacheAlias = stored;
+        _workerSampler = study.ThreadLocal.SamplerOverride;
         var filteredStudy = PrunerHelpers.FilterStudy(Study, _cachedFrozenTrial);
 
         // Sampler monitors are entered through the sampler's EnterMonitor, so a Python-bridged sampler can release the
         // GIL while it waits: an objective that holds Py.GIL() must never block on the monitor (P3-1).
-        var sampler = Study.Sampler;
+        var sampler = CurrentSampler;
         sampler.Locked(() => sampler.BeforeTrial(filteredStudy, _cachedFrozenTrial));
 
         // NOTE(not522): Evaluate it lazily to get as latest search as possible.
@@ -131,7 +144,7 @@ public class Trial : BaseTrial
                     var study = PrunerHelpers.FilterStudy(Study, _cachedFrozenTrial);
                     // Inference and sampling form one sampler call, as in Python: a concurrent trial must not
                     // change the sampler's state between the two.
-                    var sampler = Study.Sampler;
+                    var sampler = CurrentSampler;
                     sampler.Locked(() =>
                     {
                         _relativeSearchSpace = sampler.InferRelativeSearchSpace(study, _cachedFrozenTrial);
@@ -393,8 +406,9 @@ public class Trial : BaseTrial
                 else
                 {
                     var study = PrunerHelpers.FilterStudy(Study, trial);
-                    // Concurrent trials share this sampler and its random generator (see BaseSampler.SyncRoot).
-                    var sampler = Study.Sampler;
+                    // Concurrent trials share this sampler and its random generator (see BaseSampler.SyncRoot),
+                    // unless each worker has its own (SamplerConcurrency.PerWorker).
+                    var sampler = CurrentSampler;
                     paramValue = sampler.Locked(() => sampler.SampleIndependent(study, trial, name, distribution));
                 }
 

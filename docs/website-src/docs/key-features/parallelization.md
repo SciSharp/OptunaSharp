@@ -76,6 +76,36 @@ ports.
 > `ThreadPool.SetMinThreads`. The design is in
 > [THREADING.md](https://github.com/SciSharp/OptunaSharp/blob/master/docs/THREADING.md).
 
+### Sampling in parallel, and OpenBLAS threads
+
+As in Python, the `nJobs` workers share the study's one sampler, which proposes for one trial at a time. When
+proposing, not the objective, limits a run (a multivariate TPE over many parameters, a high-dimensional CMA-ES,
+a fast objective), let each worker sample with an instance of its own:
+
+```csharp
+var parallel = new TrialExecutorOptions { SamplerConcurrency = SamplerConcurrency.PerWorker };
+study.Optimize(Objective, nTrials: 600, nJobs: 8, executorOptions: parallel);
+```
+
+Each worker's instance is made from the study's sampler, reseeded before each trial, and used for the trials it
+asks, like separate processes on one storage. Only samplers that never proposed the same point twice this way take
+part: `RandomSampler`, `TPESampler`, `CmaEsSampler`, `VkdCmaSampler`, `GridSampler`, and `PartialFixedSampler`
+over one of them. Every other sampler, and any sampler of your own, stays shared on its own. Measured at
+`nJobs: 8` on 32 cores: a multivariate TPE over 10 parameters ran 600 trials in 1.20 s instead of 1.95 s, and a
+40-dimensional CMA-ES 2,000 trials in 1.46 s instead of 3.68 s. Functions you hand to such a sampler (TPE's
+`gamma`, `weights`, `constraintsFunc`) then run on several workers at once, so they must be thread-safe.
+
+While several workers run, OptunaSharp also runs OpenBLAS (the linear algebra behind CMA-ES, GP and NSGA-III)
+single-threaded, so the workers do not fight for the cores: the 40-dimensional CMA-ES above took 5.22 s at
+`nJobs: 8` with OpenBLAS's own 24 threads and 3.58 s with one. `nJobs: 1` leaves OpenBLAS as it is, which keeps
+sequential runs identical to Python's. `BlasThreads` sets another count for the duration of any call:
+
+```csharp
+var options = new TrialExecutorOptions { BlasThreads = 4 };   // null (the default) is the automatic policy
+```
+
+The count is process-wide while a call holds it, and the count from before is restored when the call ends.
+
 ### Stopping a run: cancellation, Ctrl+C and SIGTERM
 
 `Optimize` takes a `CancellationToken` as `ct`:

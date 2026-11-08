@@ -115,6 +115,43 @@ public sealed class VkdCmaSampler : BaseSampler
         _kAdapt = kAdapt;
     }
 
+    /// <summary>
+    ///     A worker instance for <see cref="SamplerConcurrency.PerWorker" />: <paramref name="prototype" />'s configuration
+    ///     with a generator, a search-space cache and an independent sampler of its own.
+    /// </summary>
+    /// <param name="prototype">The study's sampler whose configuration the worker instance takes.</param>
+    /// <param name="independentSampler">A worker instance of the prototype's independent sampler.</param>
+    private VkdCmaSampler(VkdCmaSampler prototype, BaseSampler independentSampler)
+    {
+        _independentSampler = independentSampler;
+        _nStartupTrials = prototype._nStartupTrials;
+        _warnIndependentSampling = prototype._warnIndependentSampling;
+        // OS entropy, for the same reason as CmaEsSampler's: the per-trial optimizer seed is drawn from this generator.
+        _cmaRng = new LazyRandomState(null);
+        _searchSpace = new IntersectionSearchSpace();
+        _considerPrunedTrials = prototype._considerPrunedTrials;
+        _popsize = prototype._popsize;
+        _kInit = prototype._kInit;
+        _kAdapt = prototype._kAdapt;
+    }
+
+    /// <summary>
+    ///     A new <see cref="VkdCmaSampler" /> with this one's configuration, for a <see cref="SamplerConcurrency.PerWorker" />
+    ///     worker; the optimizer state lives in the storage and each trial reseeds it, as for CMA-ES (0 duplicate samples in
+    ///     the measured eight-instance runs).
+    /// </summary>
+    /// <returns>
+    ///     A fresh instance, or <see langword="null" /> (shared access) for a subclass or when the independent sampler has
+    ///     no worker instance.
+    /// </returns>
+    internal override BaseSampler? CreateWorkerInstance()
+    {
+        if (GetType() != typeof(VkdCmaSampler))
+            return null;
+        BaseSampler? independent = _independentSampler.CreateWorkerInstance();
+        return independent is null ? null : new VkdCmaSampler(this, independent);
+    }
+
     /// <inheritdoc />
     public override void ReseedRng()
     {

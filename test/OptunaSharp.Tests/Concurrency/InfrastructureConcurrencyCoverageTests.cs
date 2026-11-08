@@ -22,7 +22,8 @@ namespace OptunaSharp.Tests.Concurrency;
 ///     a time. A sampler's generator stays whole while workers reseed it and others draw, and one sampler serves a study
 ///     per thread without repeating a draw. A categorical distribution's index, built on first use, maps every choice
 ///     correctly whoever builds it. The <c>nJobs</c> worker scheduler runs every task queued at once exactly once, all of
-///     them in flight together. Log handlers registered and removed while others log never break a record's delivery.
+///     them in flight together. Log handlers registered and removed while others log never break a record's delivery, and
+///     each handler serves one record at a time under a lock of its own, as Python's <c>Handler.handle</c> does.
 /// </summary>
 [TestClass]
 public class InfrastructureConcurrencyCoverageTests
@@ -273,6 +274,99 @@ public class InfrastructureConcurrencyCoverageTests
             OptunaLogging.EnableDefaultHandler();
             OptunaLogging.SetVerbosity(verbosity);
         }
+    }
+
+    /// <summary>
+    ///     Every shooter logs through the same two handlers at once. Each handler serves one record at a time (Python's
+    ///     <c>Handler.handle</c> holds the handler's lock around <c>emit</c>, THREADING.md §6.6), and both receive every
+    ///     record. Without the lock, eight shooters were inside one handler together.
+    /// </summary>
+    [TestMethod]
+    public void LogHandler_EnteredByEveryThreadAtOnce_ServesOneRecordAtATime()
+    {
+        const int rounds = 20, records = 50;
+        Logger logger = OptunaLogging.GetLogger("optuna.tests.handler_gun");
+        var first = new OverlapLogHandler();
+        var second = new OverlapLogHandler();
+
+        int verbosity = OptunaLogging.GetVerbosity();
+        OptunaLogging.DisableDefaultHandler();
+        OptunaLogging.SetVerbosity(LogLevel.Warning);
+        OptunaLogging.AddHandler(first);
+        OptunaLogging.AddHandler(second);
+        try
+        {
+            using var gun = new ConcurrencyGun(Threads);
+            GunReport report = gun.Fire(rounds, shot =>
+            {
+                for (int k = 0; k < records; k++)
+                    logger.Warning($"shooter {shot.Thread}, round {shot.Round}, record {k}");
+            });
+
+            report.AssertClean();
+            first.PeakInside.Should().Be(1);
+            second.PeakInside.Should().Be(1);
+            first.Count.Should().Be(Threads * rounds * records);
+            second.Count.Should().Be(Threads * rounds * records);
+        }
+        finally
+        {
+            OptunaLogging.RemoveHandler(first);
+            OptunaLogging.RemoveHandler(second);
+            OptunaLogging.EnableDefaultHandler();
+            OptunaLogging.SetVerbosity(verbosity);
+        }
+    }
+
+    /// <summary>
+    ///     The lock belongs to each handler, not to logging: while one thread is inside the second handler with its
+    ///     record, another thread's record passes through the first handler. A single lock around all handlers would hold
+    ///     the second thread out until the first finished, and the first waits for it, up to the timeout.
+    /// </summary>
+    [TestMethod]
+    public void LogHandlers_EachHaveTheirOwnLock_SoDifferentHandlersServeDifferentThreadsAtOnce()
+    {
+        Logger logger = OptunaLogging.GetLogger("optuna.tests.handler_locks");
+        using var insideSecond = new ManualResetEventSlim();
+        using var otherPassedFirst = new ManualResetEventSlim();
+        bool overlapped = false;
+        var first = new DelegateLogHandler(record =>
+        {
+            if (record.Message == "other")
+                otherPassedFirst.Set();
+        });
+        var second = new DelegateLogHandler(record =>
+        {
+            if (record.Message != "holder")
+                return;
+            insideSecond.Set();
+            overlapped = otherPassedFirst.Wait(TimeSpan.FromSeconds(10));
+        });
+
+        int verbosity = OptunaLogging.GetVerbosity();
+        OptunaLogging.DisableDefaultHandler();
+        OptunaLogging.SetVerbosity(LogLevel.Warning);
+        OptunaLogging.AddHandler(first);
+        OptunaLogging.AddHandler(second);
+        try
+        {
+            var holder = new Thread(() => logger.Warning("holder"));
+            holder.Start();
+            insideSecond.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue("the holder reaches the second handler");
+            var other = new Thread(() => logger.Warning("other"));
+            other.Start();
+            holder.Join();
+            other.Join();
+        }
+        finally
+        {
+            OptunaLogging.RemoveHandler(first);
+            OptunaLogging.RemoveHandler(second);
+            OptunaLogging.EnableDefaultHandler();
+            OptunaLogging.SetVerbosity(verbosity);
+        }
+
+        overlapped.Should().BeTrue("the first handler served another thread while the second held a record");
     }
 
     /// <summary>
@@ -563,5 +657,41 @@ public class InfrastructureConcurrencyCoverageTests
         /// <summary>Counts the record.</summary>
         /// <param name="record">The record; only counted.</param>
         public void Emit(in LogRecord record) => Interlocked.Increment(ref _count);
+    }
+
+    /// <summary>
+    ///     A handler that counts its records and the most emits that were ever inside it at once, staying inside a little
+    ///     so a second emit admitted at the same time would be seen.
+    /// </summary>
+    private sealed class OverlapLogHandler : ILogHandler
+    {
+        private int _count;
+        private int _inside;
+        private int _peakInside;
+
+        /// <summary>How many records the handler received.</summary>
+        internal int Count => Volatile.Read(ref _count);
+
+        /// <summary>The most emits inside the handler at one instant; 1 when OptunaSharp's handler lock held.</summary>
+        internal int PeakInside => Volatile.Read(ref _peakInside);
+
+        /// <summary>Counts the record and the emits inside meanwhile.</summary>
+        /// <param name="record">The record; only counted.</param>
+        public void Emit(in LogRecord record)
+        {
+            Watermark.Raise(ref _peakInside, Interlocked.Increment(ref _inside));
+            Thread.SpinWait(200);
+            Interlocked.Increment(ref _count);
+            Interlocked.Decrement(ref _inside);
+        }
+    }
+
+    /// <summary>A handler that runs a test's delegate for each record.</summary>
+    /// <param name="emit">What to do with each record, on the logging thread.</param>
+    private sealed class DelegateLogHandler(Action<LogRecord> emit) : ILogHandler
+    {
+        /// <summary>Runs the delegate.</summary>
+        /// <param name="record">The record handed to the delegate.</param>
+        public void Emit(in LogRecord record) => emit(record);
     }
 }

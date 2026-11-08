@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using OptunaSharp.Logging;
+using OptunaSharp.Samplers;
 using OptunaSharp.Storages;
 
 namespace OptunaSharp.Internal;
@@ -96,6 +97,9 @@ internal static class OptimizeLoop
         {
             if (nJobs == 1)
             {
+                // An explicit TrialExecutorOptions.BlasThreads holds its OpenBLAS thread count for the call; the automatic
+                // policy leaves OpenBLAS alone with one worker, so a sequential run keeps NumPy's default (and its bits).
+                using BlasThreadPolicy.Lease blas = BlasThreadPolicy.Hold(executor.BlasThreadsFor(nJobs));
                 cancelled = OptimizeSequential(
                     study, func, nTrials, timeout, catchTypes, callbacks, gcAfterTrial,
                     reseedSamplerRng: false, timeStart: null, progressBar: progressBar, ct: ct);
@@ -108,6 +112,16 @@ internal static class OptimizeLoop
                 // Without this check 0 or -2 reached Task.WhenAny on an empty set, an ArgumentException Python never raises.
                 if (nJobs <= 0)
                     throw new NumSharp.ValueError("max_workers must be greater than 0");
+
+                // Several workers: OpenBLAS single-threaded unless BlasThreads says otherwise, so the workers' linear
+                // algebra does not oversubscribe the cores (TrialExecutorOptions.BlasThreads). Disposed at the end of this
+                // block, after the finally below has awaited every worker, so no worker runs with the restored count.
+                using BlasThreadPolicy.Lease blas = BlasThreadPolicy.Hold(executor.BlasThreadsFor(nJobs));
+
+                // SamplerConcurrency.PerWorker: the call's workers rent sampler instances of their own from this pool, for
+                // the samplers that allow it; the others keep the study's shared instance, one call at a time.
+                SamplerWorkerPool? samplerPool =
+                    executor.SamplerConcurrency == SamplerConcurrency.PerWorker ? new SamplerWorkerPool() : null;
 
                 var timeStart = DateTime.Now;
                 var futures = new HashSet<Task>();
@@ -156,7 +170,7 @@ internal static class OptimizeLoop
                         futures.Add(StartWorker(executor, () => OptimizeSequential(
                             study, func, 1, timeout, catchTypes, callbacks, gcAfterTrial,
                             reseedSamplerRng: true, timeStart: timeStart, progressBar: progressBar,
-                            restoreLoopFlag: true, ct: ct)));
+                            restoreLoopFlag: true, ct: ct, samplerPool: samplerPool)));
                     }
                 }
                 finally
@@ -204,6 +218,10 @@ internal static class OptimizeLoop
     ///     False on the caller's own thread, where <see cref="Optimize" /> clears it, as Python does.
     /// </param>
     /// <param name="ct">The caller's cancellation, checked before each trial and handed to it.</param>
+    /// <param name="samplerPool">
+    ///     The call's pool of worker sampler instances (<see cref="SamplerConcurrency.PerWorker" />), or null to sample
+    ///     with the study's shared sampler.
+    /// </param>
     /// <returns><c>true</c> when <paramref name="ct" />, rather than the count, the timeout or Stop(), ended the loop.</returns>
     /// <exception cref="System.Exception">The supplied objective or evaluation callback throws an exception that is not handled by this operation.</exception>
     private static bool OptimizeSequential(
@@ -218,19 +236,34 @@ internal static class OptimizeLoop
         DateTime? timeStart,
         ProgressBar? progressBar,
         bool restoreLoopFlag = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        SamplerWorkerPool? samplerPool = null)
     {
         // Here we set `InOptimizeLoop = true`, not at the beginning of the `Optimize()` function.
         // Because it is a thread-local value and the n_jobs option spawns new threads.
         bool wasInOptimizeLoop = study.ThreadLocal.InOptimizeLoop;
         study.ThreadLocal.InOptimizeLoop = true;
+        BaseSampler? previousOverride = study.ThreadLocal.SamplerOverride;
+        BaseSampler? prototype = null;
+        BaseSampler? workerSampler = null;
         try
         {
+            if (samplerPool is not null)
+            {
+                // SamplerConcurrency.PerWorker: this worker's own instance for its trial, made from the study's sampler
+                // as read now; null keeps the shared instance (a sampler that would hand workers duplicate samples).
+                prototype = study.Sampler;
+                workerSampler = samplerPool.Rent(prototype);
+                if (workerSampler is not null)
+                    study.ThreadLocal.SamplerOverride = workerSampler;
+            }
+
             if (reseedSamplerRng)
             {
                 // Workers reseed the one shared sampler concurrently with each other's draws; the sampler's
-                // monitor keeps the generator state whole (numpy's RandomState locks every call).
-                var sampler = study.Sampler;
+                // monitor keeps the generator state whole (numpy's RandomState locks every call). A worker's own
+                // instance is reseeded the same way, uncontended, so no two of them ever share a stream.
+                var sampler = workerSampler ?? study.Sampler;
                 sampler.Locked(sampler.ReseedRng);
             }
 
@@ -247,6 +280,14 @@ internal static class OptimizeLoop
             {
                 study.ThreadLocal.InOptimizeLoop = wasInOptimizeLoop;
                 study.ThreadLocal.CachedAllTrials = null;
+            }
+
+            // The same hygiene for the worker's sampler instance: the reused thread must not keep serving it, and the
+            // pool hands it to the call's next trial.
+            if (workerSampler is not null)
+            {
+                study.ThreadLocal.SamplerOverride = previousOverride;
+                samplerPool!.Return(prototype!, workerSampler);
             }
         }
     }
