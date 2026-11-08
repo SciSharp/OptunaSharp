@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading;
 using AwesomeAssertions;
 using OptunaSharp.Samplers;
 using OptunaSharp.Storages.Journal;
@@ -237,21 +238,45 @@ public class JournalRedisInteropTests
         }
     }
 
-    /// <summary>Skip (Inconclusive) unless a Redis server is reachable AND redis-py is importable.</summary>
-    /// <remarks>Shared with the Redis fleet of <see cref="JournalMixedFleetInteropTests" />.</remarks>
-    internal static void EnsureRedisOrInconclusive()
+    /// <summary>
+    ///     Why no Redis server can be used in this process, or <see langword="null" /> when one answered a PING. Probed
+    ///     once, by the first test that needs Redis, since a server does not appear or vanish during a test run.
+    /// </summary>
+    /// <remarks>
+    ///     Probing per test made every Redis case on a machine without Redis wait out its own refused connect. A refused
+    ///     loopback connect returns at once on Linux, but Windows retries the SYN for about 2 s before failing, so on the
+    ///     Windows runner (no Redis service) each skipped case cost about 1.8 s.
+    /// </remarks>
+    private static readonly Lazy<string?> RedisUnavailableReason = new(ProbeRedis, LazyThreadSafetyMode.ExecutionAndPublication);
+
+    /// <summary>Connects to <see cref="Url" /> and pings it; the result is cached by <see cref="RedisUnavailableReason" />.</summary>
+    /// <returns><see langword="null" /> when the server answered; otherwise the skip message naming the failure.</returns>
+    private static string? ProbeRedis()
     {
         try
         {
             using var mux = ConnectionMultiplexer.Connect(ProbeConfig);
             _ = mux.GetDatabase().Ping();
+            return null;
         }
         catch (Exception e)
         {
-            Assert.Inconclusive(
-                $"No Redis reachable at {Url}; skipping. Start one " +
-                $"(e.g. `docker run --rm -p 6379:6379 redis:7-alpine`). ({e.GetType().Name})");
+            // Any failure (refused, timed out, protocol) means the same thing to these tests: no usable server.
+            return $"No Redis reachable at {Url}; skipping. Start one " +
+                   $"(e.g. `docker run --rm -p 6379:6379 redis:7-alpine`). ({e.GetType().Name})";
         }
+    }
+
+    /// <summary>Skip (Inconclusive) unless a Redis server is reachable AND redis-py is importable.</summary>
+    /// <remarks>
+    ///     Shared with the Redis fleet of <see cref="JournalMixedFleetInteropTests" />. The server probe runs once per
+    ///     process (<see cref="RedisUnavailableReason" />); the redis-py check is a cheap import lookup and runs each time.
+    /// </remarks>
+    /// <exception cref="AssertInconclusiveException">No Redis server answered, or redis-py is not installed.</exception>
+    internal static void EnsureRedisOrInconclusive()
+    {
+        if (RedisUnavailableReason.Value is { } reason)
+            Assert.Inconclusive(reason);
 
         using (Py.GIL())
         {
