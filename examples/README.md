@@ -57,6 +57,7 @@ classes).
 | [`0_ServerlessPowerTuningMotpe.cs`](0_ServerlessPowerTuningMotpe.cs) | multi-objective TPE + constraint | Lambda-style memory / arch / batch / AOT: cost per million vs. p99 latency |
 | [`0_RateLimiterHostedService.cs`](0_RateLimiterHostedService.cs) | Generic Host + DI (`AddOptunaStudyFactory` …), cancellation | a `BackgroundService` re-tunes an API gateway's token bucket every telemetry window |
 | [`0_PressureVesselParetoReport.cs`](0_PressureVesselParetoReport.cs) | NSGA-II, mixed directions, constraints, Pareto + hypervolume charts | pressure-vessel cost vs. capacity under the ASME thickness rules (RE23) |
+| [`0_SpamFilterTimeBudget.cs`](0_SpamFilterTimeBudget.cs) | TPE with only a `timeout`, `show_progress_bar` | a naive-Bayes spam filter tuned inside a fixed ten-second slot |
 
 Notes from running them:
 
@@ -69,6 +70,8 @@ Notes from running them:
 - `0_LoanDefaultLightGbmTunerCv` sets LightGBM's `seed` explicitly. Without one, the ML.NET adapter is not
   reproducible: native LightGBM falls back to fixed default seeds, the adapter draws a random one. That is
   an open bug, tracked by `LightGbmRealWorldBugTests`.
+- The progress bar shows the best value as a full float repr (`0.9303817601391925`); Optuna prints it with
+  `:.6g` (`0.930382`). Open bug, tracked by `QA/RealWorldExampleBugTests`.
 - `0_GpuFineTunePlanner` fails most of its trials on purpose. Samplers learn nothing from a FAIL trial, so
   record a predictable failure with `SetConstraint` instead (as `0_CloudRightSizing` does).
 
