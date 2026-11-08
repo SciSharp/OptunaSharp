@@ -324,9 +324,12 @@ public sealed class RandomEmbeddingSampler : BaseSampler
 
             // Default path → the paper-faithful proposer (both §3.2 kernels + Algorithm 3); an overridden
             // inner sampler → the shadow-study path over the latent y.
+            // The latent points other running trials of this embedding are evaluating, so a proposal made while they
+            // run is steered away from them (none in a sequential run, which is then unchanged).
+            List<double[]> pending = PendingLatents(study, trial, run);
             double[] y = _innerSampler is null
-                ? ComputeLatentPaper(study, state, run)
-                : ComputeLatentLowDim(study, state, run);
+                ? ComputeLatentPaper(study, state, run, pending)
+                : ComputeLatentLowDim(study, state, run, pending);
 
             // Persist the latent point so future rebuilds (and resumption) can recover this trial.
             study.Storage.SetTrialSystemAttr(trial.TrialId, LatentAttrKey, y.Cast<object?>().ToList());
@@ -337,27 +340,63 @@ public sealed class RandomEmbeddingSampler : BaseSampler
         }
     }
 
+    /// <summary>
+    ///     The latent points of this embedding's other running trials, each stored when its trial was proposed. A
+    ///     concurrent proposal steers away from them.
+    /// </summary>
+    /// <param name="study">The real study, whose running trials are read from the storage (their latent stamps are fresh there).</param>
+    /// <param name="trial">The trial being proposed; it has no latent point yet.</param>
+    /// <param name="run">The embedding (run) index; trials of other embeddings live in other latent spaces.</param>
+    /// <returns>The running trials' latent points, in trial-number order; empty in a sequential run.</returns>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
+    private List<double[]> PendingLatents(Study study, FrozenTrial trial, int run)
+    {
+        var pending = new List<double[]>();
+        foreach (FrozenTrial other in ConcurrentAsks.OtherRunningTrials(study, trial))
+        {
+            if (_embedding.RunForTrial(other.Number) != run)
+                continue;
+            if (TryReadStoredLatent(other, out double[] y))
+                pending.Add(y);
+        }
+
+        return pending;
+    }
+
     /// <summary>Proposes a latent point with the low-dimensional kernel: the inner sampler over the shadow study.</summary>
     /// <param name="study">The real study whose finished trials seed the shadow study.</param>
     /// <param name="state">The real study's REMBO state, holding its shadow studies; caller holds <c>_gate</c>.</param>
     /// <param name="run">The embedding (run) index the shadow study serves.</param>
+    /// <param name="pending">The latent points other running trials of this embedding are evaluating.</param>
     /// <returns>The proposed latent coordinates.</returns>
-    private double[] ComputeLatentLowDim(Study study, StudyEmbeddingState state, int run)
+    /// <remarks>
+    ///     A point a running trial holds is asked for again, up to <see cref="MaxPendingRedraws" /> times: the inner
+    ///     sampler sees finished trials only (its shadow mirrors them), so it can repeat a point that is still being
+    ///     evaluated. A sequential run has no pending point and asks once, as before.
+    /// </remarks>
+    private double[] ComputeLatentLowDim(Study study, StudyEmbeddingState state, int run, List<double[]> pending)
     {
         Study shadow = GetOrCreateShadow(study, state, run);
         SyncShadow(study, state, shadow, run);
 
         _latentSpace ??= _embedding.LatentSearchSpace();
 
-        // Ask the inner optimizer for a latent point, then fail the ask-trial: leaving it RUNNING would
-        // make the GP treat it as a pending evaluation on every subsequent ask (it counts running trials
-        // that carry all search-space keys), while completing it would inject a bogus observation. A
-        // FAILED trial is invisible to the inner sampler; the real observation is mirrored later by SyncShadow.
-        Trial ask = shadow.Ask(_latentSpace);
-        double[] y = ReadLatent(ask);
-        shadow.Tell(ask, values: null, state: TrialState.Fail);
-        return y;
+        for (int attempt = 0; ; attempt++)
+        {
+            // Ask the inner optimizer for a latent point, then fail the ask-trial: leaving it RUNNING would
+            // make the GP treat it as a pending evaluation on every subsequent ask (it counts running trials
+            // that carry all search-space keys), while completing it would inject a bogus observation. A
+            // FAILED trial is invisible to the inner sampler; the real observation is mirrored later by SyncShadow.
+            Trial ask = shadow.Ask(_latentSpace);
+            double[] y = ReadLatent(ask);
+            shadow.Tell(ask, values: null, state: TrialState.Fail);
+            if (attempt == MaxPendingRedraws || !pending.Any(p => p.AsSpan().SequenceEqual(y)))
+                return y;
+        }
     }
+
+    /// <summary>How many times the inner sampler is asked again for a point a running trial already holds.</summary>
+    private const int MaxPendingRedraws = 8;
 
     /// <summary>
     ///     Proposes a latent point with REMBO's paper-faithful optimizer (Wang et al. 2016, §3.2-3.3): a
@@ -369,8 +408,9 @@ public sealed class RandomEmbeddingSampler : BaseSampler
     /// <param name="study">The real study supplying this embedding's completed trials and their values.</param>
     /// <param name="state">The real study's REMBO state, holding its proposer; caller holds <c>_gate</c>.</param>
     /// <param name="run">The embedding (run) index whose history trains the GP.</param>
+    /// <param name="pending">The latent points other running trials of this embedding are evaluating (a constant liar).</param>
     /// <returns>The proposed latent coordinates.</returns>
-    private double[] ComputeLatentPaper(Study study, StudyEmbeddingState state, int run)
+    private double[] ComputeLatentPaper(Study study, StudyEmbeddingState state, int run, List<double[]> pending)
     {
         OrderedDict<string, BaseDistribution> embeddedSpace = EmbeddedSpace(study);
         double sign = study.Direction == StudyDirection.Minimize ? -1.0 : 1.0;
@@ -394,7 +434,7 @@ public sealed class RandomEmbeddingSampler : BaseSampler
         // real parameter space (and embed categoricals) rather than over y.
         state.Proposer ??= new RemboGpProposer(
             _embedding, _kernel == RandomEmbeddingKernel.HighDimensional, _nStartupTrials, _baseSeed);
-        return state.Proposer.Propose(run, latents, values, embeddedSpace);
+        return state.Proposer.Propose(run, latents, values, embeddedSpace, pending);
     }
 
     /// <summary>The embedded real search space (float / integer / categorical) shared by all embeddings.</summary>

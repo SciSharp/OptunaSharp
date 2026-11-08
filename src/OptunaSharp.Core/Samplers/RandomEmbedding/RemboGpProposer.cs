@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -115,12 +116,23 @@ internal sealed class RemboGpProposer
     /// <param name="latentHistory">The latent points <c>y_i</c> of this embedding's completed trials, in order (each length <c>d</c>).</param>
     /// <param name="maxValues">The matching maximization-oriented objective values (already sign-flipped for a minimizing study).</param>
     /// <param name="embeddedSpace">The embedded real search space (used only by the high-dimensional kernel to project and normalize).</param>
+    /// <param name="pendingLatents">
+    ///     The latent points of this embedding's trials that are still running (proposed, not yet evaluated). They
+    ///     join the acquisition's GP as observations at the worst value seen (a pessimistic constant liar), so a
+    ///     proposal made while they run is not their point again. Empty in a sequential run, which is then unchanged.
+    /// </param>
     /// <returns>The proposed latent point <c>y ∈ Y</c> (length <c>d</c>).</returns>
+    /// <remarks>
+    ///     Without the liar, every proposal made before a trial finished maximized the same acquisition on the same
+    ///     history, and DIRECT is deterministic, so concurrent asks received one point: 21 of 64 trials at 8 workers.
+    ///     The length-scale fit (Algorithm 3) still sees real observations only; the liar shapes the acquisition alone.
+    /// </remarks>
     internal double[] Propose(
         int run,
         IReadOnlyList<double[]> latentHistory,
         IReadOnlyList<double> maxValues,
-        OrderedDict<string, BaseDistribution> embeddedSpace)
+        OrderedDict<string, BaseDistribution> embeddedSpace,
+        IReadOnlyList<double[]> pendingLatents)
     {
         int d = _embedding.Dim;
         RunState state = GetRunState(run);
@@ -153,7 +165,9 @@ internal sealed class RemboGpProposer
             state.StepsSinceRefit = 0;
         }
 
-        var gp = SquaredExponentialGp.Fit(trainX, yStd, isCategorical, state.LengthScale, state.CategoricalScale);
+        var gp = pendingLatents.Count == 0
+            ? SquaredExponentialGp.Fit(trainX, yStd, isCategorical, state.LengthScale, state.CategoricalScale)
+            : FitWithPendingLies(run, trainX, yStd, pendingLatents, space, embeddedSpace, isCategorical, state);
 
         // Maximize expected improvement over Y by minimizing −log-EI, with DIRECT + CMA-ES (§3.3).
         double h = _embedding.BoxHalfWidth;
@@ -191,6 +205,46 @@ internal sealed class RemboGpProposer
 
         state.StepCount++;
         return yStar;
+    }
+
+    /// <summary>
+    ///     Fits the acquisition's GP on the real observations plus the running trials' points, each told the worst
+    ///     standardized value observed: the posterior variance at a running point collapses and its mean is low, so
+    ///     expected improvement there is near zero and the next proposal moves away from it.
+    /// </summary>
+    /// <param name="run">The embedding (run) index.</param>
+    /// <param name="trainX">The real observations' kernel-space inputs.</param>
+    /// <param name="yStd">The real observations' standardized maximization values.</param>
+    /// <param name="pendingLatents">The running trials' latent points.</param>
+    /// <param name="space">The kernel-space search space (high-dimensional kernel), or null (low-dimensional).</param>
+    /// <param name="embeddedSpace">The embedded real search space.</param>
+    /// <param name="isCategorical">Per input column, whether the kernel treats it as categorical.</param>
+    /// <param name="state">The run's fitted length scales.</param>
+    /// <returns>The GP the acquisition is maximized over.</returns>
+    private SquaredExponentialGp FitWithPendingLies(
+        int run, double[,] trainX, double[] yStd, IReadOnlyList<double[]> pendingLatents, GpSearchSpace? space,
+        OrderedDict<string, BaseDistribution> embeddedSpace, bool[] isCategorical, RunState state)
+    {
+        double[,] pendingX = BuildTrainInputs(run, pendingLatents, space, embeddedSpace);
+        int n = trainX.GetLength(0), p = pendingX.GetLength(0), cols = trainX.GetLength(1);
+        var x = new double[n + p, cols];
+        var y = new double[n + p];
+        double lie = yStd.Length == 0 ? 0.0 : yStd.Min();
+        for (int i = 0; i < n; i++)
+        {
+            for (int j = 0; j < cols; j++)
+                x[i, j] = trainX[i, j];
+            y[i] = yStd[i];
+        }
+
+        for (int i = 0; i < p; i++)
+        {
+            for (int j = 0; j < cols; j++)
+                x[n + i, j] = pendingX[i, j];
+            y[n + i] = lie;
+        }
+
+        return SquaredExponentialGp.Fit(x, y, isCategorical, state.LengthScale, state.CategoricalScale);
     }
 
     /// <summary>Returns (creating on first use) the Algorithm-3 state for one embedding.</summary>

@@ -181,7 +181,13 @@ public class NSGAIIISampler : BaseGASampler
         var parentPopulation = GetParentPopulation(study, generation);
         if (parentPopulation.Count == 0)
             return new OrderedDict<string, object?>();
-        return _childGenerationStrategy(study, searchSpace, parentPopulation);
+        var child = _childGenerationStrategy(study, searchSpace, parentPopulation);
+        // Two trials asked at once that draw the same parents and crossover mask, with no mutation, build one child;
+        // generate again while a running trial holds it. Never redraws sequentially, so seeded runs match Optuna. When
+        // every redraw is held (a population collapsed onto one point), the trial is sampled independently instead.
+        return HandedOutChildren.Claim(study, trial, child,
+                   () => _childGenerationStrategy(study, searchSpace, parentPopulation))
+               ?? new OrderedDict<string, object?>();
     }
 
     /// <inheritdoc />
@@ -205,6 +211,7 @@ public class NSGAIIISampler : BaseGASampler
     {
         System.Diagnostics.Debug.Assert(
             state is TrialState.Complete or TrialState.Fail or TrialState.Pruned);
+        HandedOutChildren.Forget(study, trial.Number);
         _afterTrialStrategy(study, trial, state, values);
         _randomSampler.AfterTrial(study, trial, state, values);
     }

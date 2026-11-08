@@ -85,6 +85,16 @@ public sealed class PsoSampler : BaseSampler
     private readonly double _c2;
     private readonly double _maxVelocityRate;
 
+    // Trials sampled independently on purpose because every particle of the generation was held by a running
+    // trial, or every redraw met a point a running trial holds; their independent draws are not warned about.
+    // Guarded by the sampler's monitor, like every hook.
+    private readonly OverrunTrials _overrun = new();
+
+    // Per study: the position each running trial received (generation, clamped point in the optimizer's unit box), so
+    // a point a running trial evaluates is not handed out again. Entries leave with AfterTrial. Guarded by the
+    // sampler's monitor.
+    private readonly HandedOutPoints _handedOut = new();
+
     /// <param name="nStartupTrials">Minimum independent trials before PSO begins; PSO always waits for at
     ///     least <c>populationSize</c> completed trials to seed the initial swarm, whichever is larger.</param>
     /// <param name="independentSampler">Sampler for parameters outside the relative search space (default <see cref="RandomSampler" />).</param>
@@ -216,8 +226,19 @@ public sealed class PsoSampler : BaseSampler
             solutionTrials = GetSolutionTrials(completedTrials, optimizer.Generation);
         }
 
-        // Target index (particle) within the current generation (0-based). Clamp guards a mild parallel overrun.
-        int target = Math.Min(solutionTrials.Count, optimizer.PopulationSize - 1);
+        // Target index (particle) within the current generation (0-based): the first particle no finished or running
+        // trial of the generation holds. Counting only the finished ones gave every worker asking at the same time
+        // the same particle, and past the population clamped them all onto the last one: at nJobs 8, 1-9 of 64 trials
+        // received a point a running trial already had. A sequential run holds only its finished particles
+        // 0..count-1, so the target is still solutionTrials.Count and seeded runs are unchanged.
+        if (FirstFreeParticle(study, trial, optimizer.Generation, optimizer.PopulationSize, solutionTrials) is not int target)
+        {
+            // Every particle is held by a running trial (more workers than particles): rather than hand this trial a
+            // particle another worker is evaluating, sample it independently. It joins no generation, as its
+            // generation and index are never stamped.
+            _overrun.Add(study, trial.Number);
+            return new OrderedDict<string, object?>();
+        }
 
         // Each trial reseeds so its single ask is reproducible and differs from its siblings' asks.
         int seed = (int)_psoRng.Rng.randint(1, 65536) + trial.Number;
@@ -227,6 +248,27 @@ public sealed class PsoSampler : BaseSampler
         for (int i = 0; i < nDim; i++)
             psoParams[i] = Math.Min(Math.Max(psoParams[i], lower[i]), upper[i]);   // clamp to the box
 
+        // Distinct particles do not make distinct points: particles flying out of the box clamp onto the same face or
+        // corner, and two particles that converged on one point move alike. Hand out the first draw no other running
+        // trial of the generation is evaluating; a particle at rest at the global best moves nowhere whatever it
+        // draws, so its trial ends up sampled independently. A sequential run has no such trial, so it never redraws
+        // and its RNG stream, and seeded results, are unchanged.
+        double[]? claimed = _handedOut.Claim(study, trial, optimizer.Generation, psoParams, () =>
+        {
+            double[] next = optimizer.AskCandidate(target);
+            for (int i = 0; i < nDim; i++)
+                next[i] = Math.Min(Math.Max(next[i], lower[i]), upper[i]);   // clamp to the box
+            return next;
+        });
+        if (claimed is null)
+        {
+            // Every redraw met a held point: sample this trial independently instead of handing out a point another
+            // worker is evaluating. It joins no generation, as its generation and index are never stamped.
+            _overrun.Add(study, trial.Number);
+            return new OrderedDict<string, object?>();
+        }
+
+        psoParams = claimed;
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyGeneration, optimizer.Generation);
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyIndex, target);
 
@@ -349,7 +391,8 @@ public sealed class PsoSampler : BaseSampler
     {
         RaiseErrorIfMultiObjective(study);
 
-        if (_warnIndependentSampling)
+        // An overrun trial is independent on purpose (every particle was held), so it is not warned about.
+        if (_warnIndependentSampling && !_overrun.Contains(study, trial.Number))
         {
             var completeTrials = GetTrials(study);
             if (completeTrials.Count >= _nStartupTrials)
@@ -385,6 +428,39 @@ public sealed class PsoSampler : BaseSampler
         return completeTrials;
     }
 
+    /// <summary>
+    ///     The first particle of <paramref name="generation" /> that no finished trial and no other running trial of the
+    ///     generation holds, so concurrent asks never evaluate one particle twice.
+    /// </summary>
+    /// <param name="study">
+    ///     The study, whose complete and running trials are read from the storage in one read (their stamps are fresh
+    ///     there, and a trial told since this trial read its history is still seen).
+    /// </param>
+    /// <param name="trial">The trial being sampled; it holds no particle yet.</param>
+    /// <param name="generation">The current generation.</param>
+    /// <param name="popsize">The number of particles.</param>
+    /// <param name="finished">The finished trials of the generation in the history snapshot, whose particles are taken.</param>
+    /// <returns>The free particle's index, or <c>null</c> when every particle is held.</returns>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
+    private static int? FirstFreeParticle(
+        Study study, FrozenTrial trial, int generation, int popsize, List<FrozenTrial> finished)
+    {
+        var held = new HashSet<long>();
+        foreach (var t in finished)
+            held.Add(t.SystemAttrs.TryGetValue(AttrKeyIndex, out var v) ? Convert.ToInt64(v) : -1);
+        foreach (var t in ConcurrentAsks.OtherCompleteOrRunningTrials(study, trial))
+        {
+            long g = t.SystemAttrs.TryGetValue(AttrKeyGeneration, out var gv) ? Convert.ToInt64(gv) : -1;
+            if (g == generation)
+                held.Add(t.SystemAttrs.TryGetValue(AttrKeyIndex, out var v) ? Convert.ToInt64(v) : -1);
+        }
+
+        for (int i = 0; i < popsize; i++)
+            if (!held.Contains(i))
+                return i;
+        return null;
+    }
+
     /// <summary>The particles of one generation, ordered by their target index (so <c>result[i]</c> is
     ///     particle <c>i</c>) — the pairing PSO's swarm update needs.</summary>
     /// <param name="trials">Trial history available to the operation, in its existing order.</param>
@@ -416,6 +492,8 @@ public sealed class PsoSampler : BaseSampler
             OptunaWarnings.Warn(
                 "Constraints have been set, but PsoSampler will not use them for optimization.",
                 WarningCategory.UserWarning);
+        _overrun.Remove(study, trial.Number);
+        _handedOut.Forget(study, trial.Number);
         _independentSampler.AfterTrial(study, trial, state, values);
     }
 }

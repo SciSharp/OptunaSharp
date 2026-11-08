@@ -95,6 +95,18 @@ over one of them. Every other sampler, and any sampler of your own, stays shared
 40-dimensional CMA-ES 2,000 trials in 1.46 s instead of 3.68 s. Functions you hand to such a sampler (TPE's
 `gamma`, `weights`, `constraintsFunc`) then run on several workers at once, so they must be thread-safe.
 
+Trials that ask at the same time get different points from every sampler in the `OptunaSharp` package, shared or
+per worker. The
+population samplers (JANUS, PSO, DE, LM-CMA, the genetic samplers), TuRBO's and SAASBO's startup designs, REMBO and
+BruteForce used to derive a candidate from state that changes only when a trial finishes, so trials asked together
+could receive the same one; they now also look at the trials still running, which changes nothing in a run of one
+trial at a time. Two things are as in Python: the genetic samplers, DE, PSO and LM-CMA can propose a point a
+finished trial already had (a child that copies its parent), and the Python bridges (PyCma, pymoo, BoTorch,
+OptunaHub) hand out what the Python code they drive hands out. BruteForce goes further than Optuna: in
+`avoidPrematureStop` mode it no longer hands out a point a running trial holds, so a point whose worker died is
+evaluated only once that trial is failed. Separate processes on one storage are kept apart only partly; the
+details are in [THREADING.md §6.3](https://github.com/SciSharp/OptunaSharp/blob/master/docs/THREADING.md).
+
 While several workers run, OptunaSharp also runs OpenBLAS (the linear algebra behind CMA-ES, GP and NSGA-III)
 single-threaded, so the workers do not fight for the cores: the 40-dimensional CMA-ES above took 5.22 s at
 `nJobs: 8` with OpenBLAS's own 24 threads and 3.58 s with one. `nJobs: 1` leaves OpenBLAS as it is, which keeps

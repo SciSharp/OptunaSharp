@@ -280,7 +280,10 @@ public sealed class JanusSampler : BaseSampler
         }
 
         optimizer.UpdateEs();
-        return optimizer.Ask(trial.Number);
+        // Each slot of a generation goes to one trial. When every slot was handed out (more trials at once than the
+        // population, or a generation still waiting for its trials), the trial is sampled independently (an empty
+        // result) instead of evaluating a candidate another trial has.
+        return optimizer.AskSlot(trial.Number) ?? new OrderedDict<string, object?>();
     }
 
     /// <inheritdoc />

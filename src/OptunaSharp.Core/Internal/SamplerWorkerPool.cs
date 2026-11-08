@@ -16,7 +16,9 @@ namespace OptunaSharp.Internal;
 ///     </para>
 ///     <para>
 ///         A sampler whose <see cref="BaseSampler.CreateWorkerInstance" /> returns null is remembered, so its
-///         workers fall back to the shared instance, one call at a time, without asking again per trial.
+///         workers fall back to the shared instance, one call at a time, without asking again per trial. The first call
+///         per sampler is made under the pool's lock, so workers that start together ask it once; later instances of a
+///         sampler that makes them are built outside the lock.
 ///     </para>
 ///     <para>Thread-safe: every worker of the call rents and returns concurrently, under one short lock.</para>
 /// </remarks>
@@ -29,6 +31,10 @@ internal sealed class SamplerWorkerPool
 
     // Samplers that have no worker instance (they stay shared); guarded by _gate.
     private readonly HashSet<BaseSampler> _shared = new(ReferenceEqualityComparer.Instance);
+
+    // Samplers whose first CreateWorkerInstance call returned an instance, so later ones are made outside the lock;
+    // guarded by _gate.
+    private readonly HashSet<BaseSampler> _makesInstances = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     ///     An instance made from <paramref name="prototype" /> for one trial: an idle one, or a new one; null when the
@@ -51,6 +57,23 @@ internal sealed class SamplerWorkerPool
                     _idle.RemoveAt(i);
                     return instance;
                 }
+            }
+
+            if (!_makesInstances.Contains(prototype))
+            {
+                // The first call for this sampler is made under the lock, so workers that start together ask it once:
+                // two of them asking outside the lock both asked a sampler that stays shared (a flaky
+                // PerWorker_ASamplerWithoutWorkerInstances_StaysSharedOneCallAtATime). It only copies configuration,
+                // so the others wait microseconds, once per call.
+                BaseSampler? first = prototype.CreateWorkerInstance();
+                if (first is null)
+                {
+                    _shared.Add(prototype);
+                    return null;
+                }
+
+                _makesInstances.Add(prototype);
+                return first;
             }
         }
 

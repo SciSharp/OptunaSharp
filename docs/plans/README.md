@@ -45,8 +45,11 @@ numeric prefix is the recommended execution order.
 | [09](09-pymoo-live-parity-gate.md) | Live pymoo parity gate (AGE-MOEA-2) | AGE-MOEA-2 (done) | **X** | ★★ / low |
 | [10](10-threading.md) | Threading: a configurable `nJobs` executor, then seven follow-ups | the reused worker threads of `9cfcb12` (done) | N | ★★ / medium |
 | [11](11-threading-round-2.md) | Threading, round 2: sampler per worker, OpenBLAS threads, locked log handlers, the async question | plan 10 (done) | N | ★★ / medium |
+| [12](12-parallel-read-duplicates.md) | Parallel reads never hand one point to two trials: per-sampler fixes and tests, the bridges pinned | plan 11 (done) | N | ★★ / medium |
 
-**Threading workstream (10, 11).** Unrelated to JANUS. Plan 11 (done 2026-11-08) adds the per-worker sampler
+**Threading workstream (10, 11, 12).** Unrelated to JANUS. Plan 12 (done 2026-11-08) makes every Core sampler give
+trials that ask at once different points, without changing sequential runs, and pins what the four Python bridges
+repeat. Plan 11 (done 2026-11-08) adds the per-worker sampler
 mode and the OpenBLAS thread policy to `TrialExecutorOptions`, locks each log handler as Python does, and records
 the evaluation of a full async stack, which was not built. Plan 10 was decided with the owner on 2026-11-07.
 Phase 1, built on 2026-11-07, adds an opt-in thread-pool executor next to the default reused dedicated threads, configured

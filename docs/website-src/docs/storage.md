@@ -310,21 +310,32 @@ Limits and costs:
   `RUNNING`.
 - **Repeated candidates.** Every Core sampler completes every trial under `nJobs`: all 32 were checked at
   `nJobs: 16` on a journal file (SAASBO, whose model is slow, at `nJobs: 8`). Draws from a sampler's random
-  generator never repeat. TPE, Random, CMA-ES, GP, QMC, VkD-CMA, PartialFixed and the NES samplers
-  (OpenAI-ES, SNES, xNES) give every concurrent trial a different point. Some samplers can give one point to
-  two concurrent trials, because they derive it from state that changes only when trials finish (counts are
-  whole repeated points in 120 trials at `nJobs: 16`):
-  - JANUS picks a generation's candidate by trial number, as its reference implementation does. Pass it the
-    same `nJobs` as `Optimize` to keep one optimizer lane per worker: 0 repeats with 16 lanes, 30 without.
-  - REMBO's default proposer maximizes the same acquisition until a trial finishes: 51 repeats, against 8
-    sequentially. JANUS-DE repeats 29, LM-CMA 24 (11 sequentially) and TuRBO 4.
+  generator never repeat. Since 2026-11-08 no sampler hands one point to two trials asked at once either: the
+  samplers that derived a candidate from state that changes only when a trial finishes (JANUS, JANUS-DE, PSO,
+  DE, LM-CMA, TuRBO's and SAASBO's startup designs, REMBO, the genetic samplers, BruteForce) now also look at
+  the trials still running, which changes nothing in a run of one trial at a time
+  ([THREADING.md §6.3](https://github.com/SciSharp/OptunaSharp/blob/master/docs/THREADING.md)). Whole repeated
+  points in 120 trials at `nJobs: 16` (in memory, three runs), against one trial at a time:
+  - TPE, Random, CMA-ES, VkD-CMA, QMC, PartialFixed, OpenAI-ES, SNES, JANUS, JANUS-DE, GP, TuRBO and REMBO:
+    none. JANUS used to repeat 30 without `nJobs` lanes, JANUS-DE 29, REMBO 51, LM-CMA 24 and TuRBO 4. xNES can
+    degenerate on this kind of bounded problem, one trial at a time too, and then repeats points clamped onto
+    the box's corners.
   - The genetic samplers (NSGA-II/III, SMS-EMOA, AGE-MOEA-2, RVEA, MOEA/D and the JANUS multi-objective
-    family) sometimes copy a parent unchanged, as often sequentially as in parallel.
-  - Grid and BruteForce can hand out a point twice while it is still running, as Optuna documents for them,
-    and still cover every point before they stop the study (a 90-point grid took 101 and 112 trials).
+    family), DE, PSO and LM-CMA copy a finished point as often in parallel as one at a time, by design: a child
+    that copies its parent, a mutant clamped onto a corner of the box (JANUS-DE's DE host too), a particle at
+    rest. NSGA-II repeated 10–25 points against 16, LM-CMA 7–13 against 9, DE 0–3 against 2.
+  - CMA-ES and VkD-CMA seed each trial's sampling with `randint(1, 65536) + trial.number`, as Optuna does, so
+    two trials of one generation share a point about once in 65,535 pairs, one at a time too.
+  - Grid can hand out a point twice once every grid point is running or finished, as Optuna documents, and
+    still covers every point before it stops the study (a 90-point grid took 104–107 trials). BruteForce no
+    longer hands out a point a running trial holds, unlike Optuna's `avoidPrematureStop` mode, so the trials
+    asked once every point is taken re-evaluate finished points instead (91–101 trials).
   - QMC keys its sequence counter by the search space, which differs while the first trials are still
     running, so early concurrent trials reuse sequence positions, as Python's `QMCSampler` does. Their points
     still differ in the other coordinates.
+  - Two processes on one storage are kept apart only partly: PSO's particles, DE's targets and TuRBO's and
+    SAASBO's design rows are stamped in the storage, but JANUS's slots and the redraws of a point another trial
+    holds are kept inside one sampler instance.
 - **StackExchange.Redis and the thread pool.** StackExchange.Redis 3.x completes even synchronous calls
   on the .NET thread pool. If your code blocks more pool threads than the pool's minimum on journal
   calls at once, Redis calls time out after `SyncTimeout`. Examples: dozens of `Task.Run(() =>

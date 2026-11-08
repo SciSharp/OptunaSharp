@@ -49,6 +49,13 @@ public class BruteForceSampler : BaseSampler
     private readonly LazyRandomState _rng;
     private readonly bool _avoidPrematureStop;
 
+    // Per study: the values this sampler handed to each trial still running, in suggestion order, with their
+    // distributions. A value reaches the storage only after its sampler call returns, so a concurrent ask that read the
+    // tree in between saw the trial's path one parameter short and could take the same point; the record closes that
+    // window. Entries leave with AfterTrial. Guarded by the sampler's monitor, like every hook.
+    private readonly PerStudyState<Dictionary<int, OrderedDict<string, (object? Value, BaseDistribution Distribution)>>>
+        _pendingChoices = new();
+
     /// <param name="seed">
     ///     A seed to fix the order of trials as the search order is randomly shuffled. Please note
     ///     that it is not recommended using this option in distributed optimization settings since
@@ -78,12 +85,36 @@ public class BruteForceSampler : BaseSampler
         => new();
 
     /// <inheritdoc />
+    /// <remarks>
+    ///     <para>
+    ///         <b>Diverges from Optuna under concurrent asks</b> (<c>[Misaligned]</c>, owner's decision 2026-11-08):
+    ///         a point another running trial holds is never handed out again, in either mode. Optuna's default mode
+    ///         already prefers points nobody runs but reads running trials from the storage, one parameter late; its
+    ///         strict mode (<c>avoidPrematureStop: true</c>) hands running points out again on purpose, so that a dead
+    ///         worker's point still gets evaluated. Measured before the change with 8 trials asked at once: 3-8
+    ///         repeats per 88 trials of a 90-point space in strict mode, 0-1 in the default mode.
+    ///     </para>
+    ///     <para>
+    ///         How: the values handed to each running trial are recorded, so the tree holds every running path as far
+    ///         as it is chosen, and a running trial whose path ends above a branch counts as taking one of that branch's
+    ///         points (<c>TreeNodeBase.CountFreeUnexplored</c>). A trial enters a branch only while it has a
+    ///         point left for it, and re-evaluates a finished point only when no branch has an unexplored one. An
+    ///         unexpanded branch counts as one point, so near the end of the space, when running trials hold nearly
+    ///         every unexplored point, a trial may re-evaluate a finished point while one is still free.
+    ///     </para>
+    ///     <para>
+    ///         Footgun: in strict mode, a point whose worker died is no longer re-run by another worker; once it is the
+    ///         only unexplored point, asks receive finished points until the dead trial is failed (by a heartbeat, or
+    ///         by hand) and its point is free again. A sequential run has no other running trial and is unchanged.
+    ///     </para>
+    /// </remarks>
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
-        bool excludeRunning = !_avoidPrematureStop;
         var (trials, currentIdx) = GetNonWaitingTrialsAndCurrentTrialIndex(study, trial.Number);
         trials.RemoveAt(currentIdx);
+        var pending = _pendingChoices.Resolve(study, static () => new());
+        WithPendingChoices(trials, pending);
         var tree = new TreeNode();
         var cArgs = ArgsForDistribution(paramDistribution);
         tree.Expand(paramName, cArgs);
@@ -92,18 +123,65 @@ public class BruteForceSampler : BaseSampler
         // trials[i].params = {} for some i.
         PopulateTree(tree, trials, trial.Params);
         double paramVal;
-        if (tree.IsAnyExpandable(excludeRunning))
+        // Both modes prefer branches with an unexplored point that no running trial holds or will take. Optuna's strict
+        // mode weighed running points as unexplored here and could pick one, and both of its modes counted a point as
+        // free while a trial still choosing toward it (its path ending higher up) was about to take it: at 8 asks at
+        // once, 2 of 120 runs over a 90-point space still ended two trials on one point. Sequentially no trial runs, so
+        // the test and the weights are Optuna's.
+        if (tree.HasChildWithFreeUnexplored())
         {
-            paramVal = tree.SampleChild(_rng.Rng, excludeRunning);
+            paramVal = tree.SampleChild(_rng.Rng, excludeRunning: true, netOfRunningTrials: true);
         }
         else
         {
-            var choices = EnumerateCandidates(cArgs);
+            // Nothing unexplored is free: re-evaluate a point no running trial holds, choosing only among branches that
+            // still have one (a branch whose points are all held would force this trial onto one of them a parameter
+            // later); sequentially every branch has one and this is Optuna's choice over all candidates.
+            var choices = tree.ChoicesWithAFreeEnd(EnumerateCandidates(cArgs));
             // numpy's choice(choices) with no size/replace/p reduces to choices[randint(0, len)].
             paramVal = choices[(int)_rng.Rng.randint(0, choices.Count)];
         }
 
-        return paramDistribution.ToExternalRepr(paramVal);
+        object? external = paramDistribution.ToExternalRepr(paramVal);
+        if (!pending.TryGetValue(trial.Number, out var chosen))
+            pending[trial.Number] = chosen = new OrderedDict<string, (object?, BaseDistribution)>();
+        chosen[paramName] = (external, paramDistribution);
+        return external;
+    }
+
+    /// <summary>
+    ///     Adds to each running trial the values this sampler handed it that the storage does not hold yet, so the tree
+    ///     sees every running trial's path as far as it has been chosen.
+    /// </summary>
+    /// <param name="trials">The study's non-waiting trials; running ones with pending values are replaced by copies.</param>
+    /// <param name="pending">This study's record of handed-out values, keyed by trial number.</param>
+    private static void WithPendingChoices(
+        List<FrozenTrial> trials, Dictionary<int, OrderedDict<string, (object? Value, BaseDistribution Distribution)>> pending)
+    {
+        if (pending.Count == 0)
+            return;
+        for (int i = 0; i < trials.Count; i++)
+        {
+            FrozenTrial t = trials[i];
+            if (t.State != TrialState.Running || !pending.TryGetValue(t.Number, out var chosen))
+                continue;
+
+            OrderedDict<string, object?>? @params = null;
+            OrderedDict<string, BaseDistribution>? distributions = null;
+            foreach (var (name, (value, distribution)) in chosen)
+            {
+                if (t.ParamsDict.ContainsKey(name))
+                    continue;
+                // Copied on the first missing value only: the storage's record is shared and read-only.
+                @params ??= new OrderedDict<string, object?>(t.ParamsDict);
+                distributions ??= new OrderedDict<string, BaseDistribution>(t.DistributionsDict);
+                @params[name] = value;
+                distributions[name] = distribution;
+            }
+
+            if (@params is not null)
+                trials[i] = FrozenTrial.CreateTrial(state: TrialState.Running, @params: @params, distributions: distributions);
+        }
     }
 
     /// <inheritdoc />
@@ -111,7 +189,11 @@ public class BruteForceSampler : BaseSampler
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         bool excludeRunning = !_avoidPrematureStop;
+        // The trial is finished: its path is in the storage now, and it holds no running point any more.
+        var pending = _pendingChoices.Resolve(study, static () => new());
+        pending.Remove(trial.Number);
         var (trials, currentIdx) = GetNonWaitingTrialsAndCurrentTrialIndex(study, trial.Number);
+        WithPendingChoices(trials, pending);
         // Set current trial as complete.
         trials[currentIdx] = FrozenTrial.CreateTrial(
             state: state, values: values, @params: trial.ParamsDict, distributions: trial.DistributionsDict);
@@ -514,6 +596,27 @@ public class BruteForceSampler : BaseSampler
         /// <param name="excludeRunning">Whether subtrees assigned to running evaluations are excluded from traversal.</param>
         /// <returns>The number of eligible unexplored descendants.</returns>
         internal abstract int CountUnexpanded(bool excludeRunning);
+
+        /// <summary>
+        ///     The unexplored points below this node that no running trial holds or will take: each running trial whose
+        ///     known path ends at an internal node is still choosing below it and takes one of its points, so it is
+        ///     subtracted there. An unexpanded branch counts as one point.
+        /// </summary>
+        /// <remarks>
+        ///     <see cref="CountUnexpanded" /> skips a running trial only where its path ends at an unexpanded node, so
+        ///     the last free point below a trial that is still choosing looked free to every concurrent ask, and two
+        ///     trials could end on it. With no trial running the two counts agree, so a sequential run weighs its
+        ///     choices exactly as Optuna does.
+        /// </remarks>
+        /// <returns>The free unexplored points, never negative.</returns>
+        internal abstract int CountFreeUnexplored();
+
+        /// <summary>
+        ///     The points below this node, unexplored or finished, that no running trial holds or will take: the points a
+        ///     trial can end on without sharing it with a running trial (a finished point can be evaluated again once).
+        /// </summary>
+        /// <returns>The free points, never negative; every point when no trial runs.</returns>
+        internal abstract int CountFreeEnds();
     }
 
     /// <summary>
@@ -530,6 +633,12 @@ public class BruteForceSampler : BaseSampler
 
         /// <inheritdoc />
         internal override int CountUnexpanded(bool excludeRunning) => 1;
+
+        /// <inheritdoc />
+        internal override int CountFreeUnexplored() => 1;
+
+        /// <inheritdoc />
+        internal override int CountFreeEnds() => 1;
     }
 
     /// <summary>
@@ -586,8 +695,86 @@ public class BruteForceSampler : BaseSampler
             }
         }
 
+        /// <summary>
+        ///     How many running trials' known paths end at this node: trials still choosing below it (an internal node,
+        ///     or an unexpanded one whose subtree they alone explore), or re-evaluating this finished point.
+        /// </summary>
+        internal int RunningEnds;
+
         /// <summary>Marks a search-tree branch as assigned to a running evaluation.</summary>
-        internal void SetRunning() => IsRunning = true;
+        internal void SetRunning()
+        {
+            IsRunning = true;
+            // Counted as well, so a node several running trials share is not taken as having room for one more.
+            RunningEnds++;
+        }
+
+        /// <summary>
+        ///     The candidates whose branch still has a point no running trial holds or will take
+        ///     (<see cref="TreeNodeBase.CountFreeEnds" />), or every candidate when none has. Used when nothing unexplored
+        ///     is free, so a re-evaluation repeats a finished point rather than share a point another worker evaluates:
+        ///     a branch whose every point is held would force the trial onto one of them a parameter later.
+        /// </summary>
+        /// <param name="candidates">This node's candidate values (internal representation), in enumeration order.</param>
+        /// <returns>The candidates to choose from, in enumeration order; all of them when no trial is running.</returns>
+        internal List<double> ChoicesWithAFreeEnd(List<double> candidates)
+        {
+            if (Children is null)
+                return candidates;
+            var free = new List<double>(candidates.Count);
+            foreach (double value in candidates)
+                if (!Children.TryGetValue(value, out TreeNodeBase? child) || child.CountFreeEnds() > 0)
+                    free.Add(value);
+            return free.Count > 0 ? free : candidates;
+        }
+
+        /// <summary>
+        ///     Whether some child of this node has an unexplored point that no running trial holds or will take: the
+        ///     test for sampling a fresh point rather than re-evaluating a finished one.
+        /// </summary>
+        /// <remarks>
+        ///     The running trials whose path ends at this node itself are not subtracted: they choose this same
+        ///     parameter, after or alongside the current trial, and see whatever it takes. Subtracting them made the first
+        ///     of several trials asked at once yield the free points to the others and re-evaluate a finished point, while
+        ///     the others then found a point to spare. An unexpanded branch counts as one point although it can hold more,
+        ///     which only errs toward re-evaluating. With no trial running this is Optuna's
+        ///     <see cref="TreeNodeBase.IsAnyExpandable" /> with running branches excluded.
+        /// </remarks>
+        /// <returns><c>true</c> when the current trial can take an unexplored point no running trial will reach.</returns>
+        internal bool HasChildWithFreeUnexplored()
+        {
+            if (Children is null)
+                return false;
+            foreach (var child in Children.Values)
+                if (child.CountFreeUnexplored() > 0)
+                    return true;
+            return false;
+        }
+
+        /// <inheritdoc />
+        internal override int CountFreeUnexplored()
+        {
+            if (Children is null)
+                return IsRunning ? 0 : 1;
+            int total = 0;
+            foreach (var child in Children.Values)
+                total += child.CountFreeUnexplored();
+            // Each running trial whose path ends here is still choosing below and will take one of these points.
+            return Math.Max(0, total - RunningEnds);
+        }
+
+        /// <inheritdoc />
+        internal override int CountFreeEnds()
+        {
+            // An unexpanded node is one point; an empty leaf is a finished one, free to evaluate again unless a running
+            // trial does.
+            if (Children is null || Children.Count == 0)
+                return IsRunning ? 0 : 1;
+            int total = 0;
+            foreach (var child in Children.Values)
+                total += child.CountFreeEnds();
+            return Math.Max(0, total - RunningEnds);
+        }
 
         /// <summary>Marks a search-tree path as a finished objective evaluation.</summary>
         internal void SetLeaf()
@@ -652,8 +839,14 @@ public class BruteForceSampler : BaseSampler
         /// <summary>Chooses a child with probability proportional to its eligible unexplored descendants.</summary>
         /// <param name="rng">Random stream whose draw order is shared with the reference algorithm.</param>
         /// <param name="excludeRunning">Whether subtrees assigned to running evaluations are excluded from traversal.</param>
+        /// <param name="netOfRunningTrials">
+        ///     Whether to weigh each child by its unexplored points net of the running trials still choosing toward them
+        ///     (<see cref="TreeNodeBase.CountFreeUnexplored" />) instead of <see cref="TreeNodeBase.CountUnexpanded" />.
+        ///     The two agree when no trial runs, so the draw, and Optuna parity, is unchanged then. The caller must know
+        ///     some child has a free point, or every weight is zero.
+        /// </param>
         /// <returns>The internal parameter value identifying the selected child.</returns>
-        internal double SampleChild(NumPyRandom rng, bool excludeRunning)
+        internal double SampleChild(NumPyRandom rng, bool excludeRunning, bool netOfRunningTrials = false)
         {
             var keys = new List<double>(Children!.Keys);
             var children = new List<TreeNodeBase>(Children!.Values);
@@ -661,7 +854,9 @@ public class BruteForceSampler : BaseSampler
 
             var unexpandedCounts = new double[n];
             for (int i = 0; i < n; i++)
-                unexpandedCounts[i] = children[i].CountUnexpanded(excludeRunning);
+                unexpandedCounts[i] = netOfRunningTrials
+                    ? children[i].CountFreeUnexplored()
+                    : children[i].CountUnexpanded(excludeRunning);
 
             // Blend exact uniform sampling with flat uniform sampling to prevent starvation of
             // unexplored branches.

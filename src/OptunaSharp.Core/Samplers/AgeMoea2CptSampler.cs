@@ -202,7 +202,16 @@ public class AgeMoea2CptSampler : BaseGASampler
         // the equations and resumes reactivating ones from their latent value instead of a random draw; no-op
         // otherwise. Identical to NSGAIIICptSampler — conditional handling is shared code.
         _conditionalParams?.ApplyDormantCarry(study, trial, child, parentPopulation, searchSpace);
-        return child;
+        // Two trials asked at once that draw the same parents and crossover mask, with no mutation, build one child;
+        // generate (and carry) again while a running trial holds it. Never redraws sequentially, so seeded runs are
+        // unchanged. When every redraw is held, the trial is sampled independently instead.
+        return HandedOutChildren.Claim(study, trial, child, () =>
+               {
+                   var again = _childGenerationStrategy(study, searchSpace, parentPopulation);
+                   _conditionalParams?.ApplyDormantCarry(study, trial, again, parentPopulation, searchSpace);
+                   return again;
+               })
+               ?? new OrderedDict<string, object?>();
     }
 
     /// <inheritdoc />
@@ -226,6 +235,7 @@ public class AgeMoea2CptSampler : BaseGASampler
     {
         System.Diagnostics.Debug.Assert(
             state is TrialState.Complete or TrialState.Fail or TrialState.Pruned);
+        HandedOutChildren.Forget(study, trial.Number);
         _afterTrialStrategy(study, trial, state, values);
         _randomSampler.AfterTrial(study, trial, state, values);
     }

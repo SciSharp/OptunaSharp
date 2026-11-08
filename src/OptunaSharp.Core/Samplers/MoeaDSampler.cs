@@ -96,6 +96,10 @@ public class MoeaDSampler : BaseSampler
     // instance fields carried study A's population, ideal point and weight vectors (built for A's objective
     // count) into study B when the sampler was reused (pre-release review item H3).
     private readonly PerStudyState<StudyDecomposition> _studies = new();
+
+    // Per study: the child each running trial received, so a child equal to one a running trial evaluates is
+    // generated again (HandedOutParams). Entries leave with AfterTrial. Guarded by the sampler's monitor.
+    private readonly HandedOutParams _handedOutChildren = new();
     private bool _warnedSingleObjective;
 
     /// <summary>The weight vectors, neighborhoods and per-subproblem population of one study.</summary>
@@ -274,6 +278,16 @@ public class MoeaDSampler : BaseSampler
         var child = MoeadOffspring.Generate(
             study, searchSpace, matingPool, _crossover, _mutation, _mutationProb, _swappingProb, _rng.Rng);
 
+        // Two trials asked at once that draw the same parents and crossover mask, with no mutation, build one child;
+        // generate again from the same mating pool while a running trial holds it. Never redraws sequentially, so
+        // seeded runs are unchanged. When every redraw is held, the trial is sampled independently: without the
+        // subproblem stamp it is no offspring, so it is never folded into the population.
+        var claimed = _handedOutChildren.Claim(study, trial, child, () => MoeadOffspring.Generate(
+            study, searchSpace, matingPool, _crossover, _mutation, _mutationProb, _swappingProb, _rng.Rng));
+        if (claimed is null)
+            return new OrderedDict<string, object?>();
+        child = claimed;
+
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeySubproblem, subproblem);
         return child;
     }
@@ -289,7 +303,11 @@ public class MoeaDSampler : BaseSampler
 
     /// <inheritdoc />
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
-        => _randomSampler.AfterTrial(study, trial, state, values);
+    {
+        // The trial is finished: its child is no longer held by a running trial.
+        _handedOutChildren.Forget(study, trial.Number);
+        _randomSampler.AfterTrial(study, trial, state, values);
+    }
 
     // ---- weight vectors / neighborhoods (built once m is known) ----------------------------------
 

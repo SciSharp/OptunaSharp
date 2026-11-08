@@ -78,6 +78,15 @@ public sealed class LmCmaSampler : BaseSampler
     private readonly int? _popsize;
     private readonly int? _nVectors;
 
+    // Per study: the candidate each running trial received (generation, clamped point in the optimizer's unit box), so
+    // a point a running trial evaluates is not handed out again. Entries leave with AfterTrial. Guarded by the
+    // sampler's monitor, like every hook.
+    private readonly HandedOutPoints _handedOut = new();
+
+    // Trials sampled independently on purpose because every redraw met a point a running trial holds; their
+    // independent draws are not warned about. Guarded by the sampler's monitor.
+    private readonly OverrunTrials _overrun = new();
+
     /// <param name="nStartupTrials">Independent sampling is used until this many trials finish.</param>
     /// <param name="independentSampler">Sampler for parameters outside the relative search space (default <see cref="RandomSampler" />).</param>
     /// <param name="warnIndependentSampling">Emit a warning when a parameter is sampled independently.</param>
@@ -207,6 +216,27 @@ public sealed class LmCmaSampler : BaseSampler
         for (int i = 0; i < nDim; i++)
             cmaParams[i] = Math.Min(Math.Max(cmaParams[i], lower[i]), upper[i]);   // clamp to the box
 
+        // A Rademacher candidate is one of few points per generation (mean ± σ along each stored direction), so
+        // workers asking at the same time drew the same point: 8-9 of 64 trials at 8 workers. Hand out the first draw
+        // no other running trial of this generation is evaluating. A sequential run has no such trial, so it never
+        // redraws and its RNG stream, and seeded results, are unchanged; its own repeats of finished points (as many
+        // sequentially) are the algorithm's and stay.
+        double[]? claimed = _handedOut.Claim(study, trial, optimizer.Generation, cmaParams, () =>
+        {
+            double[] next = optimizer.AskCandidate(k);
+            for (int i = 0; i < nDim; i++)
+                next[i] = Math.Min(Math.Max(next[i], lower[i]), upper[i]);   // clamp to the box
+            return next;
+        });
+        if (claimed is null)
+        {
+            // No free point within the redraws: sample this trial independently instead of handing out a point
+            // another worker is evaluating. It joins no generation, as its generation is never stamped.
+            _overrun.Add(study, trial.Number);
+            return new OrderedDict<string, object?>();
+        }
+
+        cmaParams = claimed;
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyGeneration, optimizer.Generation);
 
         // View the candidate zero-copy; Untransform copies it into a managed dict, so dispose here.
@@ -311,7 +341,8 @@ public sealed class LmCmaSampler : BaseSampler
     {
         RaiseErrorIfMultiObjective(study);
 
-        if (_warnIndependentSampling)
+        // An overrun trial is independent on purpose (no free point was found), so it is not warned about.
+        if (_warnIndependentSampling && !_overrun.Contains(study, trial.Number))
         {
             var completeTrials = GetTrials(study);
             if (completeTrials.Count >= _nStartupTrials)
@@ -389,6 +420,8 @@ public sealed class LmCmaSampler : BaseSampler
             OptunaWarnings.Warn(
                 "Constraints have been set, but LmCmaSampler will not use them for optimization.",
                 WarningCategory.UserWarning);
+        _overrun.Remove(study, trial.Number);
+        _handedOut.Forget(study, trial.Number);
         _independentSampler.AfterTrial(study, trial, state, values);
     }
 }

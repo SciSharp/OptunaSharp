@@ -28,7 +28,11 @@
   `TrialExecutorOptions.SamplerConcurrency` lets each `nJobs` worker sample with an instance of its own, for the
   samplers that produce no duplicate samples that way (§6.3); `TrialExecutorOptions.BlasThreads` runs OpenBLAS
   single-threaded while several workers run (§9); and every log handler serves one record at a time under a lock
-  of its own, as Python's `Handler.handle` does, with one write per record (§6.6).
+  of its own, as Python's `Handler.handle` does, with one write per record (§6.6);
+- 2026-11-08: no Core sampler hands one point to two trials asked at once: the samplers that derived a candidate
+  from state that changes only when a trial finishes now also look at the running trials, which leaves sequential
+  runs unchanged; BruteForce diverges from Optuna's strict mode to do so; the Python bridges are measured and
+  pinned (§6.3; [plan 12](plans/12-parallel-read-duplicates.md)).
 
 No threading item is open. §12 lists the known limits.
 
@@ -621,9 +625,57 @@ and ends, around one native call to OpenBLAS).
     entropy, and the absence of repeats.
   - `BoTorchSampler.ReseedRng` draws a new 31-bit integer seed for torch, as Python's
     `RandomState().randint(int32 max)` does, so it never had a key to fill.
-- Some samplers can give one point to two concurrent trials, by design: JANUS without `nJobs` lanes,
-  REMBO, JANUS-DE, LM-CMA, TuRBO, the genetic samplers, Grid, BruteForce and QMC. The Storage page lists
-  them with counts.
+- **Trials asked at once get different points** ([plan 12](plans/12-parallel-read-duplicates.md), 2026-11-08).
+  Eight trials that ask and suggest on the same history before any is told (a *parallel read*) receive eight
+  different points from every Core sampler they share in one process. The samplers that derived a candidate from
+  state that changes only when a trial finishes now also look at the other running trials (collisions are trials
+  of a round that received a point another trial of the round received, 8 rounds of 8, before the change):
+
+  | Sampler | Collisions before | What a trial asked while others run gets now |
+  |---|---|---|
+  | `JanusSampler`, `JanusDeSampler` | 7 (and 30, 29 of 120 under `Optimize(nJobs: 16)`) | a slot of the generation no trial received yet, running or finished; with none left, an independent sample |
+  | `PsoSampler`, `DifferentialEvolutionSampler` | 1–9, up to 2 | the first particle or target no finished or running trial of the generation holds (stamped in the storage), and a point no running trial holds (redrawn up to 32 times); otherwise an independent sample, which is not warned about |
+  | `LmCmaSampler` | 8–10 | a Rademacher candidate no running trial of the generation holds (redrawn up to 32 times); otherwise an independent sample |
+  | `TurboSampler`, `SaasboSampler` | every startup round, 7 | the first row of the startup Sobol design no completed or running trial holds (stamped `turbo:init`, `saasbo:init`); rows past the design are the sequence's next points |
+  | `RandomEmbeddingSampler` | up to 21 | an acquisition fitted with the running trials' latents as constant lies, so its optimum moves |
+  | NSGA-II/III and their CPT variant, AGE-MOEA-2 and its CPT variant, SMS-EMOA, RVEA, MOEA/D, the JANUS multi-objective samplers | 1 in one run of 12–20 | a child generated again while a running trial holds it (up to 32 times); otherwise an independent sample |
+  | `BruteForceSampler`, both modes | strict 3–8 per 88 trials, default 0–1 | a point no running trial holds or will take (below) |
+
+  - **Sequential runs are unchanged.** Every rule but JANUS's keys on *other* running trials, and a run of one trial
+    at a time has none; JANUS's hands each slot of a generation out once, which consecutive trials asked one at a time
+    do anyway. So such a run never skips a slot, redraws or lies, and seeded results, Optuna parity and JANUS's byte
+    parity with its reference are the same. (One edge: after a JANUS trial fails, its generation is never told, and
+    the trials past its slots are sampled independently instead of evaluating its candidates again.)
+  - **Pinned by** `SamplerParallelReadTests`, over every Core sampler, both on eight threads (`ParallelReads.Fire`)
+    and in lockstep, every read of a round landing before any write (`ParallelReads.ReadInLockstep`), with the
+    per-worker instances too; with populations larger than a round, so a generation's trials finish before the
+    generation is complete; and in whole `Optimize(nJobs: 16)` runs, where no sampler that never re-proposes a
+    finished point evaluated a point twice in 120 trials (xNES aside: its distribution can degenerate one trial at
+    a time too, plan 12 §8). The rounds alone were not enough: a first JANUS fix,
+    which freed a slot once its trial finished, passed every volley and still repeated 41–65 points in 120 trials
+    of `Optimize(nJobs: 16)`, because rounds release a population of 7 together.
+  - **History repeats are not collisions.** The genetic samplers, DE, JANUS-DE, PSO and LM-CMA re-propose finished
+    points by design (a child that copies a parent, a mutant clamped onto a corner, a particle at rest, a Rademacher
+    point of an earlier generation), one trial at a time as well; every other Core sampler repeats no told trial
+    under parallel reads either, except that CMA-ES and VkD-CMA seed each trial with `randint(1, 65536) +
+    trial.number`, as Optuna does, so two trials of a generation share a point about once in 65,535 pairs.
+  - **One process.** PSO's particles, DE's targets and TuRBO's and SAASBO's design rows are stamped in the storage,
+    so they steer apart asks from different processes too. JANUS's slots, the redraws and BruteForce's record of
+    handed-out values live in the sampler instance, guarded by its monitor: two processes on one storage can still
+    receive one point.
+  - **BruteForce diverges from Optuna** (`[Misaligned]`, the owner's decision). It samples one parameter per call, so
+    it records the values handed to each running trial, counts a trial still choosing as taking one point below its
+    path, and enters a branch whose points are all held only when every branch is. Optuna's strict mode
+    (`avoid_premature_stop=True`) hands running points out again on purpose, so a dead worker's point is still
+    evaluated; here it is not, until the dead trial is failed. When running trials hold nearly every unexplored
+    point, a trial re-evaluates a finished point instead.
+  - **Grid is unchanged:** it hands out the ids no finished or running trial holds, as Optuna does, and once every id
+    is taken, any id, a running one included, until the study stops.
+  - **The Python bridges are unchanged:** each hands out what the Python code it drives hands out.
+    `BridgeSamplerParallelReadTests` pins them (8 rounds of 8; collisions in lockstep, then on threads): PyCma 49
+    (exactly `optuna_integration.PyCmaSampler`'s points, compared bit for bit), 0–1; pymoo NSGA-II and AGE-MOEA-2
+    42, 0–2, and on threads it re-hands 7–8 offspring that told trials evaluated; OptunaHub `random_search` and
+    `pso` 0, 0; its `differential_evolution` 49, 49; BoTorch 0, 0.
 
 **Per-worker sampler instances** (opt-in, [plan 11](plans/11-threading-round-2.md), 2026-11-08).
 `TrialExecutorOptions.SamplerConcurrency` chooses how the workers of one `Optimize(nJobs)` call reach the
@@ -657,6 +709,9 @@ sampler:
   | `GPSampler` | 0, 0, 0 | 0, 1, 0, then 0 in eight more rounds | no: instances that see the same history optimize the same acquisition function |
   | `LmCmaSampler`, the genetic and many-objective samplers (NSGA-II/III, SMS-EMOA, AGE-MOEA-2, RVEA, MOEA/D, DE, the JANUS hosts) | 0–11 (by design, above) | 0–15 | no: they repeat points in both modes, so per-worker gains nothing safe |
 
+  The "Shared" column was measured before plan 12 gave every Core sampler different points for trials asked at
+  once (above); the decision it informed stands, because a per-worker instance sees neither the shared instance's
+  record of handed-out points nor, for the samplers that redraw, the other instances' draws.
   `OnlyTheListedSamplers_MakeWorkerInstances` pins the list, and
   `TakingPartSamplers_UnderPerWorker_ProposeNoPointTwice` pins the "no repeat" property for each of them at
   `nJobs: 8` (CMA-ES and VkD-CMA tolerate one repeat: each trial seeds the optimizer with a draw from 1 to
@@ -1183,6 +1238,8 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `JournalConcurrencyTests` | both lock protocols under contention; stale-lock takeover after the grace period; mixed protocols on one journal; separate storages on one study; a shared backend's offset cache; many studies on one journal; enqueued trials popped once; one trial's concurrent reports, suggestions and constraints; the create race |
 | `HeartbeatTests` | heartbeat threads beat and stop; a failed write ends only its thread, reported like `threading.excepthook`; trials complete when every heartbeat write fails; `FailStaleTrials` and the retry callback; `Ask`'s warning outside `Optimize` |
 | `SamplerNJobsSweepTests`, `PrunerNJobsSweepTests` | every Core sampler and pruner under `nJobs` on a journal: contiguous numbers, every trial ends as its rule dictates |
+| `SamplerParallelReadTests` | §6.3, plan 12: every Core sampler, read by eight trials at once on eight threads and in lockstep, hands no point to two of them, and the samplers that never re-propose a finished point repeat none (CMA-ES and VkD-CMA one, through Optuna's seeding); per-worker instances; populations larger than a round; whole `Optimize(nJobs: 16)` runs evaluating no point twice; Grid and BruteForce (both modes, `[Misaligned]`) over 88 of 90 points; DE and PSO with more trials than members, the rest sampled independently without warnings; the sequential repeats of the samplers allowed them |
+| `BridgeSamplerParallelReadTests` (interop) | §6.3, plan 12: each Python bridge's repeats under parallel reads, exact in lockstep (PyCma's compared bit for bit with `optuna_integration.PyCmaSampler`) and bounded on threads; BoTorch in the slow category |
 | `LazyRandomStateSeedingTests` | unseeded samplers created together never share a stream; seeded ones stay reproducible |
 | `OsEntropySeedTests` | numpy's OS-entropy seeding: the constructor's key, position 623 and draws, and a reseed's kept position and dropped Gaussian, against numpy 2.4.2 output for injected entropy; no repeated draw in 300,000 reseeds |
 | `TerminatorTests` | `TerminatorCallback` at `nJobs: 8` runs its terminator one call at a time |
@@ -1294,7 +1351,10 @@ thread-pool executor option, was built on 2026-11-07 (§3.5). Phase 2 covers the
 - **One Python thread** (§8): bridge calls of concurrent studies run one at a time, so Python code that
   releases the GIL (torch kernels, large numpy operations) no longer overlaps across studies. A
   `PythonRuntime.Run` body must not wait for a thread that may be waiting for the Python thread.
-- **Repeated candidates** by design in some samplers (§6.3).
+- **Repeated candidates** (§6.3): no Core sampler hands one point to two trials asked at once in one process, but
+  the genetic samplers, DE, JANUS-DE, PSO and LM-CMA re-propose finished points by design, as in Optuna; two
+  processes on one storage are steered apart only by the stamped particles, targets and design rows; Grid at the end
+  of its grid and the Python bridges keep their Python behavior. Plan 12 lists the follow-ups.
 - **Serial sampling for the samplers that do not take part in `PerWorker`** (§6.3): GP, SAASBO and the other
   slow model-based samplers still propose one at a time per study, so at `nJobs: 8` a GP study ran slower than at
   `nJobs: 1` (18.7 s against 12.1 s, 120 trials of a 20 ms objective). Optuna has the same cap.

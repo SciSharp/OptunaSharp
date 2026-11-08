@@ -93,6 +93,10 @@ public sealed class TurboSampler : BaseSampler
     // from (labels, values). See docs/TURBO_M_PORTING.md §2.
     private const string AttrKeyTrustRegion = "turbo:tr";
 
+    // [slot, restart, row] of the initialization design a trial took (see InitRow), so trials asked at the same time
+    // never take one Sobol row.
+    private const string AttrKeyInitRow = "turbo:init";
+
     private static readonly Logger Logger = OptunaLogging.GetLogger("optuna.samplers.turbo");
 
     private readonly BaseSampler _independentSampler;
@@ -294,9 +298,14 @@ public sealed class TurboSampler : BaseSampler
             // init trial takes the next row of that restart's sequence. Mask to 31 bits so the seed is
             // non-negative (numpy's SeedSequence rejects negative entropy).
             int restartSeed = (int)(Mix(_baseSeed ^ InitSeedSalt, (ulong)state.RestartCount) & 0x7FFFFFFFu);
-            double[,] sobolInit = ScrambledSobol.Random(d, nInit, restartSeed);
+            // The next row is the first one no finished or running trial of this restart holds. It used to be the
+            // finished count, so workers asking at the same time after a restart all took one row (7 of 64 trials at
+            // 8 workers). A sequential run holds rows 0..count-1, so the row is still trialsInRestart.
+            int row = InitRow(study, trial, slot: 0, state.RestartCount, completed.Skip(state.RestartStart));
+            double[,] sobolInit = ScrambledSobol.Random(d, Math.Max(nInit, row + 1), restartSeed);
             var point = new double[d];
-            for (int j = 0; j < d; j++) point[j] = sobolInit[trialsInRestart, j];
+            for (int j = 0; j < d; j++) point[j] = sobolInit[row, j];
+            PersistInitRow(study, trial, slot: 0, state.RestartCount, row);
             return Unnormalize(internalSpace, searchSpace, point);
         }
 
@@ -414,10 +423,15 @@ public sealed class TurboSampler : BaseSampler
             // SeedSequence rejects negative entropy). No per-trial RNG is consumed in the init phase.
             ulong initCounter = ((ulong)(uint)initSlot << 32) | (uint)states[initSlot].RestartCount;
             int restartSeed = (int)(Mix(_baseSeed ^ InitSeedSalt, initCounter) & 0x7FFFFFFFu);
-            double[,] sobolInit = ScrambledSobol.Random(d, nInit, restartSeed);
+            // As in TuRBO-1: the first row of this slot's restart that no finished or running trial holds, so
+            // concurrent asks never share a row; sequentially it is still trialsInRestart[initSlot].
+            int row = InitRow(study, trial, initSlot, states[initSlot].RestartCount,
+                slotTrials[initSlot].Skip(states[initSlot].RestartStart));
+            double[,] sobolInit = ScrambledSobol.Random(d, Math.Max(nInit, row + 1), restartSeed);
             var point = new double[d];
-            for (int j = 0; j < d; j++) point[j] = sobolInit[trialsInRestart[initSlot], j];
+            for (int j = 0; j < d; j++) point[j] = sobolInit[row, j];
             PersistTrustRegionLabel(study, trial, initSlot);
+            PersistInitRow(study, trial, initSlot, states[initSlot].RestartCount, row);
             return Unnormalize(internalSpace, searchSpace, point);
         }
 
@@ -509,13 +523,84 @@ public sealed class TurboSampler : BaseSampler
         => trial.SystemAttrs.TryGetValue(AttrKeyTrustRegion, out object? v) ? (int)Convert.ToInt64(v) : -1;
 
     /// <summary>Persists this trial's winning region slot as the system attr <c>"turbo:tr"</c> so the per-region
-    ///     fold can reconstruct which region proposed it. This is the one piece of state TuRBO-m stores (a small
-    ///     int per trial); each worker writes only its own trial's label, so it is parallel-worker-safe.</summary>
+    ///     fold can reconstruct which region proposed it. With the init row (<see cref="PersistInitRow" />) it is the
+    ///     only state TuRBO-m stores (a small int per trial); each worker writes only its own trial's label, so it is
+    ///     parallel-worker-safe.</summary>
     /// <param name="study">The study whose storage backs the write.</param>
     /// <param name="trial">The trial receiving the label (identified by its trial id).</param>
     /// <param name="slot">The winning region slot index to persist.</param>
     private static void PersistTrustRegionLabel(Study study, FrozenTrial trial, int slot)
         => study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyTrustRegion, slot);
+
+    /// <summary>
+    ///     The Sobol row of a (slot, restart) initialization design for this trial: the first row that no finished
+    ///     trial of the restart and no other running trial of it holds, so trials asked at the same time take
+    ///     distinct rows. Rows run past the design's <c>nInit</c> only when more trials are in flight than rows
+    ///     remain; the scrambled Sobol sequence is prefix-stable, so those extra rows are its next points.
+    /// </summary>
+    /// <param name="study">
+    ///     The study, whose complete and running trials are read from the storage in one read (their stamps are fresh
+    ///     there, and a trial told since this trial read its history is still seen).
+    /// </param>
+    /// <param name="trial">The trial being sampled; it holds no row yet.</param>
+    /// <param name="slot">The trust-region slot (0 for TuRBO-1).</param>
+    /// <param name="restartCount">The slot's current restart, whose design is being filled.</param>
+    /// <param name="finishedInRestart">The slot's finished trials since the restart began, in the history snapshot.</param>
+    /// <returns>The row to take; equal to the finished count in a sequential run.</returns>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
+    private static int InitRow(
+        Study study, FrozenTrial trial, int slot, int restartCount, IEnumerable<FrozenTrial> finishedInRestart)
+    {
+        var held = new List<long>();
+        int unstamped = 0;
+        foreach (FrozenTrial t in finishedInRestart)
+        {
+            if (TryReadInitRow(t, slot, restartCount, out long row))
+                held.Add(row);
+            else
+                unstamped++;
+        }
+
+        // The stamp names the slot and restart, so trials of other restarts drop out here without the snapshot's
+        // restart window.
+        foreach (FrozenTrial t in ConcurrentAsks.OtherCompleteOrRunningTrials(study, trial))
+            if (TryReadInitRow(t, slot, restartCount, out long row))
+                held.Add(row);
+
+        // A finished trial without a row (written before rows were stamped, or proposed in the previous restart's
+        // optimization phase) took the next row in order back then: FirstFreeIndex gives each one the lowest row
+        // still free before picking this trial's.
+        return ConcurrentAsks.FirstFreeIndex(held, unstamped);
+    }
+
+    /// <summary>Reads a trial's init-row stamp when it belongs to the given slot's restart.</summary>
+    /// <param name="trial">The trial whose system attributes are read.</param>
+    /// <param name="slot">The slot the stamp must name.</param>
+    /// <param name="restartCount">The restart the stamp must name.</param>
+    /// <param name="row">The stamped row, when the stamp matches.</param>
+    /// <returns><c>true</c> when the trial took a row of that slot's restart.</returns>
+    private static bool TryReadInitRow(FrozenTrial trial, int slot, int restartCount, out long row)
+    {
+        row = -1;
+        if (!trial.SystemAttrs.TryGetValue(AttrKeyInitRow, out object? v) || v is not IList<object?> parts || parts.Count != 3)
+            return false;
+        if (Convert.ToInt64(parts[0]) != slot || Convert.ToInt64(parts[1]) != restartCount)
+            return false;
+        row = Convert.ToInt64(parts[2]);
+        return true;
+    }
+
+    /// <summary>
+    ///     Stamps the trial with the initialization row it took, as the system attr <c>"turbo:init"</c> =
+    ///     <c>[slot, restart, row]</c>, so concurrent asks of the same restart see the row as held.
+    /// </summary>
+    /// <param name="study">The study whose storage backs the write.</param>
+    /// <param name="trial">The trial receiving the stamp.</param>
+    /// <param name="slot">The trust-region slot (0 for TuRBO-1).</param>
+    /// <param name="restartCount">The slot's current restart.</param>
+    /// <param name="row">The Sobol row the trial took.</param>
+    private static void PersistInitRow(Study study, FrozenTrial trial, int slot, int restartCount, int row)
+        => study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyInitRow, new List<object?> { slot, restartCount, row });
 
     /// <summary>Maps a completed trial's objective value to a maximization-oriented score (higher = better).</summary>
     /// <param name="value">The trial's scalar objective value (null for an unfinished trial).</param>

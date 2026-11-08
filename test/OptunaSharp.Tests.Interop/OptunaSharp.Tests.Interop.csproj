@@ -85,4 +85,12 @@
     <ProjectReference Include="..\..\src\OptunaSharp.Visualization.Plotly\OptunaSharp.Visualization.Plotly.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The unit suite's parallel-read harness, compiled in from its one source rather than copied, so
+         BridgeSamplerParallelReadTests fires the Python bridges exactly as SamplerParallelReadTests fires the
+         Core samplers. This project does not reference the unit suite; both files use only Core and MSTest. -->
+    <Compile Include="..\OptunaSharp.Tests\Concurrency\ConcurrencyGun.cs" Link="Concurrency\ConcurrencyGun.cs" />
+    <Compile Include="..\OptunaSharp.Tests\Concurrency\ParallelReads.cs" Link="Concurrency\ParallelReads.cs" />
+  </ItemGroup>
+
 </Project>

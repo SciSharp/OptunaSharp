@@ -121,7 +121,13 @@ public class AgeMoea2Sampler : BaseGASampler
         var parentPopulation = GetParentPopulation(study, generation);
         if (parentPopulation.Count == 0)
             return new OrderedDict<string, object?>();
-        return _childGenerationStrategy(study, searchSpace, parentPopulation);
+        var child = _childGenerationStrategy(study, searchSpace, parentPopulation);
+        // Two trials asked at once that draw the same parents and crossover mask, with no mutation, build one child;
+        // generate again while a running trial holds it. Never redraws sequentially, so seeded runs (and the pymoo
+        // parity) are unchanged. When every redraw is held, the trial is sampled independently instead.
+        return HandedOutChildren.Claim(study, trial, child,
+                   () => _childGenerationStrategy(study, searchSpace, parentPopulation))
+               ?? new OrderedDict<string, object?>();
     }
 
     /// <inheritdoc />
@@ -137,6 +143,7 @@ public class AgeMoea2Sampler : BaseGASampler
     /// <exception cref="System.Exception">A configured after-trial or constraint callback fails; its exception propagates.</exception>
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
+        HandedOutChildren.Forget(study, trial.Number);
         _afterTrialStrategy(study, trial, state, values);
         _randomSampler.AfterTrial(study, trial, state, values);
     }

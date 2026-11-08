@@ -77,6 +77,16 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
     private readonly double _cr;
     private readonly DeStrategy _strategy;
 
+    // Trials sampled independently on purpose because every target of the generation was held by a running trial, or
+    // every redraw met a point a running trial holds; their independent draws are not warned about. Guarded by the
+    // sampler's monitor, like every hook.
+    private readonly OverrunTrials _overrun = new();
+
+    // Per study: the trial vector each running trial received (generation, clamped point in the optimizer's unit box),
+    // so a point a running trial evaluates is not handed out again. Entries leave with AfterTrial. Guarded by the
+    // sampler's monitor.
+    private readonly HandedOutPoints _handedOut = new();
+
     /// <param name="nStartupTrials">Minimum independent trials before DE begins; DE always waits for at
     ///     least <c>populationSize</c> completed trials to seed the initial population, whichever is larger.</param>
     /// <param name="independentSampler">Sampler for parameters outside the relative search space (default <see cref="RandomSampler" />).</param>
@@ -208,8 +218,19 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
             solutionTrials = GetSolutionTrials(completedTrials, optimizer.Generation);
         }
 
-        // Target index within the current generation (0-based). Clamp guards a mild parallel overrun.
-        int target = Math.Min(solutionTrials.Count, optimizer.PopulationSize - 1);
+        // Target index within the current generation (0-based): the first target no finished or running trial of the
+        // generation holds. Counting only the finished ones gave every worker asking at the same time the same target,
+        // and past the population clamped them all onto the last one, so concurrent trials could receive one point.
+        // A sequential run holds only its finished targets 0..count-1, so the target is still solutionTrials.Count
+        // and seeded runs are unchanged.
+        if (FirstFreeTarget(study, trial, optimizer.Generation, optimizer.PopulationSize, solutionTrials) is not int target)
+        {
+            // Every target is held by a running trial (more workers than the population): rather than hand this trial
+            // a target another worker is evaluating, sample it independently. It joins no generation, as its
+            // generation and index are never stamped.
+            _overrun.Add(study, trial.Number);
+            return new OrderedDict<string, object?>();
+        }
 
         // Each trial reseeds so its single ask is reproducible and differs from its siblings' asks.
         int seed = (int)_deRng.Rng.randint(1, 65536) + trial.Number;
@@ -219,6 +240,27 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         for (int i = 0; i < nDim; i++)
             deParams[i] = Math.Min(Math.Max(deParams[i], lower[i]), upper[i]);   // clamp to the box
 
+        // Distinct targets do not make distinct points: a trial vector that takes every coordinate from the mutant
+        // is independent of its target, so two workers drawing the same donors (r1, r2, r3) built the same point, and
+        // mutants pushed out of the box clamp onto the same face or corner (2 of 48 trials in one 8-worker run). Hand
+        // out the first draw no other running trial of the generation is evaluating. A sequential run has no such
+        // trial, so it never redraws and its RNG stream, and seeded results, are unchanged.
+        double[]? claimed = _handedOut.Claim(study, trial, optimizer.Generation, deParams, () =>
+        {
+            double[] next = optimizer.AskCandidate(target);
+            for (int i = 0; i < nDim; i++)
+                next[i] = Math.Min(Math.Max(next[i], lower[i]), upper[i]);   // clamp to the box
+            return next;
+        });
+        if (claimed is null)
+        {
+            // Every redraw met a held point: sample this trial independently instead of handing out a point another
+            // worker is evaluating. It joins no generation, as its generation and index are never stamped.
+            _overrun.Add(study, trial.Number);
+            return new OrderedDict<string, object?>();
+        }
+
+        deParams = claimed;
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyGeneration, optimizer.Generation);
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyIndex, target);
 
@@ -340,7 +382,8 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
     {
         RaiseErrorIfMultiObjective(study);
 
-        if (_warnIndependentSampling)
+        // An overrun trial is independent on purpose (every target was held), so it is not warned about.
+        if (_warnIndependentSampling && !_overrun.Contains(study, trial.Number))
         {
             var completeTrials = GetTrials(study);
             if (completeTrials.Count >= _nStartupTrials)
@@ -376,6 +419,39 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         return completeTrials;
     }
 
+    /// <summary>
+    ///     The first target of <paramref name="generation" /> that no finished trial and no other running trial of the
+    ///     generation holds, so concurrent asks never build two offspring for one target.
+    /// </summary>
+    /// <param name="study">
+    ///     The study, whose complete and running trials are read from the storage in one read (their stamps are fresh
+    ///     there, and a trial told since this trial read its history is still seen).
+    /// </param>
+    /// <param name="trial">The trial being sampled; it holds no target yet.</param>
+    /// <param name="generation">The current generation.</param>
+    /// <param name="popsize">The population size.</param>
+    /// <param name="finished">The finished trials of the generation in the history snapshot, whose targets are taken.</param>
+    /// <returns>The free target's index, or <c>null</c> when every target is held.</returns>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
+    private static int? FirstFreeTarget(
+        Study study, FrozenTrial trial, int generation, int popsize, List<FrozenTrial> finished)
+    {
+        var held = new HashSet<long>();
+        foreach (var t in finished)
+            held.Add(t.SystemAttrs.TryGetValue(AttrKeyIndex, out var v) ? Convert.ToInt64(v) : -1);
+        foreach (var t in ConcurrentAsks.OtherCompleteOrRunningTrials(study, trial))
+        {
+            long g = t.SystemAttrs.TryGetValue(AttrKeyGeneration, out var gv) ? Convert.ToInt64(gv) : -1;
+            if (g == generation)
+                held.Add(t.SystemAttrs.TryGetValue(AttrKeyIndex, out var v) ? Convert.ToInt64(v) : -1);
+        }
+
+        for (int i = 0; i < popsize; i++)
+            if (!held.Contains(i))
+                return i;
+        return null;
+    }
+
     /// <summary>The offspring of one generation, ordered by their target index (so <c>result[i]</c> is the
     ///     offspring of parent <c>i</c>) — the pairing DE's greedy selection needs.</summary>
     /// <param name="trials">Trial history available to the operation, in its existing order.</param>
@@ -407,6 +483,8 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
             OptunaWarnings.Warn(
                 "Constraints have been set, but DifferentialEvolutionSampler will not use them for optimization.",
                 WarningCategory.UserWarning);
+        _overrun.Remove(study, trial.Number);
+        _handedOut.Forget(study, trial.Number);
         _independentSampler.AfterTrial(study, trial, state, values);
     }
 }

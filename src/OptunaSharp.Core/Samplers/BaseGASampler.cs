@@ -79,6 +79,15 @@ public abstract class BaseGASampler : BaseSampler
     // (pre-release review item H3).
     private readonly PerStudyState<GenerationTracker> _trackers = new();
 
+    /// <summary>
+    ///     The children this sampler handed to trials that are still running, so a child equal to one a running trial
+    ///     evaluates is generated again instead of evaluated twice at once (<see cref="HandedOutParams" />). A subclass
+    ///     claims each child through it in <c>SampleRelative</c> and forgets the trial in <c>AfterTrial</c>; a
+    ///     sequential run never redraws, so its children, and Optuna parity, are unchanged.
+    /// </summary>
+    /// <remarks>Guarded by the sampler's monitor, under which every sampler hook runs; not by <c>_trackerLock</c>.</remarks>
+    private protected HandedOutParams HandedOutChildren { get; } = new();
+
     /// <summary>Initializes generation bookkeeping with the requested number of completed individuals per generation.</summary>
     /// <param name="populationSize">Number of individuals retained or evaluated per generation.</param>
     protected BaseGASampler(int? populationSize)

@@ -89,6 +89,10 @@ internal sealed class JanusOptimizer
     // distributions into one CMA update whenever nStartupTrials is not a multiple of popsize).
     private readonly List<int> _askedOrder = new();
     private readonly HashSet<int> _asked = new();
+    // Slot -> the trial that received the pending generation's candidate in that slot, so no slot is handed out twice
+    // in one generation (concurrent asks, or asks while the generation waits for its trials); emptied whenever a new
+    // generation is prepared.
+    private readonly Dictionary<int, int> _slotHolders = new();
     private int _generation;
     private double[][]? _pending;
     private double[,]? _lastJtJ;
@@ -814,19 +818,52 @@ internal sealed class JanusOptimizer
             xs[0] = BoundedElite(elite);
 
         _pending = xs;
+        _slotHolders.Clear();
     }
 
-    /// <summary>Assigns the next prepared host or injected candidate to a trial number.</summary>
+    /// <summary>
+    ///     Assigns a trial the candidate of one slot of the pending generation: the reference's slot
+    ///     <c>trialNumber % popsize</c> when no trial received it yet in this generation, else the next slot none did.
+    /// </summary>
     /// <param name="trialNumber">Public trial number assigned to the next requested candidate.</param>
-    /// <returns>The next external parameter values assigned to the trial.</returns>
-    internal OrderedDict<string, object?> Ask(int trialNumber)
+    /// <returns>
+    ///     The external parameter values assigned to the trial, or <c>null</c> when every slot of the pending generation
+    ///     was handed out already (the caller then samples the trial independently).
+    /// </returns>
+    /// <remarks>
+    ///     <para>
+    ///         A slot is handed out once per generation, whether its trial is still running or has finished: the
+    ///         generation is told, and the next one drawn, only once all its trials complete in ask order. The reference
+    ///         picks slot <c>trialNumber % popsize</c> regardless, so a trial asked while an earlier trial of the
+    ///         generation was running, or finished but not yet told with the rest, evaluated that trial's candidate
+    ///         again: 7 of 64 trials at 8 workers with popsize 7, and 41-65 of 120 under <c>Optimize(nJobs: 16)</c>
+    ///         (counting a first version of this fix that freed a slot once its trial finished).
+    ///     </para>
+    ///     <para>
+    ///         A sequential run asks consecutive trial numbers, one generation's slots in turn, so the reference's slot
+    ///         is always free and the run, and its byte parity with the reference, is unchanged. The one sequential
+    ///         difference: after a JANUS trial fails, its generation is never told (the batching waits for it in ask
+    ///         order), and the trials past the generation's slots are sampled independently instead of evaluating the
+    ///         generation's candidates again and again.
+    ///     </para>
+    /// </remarks>
+    internal OrderedDict<string, object?>? AskSlot(int trialNumber)
     {
         if (_pending is null) Generate();
+
+        int slot = SlotFor(trialNumber);
+        // Every slot of the pending generation was handed out (more workers than the population, or a generation
+        // waiting for its trials to complete): no slot is handed out, and the trial is not recorded as JANUS-asked, so
+        // no generation counts it.
+        if (slot < 0)
+            return null;
+
+        _slotHolders[slot] = trialNumber;
         // Record this trial as a JANUS-generated one so UpdateEs can tell it as part of a coherent
         // generation. `idx = trialNumber % popsize` picks the slot (GN elite = slot 0), matching the
         // reference; popsize consecutive asked trials consume exactly one pending generation.
         if (_asked.Add(trialNumber)) _askedOrder.Add(trialNumber);
-        double[] x = _pending![trialNumber % _popsize];
+        double[] x = _pending![slot];
         var safe = new double[_d];
         for (int i = 0; i < _d; i++)
         {
@@ -839,6 +876,42 @@ internal sealed class JanusOptimizer
         // View the clamped candidate zero-copy; Untransform copies it out, so dispose here.
         using NDArray nd = np.array(safe, copy: false);
         return _trans.Untransform(nd);
+    }
+
+    /// <summary>
+    ///     Assigns the candidate of the reference's slot, for a driver that asks each slot of a generation once and tells
+    ///     the generation before asking past it, as a sequential run does (see <see cref="AskSlot" />).
+    /// </summary>
+    /// <param name="trialNumber">Public trial number assigned to the next requested candidate.</param>
+    /// <returns>The next external parameter values assigned to the trial.</returns>
+    /// <exception cref="InvalidOperationException">Every slot of the pending generation was handed out already.</exception>
+    internal OrderedDict<string, object?> Ask(int trialNumber)
+        => AskSlot(trialNumber)
+           ?? throw new InvalidOperationException(
+               $"Every slot of JANUS generation {_generation} was handed out already; trial {trialNumber} gets none.");
+
+    /// <summary>
+    ///     The slot of the pending generation to hand <paramref name="trialNumber" />: the one it already holds if it
+    ///     asks again, else the reference's slot <c>trialNumber % popsize</c> or the next slot after it that no trial
+    ///     received in this generation.
+    /// </summary>
+    /// <param name="trialNumber">The asking trial's number.</param>
+    /// <returns>The slot, or <c>-1</c> when every slot of the generation was handed out.</returns>
+    private int SlotFor(int trialNumber)
+    {
+        foreach (var (slot, holder) in _slotHolders)
+            if (holder == trialNumber)
+                return slot;   // asked again within the generation: keep its candidate
+
+        int reference = trialNumber % _popsize;
+        for (int step = 0; step < _popsize; step++)
+        {
+            int slot = (reference + step) % _popsize;
+            if (!_slotHolders.ContainsKey(slot))
+                return slot;
+        }
+
+        return -1;
     }
 
     /// <summary>Passes a complete pending generation to the host and updates its proposal distribution.</summary>

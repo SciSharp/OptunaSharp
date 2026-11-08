@@ -56,7 +56,9 @@ namespace OptunaSharp.Samplers;
 ///
 ///     <para><b>State is reconstructed, not persisted.</b> Like <see cref="TurboSampler" />, SAASBO stores no
 ///     optimizer blob: each trial re-fits the GP to the completed observations, so a study resumes from
-///     storage with no serialized state.</para>
+///     storage with no serialized state. The one thing it writes is the Sobol row each initialization trial
+///     took (the system attr <c>"saasbo:init"</c>), so trials asked at the same time (<c>Optimize(nJobs)</c>)
+///     take distinct rows instead of all receiving the row the completed count names.</para>
 ///
 ///     <para><b>Conformance to the paper (audited; see <c>SaasboPaperClaimsTests</c>).</b> The RBF kernel
 ///     (Eqn 1), closed-form posterior (Eqns 4-5), SAAS prior (Eqn 8) with the reparameterization (Eqn 12),
@@ -93,6 +95,10 @@ public sealed class SaasboSampler : BaseSampler
 {
     private const double Eps = 1e-10;
     private const uint InitSeedSalt = 0x5aa5_b0b0u;   // de-correlates the init Sobol stream from the per-trial streams
+
+    // The Sobol row of the initialization design a trial took (see InitRow), so trials asked at the same time take
+    // distinct rows. The only state SAASBO writes; everything else is reconstructed from the completed trials.
+    private const string AttrKeyInitRow = "saasbo:init";
 
     private static readonly Logger Logger = OptunaLogging.GetLogger("optuna.samplers.saasbo");
 
@@ -235,10 +241,17 @@ public sealed class SaasboSampler : BaseSampler
         {
             // A single Sobol stream (seeded from the base seed) makes the init reproducible; the k-th init
             // trial takes row k. Mask to 31 bits so the seed is non-negative (numpy rejects negative entropy).
+            // Row k used to be the completed count, which every trial asked at the same time shares (7 of 8
+            // trials of a round received one point); InitRow takes the first row no completed or running trial
+            // holds, which is still the completed count in a sequential run, so seeded runs are unchanged. More
+            // trials in flight than rows left run past nStartupTrials: the scrambled Sobol sequence is
+            // prefix-stable, so the extra rows are its next points and the first ones do not move.
             int initSeed = (int)((_baseSeed ^ InitSeedSalt) & 0x7FFFFFFFu);
-            double[,] sobolInit = ScrambledSobol.Random(d, _nStartupTrials, initSeed);
+            int row = InitRow(study, trial);
+            double[,] sobolInit = ScrambledSobol.Random(d, Math.Max(_nStartupTrials, row + 1), initSeed);
             var point = new double[d];
-            for (int j = 0; j < d; j++) point[j] = sobolInit[completed.Count, j];
+            for (int j = 0; j < d; j++) point[j] = sobolInit[row, j];
+            study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyInitRow, row);
             return Unnormalize(internalSpace, searchSpace, point);
         }
 
@@ -265,6 +278,39 @@ public sealed class SaasboSampler : BaseSampler
 
         double[] proposal = SaasboOptimizer.Propose(normalizedParams, y, _config, rng);
         return Unnormalize(internalSpace, searchSpace, proposal);
+    }
+
+    /// <summary>
+    ///     The Sobol row of the initialization design for this trial: the first row that no completed trial and no
+    ///     other running trial holds, so trials asked at the same time take distinct rows.
+    /// </summary>
+    /// <remarks>
+    ///     A completed trial without a row stamp (written before rows were stamped, or sampled independently, as the
+    ///     first trial of a study is, before any search space exists) took the next row in order back then, so each one
+    ///     counts as holding the lowest row still free.
+    /// </remarks>
+    /// <param name="study">
+    ///     The study, whose complete and running trials are read from the storage in one read (their stamps are fresh
+    ///     there, and a trial told since this trial read its history is still seen).
+    /// </param>
+    /// <param name="trial">The trial being sampled; it holds no row yet.</param>
+    /// <returns>The row to take; equal to the completed count in a sequential run.</returns>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
+    private static int InitRow(Study study, FrozenTrial trial)
+    {
+        // Only completed and running trials hold a row: a failed or pruned trial's row is taken again by the next
+        // trial, as it was when the row was the completed count.
+        var held = new List<long>();
+        int unstamped = 0;
+        foreach (FrozenTrial t in ConcurrentAsks.OtherCompleteOrRunningTrials(study, trial))
+        {
+            if (t.SystemAttrs.TryGetValue(AttrKeyInitRow, out object? v))
+                held.Add(Convert.ToInt64(v));
+            else if (t.State == TrialState.Complete)
+                unstamped++;   // a running trial without a row holds nothing yet
+        }
+
+        return ConcurrentAsks.FirstFreeIndex(held, unstamped);
     }
 
     /// <summary>Maps a completed trial's objective value to a maximization-oriented score (higher = better).</summary>
