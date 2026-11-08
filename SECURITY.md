@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-OptunaSharp is pre-1.0 and under active development. Security fixes go to the latest release on NuGet
-and to `main`.
+OptunaSharp is under active development. Security fixes go to the latest release on NuGet and to
+`main`.
 
 | Version | Supported |
 |---------|-----------|
