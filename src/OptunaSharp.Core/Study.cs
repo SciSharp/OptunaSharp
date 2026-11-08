@@ -279,6 +279,33 @@ public class Study
     /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
     internal IReadOnlyList<FrozenTrial> GetTrialsView() => Storage.GetTrialsPrefixView(StudyId);
 
+    /// <summary>
+    ///     Every trial of this study, for a sampler that reads the history on every ask: the zero-copy view where the
+    ///     storage has one, otherwise exactly the read Optuna's samplers make
+    ///     (<c>study._get_trials(deepcopy=False, use_cache=...)</c>).
+    /// </summary>
+    /// <param name="useCache">
+    ///     For storages without a zero-copy view: whether to share the per-thread snapshot that lives until the next
+    ///     ask (Optuna's <c>use_cache</c>). Ignored where the view is used, since the view costs nothing to take again.
+    /// </param>
+    /// <returns>Trials in ascending trial-number order; read-only.</returns>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
+    /// <remarks>
+    ///     <para>
+    ///         Same trials, same order: the two reads differ only in how fresh each snapshot is. The view returns each
+    ///         trial's current snapshot, a copied list the one current when it was taken. In a run with one trial at
+    ///         a time nothing changes in between, so seeded results are identical (Rustuna plan 13, phase 1).
+    ///     </para>
+    ///     <para>
+    ///         The fallback keeps database-backed storages on their existing read, so switching a sampler to this
+    ///         method never adds a database round trip (<see cref="BaseStorage.HasZeroCopyTrialsView" />).
+    ///     </para>
+    /// </remarks>
+    internal IReadOnlyList<FrozenTrial> GetTrialsForSampler(bool useCache)
+        => Storage.HasZeroCopyTrialsView
+            ? Storage.GetTrialsPrefixView(StudyId)
+            : GetTrialsInternal(deepcopy: false, states: null, useCache: useCache);
+
     /// <summary>Python <c>Study._get_best_trial(deepcopy)</c>.</summary>
     /// <param name="deepcopy">Whether to copy trial records; treat records returned with false as read-only.</param>
     /// <returns>The best feasible completed single-objective trial, copied when requested.</returns>

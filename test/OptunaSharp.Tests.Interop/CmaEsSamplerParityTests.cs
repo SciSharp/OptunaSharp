@@ -396,6 +396,187 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
             $"study.optimize(_obj, n_trials={nTrials})\n");
     }
 
+    // ---- Rustuna plan 13, phase 1: the optimizer cache and the incremental history must leave every trial and every
+    // ---- stored optimizer state identical to Optuna's over many generations, failing tellers and pruned trials.
+
+    /// <summary>
+    ///     30-40 generations of the plain sampler: the optimizer is restored once per generation and reused, and the
+    ///     history is folded incrementally, yet every trial and stored state equals live Optuna's.
+    /// </summary>
+    /// <param name="dim">Search-space dimension.</param>
+    /// <param name="seed">Sampler seed.</param>
+    /// <param name="nTrials">Number of trials.</param>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(10, 3, 400)]
+    [DataRow(6, 11, 300)]
+    public void LongRun_FloatSphere_FullState_IsBitIdentical(int dim, int seed, int nTrials)
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "cma",
+            sampler: new CmaEsSampler(seed: seed));
+        csStudy.Optimize(SphereCs(dim), nTrials: nTrials);
+
+        AssertParityExceptOptimizerBlob(csStudy,
+            $"study = optuna.create_study(study_name='cma', sampler=optuna.samplers.CmaEsSampler(seed={seed}))\n" +
+            SpherePy(dim) +
+            $"study.optimize(_obj, n_trials={nTrials})\n");
+    }
+
+    /// <summary>
+    ///     The 40-D workload of the Rustuna comparison for 1,200 trials (80 generations), where a wrong cache hit or a
+    ///     mis-ordered generation would show within a few generations.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
+    public void LongRun_40D_FullState_IsBitIdentical()
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "cma",
+            sampler: new CmaEsSampler(seed: 0));
+        csStudy.Optimize(SphereCs(40), nTrials: 1200);
+
+        AssertParityExceptOptimizerBlob(csStudy,
+            "study = optuna.create_study(study_name='cma', sampler=optuna.samplers.CmaEsSampler(seed=0))\n" +
+            SpherePy(40) +
+            "study.optimize(_obj, n_trials=1200)\n");
+    }
+
+    /// <summary>
+    ///     Every other trial that told a generation (its sampling stored a state) fails afterwards, plus every 7th
+    ///     trial. A failed teller never becomes the latest state holder, so the next ask must restore the previous state
+    ///     (the cache was dropped at the tell) and tell the same generation again, exactly as Optuna does.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    ///     Thrown by the objective on purpose; <c>Optimize</c>'s <c>catch</c> turns it into a FAIL trial, so it never
+    ///     leaves the test.
+    /// </exception>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void FailingTellers_FullState_IsBitIdentical()
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        var sphere = SphereCs(6);
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "cma",
+            sampler: new CmaEsSampler(seed: 5));
+        int tellersSeen = 0;
+        csStudy.Optimize(t =>
+        {
+            double v = sphere(t);
+            bool told = csStudy.Storage.GetTrialSystemAttrs(t.TrialId).ContainsKey("cma:optimizer:0");
+            if ((told && tellersSeen++ % 2 == 0) || t.Number % 7 == 3)
+                throw new InvalidOperationException("planned failure");
+            return v;
+        }, nTrials: 300, @catch: new[] { typeof(InvalidOperationException) });
+
+        csStudy.Trials.Count(t => t.State == TrialState.Fail
+            && t.SystemAttrs.ContainsKey("cma:optimizer:0")).Should().BeGreaterThan(5, "failed tellers must occur");
+        AssertParityExceptOptimizerBlob(csStudy,
+            "study = optuna.create_study(study_name='cma', sampler=optuna.samplers.CmaEsSampler(seed=5))\n" +
+            SpherePy(6) +
+            "_tellers_seen = [0]\n" +
+            "def _obj_failing(t):\n" +
+            "    v = _obj(t)\n" +
+            "    told = 'cma:optimizer:0' in t.study._storage.get_trial_system_attrs(t._trial_id)\n" +
+            "    fail = False\n" +
+            "    if told:\n" +
+            "        fail = _tellers_seen[0] % 2 == 0\n" +
+            "        _tellers_seen[0] += 1\n" +
+            "    if fail or t.number % 7 == 3:\n" +
+            "        raise ValueError('planned failure')\n" +
+            "    return v\n" +
+            "study.optimize(_obj_failing, n_trials=300, catch=(ValueError,))\n");
+    }
+
+    /// <summary>
+    ///     With <c>consider_pruned_trials</c>, pruned trials join the history as copies carrying their last
+    ///     intermediate value; the history makes each copy once, when the trial is folded, and the run still equals
+    ///     Optuna's, which copies them on every ask.
+    /// </summary>
+    /// <exception cref="TrialPruned">
+    ///     Thrown by the objective on purpose for every 5th trial; the study records it as a PRUNED trial, so it never
+    ///     leaves the test.
+    /// </exception>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void ConsiderPrunedTrials_FullState_IsBitIdentical()
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        var sphere = SphereCs(5);
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "cma",
+            sampler: new CmaEsSampler(seed: 2, considerPrunedTrials: true));
+        csStudy.Optimize(t =>
+        {
+            double v = sphere(t);
+            if (t.Number % 5 == 2)
+            {
+                t.Report(v + 1.0, 1);
+                t.Report(v * 0.5, 3);
+                throw new TrialPruned();
+            }
+            return v;
+        }, nTrials: 250);
+
+        csStudy.Trials.Count(t => t.State == TrialState.Pruned).Should().BeGreaterThan(40);
+        AssertParityExceptOptimizerBlob(csStudy,
+            "study = optuna.create_study(study_name='cma', sampler=optuna.samplers.CmaEsSampler(seed=2, consider_pruned_trials=True))\n" +
+            SpherePy(5) +
+            "def _obj_pruning(t):\n" +
+            "    v = _obj(t)\n" +
+            "    if t.number % 5 == 2:\n" +
+            "        t.report(v + 1.0, 1)\n" +
+            "        t.report(v * 0.5, 3)\n" +
+            "        raise optuna.TrialPruned()\n" +
+            "    return v\n" +
+            "study.optimize(_obj_pruning, n_trials=250)\n");
+    }
+
+    /// <summary>The separable variant over 30+ generations: its own state prefix (<c>sepcma:</c>) and diagonal state.</summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void SeparableCma_LongRun_FullState_IsBitIdentical()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "cma",
+            sampler: new CmaEsSampler(seed: 4, useSeparableCma: true));
+        csStudy.Optimize(SphereCs(8), nTrials: 300);
+
+        AssertParityExceptOptimizerBlob(csStudy,
+            "import warnings; warnings.simplefilter('ignore')\n" +
+            "study = optuna.create_study(study_name='cma', sampler=optuna.samplers.CmaEsSampler(seed=4, use_separable_cma=True))\n" +
+            SpherePy(8) +
+            "study.optimize(_obj, n_trials=300)\n");
+    }
+
+    /// <summary>Learning-rate adaptation over 30+ generations: its extra state (the lr-adapt moments) survives the cache.</summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void LrAdapt_LongRun_FullState_IsBitIdentical()
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "cma",
+            sampler: new CmaEsSampler(seed: 9, lrAdapt: true));
+        csStudy.Optimize(SphereCs(6), nTrials: 300);
+
+        AssertParityExceptOptimizerBlob(csStudy,
+            "study = optuna.create_study(study_name='cma', sampler=optuna.samplers.CmaEsSampler(seed=9, lr_adapt=True))\n" +
+            SpherePy(6) +
+            "study.optimize(_obj, n_trials=300)\n");
+    }
+
     // Deterministic shifted sphere with an explicit left-to-right sum (NOT Python's builtin sum(),
     // which since 3.12 uses Neumaier compensated summation and would drift ~1 ULP from the C# sum).
     private static Func<Trial, double> SphereCs(int dim)

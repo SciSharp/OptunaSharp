@@ -304,6 +304,27 @@ public abstract class BaseStorage
     public virtual IReadOnlyList<FrozenTrial> GetTrialsPrefixView(int studyId)
         => GetAllTrials(studyId, deepcopy: false);
 
+    /// <summary>
+    ///     Whether <see cref="GetTrialsPrefixView" /> really is O(1) here (a window over a live list), rather than
+    ///     the base fallback that copies every trial. Samplers that read the history on every ask switch to the view
+    ///     only when this is <see langword="true" />.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Why a flag rather than "always the view": the fallback is a fresh <c>GetAllTrials</c>, which on a
+    ///         database-backed storage is a synchronization with the database. A sampler that used to share the
+    ///         per-trial cached list (<c>Study.GetTrialsInternal(useCache: true)</c>) would issue one more query per
+    ///         ask if it read the fallback view instead. So such storages keep their current read path, and only the
+    ///         storages that override this to <see langword="true" /> get the zero-copy one.
+    ///     </para>
+    ///     <para>
+    ///         Internal on purpose: a third-party storage cannot opt in, because the samplers then read its view
+    ///         without the storage's lock, which is safe only for the in-memory list semantics documented on
+    ///         <see cref="TrialsPrefixView" />.
+    ///     </para>
+    /// </remarks>
+    internal virtual bool HasZeroCopyTrialsView => false;
+
     /// <summary>Count the number of trials in a study.</summary>
     /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
     /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>

@@ -150,7 +150,15 @@ public class IntersectionSearchSpace
     ///     parameter names.
     /// </returns>
     /// <exception cref="NumSharp.ValueError">This cache is reused with a different study identifier.</exception>
-    /// <remarks>The returned dictionary is a new sorted container. Distribution objects are shared with trial snapshots and are treated as immutable.</remarks>
+    /// <remarks>
+    ///     <para>The returned dictionary is a new sorted container. Distribution objects are shared with trial snapshots and are treated as immutable.</para>
+    ///     <para>
+    ///         The trials are read through <c>Study.GetTrialsForSampler</c>: on an in-memory storage that is the
+    ///         zero-copy view, so a call costs only the trials since the cached trial number, where Optuna copies the
+    ///         whole history first. The walk below already stops at the cached number; the copy was the part that grew
+    ///         with the study. Elsewhere the read is Optuna's, cache included.
+    ///     </para>
+    /// </remarks>
     public OrderedDict<string, BaseDistribution> Calculate(Study study, bool useCache = false)
     {
         if (_studyId is null)
@@ -166,7 +174,7 @@ public class IntersectionSearchSpace
         }
 
         (_searchSpace, _cachedTrialNumber) = SearchSpaceFunctions.Calculate(
-            study.GetTrialsInternal(deepcopy: false, useCache: useCache),
+            study.GetTrialsForSampler(useCache),
             _includePruned,
             _searchSpace,
             _cachedTrialNumber);

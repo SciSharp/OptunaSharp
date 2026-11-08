@@ -116,6 +116,30 @@ public class CmaEsMixedFleetInteropTests
     }
 
     /// <summary>
+    ///     The C# seat opts into <c>reuseToldOptimizer</c> (Rustuna plan 13, D1): its samples are no longer Optuna's, but
+    ///     it still stores Optuna's state every generation, so the Python seat keeps restoring and continuing it. Every
+    ///     trial completes, the states change hands both ways, and the study passes through the same generations at the
+    ///     same trials as the Python-only fleet.
+    /// </summary>
+    /// <param name="csharpFirst">Whether the C# worker takes the first turn.</param>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(true)]
+    [DataRow(false)]
+    public void CSharpWorkerReusingItsToldOptimizer_AndAPythonWorker_CompleteTheStudy(bool csharpFirst)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var reference = RunFleet("cma", "reference", firstIsCSharp: false, secondIsCSharp: false);
+        var mixed = RunFleet("cma_reuse", "mixed", firstIsCSharp: csharpFirst, secondIsCSharp: !csharpFirst);
+
+        mixed.Should().HaveCount(Turns * TrialsPerTurn).And.OnlyContain(t => t.State == TrialState.Complete);
+        AssertStatesChangedHands(mixed, "cma:");
+        mixed.Select(t => Generation(t, "cma:")).Should().Equal(reference.Select(t => Generation(t, "cma:")),
+            "tells happen when a generation's trials are complete, whatever their values");
+    }
+
+    /// <summary>
     ///     Runs a two-seat fleet on a new journal: the first seat (seed 11) takes the even turns, the second (seed 22)
     ///     the odd ones, each seat a C# or a Python worker whose study, storage and sampler live across its turns.
     /// </summary>
@@ -200,6 +224,7 @@ public class CmaEsMixedFleetInteropTests
     private static CmaEsSampler CsSampler(string variant, int seed) => variant switch
     {
         "cma" => new CmaEsSampler(seed: seed),
+        "cma_reuse" => new CmaEsSampler(seed: seed, reuseToldOptimizer: true),
         "sepcma" => new CmaEsSampler(seed: seed, useSeparableCma: true),
         "lr_adapt" => new CmaEsSampler(seed: seed, lrAdapt: true),
         "with_margin" => new CmaEsSampler(seed: seed, withMargin: true),
@@ -212,7 +237,7 @@ public class CmaEsMixedFleetInteropTests
     /// <exception cref="ArgumentOutOfRangeException">The variant is unknown.</exception>
     private static string PySampler(string variant) => variant switch
     {
-        "cma" => "optuna.samplers.CmaEsSampler(seed=seed)",
+        "cma" or "cma_reuse" => "optuna.samplers.CmaEsSampler(seed=seed)",
         "sepcma" => "optuna.samplers.CmaEsSampler(seed=seed, use_separable_cma=True)",
         "lr_adapt" => "optuna.samplers.CmaEsSampler(seed=seed, lr_adapt=True)",
         "with_margin" => "optuna.samplers.CmaEsSampler(seed=seed, with_margin=True)",

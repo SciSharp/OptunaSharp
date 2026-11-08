@@ -521,6 +521,13 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    ///     <see langword="true" />: <see cref="GetTrialsPrefixView" /> above wraps the live list without copying it, so
+    ///     samplers that read the history on every ask can afford to read it through the view.
+    /// </remarks>
+    internal override bool HasZeroCopyTrialsView => true;
+
     /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
     /// <param name="deepcopy">Whether to copy trial records; treat records returned with false as read-only.</param>
     /// <param name="states">States to include; null includes every state.</param>
