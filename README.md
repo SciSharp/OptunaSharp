@@ -49,6 +49,22 @@
 
 ---
 
+## Scientific Lead and Contributions
+OptunaSharp has reimplemented byte-for-byte many cutting-edge papers and state of the art algorithms and will continue to doing so.<br>
+Found an <strong>incredible</strong> paper? You <strong>believe</strong> an optimizer/sampler/technique has achieved a breakthrough or has been referenced more than 50 times?
+<h3>
+<p align="center">
+Open an issue (TODO LINK) or merge request (TODO LINK)!
+</p>
+</h3>
+
+
+> AGE-MOEA-2, SMS-EMOA, MOEA/D, RVEA, LM-CMA, VkD-CMA, differential evolution, PSO, the natural evolution strategies (OpenAI-ES, SNES, xNES), TuRBO, REMBO, SAASBO and JANUS (with its DE and multi-objective variants).
+
+And we would love to accept more!
+
+---
+
 ## Features
 
 The port of **Optuna 5.x is complete**: every Optuna module is ported (`study`, `trial`,
