@@ -37,6 +37,60 @@ public class RealWorldExampleBugTests
         return writer.ToString();
     }
 
+    /// <summary>Log handler that keeps the text of every record it receives, in order.</summary>
+    /// <remarks>Registered for one test at a time; records from other threads' studies can interleave.</remarks>
+    private sealed class CollectingHandler : OptunaSharp.Logging.ILogHandler
+    {
+        /// <summary>The messages received so far, oldest first.</summary>
+        public System.Collections.Generic.List<string> Messages { get; } = new();
+
+        /// <summary>Stores the record's message; never throws, so it cannot disturb the code under test.</summary>
+        /// <param name="record">The log record delivered by <see cref="OptunaSharp.Logging.OptunaLogging" />.</param>
+        public void Emit(in OptunaSharp.Logging.LogRecord record)
+        {
+            lock (Messages)
+                Messages.Add(record.Message);
+        }
+    }
+
+    /// <summary>
+    ///     A single-objective objective that returns NaN must be logged with the value it returned, as
+    ///     Optuna's <c>repr(value_or_values)</c> does: <c>Trial 0 failed with value nan.</c>; the port logs
+    ///     <c>[nan]</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <c>optuna/study/_optimize.py</c> (<c>_log_failed_trial</c>) warns
+    ///     <c>f"Trial {trial_number} failed with value {repr(value_or_values)}."</c> with the objective's own
+    ///     return value — a float for a single-objective study. The single-objective <c>Study.Optimize</c>
+    ///     overload wraps the scalar into a one-element array before the loop runs, and
+    ///     <c>Internal/Optimize.cs</c> (<c>LogFailedTrial</c>) prints that array with <c>ListRepr</c>. The same
+    ///     scalar-wrapping root cause as QA-12 (the skipped-tell message), on a different message. Found by
+    ///     diffing the logs of a real-world run (<c>examples/0_GpuFineTunePlanner.cs</c> returns NaN for
+    ///     diverged fp16 runs) against Optuna 5.0.0.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Optimize_NaNScalarObjective_LogsScalarValueLikePython()
+    {
+        var handler = new CollectingHandler();
+        int verbosity = OptunaSharp.Logging.OptunaLogging.GetVerbosity();
+        OptunaSharp.Logging.OptunaLogging.SetVerbosity(OptunaSharp.Logging.LogLevel.Info);
+        OptunaSharp.Logging.OptunaLogging.AddHandler(handler);
+        try
+        {
+            var study = Optuna.CreateStudy();
+            study.Optimize(_ => double.NaN, nTrials: 1);
+        }
+        finally
+        {
+            // Global logging state: always restore it, or later tests log at the wrong level.
+            OptunaSharp.Logging.OptunaLogging.RemoveHandler(handler);
+            OptunaSharp.Logging.OptunaLogging.SetVerbosity(verbosity);
+        }
+
+        handler.Messages.Should().Contain("Trial 0 failed with value nan.");
+    }
+
     /// <summary>
     ///     The progress bar's running best must be formatted like Optuna's <c>f"{study.best_value:.6g}"</c>
     ///     (six significant digits: <c>0.930382</c>, <c>1.23457e+06</c>); the port prints the full float repr.
