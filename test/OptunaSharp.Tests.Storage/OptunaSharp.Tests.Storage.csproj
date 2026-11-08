@@ -18,7 +18,7 @@
     <PackageReference Include="AwesomeAssertions" Version="9.6.0" />
     <!-- Code-coverage collector: the "XPlat Code Coverage" data collector emits cobertura so the
          full-API-coverage of all three backends + the shared parser is measurable. -->
-    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="coverlet.collector" Version="10.1.0" />
     <!-- Testcontainers for the EF Core RDB conformance suite (Phase 4.2): a throwaway PostgreSQL and
          MySQL server per test run. Self-skips (Inconclusive) when Docker is unavailable, like the
          Redis suite's docker-compose gating. -->
