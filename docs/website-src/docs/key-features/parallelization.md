@@ -53,10 +53,10 @@ That depends on what limits your trials:
 | Computing: a CPU-bound objective | Scales with the cores. 64 trials of 50 ms took 3.2 s at `nJobs: 1`, 0.48 s at 8 and 0.35 s at 16. Python Optuna stays at about 3.1 s, held by the GIL. |
 | Waiting: a remote service, a subprocess, a file | Scales past the cores, because a waiting thread uses no CPU. 640 trials sleeping 100 ms took 1.26 s at `nJobs: 64` (Python: 1.06 s; ideal 1.0 s). Each trial in flight holds a thread for its whole life. |
 | Sampling: a fast objective, a multivariate TPE over many parameters, a high-dimensional CMA-ES | Limited: the workers share the study's sampler, which proposes for one trial at a time. A [sampler per worker](#sampling-in-parallel-and-openblas-threads) lifts the limit for the samplers that support it. Slow model-based samplers gain nothing: a GP study took 7.53 s at `nJobs: 1` and 9.30 s at 8. |
-| Storing: a fast objective on a remote or disk-backed storage | Limited by the storage. A file journal flushes every write to disk (80–150 appends per second with 16 workers on an SSD), and a Redis journal ran about 90–130 two-parameter trials per second. See [Storage › Concurrency](../storage.md#concurrency-workers-studies-and-languages-on-one-journal). |
+| Storing: a fast objective on a remote or disk-backed storage | Limited by the storage: a file journal flushes every write to disk, and a remote storage pays a network round trip for each operation. See [Storage › Concurrency](../storage.md#concurrency-workers-studies-and-languages-on-one-journal). |
 
-The figures come from the [README's benchmarks](https://github.com/SciSharp/OptunaSharp#performance) (an i9-13900K
-with 32 logical CPUs) and the [Storage page](../storage.md#concurrency-workers-studies-and-languages-on-one-journal).
+The figures come from the [README's benchmarks](https://github.com/SciSharp/OptunaSharp#performance), on an
+i9-13900K with 32 logical CPUs.
 
 ### Your code under nJobs
 
