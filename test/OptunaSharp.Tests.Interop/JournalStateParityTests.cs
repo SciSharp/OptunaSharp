@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using AwesomeAssertions;
 using OptunaSharp.Samplers;
 using OptunaSharp.Storages.Journal;
 using Python.Runtime;
@@ -193,6 +194,60 @@ public class JournalStateParityTests : OptunaInteropTestBase
         if (csState.Trials.Count != 12)
             throw new AssertFailedException($"Expected 12 trials (4 writers x 3) but got {csState.Trials.Count}.");
         StudySnapshot.AssertParity(pyState, csState, DatetimeComparison.Instant);
+    }
+
+    // ------------------------------------------------------------------ large journals (plan 14 offset checkpoints)
+
+    /// <summary>
+    ///     Plan 14 gate: the file backend now keeps one offset per <c>JournalFileBackend.OffsetCheckpointInterval</c> lines
+    ///     (4,096) plus the furthest one, where Python keeps one per line. Python writes a 40-parameter study of 250 trials
+    ///     (over 10,000 lines, more than two checkpoint intervals); a C# storage replays it to Python's full state. Two C#
+    ///     storages then share one backend: one stays synced at Python's end while the other writes 30 more trials, so the
+    ///     lagging one's next sync starts behind the furthest offset (at a checkpoint, skipping forward). Every replay —
+    ///     the lagging storage, a cold C# storage and Python's — must give the identical full state, floats and datetimes
+    ///     included.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void LargeJournal_PythonWrites_CSharpReplaysAndContinues_SharedBackendCatchesUp_FullState()
+    {
+        PyExec(
+            $"storage = {PyJournalStorageExpr(_path)}\n" +
+            "study = optuna.create_study(study_name='big', storage=storage, " +
+            "sampler=optuna.samplers.RandomSampler(seed=14))\n" +
+            "def objective(t):\n" +
+            "    return sum(t.suggest_float(f'x{i}', -10, 10) ** 2 for i in range(40))\n" +
+            "study.optimize(objective, n_trials=250)\n");
+        var pyWritten = PyStudyState("study");
+        File.ReadAllLines(_path).Length.Should().BeGreaterThan(2 * JournalFileBackend.OffsetCheckpointInterval);
+
+        var shared = new JournalFileBackend(_path, lockObj: new JournalFileOpenLock(_path));
+        var writer = Optuna.LoadStudy("big", new JournalStorage(shared), sampler: new RandomSampler(seed: 15));
+        var lagging = Optuna.LoadStudy("big", new JournalStorage(shared), sampler: new RandomSampler(0));
+        StudySnapshot.AssertParity(pyWritten, StudySnapshot.Capture(writer), DatetimeComparison.Instant);
+        StudySnapshot.AssertParity(pyWritten, StudySnapshot.Capture(lagging), DatetimeComparison.Instant);
+
+        writer.Optimize(t =>
+        {
+            double sum = 0;
+            for (int i = 0; i < 40; i++)
+            {
+                double v = t.SuggestFloat($"x{i}", -10, 10);
+                sum += v * v;
+            }
+            return sum;
+        }, nTrials: 30);
+        var written = StudySnapshot.Capture(writer);
+        written.Trials.Should().HaveCount(280);
+
+        StudySnapshot.AssertParity(written, StudySnapshot.Capture(lagging), DatetimeComparison.Instant);
+        StudySnapshot.AssertParity(written,
+            StudySnapshot.Capture(Optuna.LoadStudy("big", NewCSharpStorage(), sampler: new RandomSampler(0))),
+            DatetimeComparison.Instant);
+        PyExec(
+            $"fresh_storage = {PyJournalStorageExpr(_path)}\n" +
+            "fresh = optuna.load_study(study_name='big', storage=fresh_storage)\n");
+        StudySnapshot.AssertParity(written, PyStudyState("fresh"), DatetimeComparison.Instant);
     }
 
     // ------------------------------------------------------------------ raw line-format parity

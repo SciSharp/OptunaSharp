@@ -29,13 +29,36 @@ public class JournalFileBackend : BaseJournalBackend
     private readonly string _filePath;
     private readonly BaseJournalFileLock _lock;
 
-    // Byte offset of every log number seen so far, so a sync can seek instead of re-reading the journal. Python's
-    // dict is safe to share between readers under the GIL; this Dictionary is not, and one backend instance can be
-    // read by several JournalStorage instances at once (a singleton backend under scoped or transient storages).
-    // Every access therefore takes _offsetLock, and a reader never looks up an entry another reader may still be
-    // writing (see ReadLogs).
-    private readonly Dictionary<int, long> _logNumberOffset = new() { [0] = 0 };
+    /// <summary>
+    ///     How many log lines apart the kept start offsets lie (plan 14; Rustuna 82b13d8). Python keeps one offset per line
+    ///     (<c>_log_number_offset</c>); a 100,000-trial, 40-parameter journal has about 4.5 million lines, 120-250 MB of
+    ///     dictionary. Here only the furthest offset reached and one offset per this many lines are kept.
+    /// </summary>
+    internal const int OffsetCheckpointInterval = 4096;
+
+    // Where a read can start without scanning from the file's beginning. Python's dict is safe to share between
+    // readers under the GIL; these fields are not, and one backend instance can be read by several JournalStorage
+    // instances at once (a singleton backend under scoped or transient storages). Every access therefore takes
+    // _offsetLock, and each reader carries its own byte position (see ReadLogs).
+    // The furthest log number whose start offset a read has established, and that offset. A sync asks for exactly the
+    // next unread log, which is this one, so it seeks straight there as Python's per-line dictionary lets it.
+    private int _latestLogNumber;
+    private long _latestLogOffset;
+    // The start offset of log number k * OffsetCheckpointInterval at index k (log 0 starts at byte 0). A read for an
+    // earlier log number (a new storage over a shared backend, a replay from the start) seeks to the nearest checkpoint
+    // at or before it and skips forward, never more than OffsetCheckpointInterval - 1 lines.
+    private readonly List<long> _offsetCheckpoints = new() { 0 };
     private readonly object _offsetLock = new();
+
+    /// <summary>How many offset checkpoints are kept, for the tests that check the bookkeeping stays sparse.</summary>
+    internal int OffsetCheckpointCount
+    {
+        get
+        {
+            lock (_offsetLock)
+                return _offsetCheckpoints.Count;
+        }
+    }
 
     /// <summary>
     ///     The lock this backend acquires around every append: the caller's, or the
@@ -92,21 +115,20 @@ public class JournalFileBackend : BaseJournalBackend
         using var f = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         // Maintain remaining_log_size to allow writing by another process while reading the log.
         long remainingLogSize = new FileInfo(_filePath).Length;
-        int logNumberStart = 0;
         // Byte offset of the line being read. Python reads `_log_number_offset[log_number]` for it, but that entry
-        // can be missing here while another reader of this backend is still inserting it, so the position is
-        // carried by this enumeration instead; it equals the cached offset whenever both exist.
-        long position = 0;
-        bool known;
-        long offset;
+        // can be missing here while another reader of this backend is still recording it, so the position is
+        // carried by this enumeration instead; it equals the recorded offset whenever both exist.
+        // Python seeks to `log_number_from` when it has that line's offset and reads from byte 0 otherwise; this starts
+        // at the nearest known line start at or before it instead (plan 14). Either way the lines before
+        // `log_number_from` are skipped exactly as below, so the records yielded and the size accounting are the same.
+        int logNumberStart;
+        long position;
         lock (_offsetLock)
-            known = _logNumberOffset.TryGetValue(logNumberFrom, out offset);
-        if (known)
+            (logNumberStart, position) = ReadStart(logNumberFrom);
+        if (position > 0)
         {
-            f.Seek(offset, SeekOrigin.Begin);
-            logNumberStart = logNumberFrom;
-            remainingLogSize -= offset;
-            position = offset;
+            f.Seek(position, SeekOrigin.Begin);
+            remainingLogSize -= position;
         }
 
         Exception? lastDecodeError = null;
@@ -127,12 +149,14 @@ public class JournalFileBackend : BaseJournalBackend
                 logNumber++;
                 continue;
             }
-            // First writer wins, as Python's `if log_number + 1 not in ...`; every reader computes the same value.
-            lock (_offsetLock)
-                _logNumberOffset.TryAdd(logNumber + 1, position + byteLen);
-            position += byteLen;
+            long nextOffset = position + byteLen;
+            position = nextOffset;
             if (logNumber < logNumberFrom)
             {
+                // A line before the requested range is skipped undecoded, as Python skips it, and its successor's start
+                // is recorded as Python records it.
+                lock (_offsetLock)
+                    RecordLineStart(logNumber + 1, nextOffset);
                 logNumber++;
                 continue;
             }
@@ -146,15 +170,59 @@ public class JournalFileBackend : BaseJournalBackend
             }
             catch (ValueError err)
             {
+                // A record that does not decode must not become a seek target, or the next sync would skip it: its
+                // successor's start is recorded only after it decodes (Python records it first and deletes it here).
                 lastDecodeError = err;
-                // A record that does not decode must not become a seek target, or the next sync would skip it.
-                lock (_offsetLock)
-                    _logNumberOffset.Remove(logNumber + 1);
             }
             if (parsed is not null)
+            {
+                lock (_offsetLock)
+                    RecordLineStart(logNumber + 1, nextOffset);
                 yield return parsed;
+            }
             logNumber++;
         }
+    }
+
+    /// <summary>The known line start a read for <paramref name="logNumberFrom" /> begins at; the caller holds <c>_offsetLock</c>.</summary>
+    /// <param name="logNumberFrom">The first log number the read must yield.</param>
+    /// <returns>
+    ///     The log number of the line the read starts at and that line's byte offset: the furthest line start established
+    ///     when <paramref name="logNumberFrom" /> is at or past it, otherwise the checkpoint at or before it (log 0 at byte 0
+    ///     when nothing nearer is known).
+    /// </returns>
+    private (int LogNumber, long Offset) ReadStart(int logNumberFrom)
+    {
+        if (logNumberFrom >= _latestLogNumber)
+            return (_latestLogNumber, _latestLogOffset);
+        int index = logNumberFrom / OffsetCheckpointInterval;
+        // Every checkpoint below the furthest line start has been recorded: the read that established it passed each.
+        return index < _offsetCheckpoints.Count
+            ? (index * OffsetCheckpointInterval, _offsetCheckpoints[index])
+            : (0, 0L);
+    }
+
+    /// <summary>
+    ///     Records that log number <paramref name="logNumber" /> starts at byte <paramref name="offset" />, once the line
+    ///     before it has been read whole and decoded; the caller holds <c>_offsetLock</c>.
+    /// </summary>
+    /// <param name="logNumber">The log number whose line starts at <paramref name="offset" />.</param>
+    /// <param name="offset">The byte offset of that line's first byte.</param>
+    /// <remarks>
+    ///     Readers sharing the backend record the same offsets for the same lines (the file only grows), so the order
+    ///     they record in does not matter: the furthest start only moves forward, and a checkpoint is appended by
+    ///     whichever reader passes it first. A reader that starts past a checkpoint starts at a line some reader reached by
+    ///     reading through every earlier checkpoint, so checkpoints are appended in order.
+    /// </remarks>
+    private void RecordLineStart(int logNumber, long offset)
+    {
+        if (logNumber > _latestLogNumber)
+        {
+            _latestLogNumber = logNumber;
+            _latestLogOffset = offset;
+        }
+        if (logNumber % OffsetCheckpointInterval == 0 && logNumber / OffsetCheckpointInterval == _offsetCheckpoints.Count)
+            _offsetCheckpoints.Add(offset);
     }
 
     /// <summary>
