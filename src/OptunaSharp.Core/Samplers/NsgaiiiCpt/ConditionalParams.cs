@@ -378,10 +378,10 @@ public sealed class ConditionalParams
         {
             foreach (var name in _rules.Keys)
             {
-                if (trial.ParamsDict.TryGetValue(name, out var active))
+                if (trial.Params.TryGetValue(name, out var active))
                     latent[name] = active;
             }
-            if (trial.SystemAttrsDict.TryGetValue(DormantAttrKey, out var raw) && raw is not null)
+            if (trial.SystemAttrs.TryGetValue(DormantAttrKey, out var raw) && raw is not null)
             {
                 foreach (var (name, value) in CoerceDormant(raw))
                 {
@@ -496,8 +496,8 @@ public sealed class ConditionalParams
     {
         foreach (var name in Order)
         {
-            bool present = trial.ParamsDict.ContainsKey(name);
-            bool active = IsActive(name, trial.ParamsDict);
+            bool present = trial.Params.ContainsKey(name);
+            bool active = IsActive(name, trial.Params);
             if (present == active)
                 continue;
             yield return (name, present

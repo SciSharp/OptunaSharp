@@ -52,7 +52,7 @@ public class RetryHeartbeatStaleTrialCallback
             ["failed_trial"] = (long)trial.Number,
             ["retry_history"] = new List<object?>(),
         };
-        foreach (var (key, value) in trial.SystemAttrsDict)
+        foreach (var (key, value) in trial.SystemAttrs)
             systemAttrs[key] = value;
 
         var retryHistory = (List<object?>)systemAttrs["retry_history"]!;
@@ -85,7 +85,7 @@ public class RetryHeartbeatStaleTrialCallback
     /// <exception cref="System.OverflowException">The retry marker exceeds Int32.</exception>
     /// <exception cref="System.InvalidCastException">The retry marker is not convertible to an integer.</exception>
     public static int? RetriedTrialNumber(FrozenTrial trial)
-        => trial.SystemAttrsDict.GetValueOrDefault("failed_trial") is { } value
+        => trial.SystemAttrs.GetValueOrDefault("failed_trial") is { } value
             ? Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture)
             : null;
 
@@ -97,7 +97,7 @@ public class RetryHeartbeatStaleTrialCallback
     /// <param name="trial">Trial record or active trial on which the operation acts.</param>
     /// <returns>A new list of ancestor trial numbers in retry order; empty when absent.</returns>
     public static List<int> RetryHistory(FrozenTrial trial)
-        => trial.SystemAttrsDict.GetValueOrDefault("retry_history") is List<object?> history
+        => trial.SystemAttrs.GetValueOrDefault("retry_history") is List<object?> history
             ? history.Select(n => Convert.ToInt32(n, System.Globalization.CultureInfo.InvariantCulture)).ToList()
             : new List<int>();
 }

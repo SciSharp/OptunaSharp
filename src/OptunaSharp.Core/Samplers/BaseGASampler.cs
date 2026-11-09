@@ -191,7 +191,7 @@ public abstract class BaseGASampler : BaseSampler
         if (trial.State != TrialState.Complete)
             return;   // failed/pruned trials never belonged to a population in the reference scan either
         tracker.NumberById[trial.TrialId] = trial.Number;
-        object? raw = trial.SystemAttrsDict.GetValueOrDefault(GenerationKey);
+        object? raw = trial.SystemAttrs.GetValueOrDefault(GenerationKey);
         int generation = raw is null ? -1 : Convert.ToInt32(raw, CultureInfo.InvariantCulture);
         if (generation < 0)
             return;   // the scan's `raw is null ? -1` case: contributes to no maximum and no population
@@ -219,7 +219,7 @@ public abstract class BaseGASampler : BaseSampler
     /// <exception cref="System.Exception">The configured storage provider fails; its exception propagates.</exception>
     public int GetTrialGeneration(Study study, FrozenTrial trial)
     {
-        var stored = trial.SystemAttrsDict.GetValueOrDefault(GenerationKey);
+        var stored = trial.SystemAttrs.GetValueOrDefault(GenerationKey);
         if (stored is not null)
             return Convert.ToInt32(stored, CultureInfo.InvariantCulture);
 

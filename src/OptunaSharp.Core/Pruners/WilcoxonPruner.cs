@@ -86,7 +86,7 @@ public class WilcoxonPruner : BasePruner
             return false;
         }
 
-        if (bestTrial.IntermediateValues.Count == 0)
+        if (bestTrial.IntermediateValuesForRead.Count == 0)
         {
             OptunaWarnings.Warn(
                 "The best trial has no intermediate values so WilcoxonPruner cannot prune trials. " +
@@ -95,8 +95,8 @@ public class WilcoxonPruner : BasePruner
             return false;
         }
 
-        var bestSteps = bestTrial.IntermediateValues.Keys.ToArray();
-        var bestStepValues = bestSteps.Select(s => bestTrial.IntermediateValues[s]).ToArray();
+        var bestSteps = bestTrial.IntermediateValuesForRead.Keys.ToArray();
+        var bestStepValues = bestSteps.Select(s => bestTrial.IntermediateValuesForRead[s]).ToArray();
 
         if (bestStepValues.Any(v => !double.IsFinite(v)))
         {

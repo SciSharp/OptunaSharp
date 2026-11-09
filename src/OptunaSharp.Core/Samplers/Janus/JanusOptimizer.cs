@@ -196,7 +196,7 @@ internal sealed class JanusOptimizer
             double[] x;
             try
             {
-                x = _trans.Transform(t.ParamsDict).ToArray<double>();
+                x = _trans.Transform(t.Params).ToArray<double>();
             }
             catch (Exception)
             {
@@ -943,7 +943,7 @@ internal sealed class JanusOptimizer
             for (int k = 0; k < _popsize; k++)
             {
                 var t = ready[b * _popsize + k];
-                double[] x = _trans.Transform(t.ParamsDict).ToArray<double>();
+                double[] x = _trans.Transform(t.Params).ToArray<double>();
                 double y = _direction == StudyDirection.Maximize ? -t.Value!.Value : t.Value!.Value;
                 solutions.Add((x, y));
                 _trialsUsed.Add(t.Number);

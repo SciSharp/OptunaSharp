@@ -162,10 +162,10 @@ internal static class TpeTrialSplit
     /// <returns>A lexicographic score prioritizing later pruning steps and then better intermediate values.</returns>
     private static (double, double) GetPrunedTrialScore(FrozenTrial trial, Study study)
     {
-        if (trial.IntermediateValues.Count > 0)
+        if (trial.IntermediateValuesForRead.Count > 0)
         {
-            long step = trial.IntermediateValues.Keys.Max();  // max(dict.items()) compares by key (step).
-            double intermediateValue = trial.IntermediateValues[step];
+            long step = trial.IntermediateValuesForRead.Keys.Max();  // max(dict.items()) compares by key (step).
+            double intermediateValue = trial.IntermediateValuesForRead[step];
             if (double.IsNaN(intermediateValue))
                 return (-step, double.PositiveInfinity);
             if (study.Directions[0] == StudyDirection.Minimize)

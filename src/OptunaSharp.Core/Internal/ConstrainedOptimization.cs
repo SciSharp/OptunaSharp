@@ -51,15 +51,18 @@ internal static class ConstrainedOptimization
         }
 
         // Load constraints from new format (individual keys).
+        // Keys first, the value only for a match: the same entries in the same order as walking the pairs, but a
+        // compact finished trial (plan 13, item S12) then rebuilds no stored string it does not need. TPE reads every
+        // trial's constraints on every ask, and its trials carry their relative parameters as long JSON strings.
         string prefix = ConstraintsKey + ":";
-        foreach (var (key, value) in systemAttrs)
+        foreach (string key in systemAttrs.Keys)
         {
             if (key.StartsWith(prefix, System.StringComparison.Ordinal))
             {
                 string constraintKey = key.Substring(prefix.Length);
                 if (constraintsDict.ContainsKey(constraintKey))
                     OptunaWarnings.Warn("Overwrite an old format constraint.");
-                constraintsDict[constraintKey] = ToDouble(value);
+                constraintsDict[constraintKey] = ToDouble(systemAttrs[key]);
             }
         }
         return constraintsDict;

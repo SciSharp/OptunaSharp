@@ -15,8 +15,11 @@ internal sealed class SearchSpaceGroup
     public List<OrderedDict<string, BaseDistribution>> SearchSpaces => _searchSpaces;
 
     /// <summary>Splits existing groups so every resulting group has the same presence pattern in the incoming trial.</summary>
-    /// <param name="distributions">The parameter distributions being incorporated into the decomposed search space.</param>
-    public void AddDistributions(OrderedDict<string, BaseDistribution> distributions)
+    /// <param name="distributions">
+    ///     The parameter distributions being incorporated into the decomposed search space; only read, so a compact
+    ///     finished trial's read-only view (plan 13, item S12) serves as well as a dictionary.
+    /// </param>
+    public void AddDistributions(IReadOnlyDictionary<string, BaseDistribution> distributions)
     {
         var distKeys = new HashSet<string>(distributions.Keys);
         var nextSearchSpaces = new List<OrderedDict<string, BaseDistribution>>();
@@ -104,7 +107,7 @@ internal sealed class GroupDecomposedSearchSpace
         foreach (var trial in study.GetTrialsForSampler(useCache))
         {
             if (System.Array.IndexOf(statesOfInterest, trial.State) >= 0)
-                _searchSpace.AddDistributions(trial.DistributionsDict);
+                _searchSpace.AddDistributions(trial.Distributions);
         }
 
         return _searchSpace.DeepCopy();

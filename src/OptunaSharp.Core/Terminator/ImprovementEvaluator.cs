@@ -138,7 +138,7 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
 
         var searchSpace = new GpSearchSpace(optunaSearchSpace);
         double[,] normalizedParams = searchSpace.GetNormalizedParams(
-            completeTrials.Select(t => (IReadOnlyDictionary<string, object?>)t.ParamsDict).ToList());
+            completeTrials.Select(t => t.Params).ToList());
         (double[,] normalizedTopNParams, double[] topNValues) = GetTopN(normalizedParams, values);
 
         double topNValuesMean = MathUtil.Mean(topNValues);

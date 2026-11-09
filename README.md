@@ -295,6 +295,11 @@ CMA-ES pickles its state into the storage every generation, and TPE scores candi
 [Performance and Compatibility](docs/website-src/docs/performance.md) guide lists the opt-in switches that trade
 that compatibility for speed.
 
+For memory, `new InMemoryStorage(compactFinishedTrials: true)` keeps finished trials compactly and gives the same
+trials: the 100,000-trial CMA-ES study above keeps 257 MB instead of 1,287 MB once finished, and NSGA-II's 88 MB
+instead of 671 MB, in the same time. Finished trials then hand out read-only views instead of dictionaries; the
+guide lists what that changes.
+
 ### Executors
 
 Trials run on [OptunaSharp's own dedicated threads by default, or on the .NET ThreadPool][parallel-executor]

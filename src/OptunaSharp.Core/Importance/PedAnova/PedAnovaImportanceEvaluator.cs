@@ -272,7 +272,7 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
         var regimeTrials = new List<(BaseDistribution? Dist, List<FrozenTrial> Trials)>();
         foreach (var trial in trials)
         {
-            BaseDistribution? key = trial.DistributionsDict.TryGetValue(paramName, out var d) ? d : null;
+            BaseDistribution? key = trial.Distributions.TryGetValue(paramName, out var d) ? d : null;
             int found = -1;
             for (int i = 0; i < regimeTrials.Count; i++)
             {
@@ -325,7 +325,7 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
         var allParams = new List<string>();
         foreach (var trial in trials)
         {
-            foreach (var name in trial.DistributionsDict.Keys)
+            foreach (var name in trial.Distributions.Keys)
             {
                 if (seen.Add(name))
                     allParams.Add(name);

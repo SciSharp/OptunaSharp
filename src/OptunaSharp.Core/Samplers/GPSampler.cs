@@ -187,7 +187,7 @@ public class GPSampler : BaseSampler
     {
         var internalSearchSpace = new GpSearchSpace(searchSpace);
         var completedParams = completedTrials
-            .Select(t => (IReadOnlyDictionary<string, object?>)t.ParamsDict)
+            .Select(t => t.Params)
             .ToList();
         double[,] normalizedParams = internalSearchSpace.GetNormalizedParams(completedParams);
 
@@ -641,8 +641,10 @@ public class GPSampler : BaseSampler
     /// <returns>The adaptation coefficients for the current covariance rank.</returns>
     private static IReadOnlyDictionary<string, object?> GetParams(FrozenTrial trial)
     {
+        // Read-only throughout: a finished record may be compact (plan 13, item S12), and the mutable accessor would
+        // give it its dictionary back on every ask.
         if (trial.State.IsFinished())
-            return trial.ParamsDict;
+            return trial.Params;
 
         var parts = new List<string>();
         int i = 0;
@@ -653,10 +655,10 @@ public class GPSampler : BaseSampler
             i++;
         }
         if (parts.Count == 0)
-            return trial.ParamsDict;
+            return trial.Params;
 
         var merged = ParseJsonObject(string.Concat(parts));
-        foreach (var kv in trial.ParamsDict)
+        foreach (var kv in trial.Params)
             merged[kv.Key] = kv.Value;
         return merged;
     }

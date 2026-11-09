@@ -110,7 +110,7 @@ public class NsgaiiiCptChildGenerationStrategy
         else
         {
             int parentPopulationSize = parentPopulation.Count;
-            var parentParams = parentPopulation[(int)_rng.Rng.randint(0, parentPopulationSize)].ParamsDict;
+            var parentParams = parentPopulation[(int)_rng.Rng.randint(0, parentPopulationSize)].Params;
             childParams = new OrderedDict<string, object?>();
             if (_conditionalParams is null)
             {

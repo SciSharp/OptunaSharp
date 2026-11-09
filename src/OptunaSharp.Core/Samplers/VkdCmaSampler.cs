@@ -232,7 +232,7 @@ public sealed class VkdCmaSampler : BaseSampler
             {
                 // Re-derive x in optimizer space from the stored (clamped) params, so the optimizer learns
                 // from the actually-evaluated points. Flip sign for maximization.
-                double[] x = trans.Transform(t.ParamsDict).ToArray<double>();
+                double[] x = trans.Transform(t.Params).ToArray<double>();
                 double y = study.Direction == StudyDirection.Minimize ? t.Value!.Value : -t.Value!.Value;
                 solutions.Add((x, y));
             }
@@ -395,11 +395,11 @@ public sealed class VkdCmaSampler : BaseSampler
                 completeTrials.Add(t);
             }
             else if (t.State == TrialState.Pruned
-                     && t.IntermediateValues.Count > 0
+                     && t.IntermediateValuesForRead.Count > 0
                      && _considerPrunedTrials)
             {
-                long maxStep = t.IntermediateValues.Keys.Max();
-                double value = t.IntermediateValues[maxStep];
+                long maxStep = t.IntermediateValuesForRead.Keys.Max();
+                double value = t.IntermediateValuesForRead[maxStep];
                 var copied = t.DeepCopy();
                 copied.Value = value;
                 completeTrials.Add(copied);

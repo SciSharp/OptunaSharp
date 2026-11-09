@@ -116,8 +116,8 @@ internal static class NsgaiiiCptCrossover
 
         if (categoricalSearchSpace.Count > 0)
         {
-            var first = parents[0].ParamsDict;
-            var last = parents[^1].ParamsDict;
+            var first = parents[0].Params;
+            var last = parents[^1].Params;
             var shared = categoricalSearchSpace.Keys.Where(k => first.ContainsKey(k) && last.ContainsKey(k)).ToList();
             var crossed = shared.Count == 0
                 ? Array.Empty<object?>()
@@ -150,7 +150,7 @@ internal static class NsgaiiiCptCrossover
             // so letting it consume RNG would make deactivation perturb the other parameters' math.
             if (conditionalParams.ResolveActive(key, childParams) == false)
                 continue;
-            var carriers = parents.Where(p => p.ParamsDict.ContainsKey(key)).ToList();
+            var carriers = parents.Where(p => p.Params.ContainsKey(key)).ToList();
             if (carriers.Count == parents.Count)
                 common[key] = distribution;
             else if (carriers.Count > 0)
@@ -166,7 +166,7 @@ internal static class NsgaiiiCptCrossover
             {
                 var row = new OrderedDict<string, object?>();
                 foreach (var key in common.Keys)
-                    row[key] = parents[i].ParamsDict[key];
+                    row[key] = parents[i].Params[key];
                 parentsNumerical[i] = transform.Transform(row).ToArray<double>();
             }
 
@@ -185,7 +185,7 @@ internal static class NsgaiiiCptCrossover
             else if (partialCarriers.TryGetValue(key, out var carriers))
             {
                 var carrier = carriers.Count == 1 ? carriers[0] : carriers[(int)rng.randint(0, carriers.Count)];
-                childParams[key] = carrier.ParamsDict[key];
+                childParams[key] = carrier.Params[key];
             }
         }
 

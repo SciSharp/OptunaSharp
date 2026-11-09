@@ -88,7 +88,7 @@ internal static class Records
                     }
                     case "params":
                     {
-                        foreach (var (name, value) in trial.ParamsDict)
+                        foreach (var (name, value) in trial.Params)
                         {
                             var col = new Column(dfColumn, name);
                             record[col] = value;
@@ -98,7 +98,7 @@ internal static class Records
                     }
                     case "user_attrs":
                     {
-                        foreach (var (name, value) in trial.UserAttrsDict)
+                        foreach (var (name, value) in trial.UserAttrs)
                         {
                             var col = new Column(dfColumn, name);
                             record[col] = value;

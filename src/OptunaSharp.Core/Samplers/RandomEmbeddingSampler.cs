@@ -535,7 +535,7 @@ public sealed class RandomEmbeddingSampler : BaseSampler
     private bool TryReadStoredLatent(FrozenTrial trial, out double[] y)
     {
         y = Array.Empty<double>();
-        if (!trial.SystemAttrsDict.TryGetValue(LatentAttrKey, out object? raw) || raw is not IEnumerable seq)
+        if (!trial.SystemAttrs.TryGetValue(LatentAttrKey, out object? raw) || raw is not IEnumerable seq)
             return false;
 
         var values = new List<double>(_embedding.Dim);

@@ -164,7 +164,7 @@ internal static class TrialsDataframe
                     }
                     case "params":
                     {
-                        foreach (var (nestedAttr, nestedValue) in trial.ParamsDict)
+                        foreach (var (nestedAttr, nestedValue) in trial.Params)
                         {
                             record[(dfColumn, nestedAttr)] = nestedValue;
                             Agg().Add((dfColumn, nestedAttr));
@@ -173,7 +173,7 @@ internal static class TrialsDataframe
                     }
                     case "user_attrs":
                     {
-                        foreach (var (nestedAttr, nestedValue) in trial.UserAttrsDict)
+                        foreach (var (nestedAttr, nestedValue) in trial.UserAttrs)
                         {
                             record[(dfColumn, nestedAttr)] = nestedValue;
                             Agg().Add((dfColumn, nestedAttr));
@@ -182,7 +182,7 @@ internal static class TrialsDataframe
                     }
                     case "system_attrs":
                     {
-                        foreach (var (nestedAttr, nestedValue) in trial.SystemAttrsDict)
+                        foreach (var (nestedAttr, nestedValue) in trial.SystemAttrs)
                         {
                             record[(dfColumn, nestedAttr)] = nestedValue;
                             Agg().Add((dfColumn, nestedAttr));
@@ -191,7 +191,7 @@ internal static class TrialsDataframe
                     }
                     case "intermediate_values":
                     {
-                        foreach (var (step, nestedValue) in trial.IntermediateValues)
+                        foreach (var (step, nestedValue) in trial.IntermediateValuesForRead)
                         {
                             string nestedAttr = step.ToString(System.Globalization.CultureInfo.InvariantCulture);
                             record[(dfColumn, nestedAttr)] = nestedValue;

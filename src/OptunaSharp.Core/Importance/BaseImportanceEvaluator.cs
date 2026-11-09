@@ -89,7 +89,7 @@ internal static class ImportanceBase
         OrderedDict<string, BaseDistribution>? distributions = null;
         foreach (var trial in completedTrials)
         {
-            var trialDistributions = trial.DistributionsDict;
+            var trialDistributions = trial.Distributions;
             if (!@params.All(name => trialDistributions.ContainsKey(name)))
                 continue;
 
@@ -131,7 +131,7 @@ internal static class ImportanceBase
         if (@params is not null && @params.Count > 0)
         {
             bool atLeastOneTrial = completedTrials.Any(
-                trial => @params.All(p => trial.DistributionsDict.ContainsKey(p)));
+                trial => @params.All(p => trial.Distributions.ContainsKey(p)));
             if (!atLeastOneTrial)
                 throw new ValueError(
                     "Study must contain completed trials with all specified parameters. " +

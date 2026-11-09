@@ -137,8 +137,12 @@ study.Optimize(trial =>
 ## Attributes, enqueueing, and manual trials
 
 ```csharp
+using OptunaSharp.Collections;
+
 study.SetUserAttr("dataset", "cifar10");           // arbitrary metadata on the study
 trial.SetUserAttr("fold", 3);                       // …or on a trial
+trial.SetUserAttrs(new OrderedDict<string, object?> // several at once, in one storage write
+    { ["seed"] = 7, ["split"] = "val" });
 
 study.EnqueueTrial(new() { ["x"] = 0.0 });          // evaluate specific params next
 study.AddTrial(FrozenTrial.CreateTrial(             // inject an already-evaluated trial

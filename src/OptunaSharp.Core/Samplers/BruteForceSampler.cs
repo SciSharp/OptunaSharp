@@ -170,11 +170,11 @@ public class BruteForceSampler : BaseSampler
             OrderedDict<string, BaseDistribution>? distributions = null;
             foreach (var (name, (value, distribution)) in chosen)
             {
-                if (t.ParamsDict.ContainsKey(name))
+                if (t.Params.ContainsKey(name))
                     continue;
                 // Copied on the first missing value only: the storage's record is shared and read-only.
-                @params ??= new OrderedDict<string, object?>(t.ParamsDict);
-                distributions ??= new OrderedDict<string, BaseDistribution>(t.DistributionsDict);
+                @params ??= new OrderedDict<string, object?>(t.Params);
+                distributions ??= new OrderedDict<string, BaseDistribution>(t.Distributions);
                 @params[name] = value;
                 distributions[name] = distribution;
             }

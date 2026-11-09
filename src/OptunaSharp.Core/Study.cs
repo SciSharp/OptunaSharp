@@ -854,9 +854,11 @@ public class Study
     {
         foreach (var trial in GetTrials(deepcopy: false))
         {
+            // The read-only accessors: this scans every trial, and the mutable ones would give each compact finished
+            // record (plan 13, item S12) its dictionaries back.
             IReadOnlyDictionary<string, object?> trialParams =
-                trial.SystemAttrsDict.GetValueOrDefault("fixed_params") as OrderedDict<string, object?>
-                ?? (IReadOnlyDictionary<string, object?>)trial.ParamsDict;
+                trial.SystemAttrs.GetValueOrDefault("fixed_params") as OrderedDict<string, object?>
+                ?? trial.Params;
 
             if (!new HashSet<string>(trialParams.Keys).SetEquals(@params.Keys))
             {

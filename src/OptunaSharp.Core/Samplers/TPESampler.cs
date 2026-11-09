@@ -351,7 +351,7 @@ public class TPESampler : BaseSampler
         if (_warnIndependentSampling && IsMultivariate(study))
         {
             // Avoid independent warning at the first sampling of `param_name`.
-            if (trials.Any(t => t.ParamsDict.ContainsKey(paramName)))
+            if (trials.Any(t => t.Params.ContainsKey(paramName)))
                 _logger.Warning(string.Format(
                     IndependentSamplingWarningTemplate,
                     paramName,
@@ -370,14 +370,18 @@ public class TPESampler : BaseSampler
     /// <param name="trial">Trial snapshot being examined; copy its contents before modifying them.</param>
     /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
     /// <returns>Recorded external parameters supplemented with readable shared relative-sampling attributes.</returns>
-    private OrderedDict<string, object?> GetParams(FrozenTrial trial, Study study)
+    /// <remarks>
+    ///     Read-only throughout (plan 13, item S12): it runs for every trial on every ask, and a finished record of a
+    ///     storage built with <c>compactFinishedTrials</c> would get its dictionary back from the mutable accessor.
+    /// </remarks>
+    private IReadOnlyDictionary<string, object?> GetParams(FrozenTrial trial, Study study)
     {
         if (trial.State.IsFinished() || !IsMultivariate(study))
-            return trial.ParamsDict;
+            return trial.Params;
 
         var paramsStrs = new List<string>();
         int i = 0;
-        while (trial.SystemAttrsDict.TryGetValue($"{RelativeParamsKey}:{i}", out var chunk)
+        while (trial.SystemAttrs.TryGetValue($"{RelativeParamsKey}:{i}", out var chunk)
                && chunk is string s && s.Length > 0)
         {
             paramsStrs.Add(s);
@@ -385,7 +389,7 @@ public class TPESampler : BaseSampler
         }
 
         if (paramsStrs.Count == 0)
-            return trial.ParamsDict;
+            return trial.Params;
 
         OrderedDict<string, object?> @params;
         try
@@ -395,9 +399,9 @@ public class TPESampler : BaseSampler
         catch
         {
             // Incomplete JSON from a concurrent write: fall back to trial.params.
-            return trial.ParamsDict;
+            return trial.Params;
         }
-        foreach (var (k, v) in trial.ParamsDict)
+        foreach (var (k, v) in trial.Params)
             @params[k] = v;
         return @params;
     }
@@ -428,9 +432,34 @@ public class TPESampler : BaseSampler
         }
 
         int rows = 0;
+        // A compact finished trial (plan 13, item S12; InMemoryStorage built with compactFinishedTrials) stores each
+        // value's internal form, exactly what ToInternalRepr would rebuild from its external one, so a parameter whose
+        // search-space distribution converts as the trial's does is copied without boxing and converting it back. The
+        // positions depend only on the trial's schema, which a static space shares across the whole history.
+        ParamSchema? schema = null;
+        int[] positions = Array.Empty<int>();
         foreach (var trial in trials)
         {
             var @params = GetParams(trial, study);
+            if (@params is CompactParams compact)
+            {
+                if (!ReferenceEquals(compact.Schema, schema))
+                {
+                    schema = compact.Schema;
+                    positions = schema.PositionsFor(names, distributions);
+                }
+                if (Array.IndexOf(positions, ParamSchema.Absent) >= 0)
+                    continue;
+                for (int i = 0; i < nParams; i++)
+                {
+                    columns[i][rows] = positions[i] >= 0
+                        ? compact.InternalAt(positions[i])
+                        : distributions[i].ToInternalRepr(@params[names[i]]);
+                }
+                rows++;
+                continue;
+            }
+
             // search_space.keys() <= params.keys(): the trial must carry every search-space param.
             bool carriesAll = true;
             for (int i = 0; i < nParams && carriesAll; i++)

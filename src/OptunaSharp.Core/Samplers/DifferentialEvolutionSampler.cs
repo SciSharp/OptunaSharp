@@ -205,7 +205,7 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
             var solutions = new List<(double[] X, double Value)>(optimizer.PopulationSize);
             foreach (var t in solutionTrials.Take(optimizer.PopulationSize))
             {
-                double[] x = trans.Transform(t.ParamsDict).ToArray<double>();
+                double[] x = trans.Transform(t.Params).ToArray<double>();
                 double y = study.Direction == StudyDirection.Minimize ? t.Value!.Value : -t.Value!.Value;
                 solutions.Add((x, y));
             }
@@ -287,7 +287,7 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         {
             if (t.Value is null) continue;
             double[] x;
-            try { x = trans.Transform(t.ParamsDict).ToArray<double>(); }
+            try { x = trans.Transform(t.Params).ToArray<double>(); }
             catch (Exception) { continue; }
             if (x.Length != nDim) continue;
             pop.Add(x);

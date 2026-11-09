@@ -82,7 +82,7 @@ public class EMMREvaluator : BaseImprovementEvaluator
 
         var searchSpace = new GpSearchSpace(optunaSearchSpace);
         double[,] normalizedParams = searchSpace.GetNormalizedParams(
-            completeTrials.Select(t => (IReadOnlyDictionary<string, object?>)t.ParamsDict).ToList());
+            completeTrials.Select(t => t.Params).ToList());
         if (searchSpace.Dim == 0)
         {
             OptunaWarnings.Warn(

@@ -65,8 +65,8 @@ internal static class MoeadOffspring
         if (categoricalSearchSpace.Count > 0)
         {
             var catKeys = categoricalSearchSpace.Keys.ToList();
-            var parent0Cat = catKeys.Select(p => parents[0].ParamsDict[p]).ToArray();
-            var parentLastCat = catKeys.Select(p => parents[^1].ParamsDict[p]).ToArray();
+            var parent0Cat = catKeys.Select(p => parents[0].Params[p]).ToArray();
+            var parentLastCat = catKeys.Select(p => parents[^1].Params[p]).ToArray();
             var r = rng.rand(catKeys.Count).ToArray<double>();
             for (int j = 0; j < catKeys.Count; j++)
                 childParams[catKeys[j]] = r[j] >= swappingProb ? parentLastCat[j] : parent0Cat[j];
@@ -83,7 +83,7 @@ internal static class MoeadOffspring
             {
                 var row = new OrderedDict<string, object?>();
                 foreach (var k in numKeys)
-                    row[k] = parents[i].ParamsDict[k];
+                    row[k] = parents[i].Params[k];
                 parentsNumerical[i] = transform.Transform(row).ToArray<double>();
             }
 

@@ -314,7 +314,7 @@ public sealed class TurboSampler : BaseSampler
         int m = restartTrials.Count;
 
         double[,] normalizedParams = internalSpace.GetNormalizedParams(
-            restartTrials.Select(t => (IReadOnlyDictionary<string, object?>)t.ParamsDict).ToList());
+            restartTrials.Select(t => t.Params).ToList());
 
         // Standardize the local run's scores for the GP fit (the paper standardizes objective values before
         // fitting; §C). `clipped` keeps the maximization-oriented observations for the center rule.
@@ -485,7 +485,7 @@ public sealed class TurboSampler : BaseSampler
         int mRestart = restartTrials.Count;
 
         double[,] normalizedParams = internalSpace.GetNormalizedParams(
-            restartTrials.Select(t => (IReadOnlyDictionary<string, object?>)t.ParamsDict).ToList());
+            restartTrials.Select(t => t.Params).ToList());
 
         // Standardize the run's maximization-oriented scores for the GP fit; keep mean/std to un-standardize the
         // Thompson draw for the cross-region comparison (each region standardizes by its OWN constants).

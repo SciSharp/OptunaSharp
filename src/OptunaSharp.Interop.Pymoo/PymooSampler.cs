@@ -329,7 +329,7 @@ public sealed class PymooSampler : BaseSampler
             // so they slot straight into the (pop_size, n) initial-population matrix — no element loop.
             NDArray gen0 = np.zeros(new Shape(_popsize, _nBounds));
             for (int k = 0; k < _popsize; k++)
-                gen0[k] = _trans.Transform(complete[k].ParamsDict);
+                gen0[k] = _trans.Transform(complete[k].Params);
 
             _algo.Dispose();
             using PyObject sampling = PymooInterop.ToNumpy(gen0);

@@ -129,7 +129,7 @@ public class QMCSampler : BaseSampler
             HashSet<string>? intersectionKeys = null;
             foreach (var t in pendingTrials)
             {
-                var space = t.DistributionsDict;
+                var space = t.Distributions;
                 foreach (var (name, dist) in space)
                     unionSearchSpace[name] = dist;
                 if (intersectionKeys is null)
@@ -147,7 +147,7 @@ public class QMCSampler : BaseSampler
 
         // If an initial trial was already made, construct the search space from the first trial.
         var result = new OrderedDict<string, BaseDistribution>();
-        foreach (var (name, dist) in firstTrial.DistributionsDict)
+        foreach (var (name, dist) in firstTrial.Distributions)
             result[name] = dist;
         return result;
     }

@@ -182,14 +182,14 @@ public sealed class NsgaiiiCptSearchSpace
 
             if (searchSpace is null)
             {
-                searchSpace = new OrderedDict<string, BaseDistribution>(trial.DistributionsDict);
+                searchSpace = new OrderedDict<string, BaseDistribution>(trial.Distributions);
                 continue;
             }
 
             var next = new OrderedDict<string, BaseDistribution>();
             foreach (var (name, distribution) in searchSpace)
             {
-                if (trial.DistributionsDict.TryGetValue(name, out var trialDist))
+                if (trial.Distributions.TryGetValue(name, out var trialDist))
                 {
                     if (trialDist.Equals(distribution))
                         next[name] = distribution;
@@ -201,7 +201,7 @@ public sealed class NsgaiiiCptSearchSpace
                     next[name] = distribution;  // Absent because inactive — the expected case.
                 }
             }
-            foreach (var (name, distribution) in trial.DistributionsDict)
+            foreach (var (name, distribution) in trial.Distributions)
             {
                 if (!conditionalParams.IsConditional(name) || next.ContainsKey(name) || excluded.Contains(name))
                     continue;

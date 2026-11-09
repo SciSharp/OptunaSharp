@@ -33,6 +33,48 @@ public class InMemoryStorage : BaseStorage
 
     private readonly object _lock = new();
     private readonly Dictionary<int, int> _prevWaitingTrialNumber = new();
+    private readonly bool _compactFinishedTrials;
+
+    /// <summary>Creates an empty storage that keeps every trial's dictionaries as Optuna's in-memory storage does.</summary>
+    public InMemoryStorage()
+        : this(compactFinishedTrials: false)
+    {
+    }
+
+    /// <summary>
+    ///     Creates an empty storage, optionally keeping finished trials in a compact form (Rustuna plan 13, item S12).
+    /// </summary>
+    /// <param name="compactFinishedTrials">
+    ///     When true, each trial is compacted as it finishes: parameters become one internal value per name against a
+    ///     parameter schema the study's trials share, distributions come from that schema, attributes become arrays
+    ///     with long ASCII strings stored as bytes, and empty dictionaries take no memory. False (the default) keeps
+    ///     Optuna's representation exactly.
+    /// </param>
+    /// <remarks>
+    ///     <para>
+    ///         What stays the same: every value any API returns, and so every sampler's results; a seeded study gives
+    ///         the same trials either way. A finished 40-parameter random-search trial took 6.7 KB in memory and takes
+    ///         0.7 KB compact; a CMA-ES trial 13.5 KB and 2.7 KB, its optimizer states stored as bytes (100,000 trials:
+    ///         1,287 MB and 257 MB). Run times stay the same within noise.
+    ///     </para>
+    ///     <para>
+    ///         What changes, which is why it is opt-in: a finished trial's <see cref="FrozenTrial.Params" />,
+    ///         <see cref="FrozenTrial.Distributions" />, <see cref="FrozenTrial.UserAttrs" /> and
+    ///         <see cref="FrozenTrial.SystemAttrs" /> become read-only views rather than <see cref="OrderedDict{TKey,TValue}" />
+    ///         objects (a cast to <c>OrderedDict</c> fails, a write through <c>IDictionary</c> throws), and numeric values
+    ///         and long strings are rebuilt on each read, so two reads are equal but not the same object. The mutable
+    ///         accessors (<see cref="FrozenTrial.ParamsDict" /> and the other <c>…Dict</c> properties, and
+    ///         <see cref="FrozenTrial.IntermediateValues" />) still return real dictionaries: the first such read gives
+    ///         the trial back a dictionary of its own, which it keeps, so changes made through them stay, at the cost of
+    ///         that trial's saving. A finished trial no longer shares its dictionaries with the running record it was
+    ///         copied from. A read of a numeric parameter through the views allocates a box; TPE, which reads every
+    ///         trial on every ask, copies the stored internal values instead.
+    ///     </para>
+    /// </remarks>
+    public InMemoryStorage(bool compactFinishedTrials) => _compactFinishedTrials = compactFinishedTrials;
+
+    /// <summary>Whether this storage keeps finished trials in the compact form (see the constructor).</summary>
+    public bool CompactFinishedTrials => _compactFinishedTrials;
 
     /// <param name="directions">Objective directions in the same order as the objective values.</param>
     /// <param name="studyName">Name identifying the study in the selected storage.</param>
@@ -258,6 +300,10 @@ public class InMemoryStorage : BaseStorage
             // Both branches built a record with dictionaries nobody else holds, so its writes may go in place until a
             // reader receives it (see FrozenTrial.StorageExclusive).
             trial.StorageExclusive = true;
+            // A trial added already finished (Study.AddTrial) is compacted as one finishing here would be; it is never
+            // written again, so the exclusive flag above stays unused for it.
+            if (_compactFinishedTrials && trial.State.IsFinished())
+                trial.CompactFinished(SchemasOf(studyId));
             _trialIdToStudyIdAndNumber[trialId] = (studyId, trial.Number);
             _studies[studyId].Trials.Add(trial);
             UpdateCache(trialId, studyId);
@@ -360,6 +406,15 @@ public class InMemoryStorage : BaseStorage
         return own;
     }
 
+    /// <summary>The study's schema cache for compact finished trials, created on first use (plan 13, item S12).</summary>
+    /// <param name="studyId">A study of this storage; the caller holds the lock.</param>
+    /// <returns>The cache the study's compact trials share schemas through.</returns>
+    private ParamSchemaCache SchemasOf(int studyId)
+    {
+        StudyInfo study = _studies[studyId];
+        return study.Schemas ??= new ParamSchemaCache();
+    }
+
     /// <summary>
     ///     How many writes had to copy a trial's record first because a reader may hold it (Rustuna plan 13, item S4):
     ///     a diagnostic the tests read to prove that suggestions nobody reads between are written in place.
@@ -442,6 +497,12 @@ public class InMemoryStorage : BaseStorage
         {
             var trial = GetTrialUnlocked(trialId);
 
+            // A compact finished trial (plan 13, item S12) stores exactly the internal value the conversion below would
+            // rebuild through its own distribution, so it is returned as stored. A missing name falls through to the
+            // dictionary path's KeyNotFoundException.
+            if (trial.Params is CompactParams compact && compact.TryGetInternal(paramName, out double stored))
+                return stored;
+
             var distribution = trial.Distributions[paramName];
             return distribution.ToInternalRepr(trial.Params[paramName]);
         }
@@ -473,8 +534,12 @@ public class InMemoryStorage : BaseStorage
             if (state.IsFinished())
             {
                 trial.DatetimeComplete = DateTime.Now;
-                SetTrial(trialId, trial);
                 int studyId = _trialIdToStudyIdAndNumber[trialId].StudyId;
+                // Compact the new record before it is published: no reader can see this object yet, and the
+                // dictionaries it shares with the record it replaces are only read (FrozenTrial.CompactFinished).
+                if (_compactFinishedTrials)
+                    trial.CompactFinished(SchemasOf(studyId));
+                SetTrial(trialId, trial);
                 UpdateCache(trialId, studyId);
             }
             else
@@ -790,5 +855,11 @@ public class InMemoryStorage : BaseStorage
         internal List<StudyDirection> Directions { get; }
         /// <summary>Identifier of the best completed trial cached for single-objective lookup.</summary>
         internal int? BestTrialId { get; set; }
+
+        /// <summary>
+        ///     The study's parameter schemas for compact finished trials (plan 13, item S12); created by the first trial
+        ///     that finishes in a storage built with <c>compactFinishedTrials: true</c>, so other storages never hold one.
+        /// </summary>
+        internal ParamSchemaCache? Schemas { get; set; }
     }
 }

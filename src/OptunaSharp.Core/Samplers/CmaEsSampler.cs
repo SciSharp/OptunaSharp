@@ -337,7 +337,7 @@ public class CmaEsSampler : BaseSampler
                 double[] x = optimizer is CmaWm
                     ? ((System.Collections.IEnumerable)t.SystemAttrs["x_for_tell"]!)
                         .Cast<object?>().Select(v => Convert.ToDouble(v)).ToArray()
-                    : trans.Transform(t.ParamsDict).ToArray<double>();
+                    : trans.Transform(t.Params).ToArray<double>();
                 double y = study.Direction == StudyDirection.Minimize ? t.Value!.Value : -t.Value!.Value;
                 solutions.Add((x, y));
             }
@@ -585,7 +585,7 @@ public class CmaEsSampler : BaseSampler
             {
                 if (!expectedStates.Contains(t.State)) continue;
                 if (!IsCompatibleSearchSpace(searchSpace, t.Distributions)) continue;
-                double[] x = trans.Transform(t.ParamsDict).ToArray<double>();
+                double[] x = trans.Transform(t.Params).ToArray<double>();
                 sourceSolutions.Add((x, sign * t.Value!.Value));
             }
             if (sourceSolutions.Count == 0)
@@ -735,11 +735,11 @@ public class CmaEsSampler : BaseSampler
     {
         if (t.State == TrialState.Complete)
             return t;
-        if (t.State == TrialState.Pruned && t.IntermediateValues.Count > 0 && _considerPrunedTrials)
+        if (t.State == TrialState.Pruned && t.IntermediateValuesForRead.Count > 0 && _considerPrunedTrials)
         {
             // max(t.intermediate_values.items()) — the value at the largest step key.
-            long maxStep = t.IntermediateValues.Keys.Max();
-            double value = t.IntermediateValues[maxStep];
+            long maxStep = t.IntermediateValuesForRead.Keys.Max();
+            double value = t.IntermediateValuesForRead[maxStep];
             // We rewrite the value of the trial `t` for sampling, so we need a copy.
             var copied = t.DeepCopy();
             copied.Value = value;

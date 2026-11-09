@@ -58,14 +58,14 @@ public static class SearchSpaceFunctions
 
             if (searchSpace is null)
             {
-                searchSpace = new OrderedDict<string, BaseDistribution>(trial.DistributionsDict);
+                searchSpace = new OrderedDict<string, BaseDistribution>(trial.Distributions);
                 continue;
             }
 
             var next = new OrderedDict<string, BaseDistribution>();
             foreach (var (name, distribution) in searchSpace)
             {
-                if (trial.DistributionsDict.TryGetValue(name, out var trialDist) && trialDist.Equals(distribution))
+                if (trial.Distributions.TryGetValue(name, out var trialDist) && trialDist.Equals(distribution))
                     next[name] = distribution;
             }
             searchSpace = next;

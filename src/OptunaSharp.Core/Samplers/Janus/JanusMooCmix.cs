@@ -157,9 +157,9 @@ internal sealed class JanusMooCmix
         for (int ti = start; ti < completed.Count; ti++)
         {
             var t = completed[ti];
-            if (!paramNames.All(n => t.ParamsDict.ContainsKey(n))) continue;
+            if (!paramNames.All(n => t.Params.ContainsKey(n))) continue;
             double[] row;
-            try { row = paramNames.Select(n => ToNorm(t.ParamsDict[n], transforms[n])).ToArray(); }
+            try { row = paramNames.Select(n => ToNorm(t.Params[n], transforms[n])).ToArray(); }
             catch (Exception) { continue; }
             rows.Add(row);
             usedTrials.Add(t);
@@ -310,7 +310,7 @@ internal sealed class JanusMooCmix
     /// <returns>The selected normalized center, or null when no compatible trial exists.</returns>
     private double[]? ChooseCenter(List<FrozenTrial> trials, List<string> paramNames, Dictionary<string, Transform> transforms)
     {
-        var complete = trials.Where(t => paramNames.All(n => t.ParamsDict.ContainsKey(n))).ToList();
+        var complete = trials.Where(t => paramNames.All(n => t.Params.ContainsKey(n))).ToList();
         if (complete.Count == 0) return null;
 
         var valueRows = complete.Where(t => t.Values is not null).Select(t => t.Values!.ToArray()).ToList();
@@ -348,7 +348,7 @@ internal sealed class JanusMooCmix
         int d = paramNames.Count;
         var center = new double[d];
         foreach (var t in top)
-            for (int j = 0; j < d; j++) center[j] += ToNorm(t.ParamsDict[paramNames[j]], transforms[paramNames[j]]);
+            for (int j = 0; j < d; j++) center[j] += ToNorm(t.Params[paramNames[j]], transforms[paramNames[j]]);
         for (int j = 0; j < d; j++) center[j] /= top.Count;
         return center;
     }

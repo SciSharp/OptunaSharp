@@ -87,8 +87,8 @@ internal static class NsgaiiCrossover
         {
             var catKeys = categoricalSearchSpace.Keys.ToList();
             // parents_categorical_params = [[parents[0][p]...], [parents[-1][p]...]]  (2 rows).
-            var parent0Cat = catKeys.Select(p => parents[0].ParamsDict[p]).ToArray();
-            var parentLastCat = catKeys.Select(p => parents[^1].ParamsDict[p]).ToArray();
+            var parent0Cat = catKeys.Select(p => parents[0].Params[p]).ToArray();
+            var parentLastCat = catKeys.Select(p => parents[^1].Params[p]).ToArray();
 
             var childCategorical = InlinedCategoricalUniformCrossover(
                 parent0Cat, parentLastCat, rng, swappingProb, catKeys.Count);
@@ -106,7 +106,7 @@ internal static class NsgaiiCrossover
         {
             var row = new OrderedDict<string, object?>();
             foreach (var k in numKeys)
-                row[k] = parents[i].ParamsDict[k];
+                row[k] = parents[i].Params[k];
             parentsNumerical[i] = numericalTransform.Transform(row).ToArray<double>();
         }
 

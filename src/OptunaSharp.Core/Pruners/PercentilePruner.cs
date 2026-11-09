@@ -157,7 +157,7 @@ public class PercentilePruner : BasePruner
         var intermediateValues = new List<double>();
         foreach (var t in completedTrials)
         {
-            if (t.IntermediateValues.TryGetValue(step, out double v))
+            if (t.IntermediateValuesForRead.TryGetValue(step, out double v))
                 intermediateValues.Add(v);
         }
 

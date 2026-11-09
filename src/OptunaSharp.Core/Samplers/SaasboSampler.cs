@@ -258,7 +258,7 @@ public sealed class SaasboSampler : BaseSampler
         // ---- Bayesian-optimization phase: fit the SAAS GP and maximize the averaged EI ----
         int n = completed.Count;
         double[,] normalizedParams = internalSpace.GetNormalizedParams(
-            completed.Select(t => (IReadOnlyDictionary<string, object?>)t.ParamsDict).ToList());
+            completed.Select(t => t.Params).ToList());
 
         double sign = study.Direction == StudyDirection.Minimize ? -1.0 : 1.0;
 

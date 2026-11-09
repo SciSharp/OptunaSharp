@@ -274,7 +274,7 @@ internal static class ScottParzenEstimatorFunctions
         var paramValues = new double[trials.Count];
         for (int t = 0; t < trials.Count; t++)
         {
-            PyFloat.TryConvert(trials[t].ParamsDict[paramName], out double v);
+            PyFloat.TryConvert(trials[t].Params[paramName], out double v);
             paramValues[t] = log ? Math.Log(v) : v;
         }
 
@@ -320,7 +320,7 @@ internal static class ScottParzenEstimatorFunctions
         var counts = new long[dist.Choices.Count];
         foreach (var trial in trials)
         {
-            int index = (int)dist.ToInternalRepr(trial.ParamsDict[paramName]);
+            int index = (int)dist.ToInternalRepr(trial.Params[paramName]);
             counts[index] += 1;
         }
         return counts;

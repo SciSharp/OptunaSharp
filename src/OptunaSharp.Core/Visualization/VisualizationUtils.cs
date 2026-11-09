@@ -173,7 +173,8 @@ internal static class VisualizationUtils
         {
             { "number", trial.Number },
             { "values", trial.Values },
-            { "params", trial.ParamsDict },
+            // Read-only: a compact finished record (plan 13, item S12) serializes its view as the same JSON object.
+            { "params", trial.Params },
         };
         if (userAttrs.Count > 0)
             dict["user_attrs"] = userAttrs;

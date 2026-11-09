@@ -157,7 +157,7 @@ public class SuccessiveHalvingPruner : BasePruner
     internal static int GetCurrentRung(FrozenTrial trial)
     {
         int rung = 0;
-        while (trial.SystemAttrsDict.ContainsKey(CompletedRungKey(rung)))
+        while (trial.SystemAttrs.ContainsKey(CompletedRungKey(rung)))
             rung += 1;
         return rung;
     }
@@ -177,8 +177,8 @@ public class SuccessiveHalvingPruner : BasePruner
         IReadOnlyList<FrozenTrial> trials, double value, string rungKey)
     {
         var competingValues = trials
-            .Where(t => t.SystemAttrsDict.ContainsKey(rungKey))
-            .Select(t => Convert.ToDouble(t.SystemAttrsDict[rungKey], CultureInfo.InvariantCulture))
+            .Where(t => t.SystemAttrs.ContainsKey(rungKey))
+            .Select(t => Convert.ToDouble(t.SystemAttrs[rungKey], CultureInfo.InvariantCulture))
             .ToList();
         competingValues.Add(value);
         return competingValues;

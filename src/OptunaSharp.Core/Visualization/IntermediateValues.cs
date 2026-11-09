@@ -45,10 +45,10 @@ public static class IntermediateValues
             => trial.Constraints.Values.All(x => x <= 0.0);
 
         var trialInfos = trials
-            .Where(trial => trial.IntermediateValues.Count > 0)
+            .Where(trial => trial.IntermediateValuesForRead.Count > 0)
             .Select(trial => new TrialInfo(
                 trial.Number,
-                trial.IntermediateValues
+                trial.IntermediateValuesForRead
                     .OrderBy(kv => kv.Key)
                     .Select(kv => (kv.Key, kv.Value))
                     .ToList(),

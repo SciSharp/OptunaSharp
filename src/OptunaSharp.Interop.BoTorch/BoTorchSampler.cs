@@ -186,7 +186,7 @@ public sealed class BoTorchSampler : BaseSampler
         for (int i = 0; i < nCompleted; i++)
         {
             FrozenTrial t = completedTrials[i];
-            double[] row = trans.Transform(t.ParamsDict).ToArray<double>();
+            double[] row = trans.Transform(t.Params).ToArray<double>();
             for (int d = 0; d < nBounds; d++)
                 completedParams[i, d] = row[d];
 
@@ -239,7 +239,7 @@ public sealed class BoTorchSampler : BaseSampler
             var rows = new List<double[]>();
             foreach (FrozenTrial t in runningTrials)
                 if (searchSpace.Keys.All(k => t.Params.ContainsKey(k)))
-                    rows.Add(trans.Transform(t.ParamsDict).ToArray<double>());
+                    rows.Add(trans.Transform(t.Params).ToArray<double>());
             if (rows.Count > 0)
             {
                 runningParams = new double[rows.Count, nBounds];

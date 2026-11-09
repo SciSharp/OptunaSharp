@@ -48,6 +48,46 @@ With `nJobs` above 1 OptunaSharp already runs OpenBLAS on one thread automatical
 so they are not reproducible anyway, and several workers in linear algebra at once would otherwise oversubscribe the
 cores (see [Easy Parallelization](key-features/parallelization.md)).
 
+## Memory: compact finished trials
+
+`new InMemoryStorage(compactFinishedTrials: true)` stores each trial compactly once it finishes. Its parameters
+become one internal value each, stored against a parameter schema that the study's trials share, and its
+distributions come from that schema. Its attributes become two arrays, with long ASCII strings stored as bytes:
+CMA-ES's optimizer state, a hexadecimal string, takes two digits per byte. Empty dictionaries take no memory.
+Results do not change: each pair below gave the same trials (equal hashes of every parameter and value), and the
+live-Optuna parity tests pass on it bit for bit.
+
+| Study (40 parameters, seed 0) | Retained by the finished study | Peak working set | Time |
+|---|---|---|---|
+| CMA-ES, 100,000 trials | 1,287 MB to 257 MB | 1,846 MB to 458 MB | 23.2 s to 22.1 s |
+| NSGA-II, 100,000 trials | 671 MB to 88 MB | 751 MB to 167 MB | 15.7 s to 14.6 s |
+| CMA-ES, 10,000 trials | 130 MB to 27 MB | 372 MB to 137 MB | 2.28 s to 2.31 s |
+| TPE, 1,000 trials | 13.4 MB to 6.9 MB | 109 MB to 92 MB | 3.8 s to 3.4 s |
+| Random, 10,000 trials | 64 MB to 6.7 MB | 200 MB to 91 MB | 3.5 s to 3.5 s |
+
+The times are the same within the machine's noise: CMA-ES over 10,000 trials averaged 2.28 s against 2.31 s over
+six steady runs each, and the large studies spend less time in the garbage collector (CMA-ES over 100,000 trials:
+2.7 s of pauses against 1.4 s). Allocation stays within 6 %. It is a switch rather than the default because a
+finished trial no longer holds dictionaries:
+
+- `Params`, `Distributions`, `UserAttrs` and `SystemAttrs` of a finished trial are read-only views, with the same
+  entries in the same order. A cast to `OrderedDict` fails, and a write through `IDictionary` throws.
+- Numbers and long strings are rebuilt on each read, so two reads are equal but are not the same object.
+- `ParamsDict`, the other `…Dict` properties and `IntermediateValues` still return real dictionaries. The first such
+  read gives the trial its dictionary back, and it keeps it, so a change made through it stays; that trial then
+  loses its saving.
+- A finished trial no longer shares its dictionaries with the running record it was copied from.
+- Only `InMemoryStorage` has the switch; journal and database storages keep their records as before.
+
+## Writing several attributes at once
+
+`trial.SetUserAttrs(attrs)`, `study.SetUserAttrs(attrs)` and the storage methods `SetTrialUserAttrs`,
+`SetTrialSystemAttrs`, `SetStudyUserAttrs` and `SetStudySystemAttrs` write a dictionary of attributes in one step.
+Optuna's singular names take a dictionary too, as overloads (`trial.SetUserAttr(attrs)`, `storage.SetTrialUserAttr(id,
+attrs)`). The result is what one call per entry would leave. The in-memory storage takes its lock once, the journal
+appends ordinary one-attribute records in one batch (Python Optuna reads them), and the databases use one
+transaction. A finished or unknown trial gets nothing written.
+
 ## Thread safety
 
 None of the caches changes what concurrent callers see. A record read from an in-memory storage, through any read, is

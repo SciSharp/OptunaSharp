@@ -1,9 +1,10 @@
 # Plan 13 — Rustuna-derived performance: compatible speedups first, opt-in paths where results would change
 
-> **Status: BUILT (2026-11-09), except S8 and S12 (§10).** Phases 1-4 are on `main`: `8f8ce3e` (S1-S3, D1),
-> `605806c` (S4, S7), `dce5885` (S3, S5, S6), `656ab94` (S10, S9 as measured). S11 was measured and changes nothing;
-> D2 awaits the owner with both of its numbers. §10 records what was built, how it was gated, and the before/after
-> measurements. Background, benchmarks and the full Rustuna read-through: catalog note
+> **Status: BUILT (2026-11-09).** Phases 1-4 are on `main`: `8f8ce3e` (S1-S3, D1),
+> `605806c` (S4, S7), `dce5885` (S3, S5, S6), `656ab94` (S10, S9 as measured). The owner then decided the three open
+> items (2026-11-09): S8 built (`74893f7`), S12 built as an opt-in (`InMemoryStorage(compactFinishedTrials: true)`,
+> §10.2), D2 not built (exact kernel only). S11 was measured and changes nothing. §10 records what was built, how it
+> was gated, and the before/after measurements. Background, benchmarks and the full Rustuna read-through: catalog note
 > `optunasharp/notes/rustuna-comparison-2026-11-08.md`.
 
 ---
@@ -368,9 +369,9 @@ the `de495f8` snapshot and the working tree; and, for the concurrency-sensitive 
 | S10 | `656ab94` | `CachedStorage` keeps its cache in number order (`ByNumber`, placeholders for unsynced numbers); `GetAllTrials` stops sorting and `GetTrialsPrefixView` wraps the cache | O(n log n) → O(n) per read, O(1) view |
 | S9 | `656ab94` | Measured first: attribute JSON is 3-4 % of a 10k-trial SQLite cold load, so lazy decoding was not built. Parsing each `distribution_json` row was ~40 %: both RDB storages now parse each distinct text once per load (`JournalDistributionCache`) | Cold load 2.1 → 1.4-1.5 s, 1.22 GB → 479 MB |
 | S11 | none | Measured: at 10-D and 40-D CMA-ES and 6-D GP the OpenBLAS thread count changes no result, but at 100-D every count gives a different (deterministic) result, as NumPy's does. Pinning one thread at `nJobs: 1` would break parity with Python's default-thread NumPy, so the automatic policy stays (pin only when `nJobs > 1`). One thread was 12 % faster at 40-D and 24-35 % at 100-D: available through `TrialExecutorOptions.BlasThreads = 1`, at the cost of parity | — |
-| S8 | not built | The bulk attribute API adds public surface Optuna lacks; after S4 an in-memory attribute write is already in place (O(1)), and the measured database cost is dominated by per-suggestion parameter writes, which no attribute API can batch. Left for the owner | — |
-| S12 | not built | Measured instead: S4 and S7 took the 100k-trial CMA-ES study from ~2.5 GB to 1.44 GB peak working set. The rest is per-trial dictionaries and boxed values plus the generation pickles (UTF-16 strings); compacting them means materializing `FrozenTrial` contents on read, a larger change with its own risks. Left for the owner with these numbers (and D4 with it) | — |
-| D2 | pending | Scoring still takes 41 % of a 1,000-trial TPE run and 49 % of a 1,000-trial MOTPE run after S6 (profiles, 2026-11-09). A fast kernel could at best roughly halve that share; §2.4's noise harness bounds the decision risk. Asked of the owner with these numbers | — |
+| S8 | `74893f7` | Owner 2026-11-09: "Build it", "Also have optuna's api overload". `SetTrialUserAttrs`/`SetTrialSystemAttrs`/`SetStudyUserAttrs`/`SetStudySystemAttrs` (virtual, default = one call per entry) plus Optuna-named overloads taking a dictionary; `Trial`/`Study.SetUserAttrs` and `SetUserAttr(dict)`. Overrides write in one step: one lock in memory, one transaction in SQLite and EF Core, one appended batch of single-key records in a journal (Python's replay asserts one key per record), with a drain so a rejected own record cannot poison the next call. Same result as the loop; a finished or unknown trial gets nothing written. Live Python reads a C#-written batch | — |
+| S12 | this commit | Owner 2026-11-09: "Build it", opt-in if behavior changes. Built as `InMemoryStorage(compactFinishedTrials: true)`: results unchanged (every proof pair hash-identical, live-Optuna parity on it), but finished trials' read-only accessors return views and values are rebuilt per read, hence the switch. §10.2 | CMA-ES 100k: retained 1,287 → 257 MB, peak 1,845 → 460 MB |
+| D2 | not built | Owner 2026-11-09: "Keep exact only". TPE scores in NumPy's order with the S6 exact kernel; no fast-numerics path | — |
 
 **Findings along the way.**
 - The CMA-ES pickle stores only C's upper triangle; keeping the told optimizer instead of a restore is therefore
@@ -414,3 +415,58 @@ The README's sampler table (benchmark 14's C# probes, rebuilt against `656ab94`,
 where the change is beyond the busy machine's noise: random over 1,000 parameters 13.5 → 3.2 s (now faster than
 Python's 8.4 s), CMA-ES 200-D 2.8 → 1.2 s, CMA-ES 6-D 1.75 → 0.91 s, QMC 0.64 → 0.39 s, random 6-D 1.34 → 0.98 s,
 TPE 100-D 2.4 → 2.1 s. GP was rerun interleaved against a `de495f8` build: the same within noise.
+
+### 10.2 S12: compact finished trials (opt-in)
+
+**What it is.** `new InMemoryStorage(compactFinishedTrials: true)` (default false) compacts each record as it finishes
+(`Internal/CompactTrialParts.cs`, `FrozenTrial.CompactFinished`):
+
+- parameters: one internal value per name against a `ParamSchema` the study's trials share;
+- distributions: the schema's one shared view;
+- attributes: arrays, with long ASCII strings as bytes. Lowercase hexadecimal is stored two digits a byte, an odd
+  trailing digit kept aside, because CMA-ES's 2,045-character pickle chunks have an odd length.
+- empty dictionaries: no memory.
+
+**Why it keeps results.** A trial is compacted only when every value reads back indistinguishable from what it stored;
+the fallbacks keep the dictionary.
+
+**Why it is a switch.** The read-only accessors return views, values are rebuilt per read, and the mutable accessors
+re-materialize the record's dictionary with a compare-exchange. The owner's rule was "if it changes optuna's/rustuna's
+behavior then make the feature optin".
+
+**Read paths.** About 70 internal reads of finished trials moved to the read-only accessors (identical objects without
+the switch), so samplers never undo compaction. A test runs every sampler family on and off and asserts every record
+is still compact.
+
+**Two allocation sites found by profiling** (`dotnet-trace --profile gc-verbose`, TraceEvent tally by type and frame):
+
+- TPE's history read boxed every value per ask. It now copies the stored internal value where the search-space
+  distribution is interchangeable (`ParamSchema.PositionsFor`).
+- `GetConstraintsFromSystemAttrs` walked every attribute pair, rebuilding each trial's relative-parameter JSON string
+  per ask (86 MB in a 300-trial run). It now scans keys and fetches only matching values.
+
+With both, compact TPE allocates what plain does.
+
+**Proof.** The plan 13 workloads (40 floats in [-10, 10], seed 0, sampler defaults) on the final build, plain then
+compact back to back in separate processes, 2026-11-09 09:04-09:07, load 20-55 %. Retained = heap the finished study
+keeps after a full collection (rep 0). Times are the steady rep where there are two. Every pair hash-identical.
+
+| Workload | Retained, plain → compact | Per trial | Peak working set | Time | Allocated |
+|---|---|---|---|---|---|
+| Random, 10,000 | 64.2 → 6.7 MB | 6,732 → 704 B | 200 → 91 MB | 3.52 → 3.53 s | 2.31 → 2.32 GB |
+| QMC, 10,000 | 64.2 → 6.7 MB | 6,735 → 704 B | 198 → 93 MB | 1.02 → 0.85 s | 1.58 → 1.60 GB |
+| NSGA-II, 10,000 | 67.7 → 9.7 MB | 7,099 → 1,012 B | 205 → 103 MB | 1.57 → 1.44 s | 1.23 → 1.29 GB |
+| TPE, 1,000 | 13.4 → 6.9 MB | 14,059 → 7,243 B | 109 → 92 MB | 3.84 → 3.37 s | 1.57 → 1.60 GB |
+| MOTPE, 1,000 | 7.2 → 1.4 MB | 7,537 → 1,461 B | 76 → 77 MB | 12.7 → 11.6 s | 3.42 → 3.45 GB |
+| CMA-ES, 10,000 | 129.5 → 26.5 MB | 13,581 → 2,779 B | 372 → 137 MB | 2.15 → 2.46 s | 1.74 → 1.85 GB |
+| NSGA-II, 100,000 | 670.9 → 87.5 MB | 7,035 → 917 B | 751 → 167 MB | 15.7 → 14.6 s | 12.4 → 13.0 GB |
+| CMA-ES, 100,000 | 1,287.3 → 256.8 MB | 13,499 → 2,692 B | 1,846 → 458 MB | 23.2 → 22.1 s | 17.4 → 18.4 GB |
+
+**Time.** The CMA-ES 10,000 pair was repeated alternately three times with three reps each, and is noise: the steady
+reps averaged 2.28 s plain and 2.31 s compact. Earlier runs had it at 2.88 → 2.86 s and 3.41 → 3.09 s. Garbage-collector
+pauses drop on the large studies (CMA-ES 100,000: 2.73 → 1.36 s).
+
+**Before the fixes.** Compact TPE allocated 3.06 GB against plain's 1.57 GB, and MOTPE 3.90 GB against 3.42 GB.
+
+**Memory per trial.** The probe in session scratchpad `s12probe` agrees: random over 40 parameters 6,681 → 648 B per
+trial at 5,000 trials, with the first study warmed up.

@@ -575,6 +575,17 @@ and ends, around one native call to OpenBLAS).
   first, as Optuna's copy-on-write does on every write. A finished record is never written again, so the
   view reads it without the lock. Records read that way are the storage's own, shared by every thread:
   never mutate them (§10).
+- With `InMemoryStorage(compactFinishedTrials: true)` (plan 13, item S12) a finished record holds compact,
+  immutable forms instead of dictionaries. The storage builds them under its lock, on the new record object
+  before it publishes it, and only reads the dictionaries it compacts (the running record a reader may hold
+  shares them), so no reader ever sees a record change form. The read-only accessors return the compact
+  form itself, which any number of threads may read. The mutable accessors (`ParamsDict` and the other
+  `…Dict` properties, `IntermediateValues`) give the record back a real dictionary with a compare-exchange:
+  however many threads ask at once, one dictionary becomes the record's and every caller gets that one, so a
+  write through any of them stays. A thread that loaded the compact form a moment earlier keeps reading it,
+  which is safe because it holds the same entries. Pinned by
+  `CompactFinishedTrialsTests.MutableAccessors_UnderContention_AllReturnTheOneDictionary` and
+  `ParallelWorkers_AndReaders_SeeConsistentRecords`.
 
 ### 6.2 Trial
 

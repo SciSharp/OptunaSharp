@@ -43,6 +43,11 @@ study.Optimize(trial =>
 }, nTrials: 100);
 ```
 
+A long study in memory can keep its finished trials compactly with `new InMemoryStorage(compactFinishedTrials:
+true)`: a 100,000-trial CMA-ES study over 40 parameters retains 257 MB instead of 1,288 MB, with the same trials.
+Finished trials then return read-only views instead of dictionaries; [Performance and
+Compatibility](performance.md#memory-compact-finished-trials) lists what that changes.
+
 ## Journal file storage (persistent, shareable)
 
 `JournalStorage` records every change as an appended JSON line; `JournalFileBackend` stores that

@@ -1,6 +1,8 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -25,10 +27,24 @@ public class FrozenTrial : BaseTrial
     private int _number;
     private List<double>? _values;
     private DateTime? _datetimeStart;
-    private OrderedDict<string, object?> _params;
-    private OrderedDict<string, object?> _userAttrs;
-    private OrderedDict<string, object?> _systemAttrs;
-    private OrderedDict<string, BaseDistribution> _distributions;
+
+    // Each dictionary field holds the OrderedDict the trial was built with, or, once a storage built with
+    // compactFinishedTrials compacted the finished record (Rustuna plan 13, item S12), an immutable compact form
+    // (ICompactDictionary). The read-only accessors return either as is; the mutable …Dict accessors swap a compact form
+    // for a real dictionary first (Decompact*), so a write through them is never lost.
+    private IReadOnlyDictionary<string, object?> _params;
+    private IReadOnlyDictionary<string, object?> _userAttrs;
+    private IReadOnlyDictionary<string, object?> _systemAttrs;
+    private IReadOnlyDictionary<string, BaseDistribution> _distributions;
+    private OrderedDict<long, double> _intermediateValues;
+
+    /// <summary>
+    ///     What a compact record holds in place of an empty <see cref="IntermediateValues" /> dictionary (plan 13, item
+    ///     S12): shared by every such record and never handed out, because the public getter returns a mutable dictionary.
+    ///     Internal reads may use it as the empty dictionary it is; <see cref="IntermediateValues" /> replaces it with a
+    ///     record's own dictionary before returning.
+    /// </summary>
+    private static readonly OrderedDict<long, double> CompactEmptyIntermediateValues = new();
     /// <summary>Storage identifier for this trial, separate from its per-study number.</summary>
     internal int TrialId;
 
@@ -100,7 +116,7 @@ public class FrozenTrial : BaseTrial
         _params = @params;
         _userAttrs = userAttrs;
         _systemAttrs = systemAttrs;
-        IntermediateValues = intermediateValues;
+        _intermediateValues = intermediateValues;
         _distributions = distributions;
         TrialId = trialId;
     }
@@ -115,7 +131,31 @@ public class FrozenTrial : BaseTrial
     ///     Intermediate objective values set with <see cref="Trial.Report" />, keyed by step. Steps are 64-bit, like
     ///     Python's unbounded <c>int</c> steps in journal, SQLite and in-memory storages.
     /// </summary>
-    public OrderedDict<long, double> IntermediateValues { get; set; }
+    /// <remarks>
+    ///     On a record an <see cref="Storages.InMemoryStorage" /> built with <c>compactFinishedTrials: true</c> compacted
+    ///     while it had no intermediate values, the first read gives the record its own empty dictionary and keeps it, so
+    ///     the dictionary returned here is always the record's and a change to it stays (plan 13, item S12).
+    /// </remarks>
+    public OrderedDict<long, double> IntermediateValues
+    {
+        get
+        {
+            OrderedDict<long, double> current = _intermediateValues;
+            if (!ReferenceEquals(current, CompactEmptyIntermediateValues))
+                return current;
+            // Only one dictionary may become the record's: a reader that loses the race returns the winner's.
+            var own = new OrderedDict<long, double>();
+            OrderedDict<long, double> witnessed = Interlocked.CompareExchange(ref _intermediateValues, own, current);
+            return ReferenceEquals(witnessed, current) ? own : witnessed;
+        }
+        set => _intermediateValues = value;
+    }
+
+    /// <summary>
+    ///     The intermediate values for internal reads that change nothing: the record's dictionary, or the shared empty
+    ///     one of a compact record, which <see cref="IntermediateValues" /> would replace with a dictionary of its own.
+    /// </summary>
+    internal OrderedDict<long, double> IntermediateValuesForRead => _intermediateValues;
 
     // ------------------------------------------------------------------ suggest API
 
@@ -192,7 +232,8 @@ public class FrozenTrial : BaseTrial
     /// <param name="key">Attribute name; an existing attribute is overwritten.</param>
     /// <param name="value">Value retained in this replay record's local attribute dictionary.</param>
     /// <summary>Updates the local user attribute by name.</summary>
-    public override void SetUserAttr(string key, object? value) => _userAttrs[key] = value;
+    /// <remarks>Writes through <see cref="UserAttrsDict" />, so a compact record gets a dictionary of its own first.</remarks>
+    public override void SetUserAttr(string key, object? value) => UserAttrsDict[key] = value;
 
     /// <summary>
     ///     Read this trial's observed-components vector (the residual terms written with
@@ -282,7 +323,8 @@ public class FrozenTrial : BaseTrial
         if (_distributions.TryGetValue(name, out var existing))
             Distribution.CheckDistributionCompatibility(existing, distribution);
 
-        _distributions[name] = distribution;
+        // Through the mutable accessor: a compact record gets a dictionary of its own before the write.
+        DistributionsDict[name] = distribution;
 
         return value;
     }
@@ -341,32 +383,53 @@ public class FrozenTrial : BaseTrial
     public void SetDatetimeStart(DateTime? value) => _datetimeStart = value;
 
     /// <summary>Dictionary that contains suggested parameters (external representations).</summary>
+    /// <remarks>
+    ///     On a finished record of an <see cref="Storages.InMemoryStorage" /> built with <c>compactFinishedTrials: true</c>
+    ///     this is a read-only view over the trial's internal values (plan 13, item S12): the same entries in the same
+    ///     order, each numeric value a new box with the stored bits on every read, and not an
+    ///     <see cref="OrderedDict{TKey,TValue}" />. <see cref="ParamsDict" /> returns a real dictionary in every case.
+    /// </remarks>
     public override IReadOnlyDictionary<string, object?> Params => _params;
 
     /// <summary>The mutable parameter dictionary (Python's <c>params</c> setter).</summary>
+    /// <remarks>
+    ///     A compact record (see <see cref="Params" />) gets a dictionary of its own on the first read, which it keeps:
+    ///     every later read returns that dictionary, and a change to it is the trial's change. It costs the memory the
+    ///     compact form saved, so internal readers that only read use <see cref="Params" />.
+    /// </remarks>
     public OrderedDict<string, object?> ParamsDict
     {
-        get => _params;
+        get => _params as OrderedDict<string, object?> ?? Decompact(ref _params);
         set => _params = value;
     }
 
     /// <summary>Dictionary that contains the distributions of <see cref="Params" />.</summary>
+    /// <remarks>
+    ///     On a compact record (see <see cref="Params" />), a read-only view that every trial of the same parameter
+    ///     schema shares; <see cref="DistributionsDict" /> returns a real dictionary in every case.
+    /// </remarks>
     public override IReadOnlyDictionary<string, BaseDistribution> Distributions => _distributions;
 
     /// <summary>Gets or replaces the mutable distribution dictionary; entries are shared distribution objects.</summary>
+    /// <remarks>A compact record gets a dictionary of its own on the first read, as <see cref="ParamsDict" /> does.</remarks>
     public OrderedDict<string, BaseDistribution> DistributionsDict
     {
-        get => _distributions;
+        get => _distributions as OrderedDict<string, BaseDistribution> ?? Decompact(ref _distributions);
         set => _distributions = value;
     }
 
     /// <summary>Dictionary that contains the user attributes.</summary>
+    /// <remarks>
+    ///     On a compact record (see <see cref="Params" />), a read-only view: long ASCII strings come back as new string
+    ///     instances with the stored characters, every other value as the stored object.
+    /// </remarks>
     public override IReadOnlyDictionary<string, object?> UserAttrs => _userAttrs;
 
     /// <summary>Gets or replaces the mutable user-attribute dictionary.</summary>
+    /// <remarks>A compact record gets a dictionary of its own on the first read, as <see cref="ParamsDict" /> does.</remarks>
     public OrderedDict<string, object?> UserAttrsDict
     {
-        get => _userAttrs;
+        get => _userAttrs as OrderedDict<string, object?> ?? Decompact(ref _userAttrs);
         set => _userAttrs = value;
     }
 
@@ -375,22 +438,26 @@ public class FrozenTrial : BaseTrial
     ///     <c>FrozenTrial</c> (only <c>BaseTrial</c>/<c>Trial</c>/<c>Study</c> lost theirs in #6834), so samplers
     ///     read system attributes of finished trials through it.
     /// </summary>
-    public IReadOnlyDictionary<string, object?> SystemAttrs => SystemAttrsDict;
+    /// <remarks>On a compact record, a read-only view as <see cref="UserAttrs" /> describes.</remarks>
+    /// <exception cref="System.Exception">The deferred storage loader fails; the loader remains available for a later attempt.</exception>
+    public IReadOnlyDictionary<string, object?> SystemAttrs
+    {
+        get
+        {
+            ResolveLazySystemAttrs();
+            return _systemAttrs;
+        }
+    }
 
     /// <summary>Gets or replaces internal attributes, resolving any deferred storage lookup once.</summary>
+    /// <remarks>A compact record gets a dictionary of its own on the first read, as <see cref="ParamsDict" /> does.</remarks>
     /// <exception cref="System.Exception">The deferred storage loader fails; the loader remains available for a later attempt.</exception>
     public OrderedDict<string, object?> SystemAttrsDict
     {
         get
         {
-            if (_systemAttrsLoader is not null)
-            {
-                // Clear the loader only after success, allowing a transient backend failure to be
-                // retried instead of permanently exposing an obsolete attribute snapshot.
-                _systemAttrs = _systemAttrsLoader();
-                _systemAttrsLoader = null;
-            }
-            return _systemAttrs;
+            ResolveLazySystemAttrs();
+            return _systemAttrs as OrderedDict<string, object?> ?? Decompact(ref _systemAttrs);
         }
         set
         {
@@ -399,18 +466,135 @@ public class FrozenTrial : BaseTrial
         }
     }
 
+    /// <summary>Loads deferred system attributes, if any are pending, before either accessor returns them.</summary>
+    /// <exception cref="System.Exception">The deferred storage loader fails; the loader remains available for a later attempt.</exception>
+    private void ResolveLazySystemAttrs()
+    {
+        if (_systemAttrsLoader is not null)
+        {
+            // Clear the loader only after success, allowing a transient backend failure to be
+            // retried instead of permanently exposing an obsolete attribute snapshot.
+            _systemAttrs = _systemAttrsLoader();
+            _systemAttrsLoader = null;
+        }
+    }
+
     /// <summary>Python <c>Trial._get_latest_trial</c> support: defer system-attr loading to the storage.</summary>
     /// <param name="loader">Deferred storage read invoked on first SystemAttrsDict access; failures are not swallowed.</param>
     internal void SetLazySystemAttrs(Func<OrderedDict<string, object?>> loader) => _systemAttrsLoader = loader;
+
+    // ------------------------------------------------------------------ compact records (plan 13, item S12)
+
+    /// <summary>
+    ///     Replaces the compact form in <paramref name="field" /> with a real dictionary of the same entries and returns
+    ///     it, so the caller of a mutable accessor gets the dictionary the record keeps.
+    /// </summary>
+    /// <typeparam name="TValue">The dictionary's value type.</typeparam>
+    /// <param name="field">One of the record's dictionary fields, holding a compact form or null.</param>
+    /// <returns>The record's dictionary from now on; null when the field held null (a record built with a null dictionary keeps returning null).</returns>
+    /// <remarks>
+    ///     Readers on other threads may call this at once on a shared finished record: the compare-exchange lets exactly
+    ///     one materialized dictionary become the record's, and every caller returns that one, so no caller can write into
+    ///     a dictionary the record does not keep. A reader that loaded the compact form a moment earlier keeps reading it,
+    ///     which is safe because a compact form never changes and holds the same entries.
+    /// </remarks>
+    private static OrderedDict<string, TValue> Decompact<TValue>(ref IReadOnlyDictionary<string, TValue> field)
+    {
+        IReadOnlyDictionary<string, TValue> observed = field;
+        while (true)
+        {
+            switch (observed)
+            {
+                case null:
+                    return null!;
+                case OrderedDict<string, TValue> dictionary:
+                    return dictionary;
+            }
+            OrderedDict<string, TValue> own = ((ICompactDictionary<string, TValue>)observed).Materialize();
+            IReadOnlyDictionary<string, TValue> witnessed = Interlocked.CompareExchange(ref field, own, observed);
+            if (ReferenceEquals(witnessed, observed))
+                return own;
+            // Another thread (or a setter) replaced the form first: return whatever the record holds now.
+            observed = witnessed;
+        }
+    }
+
+    /// <summary>
+    ///     True while any of the record's dictionaries is held in compact form (plan 13, item S12); a diagnostic the tests
+    ///     read to prove which records a storage compacted and which a mutable accessor turned back.
+    /// </summary>
+    internal bool IsCompact
+        => _params is ICompactDictionary<string, object?>
+           || _distributions is ICompactDictionary<string, BaseDistribution>
+           || _userAttrs is ICompactDictionary<string, object?>
+           || _systemAttrs is ICompactDictionary<string, object?>
+           || ReferenceEquals(_intermediateValues, CompactEmptyIntermediateValues);
+
+    /// <summary>
+    ///     Stores a finished record compactly (plan 13, item S12): parameters as internal values against a schema shared
+    ///     by the study's trials, attributes as arrays with long ASCII strings as bytes, and nothing for empty
+    ///     dictionaries. Every accessor returns the same entries afterwards.
+    /// </summary>
+    /// <param name="schemas">The study's schema cache; the caller (the storage) holds the lock that guards it.</param>
+    /// <remarks>
+    ///     <para>
+    ///         The caller must hold the only reference to this record object: the storage calls it on the copy it is about
+    ///         to publish, under its lock, so no reader can see the fields change. The record's dictionaries are only
+    ///         read, never changed, because the record it was copied from (and a reader holding that one) may share
+    ///         them; after this call the published record no longer references them.
+    ///     </para>
+    ///     <para>
+    ///         Parameters stay a dictionary when they cannot be compacted exactly: names in another order than the
+    ///         distributions, more parameter shapes than <see cref="ParamSchemaCache.MaxSchemas" />, or a value that
+    ///         would not read back identical (see <see cref="CompactParams.TryCreate" />). A record with deferred
+    ///         system attributes keeps them deferred.
+    ///     </para>
+    /// </remarks>
+    internal void CompactFinished(ParamSchemaCache schemas)
+    {
+        if (_params is OrderedDict<string, object?> @params
+            && _distributions is OrderedDict<string, BaseDistribution> distributions)
+        {
+            ParamSchema? schema = schemas.FindOrAdd(@params, distributions);
+            CompactParams? compact = schema is null ? null : CompactParams.TryCreate(schema, @params);
+            if (compact is not null)
+            {
+                _params = compact;
+                _distributions = compact.Schema.View;
+            }
+        }
+
+        if (_userAttrs is OrderedDict<string, object?> userAttrs)
+            _userAttrs = CompactAttrs.Create(userAttrs);
+        if (_systemAttrsLoader is null && _systemAttrs is OrderedDict<string, object?> systemAttrs)
+            _systemAttrs = CompactAttrs.Create(systemAttrs);
+
+        OrderedDict<long, double> intermediate = _intermediateValues;
+        if (intermediate is { Count: 0 })
+        {
+            _intermediateValues = CompactEmptyIntermediateValues;
+        }
+        else if (intermediate is not null)
+        {
+            // Kept as a dictionary (the public getter returns the mutable type), but as a copy sized to its entries:
+            // reports grow it by prime steps, and the source may be shared with the record this one was copied from.
+            var trimmed = new OrderedDict<long, double>(intermediate.Count);
+            foreach (var (step, value) in intermediate)
+                trimmed.Add(step, value);
+            _intermediateValues = trimmed;
+        }
+    }
 
     /// <summary>Return the maximum step of <see cref="IntermediateValues" /> in the trial (64-bit, like the steps).</summary>
     public long? LastStep
     {
         get
         {
-            if (IntermediateValues.Count == 0)
+            // The read-only view, so a compact record without reports does not get a dictionary just to say so.
+            OrderedDict<long, double> intermediateValues = IntermediateValuesForRead;
+            if (intermediateValues.Count == 0)
                 return null;
-            return IntermediateValues.Keys.Max();
+            return intermediateValues.Keys.Max();
         }
     }
 
@@ -430,7 +614,7 @@ public class FrozenTrial : BaseTrial
     ///     are zero or less.
     /// </summary>
     public override OrderedDict<string, double> Constraints
-        => ConstrainedOptimization.GetConstraintsFromSystemAttrs(SystemAttrsDict);
+        => ConstrainedOptimization.GetConstraintsFromSystemAttrs(SystemAttrs);
 
     /// <summary>
     ///     Set a constraint value for the trial. The trial is considered feasible when all
@@ -474,8 +658,9 @@ public class FrozenTrial : BaseTrial
             && DictValueEquals(_params, other._params)
             && DistributionsEqual(_distributions, other._distributions)
             && DictValueEquals(_userAttrs, other._userAttrs)
-            && DictValueEquals(SystemAttrsDict, other.SystemAttrsDict)
-            && IntermediateValuesEqual(IntermediateValues, other.IntermediateValues)
+            // The read-only accessors: comparing must not give a compact record dictionaries of its own.
+            && DictValueEquals(SystemAttrs, other.SystemAttrs)
+            && IntermediateValuesEqual(IntermediateValuesForRead, other.IntermediateValuesForRead)
             && TrialId == other.TrialId;
     }
 
@@ -519,10 +704,10 @@ public class FrozenTrial : BaseTrial
     }
 
     /// <summary>Compares parameter or attribute dictionaries using Python-compatible nested value equality.</summary>
-    /// <param name="a">First collection to compare.</param>
-    /// <param name="b">Second collection to compare.</param>
+    /// <param name="a">First collection to compare; a dictionary or a compact record's read-only view.</param>
+    /// <param name="b">Second collection to compare; a dictionary or a compact record's read-only view.</param>
     /// <returns>True when both collections contain equal corresponding values.</returns>
-    private static bool DictValueEquals(OrderedDict<string, object?> a, OrderedDict<string, object?> b)
+    private static bool DictValueEquals(IReadOnlyDictionary<string, object?> a, IReadOnlyDictionary<string, object?> b)
     {
         if (a.Count != b.Count)
             return false;
@@ -538,11 +723,11 @@ public class FrozenTrial : BaseTrial
     }
 
     /// <summary>Compares distribution dictionaries by parameter name and distribution value.</summary>
-    /// <param name="a">First collection to compare.</param>
-    /// <param name="b">Second collection to compare.</param>
+    /// <param name="a">First collection to compare; a dictionary or a compact record's read-only view.</param>
+    /// <param name="b">Second collection to compare; a dictionary or a compact record's read-only view.</param>
     /// <returns>True when both collections contain equal corresponding values.</returns>
     private static bool DistributionsEqual(
-        OrderedDict<string, BaseDistribution> a, OrderedDict<string, BaseDistribution> b)
+        IReadOnlyDictionary<string, BaseDistribution> a, IReadOnlyDictionary<string, BaseDistribution> b)
     {
         if (a.Count != b.Count)
             return false;
@@ -572,18 +757,26 @@ public class FrozenTrial : BaseTrial
 
     /// <summary>Python <c>copy.copy(trial)</c>: a shallow copy (dict references shared).</summary>
     /// <returns>A new trial wrapper sharing dictionaries, values, and the deferred loader with this instance.</returns>
+    /// <remarks>
+    ///     A compact record (plan 13, item S12) first gets real dictionaries of its own, which the copy then shares:
+    ///     sharing the compact forms instead would let each object later take a different dictionary, and a change
+    ///     through one would no longer show in the other as it does for Python's shallow copy. The storages copy only
+    ///     unfinished records, which are never compact, so this costs nothing on their paths.
+    /// </remarks>
     internal FrozenTrial ShallowCopy()
     {
+        // Field by field rather than through the accessors: SystemAttrsDict would run a pending deferred loader, which
+        // a shallow copy hands over unrun instead.
         var copy = new FrozenTrial(
             number: _number,
             state: State,
             value: null,
             datetimeStart: _datetimeStart,
             datetimeComplete: DatetimeComplete,
-            @params: _params,
-            distributions: _distributions,
-            userAttrs: _userAttrs,
-            systemAttrs: _systemAttrs,
+            @params: _params as OrderedDict<string, object?> ?? Decompact(ref _params),
+            distributions: _distributions as OrderedDict<string, BaseDistribution> ?? Decompact(ref _distributions),
+            userAttrs: _userAttrs as OrderedDict<string, object?> ?? Decompact(ref _userAttrs),
+            systemAttrs: _systemAttrs as OrderedDict<string, object?> ?? Decompact(ref _systemAttrs),
             intermediateValues: IntermediateValues,
             trialId: TrialId,
             values: null);
@@ -594,6 +787,10 @@ public class FrozenTrial : BaseTrial
 
     /// <summary>Python <c>copy.deepcopy(trial)</c>.</summary>
     /// <returns>A new trial with copied value lists and supported nested attribute containers; distribution instances remain shared.</returns>
+    /// <remarks>
+    ///     The copy always holds real dictionaries, including the copy of a compact record (plan 13, item S12), which is
+    ///     read through its views and left compact itself.
+    /// </remarks>
     public FrozenTrial DeepCopy()
     {
         // Nested JSON-compatible values need separate containers because users commonly mutate
@@ -605,20 +802,29 @@ public class FrozenTrial : BaseTrial
             datetimeStart: _datetimeStart,
             datetimeComplete: DatetimeComplete,
             @params: DeepCopyAttrs(_params),
-            distributions: _distributions.ShallowClone(),  // Distributions are treated as immutable.
+            distributions: CloneDistributions(_distributions),  // Distributions are treated as immutable.
             userAttrs: DeepCopyAttrs(_userAttrs),
-            systemAttrs: DeepCopyAttrs(SystemAttrsDict),
-            intermediateValues: IntermediateValues.ShallowClone(),
+            systemAttrs: DeepCopyAttrs(SystemAttrs),
+            intermediateValues: IntermediateValuesForRead.ShallowClone(),
             trialId: TrialId,
             values: null);
         copy._values = _values is null ? null : new List<double>(_values);
         return copy;
     }
 
+    /// <summary>A new distributions dictionary sharing the distribution instances, as <c>ShallowClone</c> builds one.</summary>
+    /// <param name="distributions">The record's dictionary, or a compact record's shared view.</param>
+    /// <returns>A dictionary the copy owns, in the same order.</returns>
+    private static OrderedDict<string, BaseDistribution> CloneDistributions(
+        IReadOnlyDictionary<string, BaseDistribution> distributions)
+        => distributions is OrderedDict<string, BaseDistribution> dictionary
+            ? dictionary.ShallowClone()
+            : new OrderedDict<string, BaseDistribution>(distributions);
+
     /// <summary>Copies an attribute dictionary through the Python-compatible nested-value copier.</summary>
-    /// <param name="attrs">Attribute dictionary to copy.</param>
+    /// <param name="attrs">Attribute dictionary to copy; a dictionary or a compact record's read-only view.</param>
     /// <returns>A new dictionary with supported nested containers copied.</returns>
-    private static OrderedDict<string, object?> DeepCopyAttrs(OrderedDict<string, object?> attrs)
+    private static OrderedDict<string, object?> DeepCopyAttrs(IReadOnlyDictionary<string, object?> attrs)
     {
         var copy = new OrderedDict<string, object?>(attrs.Count);
         foreach (var (key, value) in attrs)
@@ -637,11 +843,12 @@ public class FrozenTrial : BaseTrial
             $"values={(_values is null ? "None" : PythonRepr.ListRepr(_values))}",
             $"datetime_start={PythonRepr.Repr(_datetimeStart?.ToString("yyyy-MM-dd HH:mm:ss.ffffff"))}",
             $"datetime_complete={PythonRepr.Repr(DatetimeComplete?.ToString("yyyy-MM-dd HH:mm:ss.ffffff"))}",
-            $"params={PythonRepr.DictRepr(_params)}",
-            $"user_attrs={PythonRepr.DictRepr(_userAttrs)}",
-            $"system_attrs={PythonRepr.DictRepr(_systemAttrs)}",
-            $"intermediate_values={PythonRepr.DictRepr(IntermediateValues)}",
-            $"distributions={PythonRepr.DictRepr(_distributions)}",
+            // Every field is an IDictionary: an OrderedDict, or a compact record's view, which prints the same entries.
+            $"params={PythonRepr.DictRepr((IDictionary)_params)}",
+            $"user_attrs={PythonRepr.DictRepr((IDictionary)_userAttrs)}",
+            $"system_attrs={PythonRepr.DictRepr((IDictionary)_systemAttrs)}",
+            $"intermediate_values={PythonRepr.DictRepr(IntermediateValuesForRead)}",
+            $"distributions={PythonRepr.DictRepr((IDictionary)_distributions)}",
             $"trial_id={TrialId}",
             "value=None",
         };
