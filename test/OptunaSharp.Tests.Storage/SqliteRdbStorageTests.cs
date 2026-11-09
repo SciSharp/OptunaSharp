@@ -621,6 +621,66 @@ public class SqliteRdbStorageTests
         }
     }
 
+    /// <summary>
+    ///     Plan 14: <see cref="CachedStorage" />'s refresh asks the SQLite storage for <c>trial_id &gt; watermark</c> plus the
+    ///     running trials it tracks below it, now as a <c>UNION ALL</c> of two indexable halves instead of Optuna's OR. Two
+    ///     workers share one database file: the other worker leaves trials running below the watermark, completes trials
+    ///     around them, then finishes the running ones out of order. After every step the cached view must equal a fresh
+    ///     storage's read of the file (numbers, states, parameters, values and intermediate values, in order).
+    /// </summary>
+    [TestMethod]
+    public void CachedRefresh_WithRunningTrialsBelowTheWatermark_EqualsAFreshRead()
+    {
+        string url = $"sqlite:///{TempDbPath().Replace('\\', '/')}";
+        using var other = new RDBStorage(url);
+        int studyId = other.CreateNewStudy(new[] { StudyDirection.Minimize }, "s");
+        using var backend = new RDBStorage(url);
+        var cached = new CachedStorage(backend);
+
+        void AssertSameAsFresh(string step)
+        {
+            using var fresh = new RDBStorage(url);
+            var expected = fresh.GetAllTrials(studyId);
+            var actual = cached.GetAllTrials(studyId);
+            actual.Select(t => t.Number).Should().Equal(expected.Select(t => t.Number), step);
+            for (int i = 0; i < expected.Count; i++)
+            {
+                actual[i].State.Should().Be(expected[i].State, $"{step}: trial {i} state");
+                actual[i].Params.Should().BeEquivalentTo(expected[i].Params, $"{step}: trial {i} params");
+                (actual[i].Values ?? new List<double>()).Should().Equal(expected[i].Values ?? new List<double>(), $"{step}: trial {i} values");
+                actual[i].IntermediateValues.Should().BeEquivalentTo(expected[i].IntermediateValues, $"{step}: trial {i} intermediate values");
+            }
+        }
+
+        int Finished(int value)
+        {
+            int id = other.CreateNewTrial(studyId);
+            other.SetTrialParam(id, "x", value * 0.5, new FloatDistribution(-100, 100));
+            other.SetTrialStateValues(id, TrialState.Complete, new[] { value * 0.25 });
+            return id;
+        }
+
+        int stale1 = other.CreateNewTrial(studyId);
+        Finished(1);
+        int stale2 = other.CreateNewTrial(studyId);
+        Finished(2);
+        AssertSameAsFresh("two running trials below the watermark");
+
+        for (int i = 3; i < 23; i++)
+            Finished(i);
+        other.SetTrialParam(stale2, "x", 7.0, new FloatDistribution(-100, 100));
+        other.SetTrialIntermediateValue(stale2, 0, 1.5);
+        AssertSameAsFresh("more trials completed; a running one changed");
+
+        other.SetTrialStateValues(stale2, TrialState.Complete, new[] { -1.0 });
+        AssertSameAsFresh("the later running trial finished first");
+
+        other.SetTrialParam(stale1, "x", -3.0, new FloatDistribution(-100, 100));
+        other.SetTrialStateValues(stale1, TrialState.Fail, null);
+        Finished(99);
+        AssertSameAsFresh("the earlier running trial failed; one more completed");
+    }
+
     [TestMethod]
     public void GetStorage_WrapsRdbStorage_InCachedStorage()
     {

@@ -294,4 +294,45 @@ public class SqliteRdbInteropParityTests : OptunaInteropTestBase
         wait.UserAttrs["owner"].Should().Be(PyStr("rwait.user_attrs['owner']"));
         ((long)wait.SystemAttrs["custom"]!).Should().Be(PyLong("rwait.system_attrs['custom']"));
     }
+
+    /// <summary>
+    ///     Plan 14 gate: the cached SQLite refresh now asks for <c>trial_id &gt; watermark UNION ALL trial_id IN
+    ///     (running ids)</c> instead of Optuna's OR, a query shape that only runs while a trial below the watermark is still
+    ///     RUNNING. Python opens the study, leaves its first trial running and completes 15 more; C# loads it through
+    ///     <see cref="CachedStorage" /> and optimizes 25 trials (every sync takes the new query, with the running trial
+    ///     included); Python then gives the running trial a parameter, an intermediate value and its value and completes it;
+    ///     C#'s cached view must then equal Python's fresh read of the file, field for field.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void RunningTrialBelowTheWatermark_CachedRefresh_MatchesPythonsRead()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        PyExec(
+            $"study = optuna.create_study(study_name='s', storage=r'{Url}', " +
+            "sampler=optuna.samplers.RandomSampler(5))\n" +
+            "stale = study.ask()\n" +
+            PyMixedObjective +
+            "study.optimize(_obj, n_trials=15)\n");
+
+        var csStudy = Optuna.LoadStudy("s", new RDBStorage(Url), sampler: new RandomSampler(6));
+        csStudy.Storage.Should().BeOfType<CachedStorage>();
+        csStudy.Optimize(MixedObjective, nTrials: 25);
+        csStudy.Trials.Count(t => t.State == TrialState.Running).Should().Be(1, "Python's first trial is still running");
+
+        PyExec(
+            "stale.suggest_float('x', -10, 10)\n" +
+            "stale.report(1.25, 0)\n" +
+            "study.tell(stale, 3.5)\n" +
+            "study._storage.remove_session()\n" +
+            $"fresh = optuna.load_study(study_name='s', storage=r'{Url}')\n");
+        var pyState = PyStudyState("fresh");
+        PyExec("fresh._storage.remove_session()\n");
+
+        var csState = StudySnapshot.Capture(csStudy);
+        csState.Trials.Should().HaveCount(41);
+        csStudy.Trials[0].State.Should().Be(TrialState.Complete, "the cached view picked up Python's tell");
+        StudySnapshot.AssertParity(pyState, csState, DatetimeComparison.NullnessOnly);
+    }
 }

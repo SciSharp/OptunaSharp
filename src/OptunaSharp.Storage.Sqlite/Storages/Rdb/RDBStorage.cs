@@ -1217,9 +1217,18 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
             if (included.Count > 0 && trialIdGreaterThan > -1)
             {
-                sql.Append(" AND (trial_id > $p").Append(args.Count);
+                // Optuna asks for `trial_id > :watermark OR trial_id IN (:included)`; SQLite answers that OR by walking
+                // every trial of the study in ix_trials_study_id (2.6 ms at 20,000 trials), so each sync of a study with a
+                // trial left RUNNING below the watermark (a parallel worker's, or a crashed one's) grew with the whole
+                // history. Two halves joined by UNION ALL let each use the primary key (64 µs there; plan 14, Rustuna
+                // d46ace5). They are disjoint (every included id is at or below the watermark), and the final ORDER BY
+                // sorts the union, so the rows and their order are the OR's. Both halves repeat the same named
+                // parameters, which SQLite binds to the same values. Rustuna also adds a (study_id, number) index; that
+                // changes Optuna's schema, so it is not taken.
+                string head = sql.ToString();
+                sql.Append(" AND trial_id > $p").Append(args.Count);
                 args.Add(trialIdGreaterThan);
-                sql.Append(" OR trial_id IN (");
+                sql.Append(" UNION ALL ").Append(head).Append(" AND trial_id IN (");
                 for (int i = 0; i < included.Count; i++)
                 {
                     if (i > 0)
@@ -1227,7 +1236,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
                     sql.Append("$p").Append(args.Count);
                     args.Add(included[i]);
                 }
-                sql.Append("))");
+                sql.Append(')');
             }
             else if (trialIdGreaterThan > -1)
             {
