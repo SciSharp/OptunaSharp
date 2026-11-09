@@ -2,8 +2,10 @@
 
 > **Status: BUILT (2026-11-09).** Six steps on `main`: A `cfe78ec`, B `3050d81`, C `fe68085`, D `7537079`,
 > E `39fdd4b`, F `82b8a0b`. None of them changes a seeded trial or a stored byte, so none is a switch. §4 lists the
-> byte-for-byte gates of every affected area, §5 the final before/after proof. The comparison behind the plan: catalog
-> note `optunasharp/notes/rustuna-comparison-2026-11-08.md`, section "Second pass".
+> byte-for-byte gates of every affected area, §5 the final before/after proof. §8 is the concurrency review that
+> followed: no threading defect, new concurrency tests, and a fix to the TPE cache for studies recreated under a
+> reused id. The comparison behind the plan: catalog note `optunasharp/notes/rustuna-comparison-2026-11-08.md`,
+> section "Second pass".
 
 ---
 
@@ -202,3 +204,38 @@ The README's sampler table (benchmark 14's C# probes, three fresh processes per 
 - NumSharp temporaries were traced (allocation ticks by creating frame, scratch `p14/nd/AnalyzeNd.cs`) on the five
   plan 13 workloads only: random, QMC, NSGA-II, TPE, CMA-ES. GP, DE, PSO, the NES family and the other samplers were
   not traced.
+
+## 8. Concurrency review (2026-11-09, after the build)
+
+The owner asked: "Did we not break the concurrency?" Everything plan 14 added that more than one thread can reach, and
+what guards it:
+
+| State | Reached from | Guard | Tests |
+|---|---|---|---|
+| `TpeObservationCache` (a `TPESampler` field) | `GetInternalRepr` ← `BuildParzenEstimator` ← `Sample` ← `SampleRelative` / `SampleIndependent` only | The sampler monitor (`BaseSampler.SyncRoot`), held for every study-driven call, also when several studies share the sampler. A `PerWorker` instance gets its own cache: the field initializer runs for the private copy constructor, which does not copy it | New: `WorkerInstances_OwnTheirCaches_AndThePrototypesStaysUnused`, `SharedByEightWorkers_EveryCachedRowIsItsTrialsOwnValue` (eight workers, constant liar; every cached row equals its trial's conversion to the bit). Existing: `SamplerParallelReadTests` and `SamplerSharingConcurrencyCoverageTests` (`tpe`, `tpe-independent`) |
+| `QMCSampler._lastKeyNames` / `_lastKeyDistributions` / `_lastKeyQmcId` | `QmcIdKey` ← `FindSampleId` ← `SampleQmc` ← `SampleRelative` only | The sampler monitor; QMC has no worker instances, so it is always shared and called one at a time | Existing: `SamplerParallelReadTests`, `SamplerSharingConcurrencyCoverageTests` (`qmc`, `qmc-scrambled`); `QmcIdKey_Memoized_EqualsAFreshComputation` |
+| `JournalFileBackend` offsets (`_latestLogNumber`, `_latestLogOffset`, `_offsetCheckpoints`) | `ReadLogs`, from any number of storages sharing the backend | `_offsetLock` on every access; each read carries its own byte position; a line start is recorded only after the line decodes, so the furthest start advances one line at a time and each checkpoint is appended once, in order (index check) | New: `ReadersSyncingWhileOneWriterAppends_AcrossCheckpoints_AllReadExactly` (one writer and six syncing readers on one backend across three checkpoints). Existing: `ConcurrentReaders_FromScatteredPositions_AllReadExactly`, `JournalConcurrencyTests` |
+| `Internal/NumPyDraws` | Every sampler that draws | No state. Each draw or fill holds `BitGenerator.@lock`, the lock NumSharp's own primitives take and the one NumSharp asks callers outside its `Generator` to hold | Through the suites above |
+| Exact widths, the `exp` skip, categorical logs, `TransformValues` / `UntransformValues`, the SQLite query | | No shared state; the SQLite query runs under the storage's one-connection lock as before | |
+
+Runs on the fixed tree: the unit suite with CI's filter, 2172 passed on net8.0 and on net10.0 (one Windows self-skip
+each); every concurrency-focused class (`OptunaSharp.Tests.Concurrency`, `OptimizeConcurrencyTests`,
+`SamplerNJobsSweepTests`, `JournalConcurrencyTests`, `JournalOffsetCheckpointTests`, `TpeObservationCacheTests`,
+`QmcSamplerTests`) three more times in a row, 342/342 each time; live TPE, compact-storage, importance and
+battle-tested parity, 83/83; the storage suite's gRPC, SQLite and journal-contract classes, 114/114.
+
+**Found by the review, not a threading bug: recreated studies.** `TpeObservationCache` reset only when the storage
+object or the study id changed. SQLite reuses the highest deleted study and trial ids, and a gRPC proxy (or a custom
+storage) passes them through as one storage object, so a reused `TPESampler` on a study deleted and recreated under the
+same id read the deleted study's values for the cached trial numbers. Optuna has no such cache, and TPE before plan 14
+re-read every trial, so this was a regression. The storage suite's new
+`GrpcStorageProxyTests.Tpe_ReusedOnARecreatedStudyUnderTheSameId_SamplesAsUnderANewId` reproduced it: the same run
+with the deleted study's id reused suggested different parameters from the first TPE trial on. The fix applies
+`PerStudyState`'s `TrialAnchor` rule per row: each cached row keeps its trial's storage id and start time, and every
+call checks the trials it is about to read, starting over on a mismatch. The cache also holds its storage weakly now,
+as `PerStudyState` does, so a long-lived sampler does not keep the last storage alive. New unit tests:
+`LiveStudy_NeverStartsOverOnATrialsIdentity` (no false alarm in either TPE mode, plain or compact storage, constant
+liar with running trials), `TrialNumbersCarryingOtherTrials_StartTheCacheOver`, `Cache_DoesNotKeepTheStorageAlive`.
+Mutation checks: with the identity check disabled, or the storage held strongly, those tests fail. The 36-study hash
+probe is unchanged, and TPE / MOTPE times are unchanged within noise (TPE 1k warm: 2.68-2.90 s before the fix,
+2.58-3.04 s after; allocations equal).

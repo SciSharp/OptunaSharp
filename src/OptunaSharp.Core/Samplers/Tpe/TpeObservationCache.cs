@@ -20,7 +20,15 @@ namespace OptunaSharp.Samplers.Tpe;
 ///     Unfinished trials (constant liar's running trials, whose relative parameters still arrive) are never cached.</para>
 ///     <para><b>Lifetime.</b> The cache answers for one study at a time: a call for another study or storage (a sampler
 ///     reused across studies) starts over. Dynamic search spaces add a column per distinct distribution; past
-///     <see cref="MaxColumns" /> the cache starts over rather than grow without bound.</para>
+///     <see cref="MaxColumns" /> the cache starts over rather than grow without bound. The storage is held weakly, as
+///     <see cref="Internal.PerStudyState{TState}" /> holds it, so a long-lived sampler does not keep the last storage it
+///     served alive.</para>
+///     <para><b>Recreated studies.</b> The storage object and the study id do not identify a history on their own: SQLite
+///     reuses the highest deleted study and trial ids, and a gRPC proxy or a custom storage passes them through as one
+///     storage object, so a study deleted and recreated under the same id shows the cache different trials under the
+///     numbers it holds. Each cached row therefore keeps its trial's identity (storage id and start time, the
+///     <see cref="Internal.TrialAnchor" /> rule), and every <see cref="ColumnsFor" /> checks the finished trials it is
+///     given against it before any row is read: one mismatch and the cache starts over.</para>
 ///     <para><b>Concurrency.</b> Not thread-safe; TPE uses it only inside sampling, which runs under the sampler's lock
 ///     (each <see cref="SamplerConcurrency.PerWorker" /> instance has its own cache).</para>
 /// </remarks>
@@ -38,9 +46,25 @@ internal sealed class TpeObservationCache
     /// <summary>The state of a column entry whose finished trial lacks the parameter.</summary>
     internal const byte Absent = 2;
 
+    /// <summary>The trial id recorded for a trial number no column holds a row for (storage ids are never negative).</summary>
+    private const int NoRow = -1;
+
+    /// <summary>The start time recorded for a cached trial that had none, which then matches any start time.</summary>
+    private const long NoStart = long.MinValue;
+
     private readonly Dictionary<(string Name, BaseDistribution Distribution), Column> _columns = new();
-    private BaseStorage? _storage;
+    private WeakReference<BaseStorage>? _storage;
     private int _studyId;
+    // The identity of the trial each cached row was read from, by trial number: its storage id (NoRow where no row is
+    // cached) and its start time in ticks (NoStart where it had none). Shared by every column, since a row is one trial.
+    private int[] _rowTrialIds = Array.Empty<int>();
+    private long[] _rowStartTicks = Array.Empty<long>();
+
+    /// <summary>
+    ///     How many times the cache started over because a trial number it holds now carries another trial (a study
+    ///     recreated under a reused id), for the tests that check a live study never triggers it.
+    /// </summary>
+    internal int IdentityRestarts { get; private set; }
 
     /// <summary>One parameter's cached values by trial number, with each entry's state.</summary>
     internal sealed class Column
@@ -99,27 +123,44 @@ internal sealed class TpeObservationCache
     /// </summary>
     internal void Reset()
     {
-        _columns.Clear();
+        ForgetRows();
         _storage = null;
         _studyId = 0;
     }
 
     /// <summary>
-    ///     The columns for one search space, in its order, after starting over when the study changed or the cache grew past
-    ///     <see cref="MaxColumns" />.
+    ///     The columns for one search space, in its order, after starting over when the study changed, when a trial number
+    ///     the cache holds now carries another trial, or when the cache grew past <see cref="MaxColumns" />.
     /// </summary>
     /// <param name="study">The study being sampled; its id and storage identify the history the cache answers for.</param>
+    /// <param name="trials">
+    ///     The trials the caller is about to read rows for. Each one whose number has a cached row must be the trial that
+    ///     row was read from (same storage id and, when both are known, start time), or the cache starts over before
+    ///     anything is read.
+    /// </param>
     /// <param name="names">The search space's parameter names, in order.</param>
     /// <param name="distributions">The search space's distributions, in the same order.</param>
     /// <returns>One column per parameter, aligned with <paramref name="names" />.</returns>
-    internal Column[] ColumnsFor(Study study, string[] names, BaseDistribution[] distributions)
+    internal Column[] ColumnsFor(
+        Study study, IReadOnlyList<FrozenTrial> trials, string[] names, BaseDistribution[] distributions)
     {
-        if (!ReferenceEquals(_storage, study.Storage) || _studyId != study.StudyId)
+        BaseStorage storage = study.Storage;
+        if (_storage is null || !_storage.TryGetTarget(out BaseStorage? held) || !ReferenceEquals(held, storage)
+            || _studyId != study.StudyId)
         {
-            _columns.Clear();
-            _storage = study.Storage;
+            ForgetRows();
+            _storage = new WeakReference<BaseStorage>(storage);
             _studyId = study.StudyId;
         }
+        else if (!RowsMatch(trials))
+        {
+            // The same storage object and study id now hold another history: the study was deleted and recreated under a
+            // reused id. Nothing cached for the old one may be read, so every row goes, before the caller reads any.
+            ForgetRows();
+            IdentityRestarts++;
+        }
+        // Only the columns go: the row identities still describe this study's trials, and a row without column entries is
+        // never read.
         if (_columns.Count + names.Length > MaxColumns)
             _columns.Clear();
 
@@ -135,5 +176,60 @@ internal sealed class TpeObservationCache
             result[i] = column;
         }
         return result;
+    }
+
+    /// <summary>
+    ///     Records which trial a finished trial's row was read from; called whenever a column records its value or its
+    ///     absence, so that <see cref="ColumnsFor" /> can tell the trial from another one under the same number later.
+    /// </summary>
+    /// <param name="trial">The finished trial whose row a column now holds.</param>
+    internal void RememberTrial(FrozenTrial trial)
+    {
+        int number = trial.Number;
+        if (number >= _rowTrialIds.Length)
+        {
+            // Doubling, like the columns; the new entries hold no row until a trial is recorded there.
+            int oldSize = _rowTrialIds.Length;
+            int size = Math.Max(Math.Max(16, number + 1), 2 * oldSize);
+            Array.Resize(ref _rowTrialIds, size);
+            Array.Resize(ref _rowStartTicks, size);
+            Array.Fill(_rowTrialIds, NoRow, oldSize, size - oldSize);
+        }
+        _rowTrialIds[number] = trial.TrialId;
+        _rowStartTicks[number] = trial.DatetimeStart?.Ticks ?? NoStart;
+    }
+
+    /// <summary>
+    ///     Whether every trial in <paramref name="trials" /> whose number has a cached row is the trial that row was read
+    ///     from: the same storage id and, when both start times are known, the same start time (the
+    ///     <see cref="Internal.TrialAnchor" /> rule; SQLite reuses deleted trial ids too, but a recreated trial starts
+    ///     later).
+    /// </summary>
+    /// <param name="trials">The trials about to be read; numbers without a cached row are not checked.</param>
+    /// <returns><c>true</c> when no cached row belongs to another trial.</returns>
+    private bool RowsMatch(IReadOnlyList<FrozenTrial> trials)
+    {
+        int[] ids = _rowTrialIds;
+        for (int i = 0; i < trials.Count; i++)
+        {
+            FrozenTrial trial = trials[i];
+            int number = trial.Number;
+            if ((uint)number >= (uint)ids.Length || ids[number] == NoRow)
+                continue;
+            if (ids[number] != trial.TrialId)
+                return false;
+            long cachedStart = _rowStartTicks[number];
+            if (cachedStart != NoStart && trial.DatetimeStart is { } start && start.Ticks != cachedStart)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>Drops every column and every row identity; the study and storage the cache answers for stay.</summary>
+    private void ForgetRows()
+    {
+        _columns.Clear();
+        _rowTrialIds = Array.Empty<int>();
+        _rowStartTicks = Array.Empty<long>();
     }
 }

@@ -623,11 +623,13 @@ and ends, around one native call to OpenBLAS).
   monitor: `CmaEsSampler`'s restored optimizer and its folded history (`CmaTrialHistory`, which starts
   over when it is handed another storage, study or history), and `TPESampler`'s last trial split
   (`TpeSplitCache`). Plan 14 added two more of the same kind: `TPESampler`'s finished trials' internal
-  values (`TpeObservationCache`, which starts over for another study or storage and never holds a running
-  trial) and `QMCSampler`'s last sample-id key (kept with the very distribution objects it was computed
-  from). A `SamplerConcurrency.PerWorker` worker instance gets its own of each, so workers never share
-  one. Each is keyed by what it was computed from (the holder trial's id, the very records split, the
-  study and storage, the distribution objects), so a cache that outlives its study only misses.
+  values (`TpeObservationCache`, which starts over for another study or storage, holds the storage weakly,
+  never holds a running trial, and checks each cached row's trial identity, so a study recreated under a
+  reused id is not read from the deleted one's rows) and `QMCSampler`'s last sample-id key (kept with the
+  very distribution objects it was computed from). A `SamplerConcurrency.PerWorker` worker instance gets
+  its own of each, so workers never share one. Each is keyed by what it was computed from (the holder
+  trial's id, the very records split, the study and storage plus each row's trial, the distribution
+  objects), so a cache that outlives its study only misses.
 - Random numbers come from `LazyRandomState`, MT19937, never `System.Random`. An unseeded sampler seeds
   itself from OS entropy (`RandomNumberGenerator`) rather than the clock. Samplers created at the same
   moment therefore draw different streams: in one process, in worker processes, and in parallel

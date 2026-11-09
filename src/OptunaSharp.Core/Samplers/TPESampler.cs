@@ -444,8 +444,10 @@ public class TPESampler : BaseSampler
         int rows = 0;
         // A finished trial never changes, so its conversions are kept in the observation cache (plan 14): once each of
         // this space's columns knows the trial, the row is copied from dense columns without touching the trial's
-        // parameters; a column that knows the trial lacks a name skips it, as the subset test below would.
-        TpeObservationCache.Column[] cached = _observationCache.ColumnsFor(study, names, distributions);
+        // parameters; a column that knows the trial lacks a name skips it, as the subset test below would. The cache
+        // first checks that every trial here is the one its row was read from, and starts over for a study recreated
+        // under a reused id.
+        TpeObservationCache.Column[] cached = _observationCache.ColumnsFor(study, trials, names, distributions);
         // The current trial's external values, read once each by name before any is converted (see below).
         var externals = new object?[nParams];
         // A compact finished trial (plan 13, item S12; InMemoryStorage built with compactFinishedTrials) stores each
@@ -485,7 +487,10 @@ public class TPESampler : BaseSampler
                 if (absent >= 0)
                 {
                     if (finished)
+                    {
                         cached[absent].SetAbsent(number);
+                        _observationCache.RememberTrial(trial);
+                    }
                     continue;
                 }
                 for (int i = 0; i < nParams; i++)
@@ -495,7 +500,10 @@ public class TPESampler : BaseSampler
                         : distributions[i].ToInternalRepr(@params[names[i]]);
                 }
                 if (finished)
+                {
                     RememberRow(cached, number, columns, rows);
+                    _observationCache.RememberTrial(trial);
+                }
                 rows++;
                 continue;
             }
@@ -516,13 +524,19 @@ public class TPESampler : BaseSampler
             if (missing >= 0)
             {
                 if (finished)
+                {
                     cached[missing].SetAbsent(number);
+                    _observationCache.RememberTrial(trial);
+                }
                 continue;
             }
             for (int i = 0; i < nParams; i++)
                 columns[i][rows] = distributions[i].ToInternalRepr(externals[i]);
             if (finished)
+            {
                 RememberRow(cached, number, columns, rows);
+                _observationCache.RememberTrial(trial);
+            }
             rows++;
         }
 

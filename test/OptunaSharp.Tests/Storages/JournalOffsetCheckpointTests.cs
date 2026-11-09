@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using OptunaSharp.Collections;
@@ -153,6 +154,55 @@ public class JournalOffsetCheckpointTests
             Read(shared, from).Should().Equal(expected, $"read from {from}");
         });
         shared.OffsetCheckpointCount.Should().Be(4, "checkpoints at 0, 4096, 8192 and 12288");
+    }
+
+    /// <summary>
+    ///     One backend shared by a writer and six readers at once, as <see cref="JournalStorage" /> instances share a
+    ///     singleton backend: the writer appends past three checkpoint intervals in batches while each reader syncs the way
+    ///     a storage does, reading from the next log it has not seen, again and again, from its own starting position
+    ///     (two from the start, others inside and beyond intervals the writer has not reached yet). Each read races the
+    ///     appends and the other readers' bookkeeping, and may meet a batch half written. Every reader must end with exactly
+    ///     its slice of a full read, and the backend must hold one checkpoint per interval.
+    /// </summary>
+    [TestMethod]
+    public void ReadersSyncingWhileOneWriterAppends_AcrossCheckpoints_AllReadExactly()
+    {
+        int interval = JournalFileBackend.OffsetCheckpointInterval;
+        int total = 3 * interval + 211;
+        var shared = new JournalFileBackend(_path, new JournalFileOpenLock(_path));
+        var froms = new[] { 0, 0, 100, interval, 2 * interval + 5, 3 * interval + 12 };
+        int writerDone = 0;
+        Task<List<string>>[] readers = froms.Select(from => Task.Run(() =>
+        {
+            var seen = new List<string>();
+            int next = from;
+            while (true)
+            {
+                // Read whether the writer had finished before this sync starts: a sync that starts after it has
+                // finished sees the whole file, so it is the last one this reader needs.
+                bool finalSync = Volatile.Read(ref writerDone) == 1;
+                int before = next;
+                foreach (var log in shared.ReadLogs(next))
+                {
+                    seen.Add(PyJson.Dumps(log));
+                    next++;
+                }
+                if (finalSync)
+                    return seen;
+                if (next == before)
+                    Thread.Sleep(1);
+            }
+        })).ToArray();
+
+        Append(shared, 0, total);
+        Volatile.Write(ref writerDone, 1);
+        Task.WaitAll(readers);
+
+        List<string> reference = Read(new JournalFileBackend(_path, new JournalFileOpenLock(_path)), 0);
+        reference.Should().HaveCount(total);
+        for (int r = 0; r < froms.Length; r++)
+            readers[r].Result.Should().Equal(reference.GetRange(froms[r], total - froms[r]), $"reader {r}, from {froms[r]}");
+        shared.OffsetCheckpointCount.Should().Be(4, "checkpoints at 0, 4096, 8192 and 12288, each recorded once");
     }
 
     /// <summary>

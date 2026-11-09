@@ -517,6 +517,87 @@ public class GrpcStorageProxyTests
             System.IO.File.Delete(path);
         }
     }
+
+    /// <summary>
+    ///     Plan 14's TPE observation cache, in the recreated-study case of pre-release review item H3. TPE keeps each
+    ///     finished trial's internal parameter values by trial number for the study it last sampled. Over a gRPC proxy to
+    ///     SQLite, one storage object serves every study and SQLite reuses the highest deleted study and trial ids, so a
+    ///     study deleted and recreated under the same id shows a reused sampler different trials under numbers it has
+    ///     already cached. The reference is the same run with the first study kept, so the second study gets a new id:
+    ///     the reused sampler must suggest exactly the same parameters in both runs, as TPE without the cache (and
+    ///     Optuna, which keeps no such cache) does. Before the cache checked each row's trial identity, the recreated run
+    ///     read the deleted study's values for trials 0-19 and suggested different parameters. The sampler is the
+    ///     independent TPE: the multivariate one (Optuna 5's single-objective default) refuses, as Optuna does, a sampler
+    ///     reused for a study under another id (<c>IntersectionSearchSpace</c> cannot handle multiple studies), which is
+    ///     what the reference run does; the independent TPE reads the same cache.
+    /// </summary>
+    [TestMethod]
+    public void Tpe_ReusedOnARecreatedStudyUnderTheSameId_SamplesAsUnderANewId()
+    {
+        IReadOnlyList<string> reference = TpeTrialsOnASecondStudy(deleteTheFirst: false);
+        IReadOnlyList<string> recreated = TpeTrialsOnASecondStudy(deleteTheFirst: true);
+        recreated.Should().HaveCount(12);
+        recreated.Should().Equal(reference,
+            "a study recreated under a reused id is a new history: no value cached for the deleted study may be read");
+    }
+
+    /// <summary>
+    ///     One run of <see cref="Tpe_ReusedOnARecreatedStudyUnderTheSameId_SamplesAsUnderANewId" /> on a fresh SQLite file
+    ///     behind a fresh gRPC proxy: a reused <see cref="TPESampler" /> optimizes a first study for 20 trials, a second
+    ///     study gets 24 random trials, then the reused sampler optimizes the second study for 12 more.
+    /// </summary>
+    /// <param name="deleteTheFirst">
+    ///     Whether the first study is deleted before the second is created, so that the second reuses its id.
+    /// </param>
+    /// <returns>The 12 TPE trials of the second study, each as its parameters' value bits.</returns>
+    /// <exception cref="Exception">Whatever the proxy, the server or the study throws; the test then fails.</exception>
+    private static IReadOnlyList<string> TpeTrialsOnASecondStudy(bool deleteTheFirst)
+    {
+        string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"optunasharp-h3-tpe-{Guid.NewGuid():N}.db");
+        int port = FreePort();
+        var backend = new RDBStorage($"sqlite:///{path.Replace('\\', '/')}");
+        var app = GrpcProxyServer.MakeServer(backend, "localhost", port);
+        app.StartAsync().GetAwaiter().GetResult();
+        try
+        {
+            using var proxy = new GrpcStorageProxy("localhost", port);
+            proxy.WaitServerReady(TimeSpan.FromSeconds(15));
+            double Objective(Trial t)
+            {
+                double x = t.SuggestFloat("x", 0, 1), y = t.SuggestFloat("y", 0, 1);
+                return (x - 0.3) * (x - 0.3) + (y - 0.7) * (y - 0.7);
+            }
+            var tpe = new TPESampler(seed: 0, nStartupTrials: 5, multivariate: false);
+
+            var first = Optuna.CreateStudy(storage: proxy, studyName: "first", sampler: tpe);
+            first.Optimize(Objective, nTrials: 20);
+            int firstStudyId = proxy.GetStudyIdFromName("first");
+            if (deleteTheFirst)
+                Optuna.DeleteStudy("first", proxy);
+
+            var second = Optuna.CreateStudy(storage: proxy, studyName: "second", sampler: new RandomSampler(seed: 1));
+            if (deleteTheFirst)
+                proxy.GetStudyIdFromName("second").Should().Be(firstStudyId,
+                    "SQLite reuses the deleted study's id, which is the case under test");
+            else
+                proxy.GetStudyIdFromName("second").Should().NotBe(firstStudyId, "the reference run keeps the first study");
+            second.Optimize(Objective, nTrials: 24);
+            var secondWithTpe = Optuna.LoadStudy("second", proxy, sampler: tpe);
+            secondWithTpe.Optimize(Objective, nTrials: 12);
+
+            return secondWithTpe.Trials.Skip(24)
+                .Select(t => $"{BitConverter.DoubleToInt64Bits((double)t.Params["x"]!):X16} {BitConverter.DoubleToInt64Bits((double)t.Params["y"]!):X16}")
+                .ToList();
+        }
+        finally
+        {
+            app.StopAsync().GetAwaiter().GetResult();
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            backend.Dispose();
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            System.IO.File.Delete(path);
+        }
+    }
 }
 
 /// <summary>A trivial server interceptor used to prove <c>configureGrpc</c> is honored.</summary>
