@@ -488,8 +488,8 @@ internal sealed class MixtureOfProductDistribution
     ///     </para>
     ///     <para>
     ///         The grids are laid out by dimension (<c>[c * n_kernels + k]</c>) so the kernel loop is contiguous.
-    ///         <see cref="TruncNorm.LogGaussMass" /> is elementwise, and the vectorized-<c>erf</c> switch depends only
-    ///         on how many elements it gets (see <see cref="Erf.ComputeArray" />), so evaluating the same elements in
+    ///         <see cref="TruncNorm.LogGaussMass(ReadOnlySpan{double}, ReadOnlySpan{double}, Span{double})" /> is elementwise, and the vectorized-<c>erf</c> switch depends only
+    ///         on how many elements it gets (see <see cref="Erf.ComputeArray(ReadOnlySpan{double}, Span{double})" />), so evaluating the same elements in
     ///         another order changes no element.
     ///     </para>
     ///     <para>

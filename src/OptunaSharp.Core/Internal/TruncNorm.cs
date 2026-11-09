@@ -18,7 +18,7 @@ namespace OptunaSharp.Internal;
 ///     the plan already excuses for LAPACK-backed linear algebra; the categorical path, the trial
 ///     selection, and everything not routed through <c>erf</c> stay bit-exact. Optuna's own ≥2000-
 ///     element vectorized <c>erf</c> approximation IS reproduced bit-for-bit by
-///     <see cref="Erf.ComputeArray" />.</para>
+///     <see cref="Erf.ComputeArray(double[])" />.</para>
 /// </summary>
 internal static class TruncNorm
 {
