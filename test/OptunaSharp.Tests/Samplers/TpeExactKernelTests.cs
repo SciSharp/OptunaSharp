@@ -172,6 +172,97 @@ public class TpeExactKernelTests
         return result;
     }
 
+    // ------------------------------------------------------------------ the categorical log-pdf (plan 14)
+
+    /// <summary>
+    ///     Plan 14: a categorical dimension now takes the log of each (kernel, choice) weight once instead of once per
+    ///     candidate and kernel. Mixtures of one to four categorical dimensions (two to seven choices, some weights zero, so
+    ///     some terms are <c>-inf</c>), from one to forty kernels, against the per-candidate logs it replaced: every
+    ///     candidate's log density has the same bits.
+    /// </summary>
+    /// <param name="seed">Seeds the random mixtures.</param>
+    [TestMethod]
+    [DataRow(1)]
+    [DataRow(2)]
+    public void CategoricalLogPdf_OneLogPerKernelAndChoice_MatchesThePerCandidateLogsToTheBit(int seed)
+    {
+        var rng = new Random(seed);
+        foreach (int nDims in new[] { 1, 2, 4 })
+        {
+            for (int nKernels = 1; nKernels <= 40; nKernels += 3)
+            {
+                var dims = new List<BatchedDistributions>();
+                var choices = new int[nDims];
+                for (int d = 0; d < nDims; d++)
+                {
+                    choices[d] = rng.Next(2, 8);
+                    var weights = new double[nKernels, choices[d]];
+                    for (int k = 0; k < nKernels; k++)
+                        for (int c = 0; c < choices[d]; c++)
+                            weights[k, c] = rng.Next(0, 6) == 0 ? 0.0 : rng.NextDouble();
+                    dims.Add(new BatchedCategoricalDistributions(weights));
+                }
+                var mixture = new MixtureOfProductDistribution(RandomWeights(rng, nKernels), dims);
+                var x = new double[24, nDims];
+                for (int s = 0; s < 24; s++)
+                    for (int d = 0; d < nDims; d++)
+                        x[s, d] = rng.Next(0, choices[d]);
+
+                double[] actual = mixture.LogPdf(x);
+                double[] expected = ReferenceCategoricalLogPdf(mixture, x);
+                for (int s = 0; s < 24; s++)
+                {
+                    if (double.IsNaN(expected[s]))
+                        double.IsNaN(actual[s]).Should().BeTrue($"candidate {s} was NaN before");
+                    else
+                        BitConverter.DoubleToInt64Bits(actual[s]).Should().Be(BitConverter.DoubleToInt64Bits(expected[s]),
+                            $"candidate {s}: {nKernels} kernels, {nDims} categorical dims");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    ///     The log-pdf of a mixture of categorical dimensions as computed before plan 14: <c>log(weights[k, x])</c> taken
+    ///     per candidate and kernel, then the log mixture weights and the log-sum-exp.
+    /// </summary>
+    /// <param name="mixture">A mixture of categorical dimensions only.</param>
+    /// <param name="x">The candidates' choice indices, one row each.</param>
+    /// <returns>One log density per candidate.</returns>
+    private static double[] ReferenceCategoricalLogPdf(MixtureOfProductDistribution mixture, double[,] x)
+    {
+        int nSamples = x.GetLength(0), nKernels = mixture.Weights.Length;
+        var weighted = new double[nSamples, nKernels];
+        for (int d = 0; d < mixture.Distributions.Count; d++)
+        {
+            var cat = (BatchedCategoricalDistributions)mixture.Distributions[d];
+            for (int s = 0; s < nSamples; s++)
+            {
+                long xi = (long)x[s, d];
+                for (int k = 0; k < nKernels; k++)
+                    weighted[s, k] += Math.Log(cat.Weights[k, xi]);
+            }
+        }
+        for (int s = 0; s < nSamples; s++)
+            for (int k = 0; k < nKernels; k++)
+                weighted[s, k] += Math.Log(mixture.Weights[k]);
+
+        var result = new double[nSamples];
+        var expBuf = new double[nKernels];
+        for (int s = 0; s < nSamples; s++)
+        {
+            double max = double.NegativeInfinity;
+            for (int k = 0; k < nKernels; k++)
+                max = Math.Max(max, weighted[s, k]);
+            if (double.IsNegativeInfinity(max))
+                max = 0.0;
+            for (int k = 0; k < nKernels; k++)
+                expBuf[k] = Math.Exp(weighted[s, k] - max);
+            result[s] = Math.Log(MathUtil.PairwiseSum(expBuf)) + max;
+        }
+        return result;
+    }
+
     // ------------------------------------------------------------------ the log Gaussian mass
 
     /// <summary>

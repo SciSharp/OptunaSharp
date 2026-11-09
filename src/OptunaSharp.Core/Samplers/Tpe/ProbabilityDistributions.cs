@@ -368,11 +368,26 @@ internal sealed class MixtureOfProductDistribution
                     case BatchedCategoricalDistributions cat:
                     {
                         // xi = x[:, i, None, None].astype(int64); += log(take_along_axis(weights, xi))[..., 0].
+                        // Each candidate adds log(weights[k, xi]) for its choice xi. The log of every (kernel, choice)
+                        // weight is taken once (plan 14; Rustuna 198e484 reduces the log calls too, with other numerics):
+                        // one log per kernel and choice instead of one per candidate and kernel, 3,000 instead of 24,000
+                        // for a three-choice parameter over a thousand kernels. Math.Log is deterministic, so each
+                        // added term, and every sum, keeps its bits; only choices some candidate drew are computed.
+                        int nChoices = cat.Weights.GetLength(1);
+                        var logChoiceWeights = new double[nChoices][];
                         for (int s = 0; s < nSamples; s++)
                         {
                             long xi = (long)x[s, i];
+                            double[]? column = logChoiceWeights[xi];
+                            if (column is null)
+                            {
+                                column = new double[nKernels];
+                                for (int k = 0; k < nKernels; k++)
+                                    column[k] = Math.Log(cat.Weights[k, xi]);
+                                logChoiceWeights[xi] = column;
+                            }
                             for (int k = 0; k < nKernels; k++)
-                                weightedLogPdf[s * nKernels + k] += Math.Log(cat.Weights[k, xi]);
+                                weightedLogPdf[s * nKernels + k] += column[k];
                         }
                         break;
                     }
