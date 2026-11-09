@@ -2,7 +2,7 @@
 
 > **Status: BUILT (2026-11-09).** Phases 1-4 are on `main`: `8f8ce3e` (S1-S3, D1),
 > `605806c` (S4, S7), `dce5885` (S3, S5, S6), `656ab94` (S10, S9 as measured). The owner then decided the three open
-> items (2026-11-09): S8 built (`74893f7`), S12 built as an opt-in (`InMemoryStorage(compactFinishedTrials: true)`,
+> items (2026-11-09): S8 built (`74893f7`), S12 built as an opt-in (`17716c7`, `InMemoryStorage(compactFinishedTrials: true)`,
 > §10.2), D2 not built (exact kernel only). S11 was measured and changes nothing. §10 records what was built, how it
 > was gated, and the before/after measurements. Background, benchmarks and the full Rustuna read-through: catalog note
 > `optunasharp/notes/rustuna-comparison-2026-11-08.md`.
@@ -370,7 +370,7 @@ the `de495f8` snapshot and the working tree; and, for the concurrency-sensitive 
 | S9 | `656ab94` | Measured first: attribute JSON is 3-4 % of a 10k-trial SQLite cold load, so lazy decoding was not built. Parsing each `distribution_json` row was ~40 %: both RDB storages now parse each distinct text once per load (`JournalDistributionCache`) | Cold load 2.1 → 1.4-1.5 s, 1.22 GB → 479 MB |
 | S11 | none | Measured: at 10-D and 40-D CMA-ES and 6-D GP the OpenBLAS thread count changes no result, but at 100-D every count gives a different (deterministic) result, as NumPy's does. Pinning one thread at `nJobs: 1` would break parity with Python's default-thread NumPy, so the automatic policy stays (pin only when `nJobs > 1`). One thread was 12 % faster at 40-D and 24-35 % at 100-D: available through `TrialExecutorOptions.BlasThreads = 1`, at the cost of parity | — |
 | S8 | `74893f7` | Owner 2026-11-09: "Build it", "Also have optuna's api overload". `SetTrialUserAttrs`/`SetTrialSystemAttrs`/`SetStudyUserAttrs`/`SetStudySystemAttrs` (virtual, default = one call per entry) plus Optuna-named overloads taking a dictionary; `Trial`/`Study.SetUserAttrs` and `SetUserAttr(dict)`. Overrides write in one step: one lock in memory, one transaction in SQLite and EF Core, one appended batch of single-key records in a journal (Python's replay asserts one key per record), with a drain so a rejected own record cannot poison the next call. Same result as the loop; a finished or unknown trial gets nothing written. Live Python reads a C#-written batch | — |
-| S12 | this commit | Owner 2026-11-09: "Build it", opt-in if behavior changes. Built as `InMemoryStorage(compactFinishedTrials: true)`: results unchanged (every proof pair hash-identical, live-Optuna parity on it), but finished trials' read-only accessors return views and values are rebuilt per read, hence the switch. §10.2 | CMA-ES 100k: retained 1,287 → 257 MB, peak 1,845 → 460 MB |
+| S12 | `17716c7` | Owner 2026-11-09: "Build it", opt-in if behavior changes. Built as `InMemoryStorage(compactFinishedTrials: true)`: results unchanged (every proof pair hash-identical, live-Optuna parity on it), but finished trials' read-only accessors return views and values are rebuilt per read, hence the switch. §10.2 | CMA-ES 100k: retained 1,287 → 257 MB, peak 1,846 → 458 MB |
 | D2 | not built | Owner 2026-11-09: "Keep exact only". TPE scores in NumPy's order with the S6 exact kernel; no fast-numerics path | — |
 
 **Findings along the way.**
