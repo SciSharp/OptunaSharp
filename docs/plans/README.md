@@ -47,6 +47,7 @@ numeric prefix is the recommended execution order.
 | [11](11-threading-round-2.md) | Threading, round 2: sampler per worker, OpenBLAS threads, locked log handlers, the async question | plan 10 (done) | N | ★★ / medium |
 | [12](12-parallel-read-duplicates.md) | Parallel reads never hand one point to two trials: per-sampler fixes and tests, the bridges pinned | plan 11 (done) | N | ★★ / medium |
 | [13](13-rustuna-derived-performance.md) | **Built (2026-11-09)** — Rustuna-derived performance: compatible speedups as the only path, opt-in switches where results would change | plans 10-12 (done) | N | ★★★ / high |
+| [14](14-rustuna-second-pass.md) | **Built (2026-11-09)** — Rustuna, second pass: NumSharp temporaries, exact O(n) TPE widths, TPE and QMC caches, sparse journal offsets, SQLite `UNION ALL`; each area gated byte for byte | plan 13 (done) | N | ★★ / medium |
 
 **Threading workstream (10, 11, 12).** Unrelated to JANUS. Plan 12 (done 2026-11-08) makes every Core sampler give
 trials that ask at once different points, without changing sequential runs, and pins what the four Python bridges

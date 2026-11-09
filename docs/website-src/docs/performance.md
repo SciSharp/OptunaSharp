@@ -37,6 +37,36 @@ other work, so compare within a row. The first number of a pair includes the .NE
 | QMC, 10,000 trials | 4.8 s | 2.5 s | yes |
 | Random, 10,000 trials | 5.8 s | 4.7 s | yes |
 
+### Second comparison
+
+A second read of Rustuna and new profiles of the same studies (plan 14, `docs/plans/14-rustuna-second-pass.md`)
+found more changes that leave every result unchanged. Each one is pinned by tests that compare it with the code it
+replaced bit for bit, and by the live-Optuna parity tests of the samplers and storages it touches.
+
+| Area | What changed | Effect |
+|---|---|---|
+| `RandomSampler`, the NSGA-II family, `CmaEsSampler`, `QMCSampler`, `TPESampler` | Random draws and search-space transforms no longer create NumSharp arrays for each parameter. A NumSharp array has a finalizer, so every dropped one survived a garbage collection and pulled the next collection into generation 1 | Random search 5 to 7 times faster, NSGA-II about twice |
+| `TPESampler` | Kernel widths in linear time where that provably gives the sorted result, and the sort otherwise; finished trials' values reused across asks instead of converted again | Estimator construction and history reading about 2.5 and 4 times faster |
+| `TPESampler` | No `exp` call where its result is exactly zero; a categorical weight's logarithm taken once per kernel and choice instead of once per candidate | 20 categorical and 20 float parameters, 500 trials: 2.6 s to 1.8 s |
+| `QMCSampler` | The sample-id key (a SHA-256 of the search space) computed once per search space instead of once per trial | Most of QMC's allocations; with the first row, QMC 2.2 times faster |
+| `JournalFileBackend` | One line offset kept every 4,096 lines instead of one per line | A 4.3-million-line journal: 160 MB to 0.1 MB kept in memory |
+| SQLite storage | A cached refresh with a running trial below the last finished one asks with `UNION ALL` instead of `OR`, which SQLite answers through the primary key | 8,000 trials with one trial left running: 13.0 s to 9.6 s |
+
+Measured as above, the "before" column being the code after the first comparison, on a machine running other work
+at about 30 % load. Times include the .NET JIT warming up:
+
+| Study | Before | After | Same results |
+|---|---|---|---|
+| Random, 10,000 trials | 4.4 s | 0.8 s | yes |
+| QMC, 10,000 trials | 2.3 s | 0.8 s | yes |
+| NSGA-II, 10,000 trials | 2.7 s | 1.4 s | yes |
+| NSGA-II, 100,000 trials | 17.2 s | 8.6 s | yes |
+| TPE, 1,000 trials | 4.8 s | 3.2 s | yes |
+| TPE (two objectives), 1,000 trials | 12.8 s | 10.5 s | yes |
+
+A second study in the same process, past the JIT, gains more: random search 7 times, QMC 2.2 times, NSGA-II 2 times,
+TPE 1.6 times. CMA-ES is unchanged within the noise.
+
 ## Switches that change results
 
 | Switch | What it does | Seeded runs still match Python? | Can Python workers share the storage? |

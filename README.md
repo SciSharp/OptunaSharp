@@ -255,39 +255,40 @@ sampler's own work dominates. OptunaSharp's times include the .NET JIT warming u
 
 | Study | OptunaSharp | Python Optuna 5.0 |
 |---|---|---|
-| TPE, 6 parameters, 500 trials | 1.12 s | 2.52 s |
-| TPE multivariate, 6 parameters, 500 trials | 1.14 s | 2.42 s |
-| TPE, 100 parameters, 150 trials | 2.1 s | 19.1 s |
+| TPE, 6 parameters, 500 trials | 0.61 s | 2.52 s |
+| TPE multivariate, 6 parameters, 500 trials | 0.66 s | 2.42 s |
+| TPE, 100 parameters, 150 trials | 1.6 s | 19.1 s |
 | GP, 6 parameters, 100 trials | 3.47 s | 17.55 s |
-| CMA-ES, 6 parameters, 3,000 trials | 0.91 s | 5.21 s |
-| CMA-ES, 200 parameters, 100 trials | 1.2 s | 3.3 s |
-| NSGA-II, 6 parameters, 3,000 trials | 0.60 s | 3.39 s |
-| QMC, 6 parameters, 3,000 trials | 0.39 s | 3.49 s |
-| Random, 6 parameters, 5,000 trials | 0.98 s | 1.36 s |
-| Random, 1,000 parameters, 200 trials | 3.2 s | 8.4 s |
-| Random, 4 parameters, 50,000 trials: each block of 10,000 | 0.6-0.8 s (the first 1.2 s) | 1.9-2.1 s |
+| CMA-ES, 6 parameters, 3,000 trials | 0.74 s | 5.21 s |
+| CMA-ES, 200 parameters, 100 trials | 1.0 s | 3.3 s |
+| NSGA-II, 6 parameters, 3,000 trials | 0.31 s | 3.39 s |
+| QMC, 6 parameters, 3,000 trials | 0.13 s | 3.49 s |
+| Random, 6 parameters, 5,000 trials | 0.15 s | 1.36 s |
+| Random, 1,000 parameters, 200 trials | 0.6 s | 8.4 s |
+| Random, 4 parameters, 50,000 trials: each block of 10,000 | 0.08-0.25 s | 1.9-2.1 s |
 
-The rows for 100-parameter TPE, CMA-ES, QMC and Random were measured again on 2026-11-09 after the
-[Rustuna-derived speedups](docs/plans/13-rustuna-derived-performance.md), which keep every seeded result; the
-others moved less than the noise of a machine that was busy with other work at the time, so they keep their earlier
-numbers.
+Every OptunaSharp row except GP was measured again on 2026-11-09 after the Rustuna-derived speedups of
+[plan 13](docs/plans/13-rustuna-derived-performance.md) and [plan 14](docs/plans/14-rustuna-second-pass.md), which
+keep every seeded result: the same probes built before and after plan 14, run back to back. GP moved less than the
+noise of a machine that was also running other work, so it keeps its earlier number.
 
 ### Large studies
 
 40 float parameters in [-10, 10], seed 0, each sampler's defaults (TPE multivariate for one objective, independent
 for two), the workloads of [Rustuna's announcement](https://medium.com/optuna/announcing-rustuna-cc82a6815bf7).
-[Rustuna](https://github.com/optuna/rustuna) is the Optuna team's Rust port. OptunaSharp ran on 2026-11-09 on a
-machine also busy with other work (30-90 % CPU load), the other two on 2026-11-08 on a quieter one, so OptunaSharp's
-column errs on the slow side. OptunaSharp's times include the .NET JIT warming up.
+[Rustuna](https://github.com/optuna/rustuna) is the Optuna team's Rust port. OptunaSharp ran on 2026-11-09 after
+[plan 14](docs/plans/14-rustuna-second-pass.md), on a machine also running other work (about 30 % CPU load), the other
+two on 2026-11-08 on a quieter one, so OptunaSharp's column errs on the slow side. OptunaSharp's times include the .NET
+JIT warming up.
 
 | Study | OptunaSharp | Python Optuna 5.0 | Rustuna 0.2.1 |
 |---|---|---|---|
-| TPE, 1,000 trials | 5.0 s | 35.2 s | 1.36 s |
-| TPE, two objectives, 1,000 trials | 18.1 s | 163 s | 6.30 s |
-| CMA-ES, 10,000 trials | 4.5 s | 56.9 s | 1.59 s |
-| CMA-ES, 100,000 trials | 27.5 s | not run | 13.6 s |
-| NSGA-II, 10,000 trials | 2.9 s | 44.2 s | 0.82 s |
-| NSGA-II, 100,000 trials | 22.2 s | not run | 19.4 s |
+| TPE, 1,000 trials | 3.2 s | 35.2 s | 1.36 s |
+| TPE, two objectives, 1,000 trials | 10.5 s | 163 s | 6.30 s |
+| CMA-ES, 10,000 trials | 3.6 s | 56.9 s | 1.59 s |
+| CMA-ES, 100,000 trials | 22.1 s | not run | 13.6 s |
+| NSGA-II, 10,000 trials | 1.4 s | 44.2 s | 0.82 s |
+| NSGA-II, 100,000 trials | 8.6 s | not run | 19.4 s |
 
 OptunaSharp's seeded trials are Optuna's; Rustuna's differ from the first trial (its own random generator). Where
 OptunaSharp is still behind Rustuna, part of the gap is the protocol it keeps so Python workers can share a study:
