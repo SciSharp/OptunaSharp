@@ -65,6 +65,16 @@ public class TPESampler : BaseSampler
     /// <summary>The split cache, for the tests that count how many splits were computed rather than reused.</summary>
     internal TpeSplitCache SplitCache => _splitCache;
 
+    /// <summary>
+    ///     Finished trials' internal parameter values, by trial number (plan 14): <see cref="GetInternalRepr" /> converts
+    ///     each finished trial's value once instead of on every ask. Initialized here for the same reason as
+    ///     <see cref="_splitCache" />: each instance, a per-worker copy included, owns its cache under its own monitor.
+    /// </summary>
+    private readonly TpeObservationCache _observationCache = new();
+
+    /// <summary>The observation cache, for the tests that check what it holds.</summary>
+    internal TpeObservationCache ObservationCache => _observationCache;
+
     /// <param name="considerPrior">Deprecated (v4.3.0). Falls back to <c>true</c>.</param>
     /// <param name="priorWeight">Deprecated (v4.9.0). Falls back to <c>1.0</c>.</param>
     /// <param name="considerMagicClip">Deprecated (v4.9.0). Falls back to <c>true</c>.</param>
@@ -432,6 +442,12 @@ public class TPESampler : BaseSampler
         }
 
         int rows = 0;
+        // A finished trial never changes, so its conversions are kept in the observation cache (plan 14): once each of
+        // this space's columns knows the trial, the row is copied from dense columns without touching the trial's
+        // parameters; a column that knows the trial lacks a name skips it, as the subset test below would.
+        TpeObservationCache.Column[] cached = _observationCache.ColumnsFor(study, names, distributions);
+        // The current trial's external values, read once each by name before any is converted (see below).
+        var externals = new object?[nParams];
         // A compact finished trial (plan 13, item S12; InMemoryStorage built with compactFinishedTrials) stores each
         // value's internal form, exactly what ToInternalRepr would rebuild from its external one, so a parameter whose
         // search-space distribution converts as the trial's does is copied without boxing and converting it back. The
@@ -440,6 +456,23 @@ public class TPESampler : BaseSampler
         int[] positions = Array.Empty<int>();
         foreach (var trial in trials)
         {
+            bool finished = trial.State.IsFinished();
+            int number = trial.Number;
+            if (finished)
+            {
+                byte state = CachedRowState(cached, number);
+                if (state == TpeObservationCache.Absent)
+                    continue;
+                if (state == TpeObservationCache.Present)
+                {
+                    for (int i = 0; i < nParams; i++)
+                        columns[i][rows] = cached[i].ValueOf(number);
+                    rows++;
+                    continue;
+                }
+                // Some column has not seen this trial yet: convert the whole row as before and remember it.
+            }
+
             var @params = GetParams(trial, study);
             if (@params is CompactParams compact)
             {
@@ -448,34 +481,88 @@ public class TPESampler : BaseSampler
                     schema = compact.Schema;
                     positions = schema.PositionsFor(names, distributions);
                 }
-                if (Array.IndexOf(positions, ParamSchema.Absent) >= 0)
+                int absent = Array.IndexOf(positions, ParamSchema.Absent);
+                if (absent >= 0)
+                {
+                    if (finished)
+                        cached[absent].SetAbsent(number);
                     continue;
+                }
                 for (int i = 0; i < nParams; i++)
                 {
                     columns[i][rows] = positions[i] >= 0
                         ? compact.InternalAt(positions[i])
                         : distributions[i].ToInternalRepr(@params[names[i]]);
                 }
+                if (finished)
+                    RememberRow(cached, number, columns, rows);
                 rows++;
                 continue;
             }
 
-            // search_space.keys() <= params.keys(): the trial must carry every search-space param.
-            bool carriesAll = true;
-            for (int i = 0; i < nParams && carriesAll; i++)
-                carriesAll = @params.ContainsKey(names[i]);
-            if (carriesAll)
+            // search_space.keys() <= params.keys(): the trial must carry every search-space param. One lookup per name
+            // (plan 14): each value is read while checking its key, and the conversions start only once every key is
+            // known to be present, in search-space order, so a trial missing a name still converts nothing (and raises
+            // nothing), as with Optuna's subset test followed by the conversion loop.
+            int missing = -1;
+            for (int i = 0; i < nParams; i++)
             {
-                for (int i = 0; i < nParams; i++)
-                    columns[i][rows] = distributions[i].ToInternalRepr(@params[names[i]]);
-                rows++;
+                if (!@params.TryGetValue(names[i], out externals[i]))
+                {
+                    missing = i;
+                    break;
+                }
             }
+            if (missing >= 0)
+            {
+                if (finished)
+                    cached[missing].SetAbsent(number);
+                continue;
+            }
+            for (int i = 0; i < nParams; i++)
+                columns[i][rows] = distributions[i].ToInternalRepr(externals[i]);
+            if (finished)
+                RememberRow(cached, number, columns, rows);
+            rows++;
         }
 
         var result = new OrderedDict<string, double[]>(nParams);
         for (int i = 0; i < nParams; i++)
             result[names[i]] = rows == trials.Count ? columns[i] : columns[i][..rows];
         return result;
+    }
+
+    /// <summary>What the observation cache knows of one finished trial's row for a search space.</summary>
+    /// <param name="cached">The search space's columns, in its order.</param>
+    /// <param name="number">The finished trial's number.</param>
+    /// <returns>
+    ///     <see cref="TpeObservationCache.Absent" /> when some column knows the trial lacks its name (the row is skipped),
+    ///     <see cref="TpeObservationCache.Present" /> when every column holds its value, otherwise
+    ///     <see cref="TpeObservationCache.Unknown" /> (the row must be converted).
+    /// </returns>
+    private static byte CachedRowState(TpeObservationCache.Column[] cached, int number)
+    {
+        byte result = TpeObservationCache.Present;
+        for (int i = 0; i < cached.Length; i++)
+        {
+            byte state = cached[i].StateOf(number);
+            if (state == TpeObservationCache.Absent)
+                return TpeObservationCache.Absent;
+            if (state == TpeObservationCache.Unknown)
+                result = TpeObservationCache.Unknown;
+        }
+        return result;
+    }
+
+    /// <summary>Stores a finished trial's freshly converted row in the observation cache, one value per column.</summary>
+    /// <param name="cached">The search space's columns, in its order.</param>
+    /// <param name="number">The finished trial's number.</param>
+    /// <param name="columns">The observation columns being built; row <paramref name="row" /> holds the trial's values.</param>
+    /// <param name="row">The row just written.</param>
+    private static void RememberRow(TpeObservationCache.Column[] cached, int number, double[][] columns, int row)
+    {
+        for (int i = 0; i < cached.Length; i++)
+            cached[i].SetPresent(number, columns[i][row]);
     }
 
     /// <summary>Python <c>_sample</c>.</summary>

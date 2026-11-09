@@ -166,6 +166,16 @@ internal sealed class BatchedDiscreteTruncLogNormDistributions : BatchedNumerica
 /// <summary>Python <c>_MixtureOfProductDistribution</c>.</summary>
 internal sealed class MixtureOfProductDistribution
 {
+    /// <summary>
+    ///     A bound below which <c>exp</c> is exactly <c>+0.0</c>: <c>exp(-746)</c> is about 0.42 of half the smallest
+    ///     subnormal (2^-1075, about 2.5e-324), so a correctly rounded result is zero, and NumPy's and .NET's <c>exp</c>
+    ///     return zero for every input below the underflow point (about -745.1332; glibc, ucrt and Apple's libm alike).
+    ///     <see cref="LogPdf" /> stores <c>0.0</c> for such terms instead of calling <see cref="Math.Exp" />, whose underflow
+    ///     path costs about three normal calls; <c>TpeExpUnderflowTests</c> pins that <see cref="Math.Exp" /> returns
+    ///     <c>+0.0</c> below it on the platform that runs the tests.
+    /// </summary>
+    internal const double ExpIsZeroBelow = -746.0;
+
     /// <summary>Nonnegative mixture-component probabilities, in shared kernel order.</summary>
     internal double[] Weights { get; }
     /// <summary>Coordinate distributions sharing the same mixture-component index.</summary>
@@ -454,7 +464,15 @@ internal sealed class MixtureOfProductDistribution
                 if (double.IsNegativeInfinity(max))
                     max = 0.0;
                 for (int k = 0; k < nKernels; k++)
-                    expBuf[k] = Math.Exp(weightedLogPdf[s * nKernels + k] - max);
+                {
+                    // exp(z) is exactly +0.0 for every z below the underflow point (about -745.13: the result is under half
+                    // the smallest subnormal), so the call is skipped well below it (plan 14): kernels far from a candidate
+                    // are most of a long history and each exp was a few nanoseconds of the hottest loop. The zero still
+                    // goes into the buffer, so the pairwise sum sees the same elements; NaN fails the test and still
+                    // reaches Math.Exp, as everything at or above the bound does.
+                    double z = weightedLogPdf[s * nKernels + k] - max;
+                    expBuf[k] = z < ExpIsZeroBelow ? 0.0 : Math.Exp(z);
+                }
                 result[s] = Math.Log(MathUtil.PairwiseSum(expBuf)) + max;
             }
             return result;

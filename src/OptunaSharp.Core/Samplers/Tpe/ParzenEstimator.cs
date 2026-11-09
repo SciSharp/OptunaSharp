@@ -308,8 +308,52 @@ internal sealed class ParzenEstimator
     /// <param name="nObservations">Number of historical observations represented by the kernels.</param>
     /// <param name="parameters">Kernel construction and observation-weight configuration.</param>
     /// <returns>Per-observation kernel widths after endpoint and clipping heuristics.</returns>
-    private static double[] ComputeSigmas(
+    /// <remarks>
+    ///     The unclipped widths come from <see cref="BinnedRawSigmas" /> when it can prove they clip to exactly what Optuna's
+    ///     sort gives (plan 14: the sort was a quarter of a 1,000-trial, 40-parameter TPE run), otherwise from
+    ///     <see cref="SortedRawSigmas" />, Optuna's sort-based computation. Both then go through the same clip.
+    /// </remarks>
+    internal static double[] ComputeSigmas(
         double[] mus, double low, double high, int nObservations, ParzenEstimatorParameters parameters)
+    {
+        int n = mus.Length;
+        double maxsigma = high - low;
+        double minsigma;
+        int nBins = 0;
+        if (parameters.ConsiderMagicClip)
+        {
+            int nKernels = nObservations + 1;  // +1 for prior.
+            double divisor = Math.Min(100.0, 1.0 + nKernels);
+            minsigma = (high - low) / divisor;
+            // One bin per minsigma of the domain: (high - low) / minsigma is the divisor, a whole number from 3 to 100.
+            nBins = (int)divisor;
+        }
+        else
+        {
+            minsigma = Eps;
+        }
+
+        double[] sigmas = (parameters.ConsiderMagicClip
+                              ? BinnedRawSigmas(mus, low, high, minsigma, nBins, parameters.ConsiderEndpoints)
+                              : null)
+                          ?? SortedRawSigmas(mus, low, high, parameters.ConsiderEndpoints);
+
+        for (int t = 0; t < n; t++)
+            sigmas[t] = MathUtil.Clip(sigmas[t], minsigma, maxsigma);
+        return sigmas;
+    }
+
+    /// <summary>
+    ///     Optuna's unclipped kernel widths, computed as <c>compute_sigmas</c> does: sort the centers, take each one's larger
+    ///     distance to its sorted neighbors (the domain endpoints at both ends), and with <c>consider_endpoints=False</c> and
+    ///     at least two centers drop the endpoint distance of the smallest and the largest.
+    /// </summary>
+    /// <param name="mus">Kernel centers in transformed numerical coordinates; not modified.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
+    /// <param name="considerEndpoints">Whether the domain endpoints count as neighbors of the smallest and largest center.</param>
+    /// <returns>One unclipped width per center, in the centers' order.</returns>
+    internal static double[] SortedRawSigmas(double[] mus, double low, double high, bool considerEndpoints)
     {
         int n = mus.Length;
 
@@ -330,7 +374,7 @@ internal sealed class ParzenEstimator
         for (int t = 0; t < n; t++)
             sortedSigmas[t] = Math.Max(swe[t + 1] - swe[t], swe[t + 2] - swe[t + 1]);
 
-        if (!parameters.ConsiderEndpoints && swe.Length >= 4)
+        if (!considerEndpoints && swe.Length >= 4)
         {
             sortedSigmas[0] = swe[2] - swe[1];
             sortedSigmas[^1] = swe[^2] - swe[^3];
@@ -340,21 +384,116 @@ internal sealed class ParzenEstimator
         var sigmas = new double[n];
         for (int t = 0; t < n; t++)
             sigmas[sortedIndices[t]] = sortedSigmas[t];
+        return sigmas;
+    }
 
-        double maxsigma = high - low;
-        double minsigma;
-        if (parameters.ConsiderMagicClip)
+    /// <summary>
+    ///     Unclipped kernel widths that clip to exactly what <see cref="SortedRawSigmas" /> clips to, found in O(n) without
+    ///     sorting, or <see langword="null" /> when that cannot be proven for these centers (the caller then sorts).
+    /// </summary>
+    /// <param name="mus">Kernel centers in transformed numerical coordinates; not modified.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
+    /// <param name="minsigma">The magic-clip floor every width is clipped up to; the bin width.</param>
+    /// <param name="nBins">How many bins of width <paramref name="minsigma" /> cover the domain.</param>
+    /// <param name="considerEndpoints">Whether the domain endpoints count as neighbors of the smallest and largest center.</param>
+    /// <returns>One width per center, in the centers' order, or <see langword="null" />.</returns>
+    /// <remarks>
+    ///     <para>The idea is Rustuna's <c>binned_sigmas</c> (rustuna_core/src/parzen_estimator/model.rs): a width is the
+    ///     larger distance to the two sorted neighbors, floored at <c>minsigma</c> by the clip, so a neighbor nearer than
+    ///     <c>minsigma</c> cannot change it. Bin the centers at that width. A center that is neither the smallest nor the
+    ///     largest of its bin has both sorted neighbors inside the bin, so its width clips to <c>minsigma</c>; only each
+    ///     bin's extremes can have a farther neighbor, and that neighbor is the adjacent non-empty bin's extreme (or the
+    ///     domain endpoint). Rustuna's version can differ from the sort in the last bits where rounding puts a center in
+    ///     a neighboring bin; this one checks instead of trusting the binning.</para>
+    ///     <para><b>Why the result is exact.</b> Bin assignment <c>floor((v - low) / minsigma)</c> is monotone in
+    ///     <c>v</c> (IEEE subtraction, division by a positive constant and floor all are), so the bins are contiguous runs
+    ///     of the sorted order, and equal centers share a bin. A bin's smallest center is taken at its first index and its
+    ///     largest at its last index, which are the positions a stable sort puts first and last among equal values; the
+    ///     neighbor distances are the same subtractions of the same operands the sort makes. Every bin is verified to span
+    ///     at most <c>minsigma</c> (<c>max - min &lt;= minsigma</c>, computed); since IEEE subtraction is monotone in its
+    ///     operands, every in-bin neighbor distance is then at most <c>minsigma</c> too, so leaving those distances out
+    ///     changes no clipped width. Any bin wider than that, a center outside the domain or NaN, fewer than two
+    ///     centers, or a degenerate domain returns <see langword="null" />. <c>TpeBinnedSigmasTests</c> compares the two
+    ///     paths bit for bit over random, tied, clustered and bin-edge inputs.</para>
+    /// </remarks>
+    internal static double[]? BinnedRawSigmas(
+        double[] mus, double low, double high, double minsigma, int nBins, bool considerEndpoints)
+    {
+        int n = mus.Length;
+        if (n < 2 || nBins < 1 || nBins > 100 || !(high > low) || !(minsigma > 0) || !double.IsFinite(minsigma))
+            return null;
+
+        // Per bin: the smallest center and its first index, the largest and its last index (stable-sort positions).
+        Span<double> binMin = stackalloc double[nBins];
+        Span<double> binMax = stackalloc double[nBins];
+        Span<int> binMinIndex = stackalloc int[nBins];
+        Span<int> binMaxIndex = stackalloc int[nBins];
+        binMin.Fill(double.PositiveInfinity);
+        binMax.Fill(double.NegativeInfinity);
+        binMinIndex.Fill(-1);
+        binMaxIndex.Fill(-1);
+        for (int i = 0; i < n; i++)
         {
-            int nKernels = nObservations + 1;  // +1 for prior.
-            minsigma = (high - low) / Math.Min(100.0, 1.0 + nKernels);
-        }
-        else
-        {
-            minsigma = Eps;
+            double v = mus[i];
+            // Outside the domain (or NaN): the sort handles it; the bins assume every center lies in [low, high].
+            if (!(v >= low && v <= high))
+                return null;
+            int bin = (int)Math.Min(Math.Floor((v - low) / minsigma), nBins - 1);
+            if (v < binMin[bin])
+            {
+                binMin[bin] = v;
+                binMinIndex[bin] = i;
+            }
+            if (v >= binMax[bin])
+            {
+                binMax[bin] = v;
+                binMaxIndex[bin] = i;
+            }
         }
 
-        for (int t = 0; t < n; t++)
-            sigmas[t] = MathUtil.Clip(sigmas[t], minsigma, maxsigma);
+        // The proof's condition: every in-bin neighbor distance is at most minsigma, which holds when each bin's span is.
+        for (int b = 0; b < nBins; b++)
+        {
+            if (binMinIndex[b] >= 0 && !(binMax[b] - binMin[b] <= minsigma))
+                return null;
+        }
+
+        // Every center not at its bin's extremes clips to minsigma; start everyone there and raise the extremes.
+        var sigmas = new double[n];
+        Array.Fill(sigmas, minsigma);
+
+        // Each bin's smallest center: its sorted predecessor is the previous non-empty bin's largest (or `low`).
+        bool firstBin = true;
+        double previousMax = 0.0;
+        for (int b = 0; b < nBins; b++)
+        {
+            int i = binMinIndex[b];
+            if (i < 0)
+                continue;
+            if (!firstBin)
+                sigmas[i] = Math.Max(sigmas[i], binMin[b] - previousMax);
+            else if (considerEndpoints)
+                sigmas[i] = Math.Max(sigmas[i], binMin[b] - low);
+            firstBin = false;
+            previousMax = binMax[b];
+        }
+
+        // Each bin's largest center: its sorted successor is the next non-empty bin's smallest (or `high`).
+        bool lastBin = true;
+        double nextMin = 0.0;
+        for (int b = nBins - 1; b >= 0; b--)
+        {
+            int i = binMaxIndex[b];
+            if (i < 0)
+                continue;
+            if (!lastBin)
+                sigmas[i] = Math.Max(sigmas[i], nextMin - binMax[b]);
+            else if (considerEndpoints)
+                sigmas[i] = Math.Max(sigmas[i], high - binMax[b]);
+            lastBin = false;
+            nextMin = binMin[b];
+        }
         return sigmas;
     }
 

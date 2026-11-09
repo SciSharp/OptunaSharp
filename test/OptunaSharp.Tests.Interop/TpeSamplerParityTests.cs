@@ -405,4 +405,111 @@ public class TpeSamplerParityTests : OptunaInteropTestBase
             "    return a, b\n" +
             "study.optimize(_obj, n_trials=300)\n");
     }
+
+    /// <summary>
+    ///     Plan 14 gate: the observation cache keys each column by parameter name and distribution, and remembers that a
+    ///     finished trial lacks a parameter. This study gives it every case: a float whose range changes with the trial
+    ///     number (three distributions under one name), a log float suggested only on one categorical branch (absent from
+    ///     the other trials), and pruned trials (finished, so cached, and part of TPE's history), in both TPE modes, for 80
+    ///     trials. The trajectory must stay in lock-step with live Optuna within the erf tolerance.
+    /// </summary>
+    /// <param name="multivariate">Whether TPE models the parameters jointly (the dynamic range is then sampled independently).</param>
+    /// <param name="seed">The sampler seed on both sides.</param>
+    /// <exception cref="TrialPruned">Never escapes: the objective raises it to prune every seventh trial, and Optimize records that trial as pruned.</exception>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(false, 0)]
+    [DataRow(false, 42)]
+    [DataRow(true, 0)]
+    [DataRow(true, 7)]
+    public void DynamicRangesConditionalAndPrunedTrials_TrajectoryMatches(bool multivariate, int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), sampler: new TPESampler(seed: seed, multivariate: multivariate), studyName: "tpe");
+        csStudy.Optimize(t =>
+        {
+            double span = 5.0 + t.Number % 3;
+            double x = t.SuggestFloat("x", -span, span);
+            string c = t.SuggestCategorical("c", new[] { "a", "b", "c" });
+            double y = c == "a" ? t.SuggestFloat("y", 1e-3, 10.0, log: true) : 0.0;
+            double value = x * x + y + (c == "b" ? 0.0 : 1.0);
+            t.Report(value, 0);
+            if (t.Number % 7 == 3)
+                throw new TrialPruned();
+            return value;
+        }, nTrials: 80);
+
+        AssertTrajectoryParity(csStudy,
+            "study = optuna.create_study(study_name='tpe', " +
+            $"sampler=optuna.samplers.TPESampler(seed={seed}, multivariate={(multivariate ? "True" : "False")}))\n" +
+            "def _obj(t):\n" +
+            "    span = 5.0 + t.number % 3\n" +
+            "    x = t.suggest_float('x', -span, span)\n" +
+            "    c = t.suggest_categorical('c', ['a', 'b', 'c'])\n" +
+            "    y = t.suggest_float('y', 1e-3, 10.0, log=True) if c == 'a' else 0.0\n" +
+            "    value = x * x + y + (0.0 if c == 'b' else 1.0)\n" +
+            "    t.report(value, 0)\n" +
+            "    if t.number % 7 == 3:\n" +
+            "        raise optuna.TrialPruned()\n" +
+            "    return value\n" +
+            "study.optimize(_obj, n_trials=80)\n");
+    }
+
+    /// <summary>
+    ///     Plan 14 gate: constant liar with trials still running. Trials are asked three at a time and told only after all
+    ///     three have sampled, so each later sample sees the earlier ones RUNNING: their relative parameters come from
+    ///     system attributes (multivariate) or their suggested values (independent), and the observation cache must leave
+    ///     them uncached and read them fresh. Fifteen rounds, both TPE modes, in lock-step with live Optuna within the erf
+    ///     tolerance.
+    /// </summary>
+    /// <param name="multivariate">Whether TPE models the parameters jointly.</param>
+    /// <param name="seed">The sampler seed on both sides.</param>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(false, 3)]
+    [DataRow(true, 3)]
+    [DataRow(true, 11)]
+    public void ConstantLiarWithRunningTrials_AskTell_TrajectoryMatches(bool multivariate, int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(),
+            sampler: new TPESampler(seed: seed, multivariate: multivariate, constantLiar: true, nStartupTrials: 5),
+            studyName: "tpe");
+        for (int round = 0; round < 15; round++)
+        {
+            var batch = new Trial[3];
+            for (int i = 0; i < batch.Length; i++)
+            {
+                batch[i] = csStudy.Ask();
+                batch[i].SuggestFloat("x", -5, 5);
+                batch[i].SuggestFloat("y", 1e-2, 1e2, log: true);
+                batch[i].SuggestCategorical("c", new[] { "u", "v" });
+            }
+            foreach (var t in batch)
+            {
+                var p = csStudy.Storage.GetTrial(t.TrialId).Params;
+                double x = (double)p["x"]!, y = (double)p["y"]!;
+                csStudy.Tell(t, x * x + Math.Log(y) * Math.Log(y) + ((string)p["c"]! == "u" ? 0.0 : 0.5));
+            }
+        }
+
+        AssertTrajectoryParity(csStudy,
+            "import math\n" +
+            "study = optuna.create_study(study_name='tpe', " +
+            $"sampler=optuna.samplers.TPESampler(seed={seed}, multivariate={(multivariate ? "True" : "False")}, " +
+            "constant_liar=True, n_startup_trials=5))\n" +
+            "for _ in range(15):\n" +
+            "    batch = [study.ask() for _ in range(3)]\n" +
+            "    for t in batch:\n" +
+            "        t.suggest_float('x', -5, 5)\n" +
+            "        t.suggest_float('y', 1e-2, 1e2, log=True)\n" +
+            "        t.suggest_categorical('c', ['u', 'v'])\n" +
+            "    for t in batch:\n" +
+            "        p = t.params\n" +
+            "        study.tell(t, p['x'] ** 2 + math.log(p['y']) ** 2 + (0.0 if p['c'] == 'u' else 0.5))\n");
+    }
 }
