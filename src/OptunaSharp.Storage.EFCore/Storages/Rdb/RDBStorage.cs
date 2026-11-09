@@ -610,6 +610,61 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     public override void SetStudySystemAttr(int studyId, string key, object? value)
         => SetStudyAttr(isUser: false, studyId, key, value);
 
+    /// <inheritdoc />
+    /// <remarks>One transaction and one save for the whole batch (plan 13, item S8): all entries are stored or none are.</remarks>
+    public override void SetStudyUserAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+        => SetStudyAttrs(isUser: true, studyId, attrs);
+
+    /// <inheritdoc />
+    /// <remarks>One transaction and one save for the whole batch (plan 13, item S8): all entries are stored or none are.</remarks>
+    public override void SetStudySystemAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+        => SetStudyAttrs(isUser: false, studyId, attrs);
+
+    /// <summary>
+    ///     Upserts several JSON-serializable study attributes in one transaction after verifying once that the study
+    ///     exists: the rows <see cref="SetStudyAttr" /> writes per entry, saved together.
+    /// </summary>
+    /// <param name="isUser">Whether to use user-attribute records instead of system-attribute records.</param>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="attrs">The attributes, upserted in enumeration order.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">The study does not exist; nothing is written.</exception>
+    /// <exception cref="Exception">A value is not JSON-serializable or the database refuses the batch; nothing is written.</exception>
+    private void SetStudyAttrs(bool isUser, int studyId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        if (attrs.Count == 0)
+            return;
+        Mutate(ctx =>
+        {
+            // Disposed without Commit on any exception, which rolls the whole batch back.
+            using var tx = ctx.Database.BeginTransaction();
+            EnsureStudyExists(ctx, studyId);
+            foreach (var (key, value) in attrs)
+            {
+                string json = PyJson.Dumps(value);
+                if (isUser)
+                {
+                    var row = ctx.StudyUserAttributes.FirstOrDefault(a => a.StudyId == studyId && a.Key == key);
+                    if (row is null)
+                        ctx.StudyUserAttributes.Add(new StudyUserAttributeEntity { StudyId = studyId, Key = key, ValueJson = json });
+                    else
+                        row.ValueJson = json;
+                }
+                else
+                {
+                    var row = ctx.StudySystemAttributes.FirstOrDefault(a => a.StudyId == studyId && a.Key == key);
+                    if (row is null)
+                        ctx.StudySystemAttributes.Add(new StudySystemAttributeEntity { StudyId = studyId, Key = key, ValueJson = json });
+                    else
+                        row.ValueJson = json;
+                }
+            }
+            ctx.SaveChanges();
+            tx.Commit();
+        });
+    }
+
     /// <summary>Upserts a JSON-serializable attribute after verifying that its study exists.</summary>
     /// <param name="isUser">Whether to use user-attribute records instead of system-attribute records.</param>
     /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
@@ -1103,6 +1158,63 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     /// <inheritdoc />
     public override void SetTrialSystemAttr(int trialId, string key, object? value)
         => SetTrialAttr(isUser: false, trialId, key, value);
+
+    /// <inheritdoc />
+    /// <remarks>One transaction and one save for the whole batch (plan 13, item S8): all entries are stored or none are.</remarks>
+    public override void SetTrialUserAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+        => SetTrialAttrs(isUser: true, trialId, attrs);
+
+    /// <inheritdoc />
+    /// <remarks>One transaction and one save for the whole batch (plan 13, item S8): all entries are stored or none are.</remarks>
+    public override void SetTrialSystemAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+        => SetTrialAttrs(isUser: false, trialId, attrs);
+
+    /// <summary>
+    ///     Upserts several JSON-serializable trial attributes in one transaction after checking once that the trial is
+    ///     still mutable: the rows <see cref="SetTrialAttr" /> writes per entry, saved together.
+    /// </summary>
+    /// <param name="isUser">Whether to use user-attribute records instead of system-attribute records.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="attrs">The attributes, upserted in enumeration order.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">The trial does not exist; nothing is written.</exception>
+    /// <exception cref="UpdateFinishedTrialError">The trial has finished; nothing is written.</exception>
+    /// <exception cref="Exception">A value is not JSON-serializable or the database refuses the batch; nothing is written.</exception>
+    private void SetTrialAttrs(bool isUser, int trialId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        if (attrs.Count == 0)
+            return;
+        Mutate(ctx =>
+        {
+            // Disposed without Commit on any exception, which rolls the whole batch back.
+            using var tx = ctx.Database.BeginTransaction();
+            var trial = FindTrialForUpdate(ctx, trialId);
+            CheckTrialIsUpdatableOrRaise(trial);
+            foreach (var (key, value) in attrs)
+            {
+                string json = PyJson.Dumps(value);
+                if (isUser)
+                {
+                    var row = ctx.TrialUserAttributes.FirstOrDefault(a => a.TrialId == trialId && a.Key == key);
+                    if (row is null)
+                        ctx.TrialUserAttributes.Add(new TrialUserAttributeEntity { TrialId = trialId, Key = key, ValueJson = json });
+                    else
+                        row.ValueJson = json;
+                }
+                else
+                {
+                    var row = ctx.TrialSystemAttributes.FirstOrDefault(a => a.TrialId == trialId && a.Key == key);
+                    if (row is null)
+                        ctx.TrialSystemAttributes.Add(new TrialSystemAttributeEntity { TrialId = trialId, Key = key, ValueJson = json });
+                    else
+                        row.ValueJson = json;
+                }
+            }
+            ctx.SaveChanges();
+            tx.Commit();
+        });
+    }
 
     /// <summary>Upserts a JSON-serializable attribute after verifying that its trial is still mutable.</summary>
     /// <param name="isUser">Whether to use user-attribute records instead of system-attribute records.</param>

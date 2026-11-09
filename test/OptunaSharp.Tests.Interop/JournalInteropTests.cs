@@ -179,4 +179,60 @@ public class JournalInteropTests
         Optuna.LoadStudy("cs-first", NewCSharpStorage(), sampler: new RandomSampler(4))
             .Trials.Should().HaveCount(5);
     }
+
+    /// <summary>
+    ///     Plan 13, item S8: attributes C# writes in batches (a trial's user and system attributes, a study's user and
+    ///     system attributes) are ordinary single-key journal records, so live Python Optuna replays the file without
+    ///     tripping its <c>assert len(log["user_attr"]) == 1</c>, sees every attribute with its value, and continues the
+    ///     study in the same file.
+    /// </summary>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    public void CSharp_WritesAttributeBatches_Python_ReadsEveryOne()
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var storage = NewCSharpStorage();
+        var study = Optuna.CreateStudy(storage: storage, studyName: "batches", sampler: new RandomSampler(seed: 5));
+        var batch = new OptunaSharp.Collections.OrderedDict<string, object?>
+        {
+            ["seed"] = 7L, ["ratio"] = 0.25, ["name"] = "run", ["flag"] = true, ["none"] = null,
+            ["list"] = new System.Collections.Generic.List<object?> { 1L, "two" },
+        };
+        Trial trial = study.Ask();
+        trial.SuggestFloat("x", 0, 1);
+        trial.SetUserAttrs(batch);
+        storage.SetTrialSystemAttrs(trial.TrialId, new OptunaSharp.Collections.OrderedDict<string, object?> { ["sys"] = "s" });
+        study.SetUserAttrs(batch);
+        storage.SetStudySystemAttrs(study.StudyId, new OptunaSharp.Collections.OrderedDict<string, object?> { ["ssys"] = 1L });
+        study.Tell(trial, 0.5);
+
+        using (Py.GIL())
+        {
+            using PyModule scope = Py.CreateScope();
+            scope.Exec(
+                "import json, optuna\n" +
+                "optuna.logging.set_verbosity(optuna.logging.WARNING)\n" +
+                $"path = r'{_path}'\n" +
+                "storage = optuna.storages.JournalStorage(optuna.storages.journal.JournalFileBackend(" +
+                "path, lock_obj=optuna.storages.journal.JournalFileOpenLock(path)))\n" +
+                "study = optuna.load_study(study_name='batches', storage=storage)\n" +
+                "t0 = study.trials[0]\n" +
+                "trial_user = json.dumps(t0.user_attrs, sort_keys=True)\n" +
+                "trial_sys = json.dumps(storage.get_trial_system_attrs(t0._trial_id), sort_keys=True)\n" +
+                "study_user = json.dumps(study.user_attrs, sort_keys=True)\n" +
+                "study_sys = json.dumps(storage.get_study_system_attrs(study._study_id), sort_keys=True)\n" +
+                "study.optimize(lambda t: t.suggest_float('x', 0, 1), n_trials=2)\n" +
+                "n_trials = len(study.trials)\n");
+
+            string expected = "{\"flag\": true, \"list\": [1, \"two\"], \"name\": \"run\", \"none\": null, \"ratio\": 0.25, \"seed\": 7}";
+            scope.Get("trial_user").As<string>().Should().Be(expected);
+            scope.Get("study_user").As<string>().Should().Be(expected);
+            scope.Get("trial_sys").As<string>().Should().Contain("\"sys\": \"s\"");
+            scope.Get("study_sys").As<string>().Should().Contain("\"ssys\": 1");
+            scope.Get("n_trials").As<int>().Should().Be(3);
+        }
+
+        Optuna.LoadStudy("batches", NewCSharpStorage()).Trials.Should().HaveCount(3);
+    }
 }

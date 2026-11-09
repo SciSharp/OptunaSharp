@@ -59,7 +59,7 @@ public class StudySummary : IEquatable<StudySummary>, IComparable<StudySummary>
     /// <summary><see cref="FrozenTrial" /> with best objective value in the <see cref="Study" />.</summary>
     public FrozenTrial? BestTrial { get; }
 
-    /// <summary>Dictionary that contains the attributes of the study set with <see cref="Study.SetUserAttr" />.</summary>
+    /// <summary>Dictionary that contains the attributes of the study set with <see cref="Study.SetUserAttr(string, object?)" />.</summary>
     public OrderedDict<string, object?> UserAttrs { get; }
 
     /// <summary>The number of trials ran in the <see cref="Study" />.</summary>

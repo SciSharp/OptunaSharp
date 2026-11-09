@@ -51,7 +51,7 @@ public class FrozenStudy : IEquatable<FrozenStudy>, IComparable<FrozenStudy>
 
     /// <summary>
     ///     Dictionary that contains the attributes of the <see cref="Study" /> set with
-    ///     <see cref="Study.SetUserAttr" />.
+    ///     <see cref="Study.SetUserAttr(string, object?)" />.
     /// </summary>
     public OrderedDict<string, object?> UserAttrs { get; internal set; }
 

@@ -126,6 +126,64 @@ public abstract class BaseStorage
     /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
     public abstract void SetStudySystemAttr(int studyId, string key, object? value);
 
+    /// <summary>
+    ///     Register several user-defined attributes to a study at once, overwriting existing values (Rustuna's
+    ///     <c>set_study_user_attrs</c>; Rustuna plan 13, item S8). Optuna has no such call: the result is what calling
+    ///     <see cref="SetStudyUserAttr(int, string, object?)" /> once per entry, in the dictionary's order, leaves.
+    /// </summary>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="attrs">The attributes, written in enumeration order; persistent backends require JSON-serializable values.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <remarks>
+    ///     This default writes one entry per call, exactly as a caller looping over <see cref="SetStudyUserAttr(int, string, object?)" />
+    ///     would, so any storage supports it; it is atomic only as far as each single call is. The built-in storages
+    ///     override it to write in one step: one lock in memory, one appended batch in a journal, one transaction in a
+    ///     database. An empty dictionary writes nothing and checks nothing.
+    /// </remarks>
+    public virtual void SetStudyUserAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        foreach (var (key, value) in attrs)
+            SetStudyUserAttr(studyId, key, value);
+    }
+
+    /// <summary>
+    ///     Register several optuna-internal attributes to a study at once (Rustuna's <c>set_study_system_attrs</c>;
+    ///     plan 13, item S8): the result of <see cref="SetStudySystemAttr(int, string, object?)" /> once per entry, in order.
+    /// </summary>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="attrs">The attributes, written in enumeration order; persistent backends require JSON-serializable values.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    /// <remarks>The default writes one entry per call; see <see cref="SetStudyUserAttrs" /> for what the overrides do.</remarks>
+    public virtual void SetStudySystemAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        foreach (var (key, value) in attrs)
+            SetStudySystemAttr(studyId, key, value);
+    }
+
+    /// <summary>
+    ///     Optuna's <c>set_study_user_attr</c> name for <see cref="SetStudyUserAttrs" />: several user-defined attributes
+    ///     in one call.
+    /// </summary>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public void SetStudyUserAttr(int studyId, IReadOnlyDictionary<string, object?> attrs) => SetStudyUserAttrs(studyId, attrs);
+
+    /// <summary>
+    ///     Optuna's <c>set_study_system_attr</c> name for <see cref="SetStudySystemAttrs" />: several optuna-internal
+    ///     attributes in one call.
+    /// </summary>
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">If no study with the matching ID exists.</exception>
+    public void SetStudySystemAttr(int studyId, IReadOnlyDictionary<string, object?> attrs) => SetStudySystemAttrs(studyId, attrs);
+
     // ------------------------------------------------------------------ study access
 
     /// <summary>Read the ID of a study.</summary>
@@ -264,6 +322,69 @@ public abstract class BaseStorage
     /// <param name="key">Attribute name; a later write replaces its stored value.</param>
     /// <param name="value">Attribute value; persistent backends require JSON-serializable data.</param>
     public abstract void SetTrialSystemAttr(int trialId, string key, object? value);
+
+    /// <summary>
+    ///     Set several user-defined attributes of a trial at once, overwriting existing values (Rustuna's
+    ///     <c>set_trial_user_attrs</c>; Rustuna plan 13, item S8). Optuna has no such call: the result is what calling
+    ///     <see cref="SetTrialUserAttr(int, string, object?)" /> once per entry, in the dictionary's order, leaves.
+    /// </summary>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="attrs">The attributes, written in enumeration order; persistent backends require JSON-serializable values.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    /// <remarks>
+    ///     This default writes one entry per call, as a caller's own loop would, so any storage supports it; a failure
+    ///     part-way leaves the entries before it written. The built-in storages override it to write in one step and
+    ///     check the trial once, so a finished or unknown trial gets nothing written: one lock in memory, one appended
+    ///     batch of ordinary single-attribute records in a journal (what Python's journal reader expects), one
+    ///     transaction in a database. An empty dictionary writes nothing and checks nothing.
+    /// </remarks>
+    public virtual void SetTrialUserAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        foreach (var (key, value) in attrs)
+            SetTrialUserAttr(trialId, key, value);
+    }
+
+    /// <summary>
+    ///     Set several optuna-internal attributes of a trial at once (Rustuna's <c>set_trial_system_attrs</c>; plan 13,
+    ///     item S8): the result of <see cref="SetTrialSystemAttr(int, string, object?)" /> once per entry, in order.
+    /// </summary>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="attrs">The attributes, written in enumeration order; persistent backends require JSON-serializable values.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    /// <remarks>The default writes one entry per call; see <see cref="SetTrialUserAttrs" /> for what the overrides do.</remarks>
+    public virtual void SetTrialSystemAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        foreach (var (key, value) in attrs)
+            SetTrialSystemAttr(trialId, key, value);
+    }
+
+    /// <summary>
+    ///     Optuna's <c>set_trial_user_attr</c> name for <see cref="SetTrialUserAttrs" />: several user-defined attributes
+    ///     in one call.
+    /// </summary>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    public void SetTrialUserAttr(int trialId, IReadOnlyDictionary<string, object?> attrs) => SetTrialUserAttrs(trialId, attrs);
+
+    /// <summary>
+    ///     Optuna's <c>set_trial_system_attr</c> name for <see cref="SetTrialSystemAttrs" />: several optuna-internal
+    ///     attributes in one call.
+    /// </summary>
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">If no trial with the matching ID exists.</exception>
+    /// <exception cref="UpdateFinishedTrialError">If the trial is already finished.</exception>
+    public void SetTrialSystemAttr(int trialId, IReadOnlyDictionary<string, object?> attrs) => SetTrialSystemAttrs(trialId, attrs);
 
     // ------------------------------------------------------------------ trial access
 

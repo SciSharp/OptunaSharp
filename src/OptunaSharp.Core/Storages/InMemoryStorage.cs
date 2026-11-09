@@ -116,6 +116,47 @@ public class InMemoryStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>
+    ///     One lock and one new dictionary for the whole batch (plan 13, item S8), published only after every entry is
+    ///     in it, so a reader sees all of them or none, and a reader holding the previous dictionary sees no change.
+    /// </remarks>
+    public override void SetStudyUserAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        if (attrs.Count == 0)
+            return;
+        lock (_lock)
+        {
+            CheckStudyId(studyId);
+            var userAttrs = _studies[studyId].UserAttrs.ShallowClone();
+            foreach (var (key, value) in attrs)
+                userAttrs[key] = value;
+            _studies[studyId].UserAttrs = userAttrs;
+        }
+    }
+
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>One lock and one new dictionary for the whole batch, as <see cref="SetStudyUserAttrs" />.</remarks>
+    public override void SetStudySystemAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        if (attrs.Count == 0)
+            return;
+        lock (_lock)
+        {
+            CheckStudyId(studyId);
+            var systemAttrs = _studies[studyId].SystemAttrs.ShallowClone();
+            foreach (var (key, value) in attrs)
+                systemAttrs[key] = value;
+            _studies[studyId].SystemAttrs = systemAttrs;
+        }
+    }
+
     /// <param name="studyName">Name identifying the study in the selected storage.</param>
     /// <inheritdoc />
     public override int GetStudyIdFromName(string studyName)
@@ -536,6 +577,50 @@ public class InMemoryStorage : BaseStorage
 
             // In place unless a reader may hold the record (WritableTrialUnlocked).
             WritableTrialUnlocked(trialId).SystemAttrsDict[key] = value;
+        }
+    }
+
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>
+    ///     One lock, one updatable check and at most one copy of the record for the whole batch (plan 13, item S8): an
+    ///     unknown or finished trial gets nothing written.
+    /// </remarks>
+    public override void SetTrialUserAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        if (attrs.Count == 0)
+            return;
+        lock (_lock)
+        {
+            var trial = GetTrialUnlocked(trialId);
+            CheckTrialIsUpdatable(trialId, trial.State);
+
+            // One writable record for every entry: in place unless a reader may hold it (WritableTrialUnlocked).
+            var userAttrs = WritableTrialUnlocked(trialId).UserAttrsDict;
+            foreach (var (key, value) in attrs)
+                userAttrs[key] = value;
+        }
+    }
+
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>One lock, one check and at most one copy, as <see cref="SetTrialUserAttrs" />.</remarks>
+    public override void SetTrialSystemAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        if (attrs.Count == 0)
+            return;
+        lock (_lock)
+        {
+            var trial = GetTrialUnlocked(trialId);
+            CheckTrialIsUpdatable(trialId, trial.State);
+
+            var systemAttrs = WritableTrialUnlocked(trialId).SystemAttrsDict;
+            foreach (var (key, value) in attrs)
+                systemAttrs[key] = value;
         }
     }
 

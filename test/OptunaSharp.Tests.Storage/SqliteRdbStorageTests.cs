@@ -56,6 +56,108 @@ public class SqliteRdbStorageTests
     private static OrderedDict<string, BaseDistribution> QuadDist() =>
         new() { ["x"] = new FloatDistribution(-10, 10) };
 
+    // ------------------------------------------------------------------ plan 13: bulk attribute writes (S8)
+
+    /// <summary>
+    ///     Plan 13, item S8: a batch of trial and study attributes on SQLite leaves exactly what one single write per
+    ///     entry leaves (keys, values and their JSON), read back through a fresh storage on the same file.
+    /// </summary>
+    [TestMethod]
+    public void BulkAttributes_LeaveWhatSingleWritesLeave()
+    {
+        string path = TempDbPath();
+        string url = $"sqlite:///{path.Replace('\\', '/')}";
+        var attrs = new OrderedDict<string, object?>
+        {
+            ["seed"] = 7L, ["ratio"] = 0.25, ["name"] = "run", ["flag"] = true, ["none"] = null,
+            ["list"] = new List<object?> { 1L, "two" },
+        };
+        int bulkStudy, singleStudy, bulkTrial, singleTrial;
+        using (var storage = new RDBStorage(url))
+        {
+            bulkStudy = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "bulk");
+            singleStudy = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "single");
+            bulkTrial = storage.CreateNewTrial(bulkStudy);
+            singleTrial = storage.CreateNewTrial(singleStudy);
+            storage.SetTrialUserAttr(bulkTrial, "name", "earlier");
+            storage.SetTrialUserAttr(singleTrial, "name", "earlier");
+
+            storage.SetTrialUserAttrs(bulkTrial, attrs);
+            storage.SetTrialSystemAttrs(bulkTrial, attrs);
+            storage.SetStudyUserAttrs(bulkStudy, attrs);
+            storage.SetStudySystemAttrs(bulkStudy, attrs);
+            foreach (var (key, value) in attrs)
+            {
+                storage.SetTrialUserAttr(singleTrial, key, value);
+                storage.SetTrialSystemAttr(singleTrial, key, value);
+                storage.SetStudyUserAttr(singleStudy, key, value);
+                storage.SetStudySystemAttr(singleStudy, key, value);
+            }
+        }
+
+        using var reopened = new RDBStorage(url);
+        static string Describe(IReadOnlyDictionary<string, object?> a)
+            => string.Join("; ", a.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}={PyJson.Dumps(kv.Value)}"));
+        Describe(reopened.GetTrial(bulkTrial).UserAttrs).Should().Be(Describe(reopened.GetTrial(singleTrial).UserAttrs));
+        Describe(reopened.GetTrial(bulkTrial).SystemAttrs).Should().Be(Describe(reopened.GetTrial(singleTrial).SystemAttrs));
+        Describe(reopened.GetStudyUserAttrs(bulkStudy)).Should().Be(Describe(reopened.GetStudyUserAttrs(singleStudy)));
+        Describe(reopened.GetStudySystemAttrs(bulkStudy)).Should().Be(Describe(reopened.GetStudySystemAttrs(singleStudy)));
+        reopened.GetTrial(bulkTrial).UserAttrs["name"].Should().Be("run", "the batch overwrites an earlier value");
+    }
+
+    /// <summary>
+    ///     A batch is one transaction: a value that cannot be serialized, in the middle of the batch, rolls back the
+    ///     entries before it; a finished trial and an unknown study refuse the batch with nothing written.
+    /// </summary>
+    [TestMethod]
+    public void BulkAttributes_AreAllOrNothing()
+    {
+        using RDBStorage storage = NewMemoryStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "atomic");
+        int trialId = storage.CreateNewTrial(studyId);
+        var poisoned = new OrderedDict<string, object?> { ["ok"] = 1L, ["bad"] = new object(), ["after"] = 2L };
+
+        Action trialBatch = () => storage.SetTrialUserAttrs(trialId, poisoned);
+        Action studyBatch = () => storage.SetStudyUserAttrs(studyId, poisoned);
+        trialBatch.Should().Throw<TypeError>();
+        studyBatch.Should().Throw<TypeError>();
+        storage.GetTrial(trialId).UserAttrs.Should().BeEmpty("the transaction rolled the first entry back");
+        storage.GetStudyUserAttrs(studyId).Should().BeEmpty();
+
+        storage.SetTrialStateValues(trialId, TrialState.Complete, new[] { 1.0 });
+        Action finished = () => storage.SetTrialSystemAttrs(trialId, new OrderedDict<string, object?> { ["x"] = 1L });
+        Action unknownStudy = () => storage.SetStudySystemAttrs(424242, new OrderedDict<string, object?> { ["x"] = 1L });
+        finished.Should().Throw<UpdateFinishedTrialError>();
+        unknownStudy.Should().Throw<KeyError>();
+        storage.GetTrial(trialId).SystemAttrs.Should().NotContainKey("x");
+    }
+
+    /// <summary>
+    ///     A study on SQLite runs through <see cref="CachedStorage" />, which forwards a trial's and a study's batch to the
+    ///     backend whole; the trial and the study see their attributes, and so does a fresh storage.
+    /// </summary>
+    [TestMethod]
+    public void BulkAttributes_ThroughCachedStorage_ReachTheDatabase()
+    {
+        string path = TempDbPath();
+        string url = $"sqlite:///{path.Replace('\\', '/')}";
+        var rdb = new RDBStorage(url);
+        Study study = Optuna.CreateStudy(storage: rdb, studyName: "cached");
+        study.Storage.Should().BeOfType<CachedStorage>();
+        Trial trial = study.Ask();
+        trial.SetUserAttrs(new OrderedDict<string, object?> { ["a"] = 1L, ["b"] = "two" });
+        study.SetUserAttr(new OrderedDict<string, object?> { ["c"] = 3.5 });
+        study.Tell(trial, 1.0);
+
+        trial.UserAttrs.Keys.Should().Contain(new[] { "a", "b" });
+        study.UserAttrs["c"].Should().Be(3.5);
+        rdb.Dispose();
+        using var reopened = new RDBStorage(url);
+        int studyId = reopened.GetStudyIdFromName("cached");
+        reopened.GetAllTrials(studyId)[0].UserAttrs.Should().Contain(new KeyValuePair<string, object?>("b", "two"));
+        reopened.GetStudyUserAttrs(studyId)["c"].Should().Be(3.5);
+    }
+
     // ------------------------------------------------------------------ plan 13: one parse per distribution text
 
     /// <summary>

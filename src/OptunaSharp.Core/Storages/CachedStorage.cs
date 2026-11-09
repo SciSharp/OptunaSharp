@@ -192,6 +192,20 @@ public class CachedStorage : BaseStorage, IBaseHeartbeat
     public override void SetStudySystemAttr(int studyId, string key, object? value)
         => _backendStorage.SetStudySystemAttr(studyId, key, value);
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>Forwarded whole, so the backend writes the batch in one step (plan 13, item S8).</remarks>
+    public override void SetStudyUserAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+        => _backendStorage.SetStudyUserAttrs(studyId, attrs);
+
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>Forwarded whole, so the backend writes the batch in one step (plan 13, item S8).</remarks>
+    public override void SetStudySystemAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+        => _backendStorage.SetStudySystemAttrs(studyId, attrs);
+
     /// <param name="studyName">Name identifying the study in the selected storage.</param>
     /// <inheritdoc />
     public override int GetStudyIdFromName(string studyName)
@@ -339,6 +353,23 @@ public class CachedStorage : BaseStorage, IBaseHeartbeat
     /// <inheritdoc />
     public override void SetTrialSystemAttr(int trialId, string key, object? value)
         => _backendStorage.SetTrialSystemAttr(trialId, key: key, value: value);
+
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>
+    ///     Forwarded whole, so the backend writes the batch in one step (plan 13, item S8); like the single-attribute
+    ///     write, it leaves the cache alone (unfinished trials are re-read from the backend on the next sync).
+    /// </remarks>
+    public override void SetTrialUserAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+        => _backendStorage.SetTrialUserAttrs(trialId, attrs);
+
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>Forwarded whole, as <see cref="SetTrialUserAttrs" />.</remarks>
+    public override void SetTrialSystemAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+        => _backendStorage.SetTrialSystemAttrs(trialId, attrs);
 
     /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
     /// <summary>Looks up a finished trial without consulting the backend.</summary>

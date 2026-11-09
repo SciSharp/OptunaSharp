@@ -607,6 +607,152 @@ public class JournalStorage : BaseStorage
         }
     }
 
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>See <see cref="WriteAttributeBatch" />: one checked, appended batch of ordinary records.</remarks>
+    public override void SetStudyUserAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+        => WriteAttributeBatch(JournalOperation.SetStudyUserAttr, "study_id", studyId, "user_attr", attrs, isTrial: false);
+
+    /// <param name="studyId">Storage identifier of the study; distinct from its name.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>See <see cref="WriteAttributeBatch" />: one checked, appended batch of ordinary records.</remarks>
+    public override void SetStudySystemAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+        => WriteAttributeBatch(JournalOperation.SetStudySystemAttr, "study_id", studyId, "system_attr", attrs, isTrial: false);
+
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>See <see cref="WriteAttributeBatch" />: one checked, appended batch of ordinary records.</remarks>
+    public override void SetTrialUserAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+        => WriteAttributeBatch(JournalOperation.SetTrialUserAttr, "trial_id", trialId, "user_attr", attrs, isTrial: true);
+
+    /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
+    /// <param name="attrs">The attributes, written in enumeration order.</param>
+    /// <inheritdoc />
+    /// <remarks>See <see cref="WriteAttributeBatch" />: one checked, appended batch of ordinary records.</remarks>
+    public override void SetTrialSystemAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+        => WriteAttributeBatch(JournalOperation.SetTrialSystemAttr, "trial_id", trialId, "system_attr", attrs, isTrial: true);
+
+    /// <summary>
+    ///     The bulk attribute writes (plan 13, item S8): one record per entry, exactly the record the single-attribute
+    ///     write appends, all appended in one backend call.
+    /// </summary>
+    /// <param name="opCode">The single-attribute operation each record carries.</param>
+    /// <param name="idField">The record's id field: <c>study_id</c> or <c>trial_id</c>.</param>
+    /// <param name="id">The study or trial id.</param>
+    /// <param name="attrField">The record's attribute field: <c>user_attr</c> or <c>system_attr</c>.</param>
+    /// <param name="attrs">The attributes, one record each, in enumeration order.</param>
+    /// <param name="isTrial">Whether <paramref name="id" /> is a trial (checked as updatable) or a study (checked as existing).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="NumSharp.KeyError">The study or trial does not exist.</exception>
+    /// <exception cref="OptunaSharp.UpdateFinishedTrialError">The trial has finished.</exception>
+    /// <exception cref="Exception">A value cannot be serialized, or the backend cannot append; nothing is appended then.</exception>
+    /// <remarks>
+    ///     <para>
+    ///         <b>One record per entry, on purpose.</b> Python's journal replay asserts that an attribute record carries
+    ///         exactly one key (<c>assert len(log["user_attr"]) == 1</c>), so a journal Python workers share can only hold
+    ///         single-key records. The batch is those records, appended together: the file backend writes them under one
+    ///         lock with one flush, where single writes pay one each.
+    ///     </para>
+    ///     <para>
+    ///         <b>Checked first.</b> The replay raises for this worker's own record on an unknown or finished trial, one
+    ///         record per synchronization. Appending a whole batch the replay then rejects would leave records that make
+    ///         later, unrelated calls of this storage raise, so the batch is checked against the replayed state first and
+    ///         nothing is written when the check fails. If another process finishes the trial between the check and the
+    ///         append, <see cref="SyncAfterBatch" /> consumes the batch's rejected records before the error surfaces.
+    ///     </para>
+    /// </remarks>
+    private void WriteAttributeBatch(
+        JournalOperation opCode, string idField, int id, string attrField,
+        IReadOnlyDictionary<string, object?> attrs, bool isTrial)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        if (attrs.Count == 0)
+            return;
+
+        var logs = new List<OrderedDict<string, object?>>(attrs.Count);
+        foreach (var (key, value) in attrs)
+        {
+            logs.Add(new OrderedDict<string, object?>
+            {
+                ["op_code"] = (int)opCode,
+                ["worker_id"] = null,  // filled under the lock: the worker id belongs to the replay state
+                [idField] = id,
+                [attrField] = new OrderedDict<string, object?> { [key] = value },
+            });
+        }
+
+        lock (_threadLock)
+        {
+            SyncWithBackend();
+            if (isTrial)
+                _replayResult.ThrowIfTrialNotUpdatable(id);
+            else
+                _replayResult.ThrowIfStudyMissing(id);
+
+            string workerId = _replayResult.WorkerId;
+            foreach (var log in logs)
+                log["worker_id"] = workerId;
+            _backend.AppendLogs(logs);
+            SyncAfterBatch(logs.Count);
+        }
+    }
+
+    /// <summary>
+    ///     Synchronizes after appending a batch of this worker's records, consuming every record of the batch the replay
+    ///     rejects before raising the first rejection.
+    /// </summary>
+    /// <param name="batchSize">How many records the batch appended; each rejection consumes at least one of them.</param>
+    /// <exception cref="Exception">The first exception the synchronization raised, rethrown with its original stack.</exception>
+    /// <remarks>
+    ///     A rejection here means another process finished or deleted the target between the check and the append. The
+    ///     replay raises once per rejected record, and only for the worker that wrote it, so without draining, each of
+    ///     the batch's remaining records would raise in a later call of this storage that has nothing to do with it.
+    ///     Each failed synchronization advances past at least the record that failed, so at most one attempt per record
+    ///     is needed.
+    /// </remarks>
+    private void SyncAfterBatch(int batchSize)
+    {
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? first = null;
+        for (int attempt = 0; attempt < batchSize; attempt++)
+        {
+            try
+            {
+                SyncWithBackend();
+                break;
+            }
+            catch (Exception exception)
+            {
+                first ??= System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception);
+            }
+        }
+        first?.Throw();
+    }
+
+    /// <summary>Test hook for <see cref="SyncAfterBatch" />: appends records as one batch, then drains as it does.</summary>
+    /// <param name="logs">Complete records, worker id included.</param>
+    /// <exception cref="Exception">The first rejection of the batch, after the batch is consumed.</exception>
+    internal void AppendBatchAndSyncForTests(IReadOnlyList<OrderedDict<string, object?>> logs)
+    {
+        lock (_threadLock)
+        {
+            _backend.AppendLogs(logs);
+            SyncAfterBatch(logs.Count);
+        }
+    }
+
+    /// <summary>The worker id this storage writes into records, for tests that build records of their own.</summary>
+    internal string WorkerIdForTests
+    {
+        get
+        {
+            lock (_threadLock)
+                return _replayResult.WorkerId;
+        }
+    }
+
     /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>
     /// <inheritdoc />
     public override FrozenTrial GetTrial(int trialId)
@@ -1153,6 +1299,34 @@ internal sealed partial class JournalStorageReplayResult
                 trial.SystemAttrsDict[key] = value;
             _trials[trialId] = trial;
         }
+    }
+
+    /// <summary>
+    ///     Raises what replaying this worker's own attribute record for <paramref name="trialId" /> would raise, before
+    ///     any record is written: the bulk attribute writes (plan 13, item S8) check once, then append their batch.
+    /// </summary>
+    /// <param name="trialId">Storage identifier of the trial about to be written.</param>
+    /// <exception cref="NumSharp.KeyError">The trial does not exist (<see cref="JournalStorage.NotFoundMsg" />).</exception>
+    /// <exception cref="OptunaSharp.UpdateFinishedTrialError">The trial has finished; the message is the replay's.</exception>
+    internal void ThrowIfTrialNotUpdatable(int trialId)
+    {
+        if (!_trials.TryGetValue(trialId, out FrozenTrial? trial))
+            throw new KeyError(JournalStorage.NotFoundMsg);
+        if (trial.State.IsFinished())
+            throw new UpdateFinishedTrialError(
+                string.Format(CultureInfo.InvariantCulture, JournalStorage.UnupdatableMsgFormat, trial.Number));
+    }
+
+    /// <summary>
+    ///     Raises what replaying this worker's own study-attribute record would raise for a missing study, before any
+    ///     record is written (plan 13, item S8).
+    /// </summary>
+    /// <param name="studyId">Storage identifier of the study about to be written.</param>
+    /// <exception cref="NumSharp.KeyError">The study does not exist (<see cref="JournalStorage.NotFoundMsg" />).</exception>
+    internal void ThrowIfStudyMissing(int studyId)
+    {
+        if (!_studies.ContainsKey(studyId))
+            throw new KeyError(JournalStorage.NotFoundMsg);
     }
 
     /// <param name="trialId">Storage identifier of the trial; distinct from its per-study trial number.</param>

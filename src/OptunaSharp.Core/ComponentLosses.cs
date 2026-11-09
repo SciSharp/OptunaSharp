@@ -91,7 +91,7 @@ public static class ComponentLosses
 
     /// <summary>
     ///     Validate a to-be-written component vector against the channel contract and return an owned
-    ///     copy suitable for <see cref="BaseTrial.SetUserAttr" />. Rejects an empty vector and any
+    ///     copy suitable for <see cref="BaseTrial.SetUserAttr(string, object?)" />. Rejects an empty vector and any
     ///     non-finite entry (so a stored vector always reads back — a non-finite one never silently
     ///     becomes "absent"). Negative entries are accepted (read at their zero clamp downstream).
     /// </summary>

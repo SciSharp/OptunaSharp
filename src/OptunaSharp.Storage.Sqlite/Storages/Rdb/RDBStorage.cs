@@ -570,6 +570,47 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     }
 
     /// <inheritdoc />
+    /// <remarks>One transaction for the whole batch (plan 13, item S8): all entries are stored or none are.</remarks>
+    public override void SetStudyUserAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+        => SetStudyAttrs("study_user_attributes", studyId, attrs);
+
+    /// <inheritdoc />
+    /// <remarks>One transaction for the whole batch (plan 13, item S8): all entries are stored or none are.</remarks>
+    public override void SetStudySystemAttrs(int studyId, IReadOnlyDictionary<string, object?> attrs)
+        => SetStudyAttrs("study_system_attributes", studyId, attrs);
+
+    /// <summary>
+    ///     Upserts several JSON-serializable attributes in one transaction after verifying once that the study exists:
+    ///     the same rows <see cref="SetStudyAttr" /> writes per entry.
+    /// </summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
+    /// <param name="attrs">The attributes, upserted in enumeration order.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">The study does not exist; nothing is written.</exception>
+    /// <exception cref="Exception">A value is not JSON-serializable; the transaction rolls back and nothing is written.</exception>
+    private void SetStudyAttrs(string table, int studyId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        if (attrs.Count == 0)
+            return;
+        lock (_lock)
+        {
+            // Disposed without Commit on any exception, which rolls every upsert of the batch back.
+            using var tx = _conn.BeginTransaction();
+            EnsureStudyExists(studyId, tx);
+            foreach (var (key, value) in attrs)
+            {
+                Exec(
+                    $"INSERT INTO {table} (study_id, \"key\", value_json) VALUES ($p0, $p1, $p2) " +
+                    "ON CONFLICT(study_id, \"key\") DO UPDATE SET value_json = excluded.value_json",
+                    tx, studyId, key, PyJson.Dumps(value));
+            }
+            tx.Commit();
+        }
+    }
+
+    /// <inheritdoc />
     /// <exception cref="NumSharp.KeyError">No study has the requested name.</exception>
     public override int GetStudyIdFromName(string studyName)
     {
@@ -999,6 +1040,49 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         {
             using var tx = _conn.BeginTransaction();
             SetTrialAttrNoCommit(tx, table, trialId, key, value);
+            tx.Commit();
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>One transaction for the whole batch (plan 13, item S8): all entries are stored or none are.</remarks>
+    public override void SetTrialUserAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+        => SetTrialAttrs("trial_user_attributes", trialId, attrs);
+
+    /// <inheritdoc />
+    /// <remarks>One transaction for the whole batch (plan 13, item S8): all entries are stored or none are.</remarks>
+    public override void SetTrialSystemAttrs(int trialId, IReadOnlyDictionary<string, object?> attrs)
+        => SetTrialAttrs("trial_system_attributes", trialId, attrs);
+
+    /// <summary>
+    ///     Upserts several JSON-serializable trial attributes in one transaction after checking once that the trial is
+    ///     still mutable: the same rows <see cref="SetTrialAttrNoCommit" /> writes per entry.
+    /// </summary>
+    /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
+    /// <param name="trialId">The storage-wide trial identifier, distinct from its study-local number.</param>
+    /// <param name="attrs">The attributes, upserted in enumeration order.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="KeyError">The trial does not exist; nothing is written.</exception>
+    /// <exception cref="UpdateFinishedTrialError">The trial has finished; nothing is written.</exception>
+    /// <exception cref="Exception">A value is not JSON-serializable; the transaction rolls back and nothing is written.</exception>
+    private void SetTrialAttrs(string table, int trialId, IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        if (attrs.Count == 0)
+            return;
+        lock (_lock)
+        {
+            // Disposed without Commit on any exception, which rolls every upsert of the batch back.
+            using var tx = _conn.BeginTransaction();
+            var trial = FindTrialOrRaise(trialId, tx);
+            CheckTrialIsUpdatableOrRaise(trial);
+            foreach (var (key, value) in attrs)
+            {
+                Exec(
+                    $"INSERT INTO {table} (trial_id, \"key\", value_json) VALUES ($p0, $p1, $p2) " +
+                    "ON CONFLICT(trial_id, \"key\") DO UPDATE SET value_json = excluded.value_json",
+                    tx, trialId, key, PyJson.Dumps(value));
+            }
             tx.Commit();
         }
     }

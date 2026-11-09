@@ -232,6 +232,34 @@ public abstract class BaseTrial
     public abstract void SetUserAttr(string key, object? value);
 
     /// <summary>
+    ///     Stores several user attributes at once (Rustuna's <c>set_user_attrs</c>; Rustuna plan 13, item S8). Optuna has
+    ///     no such call: the result is what <see cref="SetUserAttr(string, object?)" /> once per entry, in the dictionary's
+    ///     order, leaves.
+    /// </summary>
+    /// <param name="attrs">The attributes, set in enumeration order; persistent backends require JSON-serializable values.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="Exception">Whatever <see cref="SetUserAttr(string, object?)" /> throws for an entry.</exception>
+    /// <remarks>
+    ///     This default calls <see cref="SetUserAttr(string, object?)" /> per entry. <see cref="Trial" /> overrides it
+    ///     to write the whole batch through one storage call (one lock, journal append or transaction), so an unknown or
+    ///     finished trial gets nothing written.
+    /// </remarks>
+    public virtual void SetUserAttrs(IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        foreach (var (key, value) in attrs)
+            SetUserAttr(key, value);
+    }
+
+    /// <summary>
+    ///     Optuna's <c>set_user_attr</c> name for <see cref="SetUserAttrs" />: several user attributes in one call.
+    /// </summary>
+    /// <param name="attrs">The attributes, set in enumeration order.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="Exception">Whatever <see cref="SetUserAttrs" /> throws.</exception>
+    public void SetUserAttr(IReadOnlyDictionary<string, object?> attrs) => SetUserAttrs(attrs);
+
+    /// <summary>
     ///     Expose this trial's observed-components vector — the per-trial residual terms
     ///     <c>r = (r_1, …, r_m)</c> of an objective that decomposes as <c>f(x) = mean_i r_i(x)</c> — on
     ///     the <see cref="ComponentLosses.Key" /> user attribute. Samplers that exploit residual

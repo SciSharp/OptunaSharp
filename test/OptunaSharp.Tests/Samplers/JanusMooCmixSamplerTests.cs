@@ -172,7 +172,7 @@ public class JanusMooCmixSamplerTests
     /// <summary>
     ///     ZDT1 over four parameters that stores its residual vector <c>[f1, f2]</c> under
     ///     <paramref name="residualKey" />. The canonical key goes through the typed writer users are told to
-    ///     call, any other key through <see cref="BaseTrial.SetUserAttr" />, and <c>null</c> stores nothing.
+    ///     call, any other key through <see cref="BaseTrial.SetUserAttr(string, object?)" />, and <c>null</c> stores nothing.
     /// </summary>
     /// <param name="t">The trial being evaluated.</param>
     /// <param name="residualKey">User-attribute key for the residual vector, or null to store none.</param>

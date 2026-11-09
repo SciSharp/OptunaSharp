@@ -692,6 +692,23 @@ public class Study
     /// <param name="value">A value of the attribute. The value should be JSON serializable.</param>
     public void SetUserAttr(string key, object? value) => Storage.SetStudyUserAttr(StudyId, key, value);
 
+    /// <summary>
+    ///     Set several user attributes to the study at once (Rustuna's <c>set_user_attrs</c>; plan 13, item S8), with one
+    ///     storage call: the stored result is what <see cref="SetUserAttr(string, object?)" /> once per entry leaves.
+    /// </summary>
+    /// <param name="attrs">The attributes, set in enumeration order. The values should be JSON serializable.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage; nothing is set.</exception>
+    /// <exception cref="Exception">A configured storage fails; its exception propagates.</exception>
+    public void SetUserAttrs(IReadOnlyDictionary<string, object?> attrs) => Storage.SetStudyUserAttrs(StudyId, attrs);
+
+    /// <summary>Optuna's <c>set_user_attr</c> name for <see cref="SetUserAttrs" />: several user attributes in one call.</summary>
+    /// <param name="attrs">The attributes, set in enumeration order. The values should be JSON serializable.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage; nothing is set.</exception>
+    /// <exception cref="Exception">A configured storage fails; its exception propagates.</exception>
+    public void SetUserAttr(IReadOnlyDictionary<string, object?> attrs) => SetUserAttrs(attrs);
+
     // Study.set_system_attr (deprecated 3.1.0) was removed in Optuna 5.0.0 (#6834). Optuna-internal
     // writers go through Storage.SetStudySystemAttr(StudyId, key, value); users keep SetUserAttr.
 

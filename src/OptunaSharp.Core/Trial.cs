@@ -361,6 +361,40 @@ public class Trial : BaseTrial
         }
     }
 
+    /// <summary>
+    ///     Set several user attributes to the trial at once (Rustuna's <c>set_user_attrs</c>; plan 13, item S8), with one
+    ///     storage call: the stored and cached result is what <see cref="SetUserAttr(string, object?)" /> once per entry
+    ///     leaves.
+    /// </summary>
+    /// <param name="attrs">The attributes, set in enumeration order. The values should be JSON serializable.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="attrs" /> is null.</exception>
+    /// <exception cref="OptunaSharp.UpdateFinishedTrialError">The storage record is already finished; nothing is set.</exception>
+    /// <exception cref="NumSharp.KeyError">The trial was removed from storage; nothing is set.</exception>
+    /// <exception cref="System.Exception">A configured storage fails; its exception propagates.</exception>
+    /// <remarks>
+    ///     The storage writes the batch in one step (<see cref="Storages.BaseStorage.SetTrialUserAttrs" />), and the trial's
+    ///     own copy is updated only after the storage accepted it, so a refused batch leaves both unchanged. Under the
+    ///     trial's monitor, like <see cref="SetUserAttr(string, object?)" />, so a concurrent read of this trial's
+    ///     attributes sees the batch whole or not at all.
+    /// </remarks>
+    public override void SetUserAttrs(IReadOnlyDictionary<string, object?> attrs)
+    {
+        ArgumentNullException.ThrowIfNull(attrs);
+        if (attrs.Count == 0)
+            return;
+        using (MonitorGate.Scope(_syncRoot))
+        {
+            Storage.SetTrialUserAttrs(TrialId, attrs);
+            foreach (var (key, value) in attrs)
+                _cachedFrozenTrial.UserAttrsDict[key] = value;
+            MirrorIntoThreadCache(t =>
+            {
+                foreach (var (key, value) in attrs)
+                    t.UserAttrsDict[key] = value;
+            });
+        }
+    }
+
     // Trial.set_system_attr (deprecated 3.1.0) was removed in Optuna 5.0.0 (#6834). Optuna-internal
     // writers call Storage.SetTrialSystemAttr(TrialId, key, value) directly; users keep SetUserAttr.
 
