@@ -225,4 +225,51 @@ public class QmcSamplerParityTests : OptunaInteropTestBase
             "    return v\n" +
             "study.optimize(_obj, n_trials=20)\n");
     }
+
+    /// <summary>
+    ///     Plan 14 gate: QMC now computes its <c>qmc:&lt;sha256&gt;</c> sample-id key once per search space and reuses it while
+    ///     the same distribution objects come back. A 40-parameter study (float, log-float, int and categorical) over 300
+    ///     trials, for each engine and scrambling, must keep the whole state, the counter in the study system attrs
+    ///     included, bit-identical to live Optuna.
+    /// </summary>
+    /// <param name="qmcType">The engine: <c>sobol</c> or <c>halton</c>.</param>
+    /// <param name="scramble">Whether the engine is scrambled (the seed then enters the key).</param>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow("sobol", false)]
+    [DataRow("halton", false)]
+    [DataRow("sobol", true)]
+    [DataRow("halton", true)]
+    public void LongRun_40Parameters_300Trials_FullState_IsBitIdentical(string qmcType, bool scramble)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "qmc",
+            sampler: new QMCSampler(qmcType: qmcType, scramble: scramble, seed: 11));
+        csStudy.Optimize(t =>
+        {
+            double v = 0;
+            for (int i = 0; i < 37; i++)
+                v += t.SuggestFloat($"x{i}", -1, 1);
+            v += Math.Log(t.SuggestFloat("lx", 1e-3, 1e3, log: true));
+            v += t.SuggestInt("n", -5, 5);
+            v += t.SuggestCategorical("c", new[] { "a", "b", "cc" }).Length;
+            return v;
+        }, nTrials: 300);
+
+        AssertFullParity(csStudy,
+            "import math\n" +
+            "study = optuna.create_study(study_name='qmc', " +
+            $"sampler=optuna.samplers.QMCSampler(qmc_type='{qmcType}', scramble={(scramble ? "True" : "False")}, seed=11))\n" +
+            "def _obj(t):\n" +
+            "    v = 0.0\n" +
+            "    for i in range(37):\n" +
+            "        v += t.suggest_float(f'x{i}', -1, 1)\n" +
+            "    v += math.log(t.suggest_float('lx', 1e-3, 1e3, log=True))\n" +
+            "    v += t.suggest_int('n', -5, 5)\n" +
+            "    v += len(t.suggest_categorical('c', ['a', 'b', 'cc']))\n" +
+            "    return v\n" +
+            "study.optimize(_obj, n_trials=300)\n");
+    }
 }

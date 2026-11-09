@@ -36,6 +36,15 @@ public class QMCSampler : BaseSampler
 
     private readonly bool _scramble;
     private readonly long _seed;
+
+    /// <summary>The names of the search space <see cref="_lastKeyQmcId" /> was computed for, in order (plan 14).</summary>
+    private string[]? _lastKeyNames;
+
+    /// <summary>The distribution objects of that search space, compared by reference.</summary>
+    private BaseDistribution[]? _lastKeyDistributions;
+
+    /// <summary>The last sample-id attribute key computed; <see langword="null" /> before the first relative sample.</summary>
+    private string? _lastKeyQmcId;
     private readonly BaseSampler _independentSampler;
     private readonly bool _warnIndependentSampling;
     private readonly string _qmcType;
@@ -146,8 +155,9 @@ public class QMCSampler : BaseSampler
         }
 
         // If an initial trial was already made, construct the search space from the first trial.
-        var result = new OrderedDict<string, BaseDistribution>();
-        foreach (var (name, dist) in firstTrial.Distributions)
+        var firstDistributions = firstTrial.Distributions;
+        var result = new OrderedDict<string, BaseDistribution>(firstDistributions.Count);
+        foreach (var (name, dist) in firstDistributions)
             result[name] = dist;
         return result;
     }
@@ -177,7 +187,7 @@ public class QMCSampler : BaseSampler
         // [0, C), and int(value) (a floor, since the engines emit values in [0, 1)) gives a uniform
         // choice index in [0, C - 1]. IntDistribution would round to nearest and bias the boundaries.
         var categoricalSpace = new OrderedDict<string, CategoricalDistribution>();
-        var combined = new OrderedDict<string, BaseDistribution>();
+        var combined = new OrderedDict<string, BaseDistribution>(searchSpace.Count);
         foreach (var (name, dist) in searchSpace)
         {
             if (dist is CategoricalDistribution cat)
@@ -196,7 +206,7 @@ public class QMCSampler : BaseSampler
         // Untransform the managed point as it is: Optuna's trans.untransform(sample), without a NumSharp copy.
         var sample = trans.UntransformValues(qmcPoint);
 
-        var result = new OrderedDict<string, object?>();
+        var result = new OrderedDict<string, object?>(sample.Count);
         foreach (var (name, value) in sample)
         {
             if (categoricalSpace.TryGetValue(name, out var cat))
@@ -253,8 +263,52 @@ public class QMCSampler : BaseSampler
     /// <returns>The sequence index allocated to this trial.</returns>
     private int FindSampleId(Study study, OrderedDict<string, BaseDistribution> searchSpace)
     {
+        string keyQmcId = QmcIdKey(searchSpace);
+
+        var studyAttrs = study.Storage.GetStudySystemAttrs(study.StudyId);
+        int sampleId = (studyAttrs.TryGetValue(keyQmcId, out var v) && v is not null
+            ? Convert.ToInt32(v)
+            : -1) + 1;
+        study.Storage.SetStudySystemAttr(study.StudyId, keyQmcId, sampleId);
+        return sampleId;
+    }
+
+    /// <summary>
+    ///     The study system attribute holding this engine's last sample id for <paramref name="searchSpace" />: Optuna's
+    ///     <c>"qmc:" + sha256(json.dumps(qmc_vars))</c>, where <c>qmc_vars</c> holds the engine kind, the search space as
+    ///     <c>str(distribution)</c> by sorted name, and the scramble flag and seed.
+    /// </summary>
+    /// <param name="searchSpace">The relative search space being sampled.</param>
+    /// <returns>The attribute key, <c>qmc:</c> followed by 64 lowercase hex digits.</returns>
+    /// <remarks>
+    ///     The key is a pure function of the search space and this sampler's fixed settings, and it was about a quarter of a
+    ///     40-parameter QMC trial (each distribution's repr, a JSON document and a hash, per trial). It is kept for the last
+    ///     search space and reused while the next call passes the same names with the very same distribution objects (plan
+    ///     14), which a study's relative search space does from its first trial on. Reference identity, not value equality,
+    ///     decides: two categoricals can be equal by Python's rules (<c>True == 1</c>) and still print differently, so
+    ///     only the same objects are known to print the same. Runs under the sampler's lock, like all of sampling.
+    /// </remarks>
+    internal string QmcIdKey(OrderedDict<string, BaseDistribution> searchSpace)
+    {
+        if (_lastKeyQmcId is not null && _lastKeyNames!.Length == searchSpace.Count)
+        {
+            bool same = true;
+            int i = 0;
+            foreach (var (name, distribution) in searchSpace)
+            {
+                if (!ReferenceEquals(_lastKeyDistributions![i], distribution) || !string.Equals(_lastKeyNames[i], name, StringComparison.Ordinal))
+                {
+                    same = false;
+                    break;
+                }
+                i++;
+            }
+            if (same)
+                return _lastKeyQmcId;
+        }
+
         // Sort by keys to make the order static.
-        var searchSpaceStr = new OrderedDict<string, object?>();
+        var searchSpaceStr = new OrderedDict<string, object?>(searchSpace.Count);
         foreach (var name in searchSpace.Keys.OrderBy(k => k, StringComparer.Ordinal))
             searchSpaceStr[name] = searchSpace[name].ToString();
 
@@ -277,12 +331,20 @@ public class QMCSampler : BaseSampler
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(PyJson.Dumps(qmcVars)));
         string keyQmcId = "qmc:" + Convert.ToHexString(hash).ToLowerInvariant();
 
-        var studyAttrs = study.Storage.GetStudySystemAttrs(study.StudyId);
-        int sampleId = (studyAttrs.TryGetValue(keyQmcId, out var v) && v is not null
-            ? Convert.ToInt32(v)
-            : -1) + 1;
-        study.Storage.SetStudySystemAttr(study.StudyId, keyQmcId, sampleId);
-        return sampleId;
+        // Remember the space this key belongs to, by its names and the distribution objects themselves.
+        var names = new string[searchSpace.Count];
+        var distributions = new BaseDistribution[searchSpace.Count];
+        int position = 0;
+        foreach (var (name, distribution) in searchSpace)
+        {
+            names[position] = name;
+            distributions[position] = distribution;
+            position++;
+        }
+        _lastKeyNames = names;
+        _lastKeyDistributions = distributions;
+        _lastKeyQmcId = keyQmcId;
+        return keyQmcId;
     }
 
     /// <summary>Warns that independently seeded scrambled sequences lose their shared low-discrepancy structure.</summary>

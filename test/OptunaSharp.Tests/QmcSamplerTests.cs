@@ -344,4 +344,38 @@ public class QmcSamplerTests
 
         Run().Should().Equal(Run());
     }
+
+    /// <summary>
+    ///     Plan 14: the sample-id attribute key is computed once per search space and reused while the same names come with
+    ///     the very same distribution objects. A memoized key must always equal the key a fresh sampler computes: for the
+    ///     same objects again (reused), for equal-by-value objects that print differently (Python equality makes
+    ///     <c>True == 1</c>, but <c>str()</c> differs, and so must the key), for a reordered space, and back again.
+    /// </summary>
+    /// <param name="scramble">Whether the engine is scrambled (the seed then enters the key).</param>
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void QmcIdKey_Memoized_EqualsAFreshComputation(bool scramble)
+    {
+        var x = new FloatDistribution(-5, 5);
+        var flags = new CategoricalDistribution(new CategoricalChoice[] { true, false });
+        var ints = new CategoricalDistribution(new CategoricalChoice[] { 1L, 0L });
+        flags.Equals(ints).Should().BeTrue("Python equality: True == 1 and False == 0");
+        var spaceFlags = new OrderedDict<string, BaseDistribution> { ["x"] = x, ["c"] = flags };
+        var spaceInts = new OrderedDict<string, BaseDistribution> { ["x"] = x, ["c"] = ints };
+        var reordered = new OrderedDict<string, BaseDistribution> { ["c"] = flags, ["x"] = x };
+
+        string Fresh(OrderedDict<string, BaseDistribution> space) => new QMCSampler(scramble: scramble, seed: 3).QmcIdKey(space);
+
+        var memo = new QMCSampler(scramble: scramble, seed: 3);
+        string first = memo.QmcIdKey(spaceFlags);
+        first.Should().Be(Fresh(spaceFlags));
+        memo.QmcIdKey(spaceFlags).Should().Be(first, "the same objects reuse the key");
+        string ints2 = memo.QmcIdKey(spaceInts);
+        ints2.Should().Be(Fresh(spaceInts));
+        ints2.Should().NotBe(first, "equal choices that print differently give a different key, as in Optuna");
+        memo.QmcIdKey(reordered).Should().Be(Fresh(reordered));
+        memo.QmcIdKey(spaceFlags).Should().Be(first);
+        first.Should().MatchRegex("^qmc:[0-9a-f]{64}$");
+    }
 }
