@@ -1,5 +1,6 @@
 using System;
 using NumSharp;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.Nsgaii;
 
@@ -46,7 +47,7 @@ public class SBXCrossover : BaseCrossover
         int n = searchSpaceBounds.GetLength(0);
         double eta = _eta ?? (study.IsMultiObjective() ? 20.0 : 2.0);
 
-        var us = rng.rand(n).ToArray<double>();
+        var us = NumPyDraws.Rand(rng, n);
 
         var c1 = new double[n];
         var c2 = new double[n];

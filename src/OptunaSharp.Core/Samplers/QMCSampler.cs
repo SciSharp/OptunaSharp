@@ -193,9 +193,8 @@ public class QMCSampler : BaseSampler
 
         double[] qmcPoint = SampleQmc(study, searchSpace);
         var trans = new SearchSpaceTransform(combined, transform01: true);
-        // View the QMC point zero-copy; Untransform copies it into a managed dict, so dispose here.
-        using NDArray nd = np.array(qmcPoint, copy: false);
-        var sample = trans.Untransform(nd);
+        // Untransform the managed point as it is: Optuna's trans.untransform(sample), without a NumSharp copy.
+        var sample = trans.UntransformValues(qmcPoint);
 
         var result = new OrderedDict<string, object?>();
         foreach (var (name, value) in sample)

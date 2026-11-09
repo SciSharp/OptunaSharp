@@ -1,5 +1,6 @@
 using System;
 using NumSharp;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.Nsgaii;
 
@@ -27,7 +28,7 @@ public class PolynomialMutation : BaseMutation
     /// <inheritdoc />
     public override double Mutation(double param, NumPyRandom rng, Study study, double[] searchSpaceBounds)
     {
-        double u = (double)rng.rand();
+        double u = NumPyDraws.Rand(rng);
         double lb = searchSpaceBounds[0];
         double ub = searchSpaceBounds[1];
         double width = ub - lb;

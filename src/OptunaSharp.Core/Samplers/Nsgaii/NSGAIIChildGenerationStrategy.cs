@@ -86,7 +86,7 @@ public class NSGAIIChildGenerationStrategy
 
         // We choose a child based on the specified crossover method.
         OrderedDict<string, object?> childParams;
-        if ((double)_rng.Rng.rand() < _crossoverProb)
+        if (NumPyDraws.Rand(_rng.Rng) < _crossoverProb)
         {
             childParams = NsgaiiCrossover.PerformCrossover(
                 _crossover, study, parentPopulation, searchSpace, _rng.Rng, _swappingProb, dominates);
@@ -94,8 +94,8 @@ public class NSGAIIChildGenerationStrategy
         else
         {
             int parentPopulationSize = parentPopulation.Count;
-            var parentParams = parentPopulation[(int)_rng.Rng.randint(0, parentPopulationSize)].Params;
-            childParams = new OrderedDict<string, object?>();
+            var parentParams = parentPopulation[(int)NumPyDraws.RandInt(_rng.Rng, 0, parentPopulationSize)].Params;
+            childParams = new OrderedDict<string, object?>(searchSpace.Count);
             foreach (var name in searchSpace.Keys)
                 childParams[name] = parentParams[name];
         }
@@ -103,10 +103,10 @@ public class NSGAIIChildGenerationStrategy
         int nParams = childParams.Count;
         double mutationProb = _mutationProb ?? 1.0 / Math.Max(1.0, nParams);
 
-        var @params = new OrderedDict<string, object?>();
+        var @params = new OrderedDict<string, object?>(childParams.Count);
         foreach (var paramName in childParams.Keys)
         {
-            if ((double)_rng.Rng.rand() >= mutationProb)
+            if (NumPyDraws.Rand(_rng.Rng) >= mutationProb)
             {
                 @params[paramName] = childParams[paramName];
             }

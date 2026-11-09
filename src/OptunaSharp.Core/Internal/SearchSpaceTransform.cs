@@ -85,8 +85,23 @@ internal sealed class SearchSpaceTransform
     ///     Transform a parameter configuration from actual values to continuous space.
     /// </summary>
     /// <param name="parameters">A parameter configuration to transform.</param>
-    /// <returns>A 1-dimensional float64 array holding the transformed parameters.</returns>
+    /// <returns>A 1-dimensional float64 array holding the transformed parameters; the caller owns it and should dispose it.</returns>
+    /// <remarks>
+    ///     A caller that only needs the values should call <see cref="TransformValues" />: this overload wraps the same
+    ///     values in a NumSharp array, which waits for the finalizer when it is not disposed (plan 14).
+    /// </remarks>
+    /// <exception cref="NumSharp.TypeError">A numerical parameter value is not a real number.</exception>
     public NDArray Transform(IReadOnlyDictionary<string, object?> parameters)
+        => np.array(TransformValues(parameters));
+
+    /// <summary>
+    ///     Transform a parameter configuration from actual values to continuous space, as a managed array: the values
+    ///     <see cref="Transform" /> returns, without the NumSharp array around them.
+    /// </summary>
+    /// <param name="parameters">A parameter configuration holding every parameter of the search space.</param>
+    /// <returns>A new array of the transformed parameters, one entry per encoded column (one-hot columns for categoricals).</returns>
+    /// <exception cref="NumSharp.TypeError">A numerical parameter value is not a real number.</exception>
+    internal double[] TransformValues(IReadOnlyDictionary<string, object?> parameters)
     {
         int n = _rawBounds.GetLength(0);
         var transParams = new double[n];
@@ -124,21 +139,44 @@ internal sealed class SearchSpaceTransform
             }
         }
 
-        return np.array(transParams);
+        return transParams;
     }
 
     /// <summary>
     ///     Untransform a parameter configuration from continuous space to actual values.
     /// </summary>
-    /// <param name="transParams">A 1-dimensional array in the transformed space.</param>
+    /// <param name="transParams">A 1-dimensional array in the transformed space; any numeric dtype, read as float64.</param>
     /// <returns>An untransformed parameter configuration keyed by parameter name.</returns>
+    /// <remarks>
+    ///     Reads the values through NumPy's <c>astype(float64)</c> copy, which is disposed here, then untransforms them as
+    ///     <see cref="UntransformValues" /> does. A caller holding a managed float64 array should call that
+    ///     overload directly and skip the NumSharp copy.
+    /// </remarks>
     public OrderedDict<string, object?> Untransform(NDArray transParams)
     {
+        System.Diagnostics.Debug.Assert(transParams.shape.Length == 1 && transParams.shape[0] == _rawBounds.GetLength(0));
+
+        // astype copies by default, so the copy is this method's to dispose; left alone it would survive a collection on
+        // the finalization queue (plan 14).
+        double[] values;
+        using (NDArray asFloat64 = transParams.astype(np.float64))
+            values = asFloat64.ToArray<double>();
+        return UntransformValues(values);
+    }
+
+    /// <summary>
+    ///     Untransform a parameter configuration from continuous space to actual values, reading float64 values directly:
+    ///     the result <see cref="Untransform(NDArray)" /> gives for the same values, without a NumSharp array.
+    /// </summary>
+    /// <param name="transParams">One value per encoded column, in the transformed space; not modified.</param>
+    /// <returns>An untransformed parameter configuration keyed by parameter name, in search-space order.</returns>
+    /// <exception cref="System.InvalidOperationException">A distribution of the search space is not supported (cannot happen for a transform this class built).</exception>
+    internal OrderedDict<string, object?> UntransformValues(ReadOnlySpan<double> transParams)
+    {
         int n = _rawBounds.GetLength(0);
-        System.Diagnostics.Debug.Assert(transParams.shape.Length == 1 && transParams.shape[0] == n);
+        System.Diagnostics.Debug.Assert(transParams.Length == n);
 
-        var values = transParams.astype(np.float64).ToArray<double>();
-
+        ReadOnlySpan<double> values = transParams;
         if (_transform01)
         {
             var scaled = new double[n];
@@ -147,7 +185,9 @@ internal sealed class SearchSpaceTransform
             values = scaled;
         }
 
-        var parameters = new OrderedDict<string, object?>();
+        // Sized for the search space up front: the result is built on every untransform (per trial and per independent
+        // draw), and growing an OrderedDictionary from empty reallocates several times for a few dozen parameters.
+        var parameters = new OrderedDict<string, object?>(_searchSpace.Count);
 
         int column = 0;
         foreach (var (name, distribution) in _searchSpace)
@@ -160,10 +200,10 @@ internal sealed class SearchSpaceTransform
             {
                 // Select the highest rated one-hot encoding (np.argmax: first max wins).
                 int argmax = 0;
-                double best = values[encodedColumns[0]];
+                double best = values[(int)encodedColumns[0]];
                 for (int i = 1; i < encodedColumns.Length; i++)
                 {
-                    double v = values[encodedColumns[i]];
+                    double v = values[(int)encodedColumns[i]];
                     if (v > best)
                     {
                         best = v;
@@ -174,7 +214,7 @@ internal sealed class SearchSpaceTransform
             }
             else
             {
-                param = UntransformNumericalParam(values[encodedColumns[0]], distribution, _transformLog);
+                param = UntransformNumericalParam(values[(int)encodedColumns[0]], distribution, _transformLog);
             }
 
             parameters[name] = param;

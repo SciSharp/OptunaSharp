@@ -1,5 +1,6 @@
 using System;
 using NumSharp;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.Nsgaii;
 
@@ -46,7 +47,7 @@ public class VSBXCrossover : BaseCrossover
         double eta = _eta ?? (study.IsMultiObjective() ? 20.0 : 2.0);
 
         const double eps = 1e-10;
-        var us = rng.rand(n).ToArray<double>();
+        var us = NumPyDraws.Rand(rng, n);
         var beta1 = new double[n];
         var beta2 = new double[n];
         for (int j = 0; j < n; j++)
@@ -59,7 +60,7 @@ public class VSBXCrossover : BaseCrossover
         var p1 = parentsParams[1];
 
         var c1 = new double[n];
-        double u1 = (double)rng.rand();
+        double u1 = NumPyDraws.Rand(rng);
         for (int j = 0; j < n; j++)
         {
             c1[j] = u1 <= 0.5
@@ -68,7 +69,7 @@ public class VSBXCrossover : BaseCrossover
         }
 
         var c2 = new double[n];
-        double u2 = (double)rng.rand();
+        double u2 = NumPyDraws.Rand(rng);
         for (int j = 0; j < n; j++)
         {
             c2[j] = u2 <= 0.5

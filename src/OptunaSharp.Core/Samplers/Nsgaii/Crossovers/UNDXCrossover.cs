@@ -66,8 +66,8 @@ public class UNDXCrossover : BaseCrossover
 
         // Draw order: etas (n gaussians) then xi (1 gaussian) — Optuna passes the *variance* as the
         // normal `scale` argument, replicated verbatim.
-        var etas = rng.normal(0.0, Math.Pow(sigmaEta, 2.0), new Shape(n)).ToArray<double>();
-        double xi = (double)rng.normal(0.0, Math.Pow(_sigmaXi, 2.0));
+        var etas = NumPyDraws.Normal(rng, 0.0, Math.Pow(sigmaEta, 2.0), n);
+        double xi = NumPyDraws.Normal(rng, 0.0, Math.Pow(_sigmaXi, 2.0));
 
         var es = OrthonormalBasisVectorToPsl(parentsParams, n);  // Orthonormal basis orthogonal to psl.
 

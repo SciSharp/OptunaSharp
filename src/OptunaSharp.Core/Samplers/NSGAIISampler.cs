@@ -133,8 +133,11 @@ public class NSGAIISampler : BaseGASampler
     /// <inheritdoc />
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
     {
-        var searchSpace = new OrderedDict<string, BaseDistribution>();
-        foreach (var (name, distribution) in _searchSpace.Calculate(study))
+        var calculated = _searchSpace.Calculate(study);
+        // Sized for the whole calculated space: this runs on every trial, and growing the result from empty reallocated
+        // it several times for a few dozen parameters (plan 14).
+        var searchSpace = new OrderedDict<string, BaseDistribution>(calculated.Count);
+        foreach (var (name, distribution) in calculated)
         {
             // The untransform of _SearchSpaceTransform does not assume a single value, so single
             // value objects are sampled via sample_independent, not sample_relative.

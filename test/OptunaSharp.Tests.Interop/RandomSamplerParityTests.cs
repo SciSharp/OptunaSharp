@@ -105,6 +105,97 @@ public class RandomSamplerParityTests
         }
     }
 
+    /// <summary>
+    ///     Plan 14: <see cref="RandomSampler" /> now draws the transform's bound rows one at a time through
+    ///     <c>NumPyDraws.Uniform</c> instead of NumPy's array form (and creates no NumSharp arrays). This pins a long run over
+    ///     every distribution kind to live Optuna: one-hot categoricals with two choices and with five choices of mixed types
+    ///     (str, int, float, None), a log int spanning 1..2^40, a stepped int with negative bounds and a float spanning
+    ///     ±1e300, 300 trials per seed, every value compared through Python's <c>repr</c> (exact for floats).
+    /// </summary>
+    /// <param name="seed">The seed both samplers start from.</param>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0)]
+    [DataRow(31337)]
+    public void LongRun_AllDistributionKinds_IsBitIdentical_ToLiveOptuna(int seed)
+    {
+        PythonSession.EnsureBitExactHostOrInconclusive();
+        const int nTrials = 300;
+        string[] names = { "a", "b", "c", "d", "e", "f", "g", "h", "w" };
+
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        study.Optimize(t =>
+        {
+            double a = t.SuggestFloat("a", -10, 10);
+            t.SuggestFloat("b", 1e-5, 1e-1, log: true);
+            t.SuggestFloat("c", 0.1, 0.9, step: 0.2);
+            t.SuggestInt("d", 1, 100);
+            t.SuggestInt("e", 1, 1L << 40, log: true);
+            t.SuggestInt("f", -20, 20, step: 5);
+            t.SuggestCategorical("g", new[] { true, false });
+            t.SuggestCategorical("h", new OptunaSharp.Distributions.CategoricalChoice[]
+                { "x", 1L, 2.5, OptunaSharp.Distributions.CategoricalChoice.None, "y" });
+            t.SuggestFloat("w", -1e300, 1e300);
+            return a;
+        }, nTrials: nTrials);
+        var csharp = study.Trials
+            .Select(t => string.Join(" ", names.Select(n => ReprOf(t.Params[n]))))
+            .ToList();
+
+        var python = new List<string>();
+        using (Py.GIL())
+        {
+            using PyModule scope = Py.CreateScope();
+            scope.Exec(
+                "import optuna\n" +
+                "optuna.logging.set_verbosity(optuna.logging.WARNING)\n" +
+                "def objective(t):\n" +
+                "    a = t.suggest_float('a', -10, 10)\n" +
+                "    t.suggest_float('b', 1e-5, 1e-1, log=True)\n" +
+                "    t.suggest_float('c', 0.1, 0.9, step=0.2)\n" +
+                "    t.suggest_int('d', 1, 100)\n" +
+                "    t.suggest_int('e', 1, 2**40, log=True)\n" +
+                "    t.suggest_int('f', -20, 20, step=5)\n" +
+                "    t.suggest_categorical('g', [True, False])\n" +
+                "    t.suggest_categorical('h', ['x', 1, 2.5, None, 'y'])\n" +
+                "    t.suggest_float('w', -1e300, 1e300)\n" +
+                "    return a\n" +
+                $"study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed={seed}))\n" +
+                $"study.optimize(objective, n_trials={nTrials})\n" +
+                $"rows = [' '.join(repr(t.params[n]) for n in {PyList(names)}) for t in study.trials]\n");
+            using var rows = scope.Get("rows");
+            long count = rows.Length();
+            for (int i = 0; i < count; i++)
+            {
+                using var row = rows[i];
+                python.Add(row.As<string>());
+            }
+        }
+
+        python.Should().HaveCount(nTrials);
+        for (int i = 0; i < nTrials; i++)
+            csharp[i].Should().Be(python[i], $"seed {seed} trial {i} (a b c d e f g h w)");
+    }
+
+    /// <summary>Python's <c>repr</c> of a suggested external value, for the value kinds the long run suggests.</summary>
+    /// <param name="value">A trial's external parameter value.</param>
+    /// <returns>The text Python's <c>repr</c> prints for the same value.</returns>
+    /// <exception cref="NotSupportedException">The value is of a kind the long run never suggests.</exception>
+    private static string ReprOf(object? value) => value switch
+    {
+        null => "None",
+        bool b => b ? "True" : "False",
+        long l => l.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        double d => OptunaSharp.Internal.PythonRepr.FloatRepr(d),
+        string s => "'" + s + "'",
+        _ => throw new NotSupportedException(value.GetType().Name),
+    };
+
+    /// <summary>A Python list literal of the given names, for embedding in a script.</summary>
+    /// <param name="names">Parameter names without quotes or backslashes.</param>
+    /// <returns>The list literal, for example <c>['a', 'b']</c>.</returns>
+    private static string PyList(IEnumerable<string> names) => "[" + string.Join(", ", names.Select(n => "'" + n + "'")) + "]";
+
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void DistributionJson_IsByteIdentical_ToLiveOptuna()

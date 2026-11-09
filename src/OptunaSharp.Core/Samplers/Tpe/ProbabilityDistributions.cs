@@ -207,7 +207,7 @@ internal sealed class MixtureOfProductDistribution
             if (Distributions[i] is BatchedCategoricalDistributions cat)
             {
                 // active_weights = weights[active_indices, :]; rnd_quantile = rng.rand(batch_size).
-                var rndQuantile = rng.Rng.rand((long)batchSize).ToArray<double>();
+                var rndQuantile = NumPyDraws.Rand(rng.Rng, batchSize);
                 int nChoices = cat.Weights.GetLength(1);
                 for (int s = 0; s < batchSize; s++)
                 {
@@ -243,7 +243,7 @@ internal sealed class MixtureOfProductDistribution
             int nNum = numericalDists.Count;
             int total = nNum * batchSize;
             // _truncnorm.rvs draws random_state.uniform(0, 1, size=(n_num, batch)) in C order.
-            var quantiles = rng.Rng.random_sample((long)total).ToArray<double>();
+            var quantiles = NumPyDraws.RandomSample(rng.Rng, total);
 
             var aFlat = new double[total];
             var bFlat = new double[total];
@@ -324,7 +324,7 @@ internal sealed class MixtureOfProductDistribution
         for (int i = 0; i < n; i++)
             cdf[i] /= last;
 
-        var u = rng.Rng.random_sample((long)size).ToArray<double>();
+        var u = NumPyDraws.RandomSample(rng.Rng, size);
         var result = new int[size];
         for (int j = 0; j < size; j++)
             result[j] = BisectRight(cdf, u[j]);

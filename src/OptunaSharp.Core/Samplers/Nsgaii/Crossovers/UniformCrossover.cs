@@ -33,7 +33,7 @@ public class UniformCrossover : BaseCrossover
         int nParams = searchSpaceBounds.GetLength(0);
         // masks = (rng.rand(n_params) >= swapping_prob).astype(int)
         // child_params = parents_params[masks, range(n_params)]
-        var r = rng.rand(nParams).ToArray<double>();
+        var r = NumPyDraws.Rand(rng, nParams);
         var child = new double[nParams];
         for (int j = 0; j < nParams; j++)
         {

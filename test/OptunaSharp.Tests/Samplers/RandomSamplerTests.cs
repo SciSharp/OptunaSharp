@@ -130,4 +130,63 @@ public class RandomSamplerTests
         act.Should().Throw<NumSharp.ValueError>()
             .WithMessage("`IntersectionSearchSpace` cannot handle multiple studies.");
     }
+
+    /// <summary>
+    ///     Plan 14: <see cref="RandomSampler.SampleIndependent" /> now draws the transform's bound rows one at a time instead
+    ///     of NumPy's array form <c>rng.uniform(trans.bounds[:, 0], trans.bounds[:, 1])</c>. This replays the array form it
+    ///     replaced, on a generator seeded alike, for every distribution kind (one-hot categoricals with two and five choices
+    ///     of mixed types included) and asserts every suggested value is identical, so the generator also stays in step from
+    ///     one suggestion to the next across a whole study.
+    /// </summary>
+    /// <param name="seed">The sampler's seed, and the replay's.</param>
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(123)]
+    [DataRow(20260830)]
+    public void SampleIndependent_RowByRow_Equals_TheArrayDrawItReplaced(int seed)
+    {
+        var distributions = new (string Name, BaseDistribution Distribution)[]
+        {
+            ("f", new FloatDistribution(-10, 10)),
+            ("fl", new FloatDistribution(1e-5, 1e-1, log: true)),
+            ("fs", new FloatDistribution(0.1, 0.9, step: 0.2)),
+            ("i", new IntDistribution(1, 100)),
+            ("il", new IntDistribution(1, 128, log: true)),
+            ("is", new IntDistribution(0, 20, step: 5)),
+            ("c2", new CategoricalDistribution(new CategoricalChoice[] { true, false })),
+            ("c5", new CategoricalDistribution(new CategoricalChoice[] { "a", 1L, 2.5, CategoricalChoice.None, "e" })),
+            ("wide", new FloatDistribution(-1e300, 1e300)),
+        };
+        var study = Optuna.CreateStudy(sampler: new RandomSampler(seed));
+        study.Optimize(t =>
+        {
+            foreach (var (name, distribution) in distributions)
+                t.Suggest(name, distribution);
+            return 0.0;
+        }, nTrials: 60);
+
+        var replay = new LazyRandomState(seed);
+        foreach (var trial in study.Trials)
+        {
+            foreach (var (name, distribution) in distributions)
+            {
+                // The pre-plan-14 body of SampleIndependent, verbatim apart from disposing its arrays.
+                var trans = new OptunaSharp.Internal.SearchSpaceTransform(
+                    new OrderedDict<string, BaseDistribution> { [name] = distribution });
+                using NumSharp.NDArray bounds = trans.Bounds;
+                using NumSharp.NDArray lows = bounds[":,0"];
+                using NumSharp.NDArray highs = bounds[":,1"];
+                using NumSharp.NDArray draws = replay.Rng.uniform(lows, highs);
+                object? expected = trans.Untransform(draws)[name];
+                if (expected is CategoricalChoice choice)
+                    expected = choice.Value;
+
+                object? actual = trial.Params[name];
+                if (expected is double d)
+                    BitConverter.DoubleToInt64Bits((double)actual!).Should().Be(BitConverter.DoubleToInt64Bits(d), $"trial {trial.Number} {name}");
+                else
+                    actual.Should().Be(expected, $"trial {trial.Number} {name}");
+            }
+        }
+    }
 }

@@ -163,4 +163,105 @@ public class SearchSpaceTransformTests
         trans.Untransform(NumSharp.np.array(new[] { 0.4, 0.4, 0.1 }))["c"]
             .Should().Be("a", "np.argmax returns the first maximum");
     }
+
+    /// <summary>
+    ///     Plan 14: <see cref="SearchSpaceTransform.TransformValues" /> returns exactly the values <see cref="SearchSpaceTransform.Transform" />
+    ///     wraps in a NumSharp array, for the mixed space, with and without the unit-cube rescaling, over many random
+    ///     configurations (one-hot categorical columns included).
+    /// </summary>
+    /// <param name="transform01">Whether the transform rescales numerical columns to the unit cube.</param>
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void TransformValues_Equal_Transform_BitForBit(bool transform01)
+    {
+        var space = MixedSpace();
+        var trans = new SearchSpaceTransform(space, transform01: transform01);
+        var rng = new Random(7);
+        string[] choices = { "u", "v", "w" };
+        for (int round = 0; round < 200; round++)
+        {
+            var config = new OrderedDict<string, object?>
+            {
+                ["f"] = -5.0 + 10.0 * rng.NextDouble(),
+                ["fl"] = Math.Exp(Math.Log(1e-3) + (Math.Log(10.0) - Math.Log(1e-3)) * rng.NextDouble()),
+                ["fs"] = 0.25 * rng.Next(0, 5),
+                ["i"] = (long)rng.Next(1, 21),
+                ["il"] = (long)rng.Next(1, 65),
+                ["c"] = choices[rng.Next(0, 3)],
+            };
+            using NumSharp.NDArray expected = trans.Transform(config);
+            double[] want = expected.ToArray<double>();
+            double[] actual = trans.TransformValues(config);
+            actual.Should().HaveCount(want.Length);
+            for (int i = 0; i < want.Length; i++)
+                BitConverter.DoubleToInt64Bits(actual[i]).Should().Be(BitConverter.DoubleToInt64Bits(want[i]), $"column {i}, round {round}");
+        }
+    }
+
+    /// <summary>
+    ///     Plan 14: <see cref="SearchSpaceTransform.UntransformValues" /> returns exactly what <see cref="SearchSpaceTransform.Untransform(NumSharp.NDArray)" />
+    ///     returns for the same float64 values (same keys in the same order, same values and types), with and without the
+    ///     unit-cube rescaling, including coordinates outside the bounds that the untransform clamps and one-hot ties.
+    /// </summary>
+    /// <param name="transform01">Whether the transform rescales numerical columns to the unit cube.</param>
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void UntransformValues_Equal_Untransform_ForTheSameValues(bool transform01)
+    {
+        var trans = new SearchSpaceTransform(MixedSpace(), transform01: transform01);
+        double[,] bounds = trans.RawBounds;
+        int n = bounds.GetLength(0);
+        var rng = new Random(11);
+        for (int round = 0; round < 300; round++)
+        {
+            var values = new double[n];
+            for (int i = 0; i < n; i++)
+            {
+                // Mostly inside the box, sometimes a little outside (the clamping branches), sometimes a tie (argmax).
+                double low = transform01 ? 0.0 : bounds[i, 0];
+                double high = transform01 ? 1.0 : bounds[i, 1];
+                values[i] = round % 7 == 0 ? 0.5 * (low + high) : low + (high - low) * (1.2 * rng.NextDouble() - 0.1);
+            }
+            using NumSharp.NDArray array = NumSharp.np.array(values);
+            var expected = trans.Untransform(array);
+            var actual = trans.UntransformValues(values);
+            actual.Keys.Should().Equal(expected.Keys);
+            foreach (var (name, value) in expected)
+            {
+                actual[name]!.GetType().Should().Be(value!.GetType(), $"{name}, round {round}");
+                if (value is double d)
+                    BitConverter.DoubleToInt64Bits((double)actual[name]!).Should().Be(BitConverter.DoubleToInt64Bits(d), $"{name}, round {round}");
+                else
+                    actual[name].Should().Be(value, $"{name}, round {round}");
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Plan 14: the NumSharp overload still reads any numeric dtype through <c>astype(float64)</c> (now disposing that copy):
+    ///     a float32 and an int64 input untransform as their float64 conversions do, and the caller's array stays usable.
+    /// </summary>
+    [TestMethod]
+    public void Untransform_NonFloat64Input_IsReadThroughAFloat64Copy_AndTheInputSurvives()
+    {
+        var space = new OrderedDict<string, BaseDistribution>
+        {
+            ["x"] = new FloatDistribution(-10.0, 10.0),
+            ["n"] = new IntDistribution(0, 9),
+        };
+        var trans = new SearchSpaceTransform(space);
+        using NumSharp.NDArray asFloat32 = NumSharp.np.array(new[] { 2.5f, 3.4f });
+        var fromFloat32 = trans.Untransform(asFloat32);
+        fromFloat32["x"].Should().Be((double)2.5f);
+        fromFloat32["n"].Should().Be(3L);
+        asFloat32.ToArray<float>().Should().Equal(2.5f, 3.4f);
+
+        using NumSharp.NDArray asInt64 = NumSharp.np.array(new[] { 4L, 7L });
+        var fromInt64 = trans.Untransform(asInt64);
+        fromInt64["x"].Should().Be(4.0);
+        fromInt64["n"].Should().Be(7L);
+        asInt64.ToArray<long>().Should().Equal(4L, 7L);
+    }
 }

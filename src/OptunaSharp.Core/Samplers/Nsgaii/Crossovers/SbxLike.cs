@@ -1,4 +1,5 @@
 using NumSharp;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.Nsgaii;
 
@@ -29,9 +30,9 @@ internal static class SbxLike
         var child2 = new double[n];
         for (int i = 0; i < n; i++)
         {
-            if ((double)rng.rand() < useChildGeneProb)
+            if (NumPyDraws.Rand(rng) < useChildGeneProb)
             {
-                if ((double)rng.rand() >= uniformCrossoverProb)
+                if (NumPyDraws.Rand(rng) >= uniformCrossoverProb)
                 {
                     child1[i] = c1[i];
                     child2[i] = c2[i];
@@ -44,7 +45,7 @@ internal static class SbxLike
             }
             else
             {
-                if ((double)rng.rand() >= uniformCrossoverProb)
+                if (NumPyDraws.Rand(rng) >= uniformCrossoverProb)
                 {
                     child1[i] = parent0[i];
                     child2[i] = parent1[i];
@@ -57,6 +58,6 @@ internal static class SbxLike
             }
         }
 
-        return (double)rng.rand() < 0.5 ? child1 : child2;
+        return NumPyDraws.Rand(rng) < 0.5 ? child1 : child2;
     }
 }

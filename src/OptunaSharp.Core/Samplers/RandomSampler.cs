@@ -1,5 +1,4 @@
 using System;
-using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
@@ -61,16 +60,29 @@ public class RandomSampler : BaseSampler
         => new();
 
     /// <inheritdoc />
+    /// <remarks>
+    ///     Optuna draws <c>rng.uniform(trans.bounds[:, 0], trans.bounds[:, 1])</c> over the transform's bound rows (one row
+    ///     for a numerical parameter, one per choice for a categorical one) and untransforms the result. This draws the
+    ///     same rows one at a time through <see cref="NumPyDraws.Uniform" />: each row is NumPy's <c>low + (high - low) * U</c>
+    ///     from the same uniform in the same order, so the value and the generator's next state are Optuna's bit for bit
+    ///     (pinned live by <c>RandomSamplerParityTests</c>). The array form's only other difference, raising before any draw
+    ///     when some range is infinite, cannot arise here: a numerical parameter has one row and every categorical row is
+    ///     [0, 1].
+    ///     <para>Why not the array form (plan 14): it built five NumSharp arrays per suggestion (the bounds, two column
+    ///     views, the draws and the untransform's float64 copy) and left them to the finalizer, which made GC pauses 47 %
+    ///     of a 40-parameter random search.</para>
+    /// </remarks>
     public override object? SampleIndependent(
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
-        var searchSpace = new OrderedDict<string, BaseDistribution> { [paramName] = paramDistribution };
+        var searchSpace = new OrderedDict<string, BaseDistribution>(1) { [paramName] = paramDistribution };
         var trans = new SearchSpaceTransform(searchSpace);
-        var bounds = trans.Bounds;
-        // uniform(bounds[:, 0], bounds[:, 1]) — one MT19937 draw per bound row, in row order,
-        // exactly as NumPy broadcasts.
-        var transParams = _rng.Rng.uniform(bounds[":,0"], bounds[":,1"]);
+        // RawBounds is trans.bounds here: this transform does not rescale to the unit cube.
+        double[,] bounds = trans.RawBounds;
+        var transParams = new double[bounds.GetLength(0)];
+        for (int row = 0; row < transParams.Length; row++)
+            transParams[row] = NumPyDraws.Uniform(_rng.Rng, bounds[row, 0], bounds[row, 1]);
 
-        return trans.Untransform(transParams)[paramName];
+        return trans.UntransformValues(transParams)[paramName];
     }
 }

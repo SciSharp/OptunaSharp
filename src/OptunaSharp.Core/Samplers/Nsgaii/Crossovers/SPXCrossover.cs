@@ -1,5 +1,6 @@
 using System;
 using NumSharp;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.Nsgaii;
 
@@ -43,7 +44,7 @@ public class SPXCrossover : BaseCrossover
         }
 
         // rs = np.power(rng.rand(n), 1 / (np.arange(n) + 1))  (Equation (2)).
-        var rand = rng.rand(n).ToArray<double>();
+        var rand = NumPyDraws.Rand(rng, n);
         var rs = new double[n];
         for (int i = 0; i < n; i++)
             rs[i] = Math.Pow(rand[i], 1.0 / (i + 1));

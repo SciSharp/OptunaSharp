@@ -1,5 +1,6 @@
 using System;
 using NumSharp;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.Nsgaii;
 
@@ -29,7 +30,7 @@ public class BLXAlphaCrossover : BaseCrossover
         double[][] parentsParams, NumPyRandom rng, Study study, double[,] searchSpaceBounds)
     {
         int n = searchSpaceBounds.GetLength(0);
-        var r = rng.rand(n).ToArray<double>();
+        var r = NumPyDraws.Rand(rng, n);
         var child = new double[n];
         for (int j = 0; j < n; j++)
         {

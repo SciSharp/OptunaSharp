@@ -310,7 +310,9 @@ public class CmaEsSampler : BaseSampler
         var restoredOptimizer = RestoreOptimizer();
         var optimizer = restoredOptimizer ?? InitOptimizer(trans, study.Direction, searchSpace);
 
-        int nDim = (int)trans.Bounds.shape[0];
+        // trans.bounds has one row per encoded column; its row count is read from the raw bounds instead of building the
+        // NumSharp bounds array only for its shape (plan 14).
+        int nDim = trans.RawBounds.GetLength(0);
         if (optimizer.Dim != nDim)
         {
             if (_warnIndependentSampling)
@@ -337,7 +339,7 @@ public class CmaEsSampler : BaseSampler
                 double[] x = optimizer is CmaWm
                     ? ((System.Collections.IEnumerable)t.SystemAttrs["x_for_tell"]!)
                         .Cast<object?>().Select(v => Convert.ToDouble(v)).ToArray()
-                    : trans.Transform(t.Params).ToArray<double>();
+                    : trans.TransformValues(t.Params);
                 double y = study.Direction == StudyDirection.Minimize ? t.Value!.Value : -t.Value!.Value;
                 solutions.Add((x, y));
             }
@@ -369,7 +371,7 @@ public class CmaEsSampler : BaseSampler
         }
 
         // Caution: optimizer should update its seed value.
-        int seed = (int)_cmaRng.Rng.randint(1, 65536) + trial.Number;
+        int seed = (int)NumPyDraws.RandInt(_cmaRng.Rng, 1, 65536) + trial.Number;
         optimizer.ReseedRng(seed);
         double[] cmaParams;
         if (optimizer is CmaWm cmaWm)
@@ -388,9 +390,8 @@ public class CmaEsSampler : BaseSampler
 
         study.Storage.SetTrialSystemAttr(trial.TrialId, AttrKeyGeneration, optimizer.Generation);
 
-        // View the candidate zero-copy; Untransform copies it into a managed dict, so dispose here.
-        using NDArray nd = np.array(cmaParams, copy: false);
-        return trans.Untransform(nd);
+        // Untransform the managed candidate as it is: Optuna's trans.untransform(params), without a NumSharp copy.
+        return trans.UntransformValues(cmaParams);
     }
 
     private string AttrKeyGeneration => _attrPrefix + "generation";

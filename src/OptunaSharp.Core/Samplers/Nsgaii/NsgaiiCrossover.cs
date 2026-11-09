@@ -81,7 +81,7 @@ internal static class NsgaiiCrossover
         OrderedDict<string, BaseDistribution> numericalSearchSpace,
         SearchSpaceTransform? numericalTransform)
     {
-        var childParams = new OrderedDict<string, object?>();
+        var childParams = new OrderedDict<string, object?>(categoricalSearchSpace.Count + numericalSearchSpace.Count);
 
         if (categoricalSearchSpace.Count > 0)
         {
@@ -100,21 +100,18 @@ internal static class NsgaiiCrossover
             return childParams;
 
         // The following is applied only for numerical parameters.
-        var numKeys = numericalSearchSpace.Keys.ToList();
+        // Optuna transforms each parent's numerical params ({p: parent.params[p] for p in numerical_search_space}). The
+        // transform reads exactly those names from the parent's own params, so it is given them directly: no per-parent
+        // dictionary copy and no NumSharp array per parent (plan 14), the same values in the same column order.
         var parentsNumerical = new double[parents.Count][];
         for (int i = 0; i < parents.Count; i++)
-        {
-            var row = new OrderedDict<string, object?>();
-            foreach (var k in numKeys)
-                row[k] = parents[i].Params[k];
-            parentsNumerical[i] = numericalTransform.Transform(row).ToArray<double>();
-        }
+            parentsNumerical[i] = numericalTransform.TransformValues(parents[i].Params);
 
         var childNumericalArray = crossover.Crossover(
             parentsNumerical, rng, study, numericalTransform.RawBounds);
-        // View the crossover child zero-copy; Untransform copies it out, so dispose here.
-        using NDArray childNd = np.array(childNumericalArray, copy: false);
-        var childNumericalParams = numericalTransform.Untransform(childNd);
+        // Read the crossover child as it is: the untransform Optuna applies, without wrapping the managed child in a
+        // NumSharp array first.
+        var childNumericalParams = numericalTransform.UntransformValues(childNumericalArray);
         foreach (var (k, v) in childNumericalParams)
             childParams[k] = v;
 
@@ -135,11 +132,15 @@ internal static class NsgaiiCrossover
         NumPyRandom rng,
         Func<FrozenTrial, FrozenTrial, IReadOnlyList<StudyDirection>, bool> dominates)
     {
-        var parents = new List<FrozenTrial>();
+        var parents = new List<FrozenTrial>(crossover.NParents);
         var selectedIds = new HashSet<int>();
         for (int i = 0; i < crossover.NParents; i++)
         {
-            var remaining = parentPopulation.Where(t => !selectedIds.Contains(t.TrialId)).ToList();
+            // Optuna's `[t for t in parent_population if t._trial_id not in parent_ids]`. Before the first pick nothing is
+            // excluded, so that list is the population itself, in its order: it is used as it is instead of being copied.
+            IReadOnlyList<FrozenTrial> remaining = selectedIds.Count == 0
+                ? parentPopulation
+                : parentPopulation.Where(t => !selectedIds.Contains(t.TrialId)).ToList();
             var parent = SelectParent(study, remaining, rng, dominates);
             parents.Add(parent);
             selectedIds.Add(parent.TrialId);
@@ -160,8 +161,8 @@ internal static class NsgaiiCrossover
         Func<FrozenTrial, FrozenTrial, IReadOnlyList<StudyDirection>, bool> dominates)
     {
         int populationSize = parentPopulation.Count;
-        var candidate0 = parentPopulation[(int)rng.randint(0, populationSize)];
-        var candidate1 = parentPopulation[(int)rng.randint(0, populationSize)];
+        var candidate0 = parentPopulation[(int)NumPyDraws.RandInt(rng, 0, populationSize)];
+        var candidate1 = parentPopulation[(int)NumPyDraws.RandInt(rng, 0, populationSize)];
 
         // TODO(ohta): Consider crowding distance.
         return dominates(candidate0, candidate1, study.Directions) ? candidate0 : candidate1;
@@ -197,7 +198,7 @@ internal static class NsgaiiCrossover
         object?[] parent0, object?[] parentLast, NumPyRandom rng, double swappingProb, int nCategorical)
     {
         // masks = (rng.rand(n) >= swapping_prob).astype(int); child = parent_params[masks, range(n)].
-        var r = rng.rand(nCategorical).ToArray<double>();
+        var r = NumPyDraws.Rand(rng, nCategorical);
         var child = new object?[nCategorical];
         for (int j = 0; j < nCategorical; j++)
             child[j] = r[j] >= swappingProb ? parentLast[j] : parent0[j];
