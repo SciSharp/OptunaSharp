@@ -129,4 +129,45 @@ public class Run2SamplerParityBugTests
             ((double)trial.Params["v5"]!).Should().Be(0.02621137972316322, sampler.GetType().Name);
         }
     }
+
+    /// <summary>
+    ///     QA-60: CMA-ES with margin feeds <c>CMAwM.tell</c> the raw <c>x_for_tell</c> vectors the generation's trials
+    ///     stored. When the search space loses a dimension before the first generation is told (here <c>y</c>'s range
+    ///     changes on trial 2, so the intersection search space keeps only <c>x</c> and a new one-dimensional optimizer
+    ///     starts at generation 0), that generation mixes two-element and one-element vectors. Optuna's
+    ///     <c>np.array([s[0] for s in solutions])</c> refuses the ragged list and the trial fails with <c>ValueError:
+    ///     setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions.
+    ///     …</c>; the port's <c>Cma.Tell</c> reads the first <c>n_dim</c> entries of each vector, so the old
+    ///     two-dimensional points are told with their first coordinate standing for a different parameter, and the run
+    ///     carries on.
+    /// </summary>
+    /// <remarks>
+    ///     Optuna 5.0.0 / cmaes 0.13.1, seed 0, 12 trials (<c>x</c> int in [0, 10], <c>y</c> float in [0, 1], [0, 1.5]
+    ///     on trial 2 only): population 3 raises at trial 4, population 4 at trial 5 (the inhomogeneous-shape error),
+    ///     population 2 at trial 3 (<c>non-broadcastable output operand with shape (1,) doesn't match the broadcast
+    ///     shape (2,)</c>, the uniform-length variant). The port finishes all 12 trials in each case. Optuna's crash is
+    ///     arguably a defect of its own, but the port's silent misaligned update is no better; the owner decides whether
+    ///     to raise as Optuna does or to guard the tell. Found by the dynamic-range program fuzz (11 of 68 CMA-ES
+    ///     programs, all with margin).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void CmaWithMargin_SearchSpaceShrinksInFirstGeneration_RaisesLikeOptuna()
+    {
+        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(withMargin: true, seed: 0, popsize: 3));
+        System.Action run = () =>
+        {
+            for (int i = 0; i < 12; i++)
+            {
+                var trial = study.Ask();
+                long x = trial.SuggestInt("x", 0, 10);
+                // The range changes once, so `y` leaves the intersection search space from trial 2 on.
+                double y = trial.SuggestFloat("y", 0.0, i == 2 ? 1.5 : 1.0);
+                study.Tell(trial, x + y);
+            }
+        };
+        run.Should().Throw<NumSharp.ValueError>()
+            .WithMessage("setting an array element with a sequence.*inhomogeneous shape*");
+        study.Trials.Should().HaveCount(5, "Optuna fails on the fifth ask (trial 4)");
+    }
 }
