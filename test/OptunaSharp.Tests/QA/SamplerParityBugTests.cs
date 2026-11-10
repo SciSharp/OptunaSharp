@@ -435,10 +435,13 @@ public class SamplerParityBugTests
     ///     Optuna: 2 of 2 start points NaN). For an <c>IntDistribution(0, 20)</c> (21 grid points, more than the 16 of
     ///     the exhaustive search) <c>_discrete_line_search</c> calls <c>minimize_scalar(method="brent")</c>, whose bracket
     ///     check raises the message below — its own comment says the bracket is valid only "if fval is finite". The
-    ///     port's <c>BrentMinimizer.MinimizeScalar</c> has the same check, so a NaN does not reach it the same way; the
-    ///     divergence's root cause in the port was not located during the run. With a float parameter both sides return
-    ///     the same point (<c>0.7903830111026764</c>). Exotic input (values near the float maximum); found by the D94
-    ///     probe.
+    ///     port's <c>BrentMinimizer.MinimizeScalar</c> has the same check, but the NaN never reaches it: the LogEI
+    ///     threshold is <c>standardized_score_vals[:, 0].max()</c>, which NumPy returns as NaN when the column holds a
+    ///     NaN, while the port's <c>GPSampler.ColumnMax</c> skips NaNs (<c>if (v &gt; max)</c> from <c>-inf</c>) and returns
+    ///     <c>-inf</c>, so its acquisition stays finite. Root cause located by the 2026-11-10 run (E12): patching Optuna's
+    ///     <c>LogEI</c> to receive <c>-inf</c> for a NaN threshold makes Optuna return <c>16</c> too. With a float
+    ///     parameter both sides return the same point (<c>0.7903830111026764</c>). Exotic input (values near the float
+    ///     maximum); found by the D94 probe.
     /// </remarks>
     [TestMethod]
     [OpenBugs]
