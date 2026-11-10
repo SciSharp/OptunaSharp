@@ -151,4 +151,39 @@ public class Run2CliParityBugTests
         trials[0].State.Should().Be(TrialState.Fail);
         trials[1].State.Should().Be(TrialState.Pruned);
     }
+
+    /// <summary>
+    ///     QA-64: <c>--sampler-kwargs</c> values that are JSON objects or arrays must reach the sampler, as Optuna's
+    ///     <c>getattr(optuna.samplers, name)(**kwargs)</c> passes them. The port's <c>SamplerFactory.TryCoerce</c> binds
+    ///     only scalars (bool, string, int, long, double, float, enums), so <c>GridSampler</c>'s <c>search_space</c>,
+    ///     <c>CmaEsSampler</c>'s <c>x0</c> and <c>NSGAIIISampler</c>'s <c>reference_points</c> make the command fail with
+    ///     <c>Could not construct sampler 'GridSampler' from the given --sampler-kwargs ({search_space}).</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Optuna 5.0.0: <c>optuna ask … --search-space '{"x": FloatDistribution(0, 1)}' --sampler GridSampler
+    ///     --sampler-kwargs '{"search_space": {"x": [0.5]}}'</c> prints <c>{"number": 0, "params": {"x": 0.5}}</c>;
+    ///     <c>--sampler CmaEsSampler --sampler-kwargs '{"x0": {"x": 0.25}, "sigma0": 0.1, "seed": 1}'</c> and
+    ///     <c>--sampler NSGAIIISampler --sampler-kwargs '{"reference_points": [[1.0]], "seed": 1}'</c> ask normally
+    ///     (exit 0). The port exits 1 for all three. GridSampler is the natural CLI sampler for a shell-driven grid sweep.
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void Ask_StructuredSamplerKwargs_ConstructTheSamplerLikeOptuna()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"optunasharp-cli-qa64-{Guid.NewGuid():N}.db");
+        _tempFiles.Add(path);
+        string url = "sqlite:///" + path.Replace('\\', '/');
+        const string space =
+            "{\"x\": {\"name\": \"FloatDistribution\", \"attributes\": {\"low\": 0.0, \"high\": 1.0, \"step\": null, \"log\": false}}}";
+        Run(out _, "create-study", "--storage", url, "--study-name", "s");
+
+        string grid = Run(out int gridExit, "ask", "--storage", url, "--study-name", "s", "--search-space", space,
+            "--sampler", "GridSampler", "--sampler-kwargs", "{\"search_space\": {\"x\": [0.5]}}");
+        Run(out int cmaExit, "ask", "--storage", url, "--study-name", "s", "--search-space", space,
+            "--sampler", "CmaEsSampler", "--sampler-kwargs", "{\"x0\": {\"x\": 0.25}, \"sigma0\": 0.1, \"seed\": 1}");
+
+        gridExit.Should().Be(0);
+        grid.Should().Be("{\"number\": 0, \"params\": {\"x\": 0.5}}\n");
+        cmaExit.Should().Be(0);
+    }
 }
