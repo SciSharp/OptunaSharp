@@ -90,4 +90,35 @@ public class Run2StorageParityBugTests
                 File.Delete(file);
         }
     }
+
+    /// <summary>
+    ///     QA-66: two storage-level exceptions differ from Optuna's. <c>get_trial_param</c> for a parameter the trial
+    ///     does not have raises Python's <c>KeyError</c> (the record's own dictionary lookup) on the in-memory and the
+    ///     journal storage; the port raises <see cref="System.Collections.Generic.KeyNotFoundException" />, which a
+    ///     <c>catch (KeyError)</c> written against the port's other storage errors does not catch. And the storages raise
+    ///     <c>DuplicatedStudyError</c> without a message (<c>raise DuplicatedStudyError</c>), so <c>str(e)</c> is empty;
+    ///     the port's carries .NET's default text.
+    /// </summary>
+    /// <remarks>
+    ///     Found by a storage API script (every <c>BaseStorage</c> method with valid and invalid ids, finished trials,
+    ///     incompatible distributions) on memory / journal / SQLite in both languages: every other result and message
+    ///     matched, storage by storage (<c>No study with study_id 999 exists.</c> in memory, <c>Record does not
+    ///     exist.</c> in the journal and SQLite, the journal's bare <c>KeyError: 999</c>, the journal still returning a
+    ///     deleted study's trial). Users reach these only by calling the storage directly: <c>create_study</c> replaces
+    ///     the empty <c>DuplicatedStudyError</c> with its own message, which the port copies. NIT.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void StorageLevelErrors_MissingParamAndDuplicatedStudy_MatchOptuna()
+    {
+        var storage = new InMemoryStorage();
+        int studyId = storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "a");
+        int trialId = storage.CreateNewTrial(studyId);
+
+        System.Action missingParam = () => storage.GetTrialParam(trialId, "missing");
+        missingParam.Should().Throw<NumSharp.KeyError>("Optuna raises KeyError('missing')");
+
+        System.Action duplicate = () => storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "a");
+        duplicate.Should().Throw<DuplicatedStudyError>().Which.Message.Should().BeEmpty("str(DuplicatedStudyError()) is ''");
+    }
 }
