@@ -148,7 +148,9 @@ public class Run2SamplerParityBugTests
     ///     shape (2,)</c>, the uniform-length variant). The port finishes all 12 trials in each case. Optuna's crash is
     ///     arguably a defect of its own, but the port's silent misaligned update is no better; the owner decides whether
     ///     to raise as Optuna does or to guard the tell. Found by the dynamic-range program fuzz (11 of 68 CMA-ES
-    ///     programs, all with margin).
+    ///     programs, all with margin), then by a log-stream comparison with a merely conditional parameter: any
+    ///     parameter that only some trials suggest makes Optuna's CMA-ES-with-margin raise at the end of the first
+    ///     generation, which makes this the common path, not an exotic one.
     /// </remarks>
     [TestMethod]
     [OpenBugs]
@@ -169,5 +171,22 @@ public class Run2SamplerParityBugTests
         run.Should().Throw<NumSharp.ValueError>()
             .WithMessage("setting an array element with a sequence.*inhomogeneous shape*");
         study.Trials.Should().HaveCount(5, "Optuna fails on the fifth ask (trial 4)");
+
+        // The same happens with a conditional parameter, no range change needed: `y` exists on even trials only, so the
+        // intersection search space drops it once trial 1 completes. Optuna raises at trial 4 for seeds 0, 1 and 2.
+        var conditional = Optuna.CreateStudy(sampler: new CmaEsSampler(withMargin: true, seed: 0, popsize: 3));
+        System.Action runConditional = () =>
+        {
+            for (int i = 0; i < 20; i++)
+            {
+                var trial = conditional.Ask();
+                long x = trial.SuggestInt("x", 0, 10);
+                double y = i % 2 == 0 ? trial.SuggestFloat("y", 0.0, 1.0) : 0.0;
+                conditional.Tell(trial, x + y);
+            }
+        };
+        runConditional.Should().Throw<NumSharp.ValueError>()
+            .WithMessage("setting an array element with a sequence.*inhomogeneous shape*");
+        conditional.Trials.Should().HaveCount(5);
     }
 }
