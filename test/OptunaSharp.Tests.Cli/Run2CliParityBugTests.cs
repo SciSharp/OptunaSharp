@@ -186,4 +186,55 @@ public class Run2CliParityBugTests
         grid.Should().Be("{\"number\": 0, \"params\": {\"x\": 0.5}}\n");
         cmaExit.Should().Be(0);
     }
+
+    /// <summary>
+    ///     QA-65: Optuna's <c>--log-file</c> attaches a <c>logging.FileHandler</c> to Python's ROOT logger, but the
+    ///     <c>optuna</c> logger is configured with <c>propagate = False</c>, so none of Optuna's records reach it and the
+    ///     file stays empty; the port attaches its file handler to Optuna's own logger, so the file receives every log
+    ///     line. An Optuna defect the port does not copy; the owner decides (as for QA-46).
+    /// </summary>
+    /// <remarks>
+    ///     Measured with Optuna 5.0.0: <c>optuna --log-file f.log create-study …</c> leaves <c>f.log</c> at 0 bytes, also
+    ///     with <c>-v</c> and with <c>--debug</c> on a failing <c>delete-study</c>; stderr still shows the log lines (the
+    ///     <c>optuna</c> logger's own handler). <c>optunasharp --log-file f.log create-study …</c> writes
+    ///     <c>[I …] A new study created in RDB with name: f</c>. The CLI runs as a separate process because its log-file
+    ///     handler is never detached and would capture later tests' logs.
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void LogFile_ReceivesNoOptunaRecords_LikeOptuna()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"optunasharp-cli-qa65-{Guid.NewGuid():N}.db");
+        string logFile = Path.Combine(Path.GetTempPath(), $"optunasharp-cli-qa65-{Guid.NewGuid():N}.log");
+        _tempFiles.Add(path);
+        _tempFiles.Add(logFile);
+        string url = "sqlite:///" + path.Replace('\\', '/');
+
+        string host = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") is { Length: > 0 } h ? h : "dotnet";
+        var psi = new System.Diagnostics.ProcessStartInfo(host)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (string a in new[]
+                 {
+                     Path.Combine(AppContext.BaseDirectory, "OptunaSharp.Cli.dll"),
+                     "--log-file", logFile, "create-study", "--storage", url, "--study-name", "f",
+                 })
+            psi.ArgumentList.Add(a);
+        using (var process = System.Diagnostics.Process.Start(psi)!)
+        {
+            // Drain both pipes before waiting, so the child never blocks on a full pipe.
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            process.WaitForExit(120_000).Should().BeTrue("the CLI finishes within two minutes");
+            stdout.GetAwaiter().GetResult();
+            stderr.GetAwaiter().GetResult();
+            process.ExitCode.Should().Be(0);
+        }
+
+        File.Exists(logFile).Should().BeTrue("Optuna's FileHandler creates the file");
+        File.ReadAllText(logFile).Should().BeEmpty("Optuna's records never propagate to the root logger's file handler");
+    }
 }
