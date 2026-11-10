@@ -189,4 +189,44 @@ public class Run2SamplerParityBugTests
             .WithMessage("setting an array element with a sequence.*inhomogeneous shape*");
         conditional.Trials.Should().HaveCount(5);
     }
+
+    /// <summary>
+    ///     QA-68: a trial numbered at or above the grid size picks its grid with
+    ///     <c>rng.choice(list(set(range(n)) - set(visited) - set(running)))</c>, so the candidates come in CPython's
+    ///     set-iteration order: the difference builds a fresh set whose small table makes values of 8 and more wrap onto
+    ///     the slots of smaller ones, so <c>list(set(range(16)) - {0, 1, 2, 3, 5, 6, 7, 9, 10, 12, 13, 14, 15})</c> is
+    ///     <c>[8, 11, 4]</c> in CPython 3.12. The port lists the candidates in ascending order, so the same random index
+    ///     picks another grid.
+    /// </summary>
+    /// <remarks>
+    ///     The port marks this <c>[Misaligned]</c> in <c>GridSampler.GetUnvisitedGridIds</c>, reasoning that only real
+    ///     concurrency reaches the <c>choice</c> branch. A single-threaded <c>optimize</c> reaches it whenever the
+    ///     study's numbering is shifted: earlier trials from <c>add_trial</c> / <c>enqueue_trial</c>, another sampler,
+    ///     or a resumed study. Optuna 5.0.0, a 16-point grid (<c>GridSampler({"x": [0.0, …, 15.0]}, seed=0)</c>) on a
+    ///     study that already holds 12 added trials, then <c>optimize(n_trials=16)</c>: <c>x</c> = <c>3, 0, 5, 12, 6, 14,
+    ///     7, 15, 10, 1, 9, 13, 11, 8, 2, 4</c>; the port's 13th value is <c>4</c> instead of <c>11</c>, once four
+    ///     unvisited grids remain (seed 2 parts at the same trial, seed 1 happens to agree). Matching it means
+    ///     reproducing CPython's set layout for small ints (hash = value, 8-slot minimum table, linear probing).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void GridSampler_ShiftedNumbering_PicksUnvisitedGridsInCPythonSetOrder()
+    {
+        var space = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.IReadOnlyList<OptunaSharp.Distributions.CategoricalChoice>>
+        {
+            ["x"] = System.Linq.Enumerable.ToList(System.Linq.Enumerable.Select(
+                System.Linq.Enumerable.Range(0, 16), i => (OptunaSharp.Distributions.CategoricalChoice)(double)i)),
+        };
+        var study = Optuna.CreateStudy(sampler: new GridSampler(space, seed: 0));
+        for (int i = 0; i < 12; i++)
+            study.AddTrial(FrozenTrial.CreateTrial(value: i,
+                @params: new OptunaSharp.Collections.OrderedDict<string, object?> { ["x"] = (double)i },
+                distributions: new OptunaSharp.Collections.OrderedDict<string, OptunaSharp.Distributions.BaseDistribution>
+                    { ["x"] = new OptunaSharp.Distributions.FloatDistribution(0, 15) }));
+        study.Optimize(t => t.SuggestFloat("x", 0, 15), nTrials: 16);
+
+        var xs = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(
+            System.Linq.Enumerable.Skip(study.Trials, 12), t => (double)t.Params["x"]!));
+        xs.Should().Equal(3.0, 0.0, 5.0, 12.0, 6.0, 14.0, 7.0, 15.0, 10.0, 1.0, 9.0, 13.0, 11.0, 8.0, 2.0, 4.0);
+    }
 }
