@@ -105,4 +105,50 @@ public class Run2CliParityBugTests
         yaml.Should().Contain("  value: 1.0e+16\n");
         yaml.Should().MatchRegex(@"datetime_start: '\d{4}-\d\d-\d\d \d\d:\d\d:\d\d'");
     }
+
+    /// <summary>
+    ///     QA-63: <c>tell --state fail</c> and <c>tell --state pruned</c> without <c>--values</c> must finish the trial in
+    ///     that state, as Optuna's CLI does. The port's <c>--values</c> option yields an empty array (not null) when it
+    ///     is omitted, so Core's <c>tell</c> sees values next to a PRUNED / FAIL state and refuses the call: the command
+    ///     dies with <c>Unhandled exception: NumSharp.ValueError: Values were told. Values cannot be specified when state
+    ///     is TrialState.PRUNED or TrialState.FAIL.</c>, exits 1, and the trial stays RUNNING.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Optuna 5.0.0: <c>optuna tell --storage … --study-name s --trial-number 0 --state fail</c> logs "Told
+    ///         trial 0 with values None and state TrialState.FAIL." and exits 0 (argparse's <c>nargs="+"</c> option
+    ///         defaults to <c>None</c>). Marking a failed or pruned trial from a shell script is the CLI's ask-and-tell
+    ///         workflow, so this is the one finding of the run on a common path.
+    ///     </para>
+    ///     <para>
+    ///         The same empty array changes a bare <c>tell --trial-number 2</c> (no values, no state): Optuna warns
+    ///         "The value None could not be cast to float." and logs "Told trial 1 with values None and state None.";
+    ///         the port warns "The number of the values 0 did not match the number of the objectives 1" and logs "with
+    ///         values []". Both fail the trial. <c>CliParityTests</c>' setup runs these two commands too, but ignores
+    ///         their exit codes, so its fixture silently kept two RUNNING trials.
+    ///     </para>
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void Tell_StateWithoutValues_FinishesTheTrialLikeOptuna()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"optunasharp-cli-qa63-{Guid.NewGuid():N}.db");
+        _tempFiles.Add(path);
+        string url = "sqlite:///" + path.Replace('\\', '/');
+        const string space =
+            "{\"x\": {\"name\": \"FloatDistribution\", \"attributes\": {\"low\": 0.0, \"high\": 1.0, \"step\": null, \"log\": false}}}";
+
+        Run(out _, "create-study", "--storage", url, "--study-name", "s");
+        Run(out _, "ask", "--storage", url, "--study-name", "s", "--search-space", space);
+        Run(out _, "ask", "--storage", url, "--study-name", "s", "--search-space", space);
+
+        Run(out int failExit, "tell", "--storage", url, "--study-name", "s", "--trial-number", "0", "--state", "fail");
+        Run(out int prunedExit, "tell", "--storage", url, "--study-name", "s", "--trial-number", "1", "--state", "pruned");
+
+        failExit.Should().Be(0);
+        prunedExit.Should().Be(0);
+        var trials = Optuna.LoadStudy("s", new RDBStorage(url)).Trials;
+        trials[0].State.Should().Be(TrialState.Fail);
+        trials[1].State.Should().Be(TrialState.Pruned);
+    }
 }
