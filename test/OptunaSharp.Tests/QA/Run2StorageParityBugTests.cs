@@ -121,4 +121,56 @@ public class Run2StorageParityBugTests
         System.Action duplicate = () => storage.CreateNewStudy(new[] { StudyDirection.Minimize }, "a");
         duplicate.Should().Throw<DuplicatedStudyError>().Which.Message.Should().BeEmpty("str(DuplicatedStudyError()) is ''");
     }
+
+    /// <summary>
+    ///     Creates studies <c>a</c>, <c>b</c>, <c>c</c>, deletes <c>b</c>, creates <c>d</c>, deletes <c>a</c>, then creates
+    ///     <c>e</c> and <c>f</c>, and lists the studies the way <c>get_all_study_names</c> does.
+    /// </summary>
+    /// <param name="storage">The storage under test.</param>
+    /// <returns>The study names in the storage's listing order.</returns>
+    /// <remarks>Each deletion frees a slot that a later creation can take, which is where the orders part.</remarks>
+    private static System.Collections.Generic.List<string> NamesAfterDeletions(BaseStorage storage)
+    {
+        foreach (string name in new[] { "a", "b", "c" })
+            Optuna.CreateStudy(storage: storage, studyName: name);
+        Optuna.DeleteStudy("b", storage);
+        Optuna.CreateStudy(storage: storage, studyName: "d");
+        Optuna.DeleteStudy("a", storage);
+        Optuna.CreateStudy(storage: storage, studyName: "e");
+        Optuna.CreateStudy(storage: storage, studyName: "f");
+        return Optuna.GetAllStudyNames(storage);
+    }
+
+    /// <summary>
+    ///     QA-67: after a study is deleted, the in-memory and journal storages list studies in a different order from
+    ///     Optuna. Python keeps studies in a <c>dict</c>, which appends every new key after the existing ones; the port
+    ///     keeps them in a <see cref="System.Collections.Generic.Dictionary{TKey, TValue}" />, which reuses a removed
+    ///     entry's slot for the next insertion, so a study created after a deletion is listed where the deleted one was.
+    /// </summary>
+    /// <remarks>
+    ///     Optuna 5.0.0 (in-memory and journal): <c>['c', 'd', 'e', 'f']</c>; the port: <c>[e, d, c, f]</c>. The SQLite
+    ///     storage orders by study id in both. The order reaches <c>get_all_study_names</c>,
+    ///     <c>get_all_study_summaries</c>, the CLI's <c>studies</c> command on a journal file, and the study list in
+    ///     <c>load_study(study_name=None)</c>'s error message. The containers are <c>InMemoryStorage._studies</c> and
+    ///     <c>JournalStorageReplayResult._studies</c>; an insertion-ordered dictionary (the repository's
+    ///     <c>OrderedDict</c>) would keep Python's order.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void StudyListing_AfterDeletions_KeepsCreationOrderLikePythonDicts()
+    {
+        NamesAfterDeletions(new InMemoryStorage()).Should().Equal("c", "d", "e", "f");
+
+        string file = Path.Combine(Path.GetTempPath(), "optunasharp-qa67-" + System.Guid.NewGuid().ToString("N") + ".log");
+        try
+        {
+            NamesAfterDeletions(new JournalStorage(new JournalFileBackend(file))).Should().Equal("c", "d", "e", "f");
+        }
+        finally
+        {
+            // The journal file is scratch state of this test only.
+            if (File.Exists(file))
+                File.Delete(file);
+        }
+    }
 }
