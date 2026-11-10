@@ -13,7 +13,8 @@ namespace OptunaSharp.Tests.Interop;
 /// <summary>
 ///     Open parity bugs in the OptunaHub sampler bridge (<see cref="OptunaHubSampler" />) found by the 2026-11-10 parity
 ///     QA run (<c>docs/qa/PARITY_QA_2026-11-10.md</c>, QA-72). Each test fails today and passes once fixed, at which
-///     point its <c>OpenBugs</c> category (and the CI guard below) should be removed.
+///     point its <c>OpenBugs</c> category (and the CI guard below) should be removed. QA-73 is the same defect in
+///     <see cref="OptunaHubPruner" />.
 /// </summary>
 /// <remarks>
 ///     The interop CI job filters only <c>TestCategory!=Slow</c>, not <c>OpenBugs</c>, so these tests report
@@ -85,6 +86,58 @@ public class Run2OptunaHubBridgeParityBugTests
 
         optimize.Should().NotThrow("the native MoCmaSampler(seed=0) completes the 30 trials");
         study.Trials.Count(t => t.State == TrialState.Complete).Should().Be(30);
+    }
+
+    /// <summary>
+    ///     QA-73: OptunaHub's <c>pruners/successive_halving</c> re-exports Optuna's own <c>SuccessiveHalvingPruner</c>,
+    ///     which records each rung a trial passes in that trial's system attributes (<c>completed_rung_N</c>) and compares
+    ///     a trial with the other trials' values in the same rung. <see cref="OptunaHubPruner" /> rebuilds its shadow study
+    ///     for every <c>prune</c> call from <c>create_trial(state, values, params, distributions, intermediate_values)</c>,
+    ///     so the rung records of earlier calls and of other trials are gone; each trial then competes only with itself,
+    ///     is always promotable, and nothing is ever pruned.
+    /// </summary>
+    /// <remarks>
+    ///     Measured: natively (Optuna 5.0.0, <c>RandomSampler(seed=0)</c>, 40 trials of this ten-step objective) 36 trials
+    ///     are pruned, the first ones (trials 3 and 4) after step 1; through the bridge, with the port's bit-exact
+    ///     <c>RandomSampler(seed: 0)</c> drawing the same <c>x</c> values, none is. <c>pruners/hyperband</c> (also
+    ///     Optuna's, built on successive halving) prunes 31 natively and none through the bridge; <c>median</c>,
+    ///     <c>percentile</c>, <c>wilcoxon</c> and <c>threshold</c>, which keep no state, agree trial for trial.
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("OpenBugs")]
+    public void SuccessiveHalvingThroughBridge_PrunesLikeNativePython()
+    {
+        using var module = LoadHubModuleOrInconclusive("pruners/successive_halving");
+        using var pruner = module.CreatePruner("SuccessiveHalvingPruner", new());
+
+        var study = Optuna.CreateStudy(sampler: new OptunaSharp.Samplers.RandomSampler(seed: 0), pruner: pruner);
+        study.Optimize(ReportingObjective, nTrials: 40);
+
+        study.Trials[3].State.Should().Be(TrialState.Pruned, "native Optuna prunes trial 3 after step 1");
+        study.Trials[3].IntermediateValues.Keys.Should().Equal(0L, 1L);
+        study.Trials.Count(t => t.State == TrialState.Pruned).Should().Be(36);
+    }
+
+    /// <summary>
+    ///     The pruning comparison's objective (<c>hub_prune.py</c> in the QA scratch): one float, ten reported steps
+    ///     <c>(x - 0.3)² + 1 / (step + 1)</c>, asking the pruner after each.
+    /// </summary>
+    /// <param name="trial">The trial to suggest on and report to.</param>
+    /// <returns>The last reported value, when the trial is never pruned.</returns>
+    /// <exception cref="TrialPruned">The study's pruner asks to prune the trial; <c>Optimize</c> records it as pruned.</exception>
+    private static double ReportingObjective(Trial trial)
+    {
+        double x = trial.SuggestFloat("x", -1.0, 1.0);
+        double value = 0.0;
+        for (int step = 0; step < 10; step++)
+        {
+            value = Math.Pow(x - 0.3, 2) + 1.0 / (step + 1);
+            trial.Report(value, step);
+            if (trial.ShouldPrune())
+                throw new TrialPruned();
+        }
+        return value;
     }
 
     /// <summary>
