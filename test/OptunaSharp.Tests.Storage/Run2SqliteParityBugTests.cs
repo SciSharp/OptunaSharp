@@ -119,4 +119,47 @@ public class Run2SqliteParityBugTests
         // The second read sends every running id below the COMPLETE trial; Optuna answers it (or falls back).
         study.Trials.Should().HaveCount(running + 2);
     }
+
+    /// <summary>
+    ///     QA-71: on SQLite, Optuna reads a study's and a trial's user and system attributes in key order, the port in
+    ///     insertion order. Optuna's queries have no <c>ORDER BY</c> (<c>StudyUserAttributeModel.where_study_id</c>, the
+    ///     <c>selectinload</c> of a trial's attributes), and SQLite answers <c>WHERE study_id = ?</c> /
+    ///     <c>WHERE trial_id IN (...)</c> through the unique <c>(study_id, key)</c> / <c>(trial_id, key)</c> autoindex
+    ///     (<c>EXPLAIN QUERY PLAN</c>: <c>SEARCH ... USING INDEX sqlite_autoindex_..._1</c>), so the rows come sorted by
+    ///     key. The port's queries order by the attribute id.
+    /// </summary>
+    /// <remarks>
+    ///     Measured with Optuna 5.0.0 / SQLAlchemy 2.0.45 / SQLite 3.51: study user attributes set as <c>zz, b, m</c> read
+    ///     back <c>b, m, zz</c> through <c>study.user_attrs</c> and <c>load_study(...).user_attrs</c>; system attributes
+    ///     <c>q, d</c> as <c>d, q</c>; trial user attributes <c>k, a</c> as <c>a, k</c> through <c>study.trials</c>,
+    ///     <c>get_trial</c> and <c>best_trial</c>. <c>get_all_studies()</c> scans the whole attribute table (no
+    ///     <c>WHERE</c>, <c>SCAN study_user_attributes</c>), so its summaries keep insertion order (<c>zz, b, m</c>), as
+    ///     the port's do. The in-memory and journal storages keep insertion order in both. Parameters and intermediate
+    ///     values already match (Optuna sorts parameters by <c>param_id</c>; intermediate values come by step through
+    ///     the same kind of index, as in the port). Only key order differs; no sampler depends on it (they read system
+    ///     attributes by key, CMA-ES sorts its keys).
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void AttributeReads_ComeBackInKeyOrderLikeOptunasIndexScan()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"optunasharp-rdb-qa71-{Guid.NewGuid():N}.db");
+        _tempFiles.Add(path);
+        var storage = new RDBStorage("sqlite:///" + path.Replace('\\', '/'));
+        var study = Optuna.CreateStudy(studyName: "attrs", storage: storage);
+        foreach (var key in new[] { "zz", "b", "m" })
+            study.SetUserAttr(key, 1L);
+        int studyId = storage.GetStudyIdFromName("attrs");
+        storage.SetStudySystemAttr(studyId, "q", 1L);
+        storage.SetStudySystemAttr(studyId, "d", 1L);
+        var trial = study.Ask();
+        trial.SetUserAttr("k", 1L);
+        trial.SetUserAttr("a", 2L);
+        study.Tell(trial, 1.0);
+
+        study.UserAttrs.Keys.Should().Equal(new[] { "b", "m", "zz" }, "Optuna's study.user_attrs comes through the (study_id, key) index");
+        storage.GetStudySystemAttrs(studyId).Keys.Should().Equal("d", "q");
+        study.Trials[0].UserAttrs.Keys.Should().Equal(new[] { "a", "k" }, "Optuna's trial reads come through the (trial_id, key) index");
+        storage.GetAllStudies()[0].UserAttrs.Keys.Should().Equal(new[] { "zz", "b", "m" }, "get_all_studies scans the table in insertion order");
+    }
 }
