@@ -1,0 +1,108 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using AwesomeAssertions;
+using OptunaSharp;
+using OptunaSharp.Cli;
+using OptunaSharp.Collections;
+using OptunaSharp.Distributions;
+using OptunaSharp.Storages;
+
+namespace OptunaSharp.Tests.Cli;
+
+/// <summary>
+///     Open parity bugs in the <c>optunasharp</c> CLI found by the 2026-11-10 parity QA run
+///     (<c>docs/qa/PARITY_QA_2026-11-10.md</c>). Each test fails today and passes once fixed, at which point its
+///     <c>OpenBugs</c> category should be removed.
+/// </summary>
+[TestClass]
+public class Run2CliParityBugTests
+{
+    private readonly List<string> _tempFiles = new();
+
+    /// <summary>Deletes the SQLite files the tests created; a file still locked by a pool is left behind.</summary>
+    [TestCleanup]
+    public void Cleanup()
+    {
+        foreach (var f in _tempFiles)
+        {
+            try
+            {
+                if (File.Exists(f))
+                    File.Delete(f);
+            }
+            catch (IOException)
+            {
+                // SQLite's connection pool may still hold the file on Windows; the temp folder is cleaned later.
+            }
+        }
+    }
+
+    /// <summary>Runs the CLI in-process and captures what it writes to standard output.</summary>
+    /// <param name="exitCode">The exit code <see cref="CliProgram.Run" /> returned.</param>
+    /// <param name="args">The command line, without the executable name.</param>
+    /// <returns>Everything written to <see cref="Console.Out" /> during the call, line feeds only.</returns>
+    private static string Run(out int exitCode, params string[] args)
+    {
+        var original = Console.Out;
+        var buffer = new StringWriter();
+        Console.SetOut(buffer);
+        try
+        {
+            exitCode = CliProgram.Run(args);
+        }
+        finally
+        {
+            Console.SetOut(original);
+        }
+        // Compare lines, not line endings (QA-36 already covers the doubled carriage return).
+        return buffer.ToString().Replace("\r", "");
+    }
+
+    /// <summary>
+    ///     QA-61: <c>-f yaml</c> writes floats and datetimes in forms a YAML 1.1 reader (PyYAML, which Optuna's own
+    ///     output targets) reads back as other types. PyYAML's <c>safe_dump</c> writes every float with a decimal point
+    ///     (<c>2.0</c>, <c>1.0e-07</c>, <c>1.0e+16</c>) and quotes the formatted datetimes; YamlDotNet writes <c>2</c>,
+    ///     <c>1E-07</c>, <c>10000000000000000</c> and bare datetimes.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Optuna 5.0.0, <c>optuna trials -f yaml</c> on a trial with <c>x=1e-07</c>, <c>y=2.0</c> and value
+    ///         <c>1e16</c>: <c>x: 1.0e-07</c>, <c>y: 2.0</c>, <c>value: 1.0e+16</c>,
+    ///         <c>datetime_start: '2026-11-10 22:51:17'</c>. The port: <c>x: 1E-07</c>, <c>"y": 2</c>,
+    ///         <c>value: 10000000000000000</c>, <c>datetime_start: 2026-11-10 22:51:17</c>.
+    ///     </para>
+    ///     <para>
+    ///         Read back with <c>yaml.safe_load</c>, the port's output gives the string <c>'1E-07'</c> (YAML 1.1's float
+    ///         needs a decimal point), the int <c>2</c> and the int <c>10000000000000000</c> for the three floats, and a
+    ///         <c>datetime</c> object where Optuna's output gives a string. <c>OutputFormat.cs</c> calls YAML byte parity
+    ///         best-effort; these change the values' types, not only their bytes. The key quoting (<c>"y"</c>, YAML 1.1's
+    ///         boolean <c>y</c>) and double instead of single quotes read back the same and are not asserted.
+    ///     </para>
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void TrialsYaml_FloatsAndDatetimes_KeepTheirTypesLikePyYaml()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"optunasharp-cli-qa61-{Guid.NewGuid():N}.db");
+        _tempFiles.Add(path);
+        string url = "sqlite:///" + path.Replace('\\', '/');
+        var study = Optuna.CreateStudy(studyName: "q", storage: new RDBStorage(url));
+        study.AddTrial(FrozenTrial.CreateTrial(
+            value: 1e16,
+            @params: new OrderedDict<string, object?> { ["x"] = 1e-07, ["y"] = 2.0 },
+            distributions: new OrderedDict<string, BaseDistribution>
+            {
+                ["x"] = new FloatDistribution(0, 1),
+                ["y"] = new FloatDistribution(0, 5),
+            }));
+
+        string yaml = Run(out int exitCode, "trials", "--storage", url, "--study-name", "q", "-f", "yaml");
+
+        exitCode.Should().Be(0);
+        yaml.Should().Contain("    x: 1.0e-07\n");
+        yaml.Should().Contain("    y: 2.0\n");
+        yaml.Should().Contain("  value: 1.0e+16\n");
+        yaml.Should().MatchRegex(@"datetime_start: '\d{4}-\d\d-\d\d \d\d:\d\d:\d\d'");
+    }
+}
