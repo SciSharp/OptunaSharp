@@ -108,12 +108,32 @@ public sealed class XnesSampler : EvolutionStrategySampler
     /// <exception cref="System.NotSupportedException">The serialized optimizer tag is not this sampler's tag.</exception>
     /// <exception cref="System.Text.Json.JsonException">The persisted payload is not valid JSON for the state type, or is the literal null.</exception>
     /// <exception cref="System.ArgumentOutOfRangeException">The stored text has no <c>&lt;tag&gt;\n</c> line.</exception>
+    /// <remarks>Parses the JSON only when the text differs from the last one parsed (<see cref="_parsedState" />); a new optimizer is built from the state every time.</remarks>
     private protected override IEvolutionStrategyOptimizer DeserializeOptimizer(string optimizerStr)
     {
+        // The same stored text as the last parse: the same state, without parsing the JSON again (see _parsedState).
+        // The whole text, tag included, is the key, so a hit has passed the tag check before.
+        if (_parsedState is { } parsed && string.Equals(parsed.Text, optimizerStr, System.StringComparison.Ordinal))
+            return XnesOptimizer.FromState(parsed.State);
+
         int nl = optimizerStr.IndexOf('\n');
         string tag = optimizerStr[..nl];
         if (tag != Tag)
             throw new NotSupportedException($"Unexpected optimizer state tag '{tag}' for XnesSampler.");
-        return XnesOptimizer.FromState(OptimizerStateJson.Deserialize<XnesState>(optimizerStr[(nl + 1)..]));
+        XnesState state = OptimizerStateJson.Deserialize<XnesState>(optimizerStr[(nl + 1)..]);
+        _parsedState = (optimizerStr, state);
+        return XnesOptimizer.FromState(state);
     }
+
+    /// <summary>
+    ///     The last stored optimizer text this instance parsed, and the state parsed from it (plan 15, as
+    ///     <c>DifferentialEvolutionSampler</c> keeps it): the text changes once per generation, and every ask in between
+    ///     parsed the same JSON again. Guarded by the sampler's monitor, like every hook; a per-worker instance has its
+    ///     own.
+    /// </summary>
+    /// <remarks>
+    ///     Safe to share across asks because FromState never changes the state it reads: the <see cref="XnesOptimizer" /> constructor clones the mean, receives the shape matrix as a fresh rectangular copy of the stored rows and clones that too, and the scale and generation are numbers. A parse that throws
+    ///     stores nothing, so the next ask parses (and throws) again, as before.
+    /// </remarks>
+    private (string Text, XnesState State)? _parsedState;
 }
