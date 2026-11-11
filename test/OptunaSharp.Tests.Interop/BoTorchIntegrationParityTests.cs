@@ -204,6 +204,36 @@ public class BoTorchIntegrationParityTests : OptunaInteropTestBase
             });
     }
 
+    /// <summary>
+    ///     Parity QA run 2 (QA-82, E63): the same two objectives over two floats (<c>n</c> in [0, 4], <c>x</c> in [0, 1],
+    ///     <c>x</c> suggested first). Here the replay's maximum difference was 0.66: the bridge suggests a different
+    ///     point altogether, consistent with QA-82's small numerical difference flipping which acquisition restart wins.
+    ///     The class's own float-only qEHVI case (<c>a</c>, <c>b</c> over [-5, 5]) stays at 0.
+    /// </summary>
+    /// <exception cref="AssertInconclusiveException">Under CI, where this known-failing repro must not run.</exception>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
+    [TestCategory("OpenBugs")]
+    public void Run2TwoFloatMultiObjective_Qehvi_ByteExact()
+    {
+        // The interop job's Slow leg filters only `TestCategory=Slow`, not OpenBugs (see the case above).
+        if (Environment.GetEnvironmentVariable("CI") == "true")
+            Assert.Inconclusive("OpenBugs repro (QA-82); the interop CI job does not filter OpenBugs.");
+        AssertReplay(
+            0, new[] { StudyDirection.Minimize, StudyDirection.Minimize }, cfExpr: "None",
+            considerRunning: false, constraintsFunc: null,
+            nStartup: 4, nCompletedBo: 4, nRunning: 0,
+            spaceExpr: "{'n': FloatDistribution(0.0, 4.0), 'x': FloatDistribution(0.0, 1.0)}",
+            objective: t =>
+            {
+                double x = t.SuggestFloat("x", 0.0, 1.0);
+                double n = t.SuggestFloat("n", 0.0, 4.0);
+                return (new() { ["x"] = x, ["n"] = n },
+                    new[] { x * x + 0.05 * n, Math.Pow(1.0 - x, 2) + 0.05 * (4 - n) });
+            });
+    }
+
     // ---- harness --------------------------------------------------------------------------------
 
     private void AssertReplay(
