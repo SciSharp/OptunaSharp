@@ -192,7 +192,12 @@ Open after plan 14 (its §7):
   folded trial: none of those allocate per scan. Survey (machine loaded by other sessions, base and tree back to
   back): SNES 3,000 trials 1.06 → 0.89 s, 173 → 59 KB per trial; xNES 2,000 0.90 → 0.86 s, 148 → 73 KB; OpenAI-ES
   3,000 1.08 → 0.89 s, 188 → 61 KB; same hashes. Gates: ES, parallel-read and nJobs sampler tests 248/248; hash
-  probe 36/36 (SNES, xNES and OpenAI-ES studies included).
+  probe 36/36 (SNES, xNES and OpenAI-ES studies included). Committed `7be356d`.
+- 07:42 — **step I, the other samplers' history lists.** DE, PSO, LM-CMA, VkD-CMA, JANUS and JANUS-DE collect their
+  completed trials into a list grown from empty on every ask; it is now sized for the history (the same contents in
+  the same order). Survey, back to back, same hashes: DE 115 → 91 KB per trial, PSO 143 → 120, LM-CMA 119 → 95,
+  VkD-CMA 73 → 60, JANUS 112 → 98; wall times within the loaded machine's noise. DE's remaining per-trial cost is
+  deserializing its JSON optimizer state on every ask (backlog). Gates: their unit tests 103/103; hash probe 36/36.
 
 ## 6. Findings and notes for the owner
 

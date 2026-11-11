@@ -387,8 +387,10 @@ public sealed class VkdCmaSampler : BaseSampler
     /// <returns>Trial snapshots eligible for the sampler history.</returns>
     private List<FrozenTrial> GetTrials(Study study)
     {
-        var completeTrials = new List<FrozenTrial>();
-        foreach (var t in study.GetTrialsInternal(deepcopy: false, states: null, useCache: true))
+        List<FrozenTrial> all = study.GetTrialsInternal(deepcopy: false, states: null, useCache: true);
+        // Sized for the whole history (plan 15): nearly every trial is complete, so the list never regrows on an ask.
+        var completeTrials = new List<FrozenTrial>(all.Count);
+        foreach (var t in all)
         {
             if (t.State == TrialState.Complete)
             {
