@@ -69,4 +69,61 @@ public class Run2LightGbmParityBugTests
             CultureInfo.CurrentCulture = previous;
         }
     }
+
+    /// <summary>
+    ///     QA-76, the tuner's alias handling: optuna-integration's <c>_handling_alias_parameters</c> warns with an
+    ///     f-string of the duplicated aliases' <c>dict</c> (Python repr: quoted strings, <c>1.0</c>) and
+    ///     <c>{param_name}={value}</c> (<c>str</c>: <c>1.0</c>, bare strings). The port's <c>FormatDict</c> interpolates
+    ///     the values with C#'s <c>ToString</c>, so <c>'x'</c> loses its quotes and <c>1.0</c> becomes <c>1</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Python (optuna-integration 5.1.0.dev on the vendored source): the parameters
+    ///     <c>{'sub_row': 0.5, 'subsample': 1.0, 'min_data': 20, 'min_data_in_leaf': 'x'}</c> warn
+    ///     <c>bagging_fraction in param detected multiple identical aliases {'sub_row': 0.5, 'subsample': 1.0}, but we use
+    ///     bagging_fraction=1.0.</c> and <c>min_child_samples in param detected multiple identical aliases
+    ///     {'min_data': 20, 'min_data_in_leaf': 'x'}, but we use min_child_samples=x.</c> The warning reaches the port's
+    ///     log at WARNING level, which is where this test reads it.
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void DuplicatedAliases_WarnWithPythonDictRepr()
+    {
+        var writer = new System.IO.StringWriter();
+        var handler = new OptunaSharp.Logging.StreamLogHandler(writer);
+        OptunaSharp.Logging.OptunaLogging.AddHandler(handler);
+        try
+        {
+            Alias.HandleAliasParameters(new OptunaSharp.Collections.OrderedDict<string, object?>
+            {
+                ["sub_row"] = 0.5, ["subsample"] = 1.0, ["min_data"] = 20L, ["min_data_in_leaf"] = "x",
+            });
+        }
+        finally
+        {
+            // Detach before asserting so a failure does not leave the handler on the shared logger.
+            OptunaSharp.Logging.OptunaLogging.RemoveHandler(handler);
+        }
+
+        writer.ToString().Should()
+            .Contain("bagging_fraction in param detected multiple identical aliases {'sub_row': 0.5, 'subsample': 1.0}, " +
+                     "but we use bagging_fraction=1.0.")
+            .And.Contain("min_child_samples in param detected multiple identical aliases {'min_data': 20, " +
+                         "'min_data_in_leaf': 'x'}, but we use min_child_samples=x.");
+    }
+
+    /// <summary>
+    ///     QA-76, the metric type error: optuna-integration's <c>_handling_alias_metrics</c> names the offending type as
+    ///     <c>{type(metric)}</c>, i.e. <c>&lt;class 'int'&gt;</c>; the port prints the CLR type name (<c>Int64</c>).
+    /// </summary>
+    /// <exception cref="AssertFailedException">The message does not match Optuna's.</exception>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void NonIterableMetric_NamesThePythonType()
+    {
+        Action handle = () => Alias.HandleAliasMetrics(
+            new OptunaSharp.Collections.OrderedDict<string, object?> { ["metric"] = 1L });
+
+        handle.Should().Throw<NumSharp.ValueError>().WithMessage(
+            "The `metric` parameter is expected to be a string or an iterable object, but got <class 'int'>.");
+    }
 }
