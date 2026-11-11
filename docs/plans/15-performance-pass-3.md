@@ -1,8 +1,8 @@
 # Plan 15 — third performance pass: speed and memory gaps (2026-11-11)
 
-> **Status: IN PROGRESS.** A four-hour working session, 2026-11-11 05:44 → 09:44 JST, on `main` after `b7ae717`. At
-> 08:00: nine steps and one regression fix (`fb18c44`..`d521e16`), every seeded result unchanged; QA-84 recorded
-> (`96abe26`); results through `d521e16` in §7. Work continues on the backlog (§4) until 09:44.
+> **Status: DONE.** A four-hour working session, 2026-11-11 05:44 → 09:44 JST, on `main` after `b7ae717`: seventeen
+> steps and one regression fix (`fb18c44`..`17a3448`), every seeded result unchanged; QA-84 recorded (`96abe26`);
+> a Windows race in the journal file lock found (§6). Results in §7.
 > This file is its central record: the rules, the baseline survey, the backlog, the progress log and the results.
 
 ## 1. The request
@@ -77,7 +77,10 @@ Open after plan 14 (its §7), with what this pass did about each:
 5. NumSharp temporaries left to the finalizer in samplers plan 14 did not trace (GP, DE, PSO, the NES family, …). —
    **Traced:** GP, DE, PSO and the NES family are plain managed code; their per-trial memory was LOH churn (GP,
    steps C and D) and history scans (steps H and I). Open: an unidentified source of NumSharp `UInt32` blocks the GP
-   run leaves to the finalizer.
+   run leaves to the finalizer. Ruled out since: the optimizers' entropy-seeded `RandomState()` (its `SeedSequence`
+   state is not an `NDArray` left behind: ~6.2 KB managed either way, step M's note). The per-ask draws that dropped
+   `NDArray`s (DE, MOEA/D, CMA-ES and others; the allocation sampler listed `UnmanagedStorage`, `ArraySlice<T>` and
+   `Disposer<T>` for them) read through `NumPyDraws` since steps P and R; MOEA/D's gen-1 collections fell 8 → 0.
 
 New, found by this pass and left open:
 
@@ -85,10 +88,20 @@ New, found by this pass and left open:
    paths is 28% of its time). The per-rebuild categorical cache (`catCache`, first trial seen per name after
    filtering) has to be reproduced exactly.
 7. DE: it deserializes its JSON optimizer state on every ask; a cached copy would need cloning before each mutation.
+   — **Done (steps M, N, O)** without cloning: the cache holds the parsed *state*, from which every `FromState` builds a
+   new optimizer by copying; done for DE, LM-CMA, PSO, VkD-CMA, SNES, xNES and OpenAI-ES.
 8. Multi-objective split (MOTPE): `lvals` through nested LINQ, `UniqueRows` with a delegate sort. The sort is unstable
    and its representative among equal rows (±0) reaches the hypervolume arithmetic, so changing it is not provably
    bit-identical; the LINQ part is.
 9. Parity, not performance: QA-84 (§6).
+10. The study core's per-suggest cost (random search, 20 KB per trial): about 40 % is the in-memory storage's
+    copy-on-write (plan 13 S4) copying a running trial's parameter and distribution dictionaries on each suggest after
+    the sampler has read the record, and 20 % is closures and delegates (`Locked(() => …)`, `Trial.Suggest`). Every
+    sampler pays it; changing the copy-on-write needs its own correctness argument.
+11. TPE's remaining bytes are the Parzen estimators' own per-kernel arrays (66 % of a TPE trial's allocation is
+    `double[]`); pooling them means reworking the estimator's ownership, not a local change.
+12. MOEA/D scans every completed trial's `SystemAttrs` by string key twice per ask (the offspring count and the new
+    offspring); an incremental count would make it O(new trials).
 
 ## 5. Progress log
 
@@ -228,6 +241,66 @@ New, found by this pass and left open:
   3,000 trials than the LINQ it replaced, for a reason not found (the property it reads is a plain field). Lesson:
   re-run a step's A/B in both orders before calling a difference noise. Gates: split, TPE and multi-objective unit
   tests 134/134; hash probe 36/36.
+- 08:00 — checkpoint: §7 written for `d521e16` (`bd2b9f4`); work continues. A new probe, an **in-process allocation
+  sampler** (the runtime's `GCAllocationTick` events counted by type through an `EventListener`, `ALLOC_TICKS=1`,
+  scratch `common/AllocTicks.cs`), showed where each workload's bytes go. Two sinks shared by several samplers: copies of
+  the whole history (`FrozenTrial[]`: DE 40 %, MOEA/D 13 %, SMS-EMOA 13 %, TPE 12 %) and dictionaries over every
+  completed trial rebuilt per ask (`Dictionary<int, FrozenTrial>`: SMS-EMOA 37 %, MOEA/D 38 %, plus their buckets).
+- 08:12 — **step K, TPE's history reads** (`439c26c`). TPE read the filtered history twice per trial in multivariate
+  mode and twice per *parameter* in independent mode (MOTPE's default), a fresh copy each time, and copied both split
+  groups per parameter. `Study.GetTrialsCachedReadOnly(states)` shares one filtered list per trial snapshot and state set
+  (memo keyed by the snapshot's identity and a state bit mask; `CachedAllTrials` became a property whose setter drops
+  it, so a tell drops both); `Study.FilterByState` filters by bit mask into a list allocated at its final size;
+  `TpeSplitCache.SplitShared` returns the cached groups without copies. Same history: both reads filter the same snapshot,
+  and a handed-out record's state never changes (the storages change a shallow copy, plan 13 S4). MOTPE 386.6 → 353.3 KB
+  per trial (base 440.3), TPE about −4 KB per trial: .NET 10's `Where().ToList()` already avoids most growth garbage, so
+  the gain is the sharing. Gates: new `StudyTrialFilterTests` (13 state sets incl. values outside the enum, the memo's
+  sharing and invalidation, `SplitShared` = `Split`); unit tests 526/526; hash probe 36/36; live TPE / multi-objective
+  parity 74 passed, 1 skipped.
+- 08:24 — **step L, steady-state population lookups** (`eca033a`). `Internal/TrialsByNumber`: a binary search over the
+  number-ordered history (one allocation-free order check per ask; a list out of order gets the replaced dictionary
+  itself, later record winning). SMS-EMOA and MOEA/D keep their populations as trial numbers instead of storage ids (the
+  same records within a study; a recreated study is discarded first by the anchor check), and MOEA/D's new-offspring
+  `OrderBy` runs only when the history is not ascending. SMS-EMOA 141.8 → 80.9 KB per trial, MOEA/D 85.5 → 54.8; cold
+  runs 15–20 % faster, warm runs 5–12 %. **A trap found on the way:** a first version (hand-written loops, the list
+  walked through `IReadOnlyList`) made MOEA/D's 2,000-trial run 0.54–0.57 s against 0.36–0.49 s, while 4,000 trials
+  were even and `DOTNET_TC_QuickJitForLoops=0` made the tree equal or faster on every repetition: new loops run as
+  unoptimized tier-0 code through the first few thousand asks, while the LINQ they replace ships precompiled
+  (ReadyToRun). The final form keeps LINQ's `Where().ToList()` and walks a span in methods marked
+  `AggressiveOptimization`. Probably also the reason step J measured slower. Gates: new `TrialsByNumberTests`; unit tests
+  660/660 and 35/35 (recreated studies); hash probe 36/36.
+- 08:29 — **step M, DE's optimizer state** (`8c1a1f7`, backlog 7). DE parsed its stored JSON population on every ask;
+  the text changes once per generation. A one-entry cache keyed by the whole text, safe because `De.FromState` copies
+  every array out of the state. DE 267 → 241 MB (base 335); time within noise (the parse was cheap). Measured and
+  dropped on the way: the optimizers' OS-entropy `np.random.RandomState()` before the reseed that precedes every draw
+  costs ~13 µs against 6–13 µs seeded, both ~6.2 KB, same stream after the reseed (scratch `rsbench`): ~2 % of a DE ask.
+  Gates: hash probe 36/36; DE / JANUS-DE / nJobs / reuse tests 179/179.
+- 08:33 — **step N, the same cache for LM-CMA, PSO and VkD-CMA** (`dbe86e5`), each `FromState` checked for aliasing.
+  PSO 351 → 280 MB, LM-CMA 279 → 220, VkD-CMA 117 → 103 (base 419 / 348 / 143). Gates: hash probe 36/36; their tests
+  254/254.
+- 08:36 — **step O, the same cache for SNES, xNES and OpenAI-ES** (`e889d56`). SNES 174 → 167 MB, xNES 143 → 125,
+  OpenAI-ES 178 → 169 (small states; step H was the large cut). Gates: hash probe 36/36; their tests 222/222;
+  documentation gate (5,855 declarations) 0 issues, Core's strict documentation build 0 errors.
+- 08:41 — **step P, draws that left arrays to the finalizer** (`bbefda2`). 21 per-ask or per-parameter sites still
+  cast a NumSharp draw (`(int)rng.randint(…)`, `(double)rng.rand()`), each dropping a finalizable `NDArray`; they read
+  through plan 14's `NumPyDraws` now (`RandInt` is the same call with the array disposed, `Rand` is pinned to `rand()`
+  by `NumPyDrawsTests`): DE and `De`, LM-CMA, MOEA/D and its offspring, BruteForce, Grid, GPSampler, CMA-ES, the ES
+  base class and both GP search spaces. Left: NSGA-III-CPT, SAASBO, `OptunaSearchCV` (not hot). Gates: hash probe
+  36/36; GP-family probe 8/8; their unit tests 460/460; live Grid and BruteForce parity 24/24.
+- 08:48 — **step Q, the state filter compiled optimized** (`cd33077`). The final survey read SMS-EMOA and MOEA/D
+  slower at the second repetition (0.37 → 0.50 s and 0.37 → 0.45 s, machine loaded). Four repetitions per process,
+  alternating: the tree is ahead from the cold run on (SMS-EMOA cold + second 1.20 / 1.16 → 1.04 / 1.01 s, all four
+  1.76 / 1.69 → 1.55 / 1.52 s; MOEA/D cold + second 1.19 → 0.94 s); only the second repetition is about 10 % behind
+  while the tree's code tiers up. `Study.FilterByState` (step K) now indexes a span and carries
+  `AggressiveOptimization`, which took SMS-EMOA's cold run from 0.56–0.58 to 0.53–0.54 s; the second repetition's gap
+  stayed, so it comes from tiering elsewhere. Gates: hash probe 36/36; 630/630 unit tests.
+- 08:55 — **step R, Gaussian draws disposed** (`17a3448`), the other half of step P: `NumPyDraws.Randn` is the same
+  `rng.randn(n)` call with its array disposed, now used by CMA-ES and SepCMA (every sampled point), VkD-CMA, the ES
+  noise matrix, JANUS, SAASBO's NUTS, REMBO and TuRBO / TuRBO-m (10 sites; JANUS-MOO draws through a NumSharp
+  `Generator` and stays as it was). Measured on CMA-ES 5,000 trials: no visible change in bytes, collections (12/3/0)
+  or time; disposing spares only the finalizer's work, which never showed as collections here. Kept as hygiene.
+  Gates (probe DLLs checked fresh after a first build failed on the JANUS-MOO site): hash probe 36/36; GP-family probe
+  8/8; their unit tests 343/343.
 
 ## 6. Findings and notes for the owner
 
@@ -247,60 +320,88 @@ New, found by this pass and left open:
   dimensions, the left-to-right sum differs in 31–54% of them. A ULP-level difference in the log densities of studies
   with eight or more continuous parameters, the class of the documented `erf` divergence; fixing it changes results, so
   it is recorded with an `[OpenBugs]` repro rather than changed here (`96abe26`).
-- **A journal-lock flake (not investigated further).** One full net10.0 unit run, on a machine loaded by other
-  sessions, failed `JournalConcurrencyTests.Lock_WithoutAGracePeriod_WaitsForALeftBehindLockUntilItIsRemoved` with
-  `UnauthorizedAccessException: Access to the path '…\optunasharp-journal-cc-….log.lock' is denied`; the test alone,
-  and its class three times in a row (21/21 each), passed, and net8.0 passed in the same run. Nothing in this pass
-  touches the journal. A plausible cause worth checking: on Windows, opening a file whose deletion is pending (deleted
-  while another handle is still open) fails with ACCESS_DENIED, which the lock's contention classification (HResult /
-  errno, `3a75811`) may not count as contention.
+- **An allocation sampler beats the CPU profiler for finding memory sinks.** An `EventListener` on
+  `Microsoft-Windows-DotNETRuntime` with the GC keyword at Verbose receives `GCAllocationTick` (one per ~100 KB, naming
+  the type of the object that crossed the threshold); counted per type over a run, the shares are proportional to the
+  bytes. It found steps K, L and P in minutes, where the sampled CPU profiler charges call-free loops to safe points.
+  No stacks (the callback runs on the dispatch thread), but the types point at the code.
+- **Hand-written loops replacing LINQ can be slower for the first few thousand calls.** Framework LINQ ships
+  precompiled (ReadyToRun) and optimized; a new loop in OptunaSharp starts as unoptimized tier-0 code, and with tiered
+  PGO it can take thousands of calls to reach its final tier. A 2,000-trial study can end before that: step L's first
+  version measured 40 % slower on MOEA/D's 2,000-trial run, even at 4,000 trials, and equal or faster with
+  `DOTNET_TC_QuickJitForLoops=0`. Compare a rewrite with warm-up included (rep 1) and warm (rep 3), and when it must be
+  a loop, keep it small and mark it `AggressiveOptimization`, or keep the LINQ.
+- **The entropy-seeded generators are not the `UInt32` blocks.** The optimizers' `np.random.RandomState()` (as cmaes'
+  `__setstate__` does) before the reseed that precedes every draw costs ~13 µs against 6–13 µs for a seeded one, and
+  both allocate ~6.2 KB managed; the stream after the reseed is identical (scratch `rsbench`). Not changed.
+- **A journal-lock flake, cause found, not changed (an owner decision).** Two of about eight full net10.0 runs of
+  this pass, both on a machine loaded by other test processes, failed
+  `JournalConcurrencyTests.Lock_WithoutAGracePeriod_WaitsForALeftBehindLockUntilItIsRemoved` with
+  `UnauthorizedAccessException: Access to the path '…\optunasharp-journal-cc-….log.lock' is denied` (once at
+  `d521e16`, once at `cd33077`); the test alone, its class three times in a row (21/21 each) and the other runs pass.
+  Nothing in this pass touches the journal. Cause: `JournalFileOpenLock.Acquire` creates the lock file with
+  `FileMode.CreateNew` and treats only an "already exists" `IOException` as contention; on Windows, creating a file
+  whose deletion is pending (the holder deleted it while another handle, e.g. a waiter's `GetLastWriteTimeUtc`, is still
+  open) fails with ACCESS_DENIED, which .NET raises as `UnauthorizedAccessException`, so the waiter fails instead of
+  retrying. It is a faithful port: Optuna's `os.open(O_CREAT | O_EXCL)` raises `PermissionError` in the same window
+  and catches only `FileExistsError`. Treating ACCESS_DENIED on an existing-or-deleting lock file as contention would
+  depart from Optuna to fix a Windows race; recorded for the owner.
 
 ## 7. Results
 
-Final survey, every workload, base `b7ae717` → tree `d521e16`, back to back per workload, warm repetition, the same
-probe and settings as §3. The machine was shared with other sessions (and, for this run, with the final unit suite),
-so allocations and collections are the dependable columns; times are compared pairwise. Every study hash is the same.
+Final survey, every workload, base `b7ae717` → tree `cd33077` (all of plan 15 but step R), back to back per workload,
+warm repetition (the second study in the process), the same probe and settings as §3. The machine was shared with
+other sessions and, for this run, with the full unit suites, so allocations and collections are the dependable columns;
+times are compared pairwise. Every study hash is the same. Step R (`17a3448`, Gaussian draws disposed) was measured on
+its own: no visible change in CMA-ES's bytes, collections or time, same hashes.
 
 | Workload | Trials | Warm time | Allocated | Per trial | gen-0/1/2 | GC pauses | Hash |
 |---|---|---|---|---|---|---|---|
-| random | 10000 | 0.399 → 0.367 s | 194 → 191 MB | 19.9 → 19.6 KB | 10/3/0 → 10/3/0 | 0.05 → 0.05 s | same |
-| tpe | 1000 | 0.865 → 0.726 s | 351 → 256 MB | 359.4 → 262.1 KB | 19/1/0 → 14/1/0 | 0.01 → 0.01 s | same |
-| tpe-int | 1000 | 2.971 → 1.405 s | 1,301 → 246 MB | 1,332.2 → 251.9 KB | 72/2/0 → 13/1/0 | 0.04 → 0.01 s | same |
-| tpe-mixed | 1000 | 1.410 → 0.893 s | 532 → 253 MB | 544.8 → 259.1 KB | 29/2/0 → 14/1/0 | 0.03 → 0.01 s | same |
-| motpe | 400 | 0.512 → 0.547 s | 172 → 151 MB | 440.3 → 386.6 KB | 9/1/0 → 8/1/0 | 0.00 → 0.00 s | same |
-| cmaes | 5000 | 0.946 → 0.831 s | 223 → 223 MB | 45.7 → 45.7 KB | 12/3/0 → 12/3/0 | 0.06 → 0.05 s | same |
-| cmaes-sep | 5000 | 0.608 → 0.575 s | 143 → 143 MB | 29.3 → 29.3 KB | 7/2/0 → 7/2/0 | 0.04 → 0.03 s | same |
-| qmc-sobol | 4000 | 2.727 → 0.143 s | 962 → 58 MB | 246.3 → 14.8 KB | 167/139/138 → 3/1/0 | 0.16 → 0.01 s | same |
-| qmc-halton | 4000 | 1.292 → 0.142 s | 644 → 58 MB | 164.9 → 14.8 KB | 39/38/2 → 3/1/0 | 0.57 → 0.01 s | same |
-| nsga2 | 5000 | 0.487 → 0.479 s | 161 → 159 MB | 33.0 → 32.6 KB | 8/2/0 → 8/2/0 | 0.03 → 0.03 s | same |
-| nsga3 | 3000 | 0.333 → 0.321 s | 101 → 101 MB | 34.5 → 34.5 KB | 5/0/0 → 5/0/0 | 0.01 → 0.01 s | same |
-| sms-emoa | 2000 | 0.444 → 0.415 s | 277 → 277 MB | 141.8 → 141.8 KB | 15/1/0 → 15/1/0 | 0.02 → 0.02 s | same |
-| age-moea2 | 2000 | 0.251 → 0.239 s | 72 → 72 MB | 36.9 → 36.9 KB | 4/2/0 → 4/2/0 | 0.02 → 0.02 s | same |
-| moead | 2000 | 0.494 → 0.503 s | 167 → 167 MB | 85.5 → 85.5 KB | 9/8/0 → 9/8/0 | 0.04 → 0.04 s | same |
-| rvea | 2000 | 0.199 → 0.190 s | 68 → 68 MB | 34.8 → 34.8 KB | 3/0/0 → 3/0/0 | 0.01 → 0.01 s | same |
-| de | 3000 | 1.163 → 1.122 s | 336 → 267 MB | 114.7 → 91.1 KB | 18/3/0 → 14/2/0 | 0.04 → 0.04 s | same |
-| pso | 3000 | 1.027 → 1.092 s | 420 → 351 MB | 143.4 → 119.8 KB | 24/4/1 → 19/3/0 | 0.04 → 0.04 s | same |
-| snes | 3000 | 0.985 → 0.795 s | 508 → 174 MB | 173.4 → 59.4 KB | 28/2/0 → 9/1/0 | 0.04 → 0.02 s | same |
-| xnes | 2000 | 0.927 → 0.658 s | 288 → 143 MB | 147.5 → 73.2 KB | 16/1/0 → 8/0/0 | 0.03 → 0.02 s | same |
-| openai-es | 3000 | 0.886 → 0.868 s | 550 → 178 MB | 187.7 → 60.8 KB | 30/2/0 → 9/1/0 | 0.04 → 0.02 s | same |
-| lm-cma | 3000 | 1.091 → 0.989 s | 348 → 279 MB | 118.8 → 95.2 KB | 19/2/0 → 15/2/0 | 0.04 → 0.03 s | same |
-| vkd-cma | 2000 | 0.641 → 0.657 s | 143 → 117 MB | 73.2 → 59.9 KB | 8/1/0 → 6/1/0 | 0.02 → 0.02 s | same |
-| janus | 2000 | 0.493 → 0.492 s | 219 → 193 MB | 112.1 → 98.8 KB | 12/0/0 → 10/0/0 | 0.02 → 0.02 s | same |
-| gp | 60 | 0.626 → 0.538 s | 425 → 137 MB | 7,253.3 → 2,338.1 KB | 38/32/24 → 21/20/17 | 0.02 → 0.01 s | same |
-| bruteforce | 4320 | 12.163 → 9.038 s | 13,966 → 5,446 MB | 3,310.5 → 1,290.9 KB | 780/219/2 → 305/52/2 | 0.97 → 0.43 s | same |
+| random | 10000 | 0.335 → 0.347 s | 192 → 190 MB | 19.7 → 19.5 KB | 10/3/0 → 10/3/0 | 0.05 → 0.05 s | same |
+| tpe | 1000 | 0.909 → 0.753 s | 351 → 252 MB | 359.4 → 258.0 KB | 19/1/0 → 14/1/0 | 0.01 → 0.01 s | same |
+| tpe-int | 1000 | 2.915 → 1.382 s | 1,301 → 242 MB | 1,332.2 → 247.8 KB | 72/2/0 → 13/1/0 | 0.04 → 0.01 s | same |
+| tpe-mixed | 1000 | 1.260 → 0.877 s | 532 → 249 MB | 544.8 → 255.0 KB | 29/2/0 → 13/1/0 | 0.02 → 0.01 s | same |
+| motpe | 400 | 0.522 → 0.543 s | 172 → 138 MB | 440.3 → 353.3 KB | 9/1/0 → 7/1/0 | 0.00 → 0.00 s | same |
+| cmaes | 5000 | 0.757 → 0.800 s | 223 → 223 MB | 45.7 → 45.7 KB | 12/3/0 → 12/3/0 | 0.05 → 0.05 s | same |
+| cmaes-sep | 5000 | 0.649 → 0.497 s | 143 → 143 MB | 29.3 → 29.3 KB | 7/2/0 → 7/2/0 | 0.04 → 0.03 s | same |
+| qmc-sobol | 4000 | 2.530 → 0.136 s | 962 → 58 MB | 246.3 → 14.8 KB | 158/128/127 → 3/1/0 | 0.15 → 0.01 s | same |
+| qmc-halton | 4000 | 1.283 → 0.140 s | 644 → 58 MB | 164.9 → 14.8 KB | 39/38/2 → 3/1/0 | 0.59 → 0.01 s | same |
+| nsga2 | 5000 | 0.490 → 0.561 s | 158 → 162 MB | 32.4 → 33.2 KB | 8/2/0 → 9/2/0 | 0.03 → 0.03 s | same |
+| nsga3 | 3000 | 0.316 → 0.341 s | 101 → 101 MB | 34.5 → 34.5 KB | 5/0/0 → 5/0/0 | 0.01 → 0.01 s | same |
+| sms-emoa | 2000 | 0.412 → 0.431 s | 276 → 159 MB | 141.3 → 81.4 KB | 15/1/0 → 8/1/0 | 0.02 → 0.01 s | same |
+| age-moea2 | 2000 | 0.277 → 0.249 s | 72 → 72 MB | 36.9 → 36.9 KB | 4/2/0 → 4/2/0 | 0.02 → 0.02 s | same |
+| moead | 2000 | 0.380 → 0.435 s | 167 → 95 MB | 85.5 → 48.6 KB | 9/8/0 → 5/0/0 | 0.04 → 0.01 s | same |
+| rvea | 2000 | 0.186 → 0.182 s | 68 → 68 MB | 34.8 → 34.8 KB | 3/0/0 → 3/0/0 | 0.01 → 0.01 s | same |
+| de | 3000 | 1.059 → 1.010 s | 336 → 241 MB | 114.7 → 82.3 KB | 18/3/0 → 13/2/0 | 0.05 → 0.03 s | same |
+| pso | 3000 | 1.003 → 1.032 s | 419 → 280 MB | 143.0 → 95.6 KB | 24/4/1 → 15/2/0 | 0.04 → 0.04 s | same |
+| snes | 3000 | 0.870 → 0.650 s | 508 → 167 MB | 173.4 → 57.0 KB | 28/2/0 → 9/1/0 | 0.04 → 0.03 s | same |
+| xnes | 2000 | 0.787 → 0.603 s | 288 → 125 MB | 147.5 → 64.0 KB | 16/1/0 → 6/0/0 | 0.03 → 0.01 s | same |
+| openai-es | 3000 | 1.065 → 0.707 s | 550 → 169 MB | 187.7 → 57.7 KB | 30/2/0 → 9/1/0 | 0.04 → 0.03 s | same |
+| lm-cma | 3000 | 1.135 → 0.920 s | 348 → 220 MB | 118.8 → 75.1 KB | 19/2/0 → 12/2/0 | 0.04 → 0.03 s | same |
+| vkd-cma | 2000 | 0.651 → 0.466 s | 143 → 103 MB | 73.2 → 52.7 KB | 8/1/0 → 5/1/0 | 0.02 → 0.01 s | same |
+| janus | 2000 | 0.487 → 0.476 s | 218 → 192 MB | 111.6 → 98.3 KB | 12/0/0 → 10/0/0 | 0.02 → 0.02 s | same |
+| gp | 60 | 0.629 → 0.521 s | 425 → 137 MB | 7,253.3 → 2,338.1 KB | 38/33/24 → 21/20/17 | 0.02 → 0.01 s | same |
+| bruteforce | 4320 | 12.291 → 8.742 s | 13,965 → 5,446 MB | 3,310.2 → 1,290.9 KB | 779/199/1 → 304/62/1 | 0.98 → 0.38 s | same |
 
-- `motpe`'s row (0.512 → 0.547 s) is noise from the shared machine: six runs per side in both orders give base best
-  0.517 s (median 0.533), tree best 0.474 s (median about 0.51).
+- `sms-emoa` and `moead` read slower here because the column times the second repetition, the one in which the tree's
+  code is still tiering up (step Q). Over four repetitions per process the tree is ahead from the cold run on:
+  SMS-EMOA all four 1.76 / 1.69 → 1.55 / 1.52 s, MOEA/D cold + second 1.19 → 0.94 s.
+- `motpe`: at `d521e16` its time moved within noise (six runs per side in both orders: base best 0.517 s, tree best
+  0.474 s); step K then cut its allocation 386.6 → 353.3 KB per trial.
 - Larger runs measured during the steps: `gp` 150 trials 15.6 → 13.2 s, 5,509 → 1,408 MB, gen-2 collections
-  795 → 143 (step C; 11.0 → 9.7 s from the matrix solve alone on a quieter machine); TuRBO 120 trials 4.64 → 4.28 s,
-  1,857 → 1,215 MB (step D); the TPE split at 3,000 trials 693.6 → 551.7 µs (one objective) and 1,505.2 → 1,320.1 µs
-  (two objectives), best of five (step F and its fix).
-- Unchanged by design: random, CMA-ES, NSGA-II/III, SMS-EMOA, AGE-MOEA-2, MOEA/D, RVEA — none was in this pass's
-  scope (their per-trial costs were already 30–140 KB and tens of microseconds).
+  795 → 143 (step C); TuRBO 120 trials 4.64 → 4.28 s, 1,857 → 1,215 MB (step D); the TPE split at 3,000 trials
+  693.6 → 551.7 µs (one objective) and 1,505.2 → 1,320.1 µs (two objectives), best of five (step F and its fix).
+- `moead`'s gen-1 collections fell 8 → 0 with step P: its per-parameter mutation draws had left one
+  finalizable array each to the finalizer, which promoted them past gen 0.
+- Unchanged by design: random, CMA-ES, NSGA-II/III, AGE-MOEA-2 and RVEA kept their per-trial bytes (CMA-ES and the
+  GA samplers were already 30–45 KB per trial after plans 13 and 14); their rows move within noise, allocations
+  included (the base itself measured 158–161 MB for `nsga2` across this pass's surveys).
 
-Gates over the final tree: unit CI filter 2,199 passed, 1 skipped, 0 failed on net10.0 and net8.0 (the journal-lock
-flake of §6 did not recur); documentation gate (5,840 declarations) 0 issues and Core built with the documentation
-warnings as errors 0 errors, both rerun on `d521e16`; hash probe
-36/36 and GP-family probe 8/8 identical; the live-Optuna suites of every touched area passed at their steps (TPE /
-PED-ANOVA / truncnorm 35, GP family 70, BruteForce 13, QMC 20, ES / JANUS / VkD-CMA reference parity 39 + 6 skipped
-without the JANUS reference checkout).
+Gates over the final tree `17a3448`: unit CI filter 2,209 passed, 1 skipped, 0 failed on net10.0 and on net8.0.
+Earlier snapshots: `dbe86e5` and `bbefda2` 2,209 passed, 1 skipped, 0 failed on both TFMs; `cd33077` net10.0 2,208
+passed, 1 skipped, 1 failed (the §6 journal-lock flake, under three concurrent test and survey processes), net8.0
+2,209 passed, 1 skipped, 0 failed. Documentation gate (5,855 declarations) 0 issues and Core built with the
+documentation warnings as errors 0 errors. Hash probe 36/36 and GP-family probe 8/8 identical to the `b7ae717` snapshot after every step.
+Live-Optuna suites of the touched areas at their steps: TPE / PED-ANOVA / truncnorm 35, GP family 70, BruteForce 13,
+QMC 20, ES / JANUS / VkD-CMA reference parity 39 + 6 skipped without the JANUS reference checkout, TPE /
+multi-objective 74 + 1 skipped (step K), Grid and BruteForce 24 (step P).
