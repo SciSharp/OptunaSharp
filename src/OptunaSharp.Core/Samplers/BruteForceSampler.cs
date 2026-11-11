@@ -265,9 +265,19 @@ public class BruteForceSampler : BaseSampler
                 nonNanParams.Add(kv);
         }
 
+        // One path buffer serves every trial (plan 15): AddPath walks a path once and keeps nothing of it, so each trial's
+        // path can overwrite the previous one. A list per trial was most of what a rebuild allocated, and a study rebuilds
+        // the tree once per sampled parameter and per finished trial.
+        var trialPath = new List<(string Name, ChoicesArgs Args, double Value)>();
+
+        // Each new node used to enumerate its parameter's candidates again: Python-faithful decimal arithmetic (a float
+        // repr, a decimal parse and a correctly rounded conversion per candidate) about a thousand times per rebuild,
+        // for the handful of progressions a study has. One list per exact progression serves the whole rebuild (plan 15).
+        var candidatesCache = new Dictionary<(long, long, bool, long, bool), List<double>>();
+
         List<(string Name, ChoicesArgs Args, double Value)> GetTrialPath(FrozenTrial trial)
         {
-            var trialPath = new List<(string, ChoicesArgs, double)>();
+            trialPath.Clear();
             var trialParams = trial.Params;
             foreach (var (name, dist) in trial.Distributions)
             {
@@ -338,7 +348,7 @@ public class BruteForceSampler : BaseSampler
                     continue;
             }
 
-            var leaf = tree.AddPath(GetTrialPath(trial));
+            var leaf = tree.AddPath(GetTrialPath(trial), candidatesCache);
             if (leaf is not null)
             {
                 // The parameters are on the defined grid.
@@ -391,6 +401,33 @@ public class BruteForceSampler : BaseSampler
     {
         object? x = v is CategoricalChoice cc ? cc.Value : v;
         return x is double d && double.IsNaN(d) || x is float f && float.IsNaN(f);
+    }
+
+    /// <summary>
+    ///     <see cref="EnumerateCandidates" /> through a cache keyed by the progression's exact bits (low, high, whether a step
+    ///     is given, the step, and whether it is an integer progression): enumerated once, then the same list returned to
+    ///     every later caller with the same key.
+    /// </summary>
+    /// <param name="args">The progression to enumerate.</param>
+    /// <param name="cache">The cache, owned by one tree rebuild on one thread.</param>
+    /// <returns>The candidates, the very list an earlier call with an equal key returned; callers only read it.</returns>
+    /// <exception cref="NumSharp.ValueError">The progression has no step (nothing is cached, so every call throws alike).</exception>
+    /// <remarks>
+    ///     The key compares bits, not values: <see cref="ChoicesArgs.Equals(ChoicesArgs)" /> treats -0.0 as 0.0 and
+    ///     ignores <c>IsInt</c>, and a cache must never hand one progression's list to another that could enumerate
+    ///     differently. <see cref="EnumerateCandidates" /> is deterministic, so a cached list holds what a fresh call
+    ///     returns.
+    /// </remarks>
+    internal static List<double> CandidatesFor(ChoicesArgs args, Dictionary<(long, long, bool, long, bool), List<double>> cache)
+    {
+        var key = (BitConverter.DoubleToInt64Bits(args.Low), BitConverter.DoubleToInt64Bits(args.High),
+            args.Step.HasValue, BitConverter.DoubleToInt64Bits(args.Step ?? 0.0), args.IsInt);
+        if (!cache.TryGetValue(key, out var candidates))
+        {
+            candidates = EnumerateCandidates(args);
+            cache[key] = candidates;
+        }
+        return candidates;
     }
 
     /// <summary>
@@ -676,14 +713,22 @@ public class BruteForceSampler : BaseSampler
         /// <summary>Materializes a branch with one child per finite numerical choice.</summary>
         /// <param name="paramName">Name of the parameter being suggested or looked up.</param>
         /// <param name="choicesArgs">Finite numerical progression assigned to the branch.</param>
+        /// <param name="candidatesCache">
+        ///     The rebuild's candidate lists by exact progression (see <see cref="CandidatesFor" />), or null to enumerate
+        ///     them here.
+        /// </param>
         /// <exception cref="NumSharp.ValueError">An expanded branch has incompatible metadata, or its numerical choices are not finite.</exception>
-        internal void Expand(string? paramName, ChoicesArgs choicesArgs)
+        internal void Expand(
+            string? paramName, ChoicesArgs choicesArgs,
+            Dictionary<(long, long, bool, long, bool), List<double>>? candidatesCache = null)
         {
             // If the node is unexpanded, expand it. Otherwise, check compatibility.
             if (Children is null)
             {
                 ParamName = paramName;
-                var choices = EnumerateCandidates(choicesArgs);
+                var choices = candidatesCache is null
+                    ? EnumerateCandidates(choicesArgs)
+                    : CandidatesFor(choicesArgs, candidatesCache);
                 Children = new OrderedDict<double, TreeNodeBase>(choices.Count);
                 foreach (var value in choices)
                     Children[value] = UnexpandedTreeNode.Instance;
@@ -786,13 +831,17 @@ public class BruteForceSampler : BaseSampler
 
         /// <summary>Add a path (the suggested parameters of one trial) to the tree.</summary>
         /// <param name="trialPath">Ordered parameter names, progression descriptors, and internal values of the objective path.</param>
+        /// <param name="candidatesCache">The rebuild's candidate lists by exact progression, passed on to <see cref="Expand" />; or null.</param>
         /// <returns>The resulting path node, or null if an already-finished prefix prevents expansion.</returns>
-        internal TreeNode? AddPath(List<(string Name, ChoicesArgs Args, double Value)> trialPath)
+        /// <exception cref="NumSharp.ValueError">A node on the path has incompatible metadata, or a progression is not finite.</exception>
+        internal TreeNode? AddPath(
+            List<(string Name, ChoicesArgs Args, double Value)> trialPath,
+            Dictionary<(long, long, bool, long, bool), List<double>>? candidatesCache = null)
         {
             var currentNode = this;
             foreach (var (paramName, choicesArgs, value) in trialPath)
             {
-                currentNode.Expand(paramName, choicesArgs);
+                currentNode.Expand(paramName, choicesArgs, candidatesCache);
                 var children = currentNode.Children;
                 if (children is null || children.Count == 0)  // children is empty or None.
                     return null;

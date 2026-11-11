@@ -144,7 +144,19 @@ Open after plan 14 (its §7):
   120 trials and REMBO at 60 (base → tree): all 8 hashes identical; TuRBO 4.64 → 4.28 s, 1,857 → 1,215 MB; REMBO
   unchanged (its embedded GP does not go through this fit); the GPSampler rows show step C (e.g. 26 trials 52 → 24 MB,
   two objectives 197 → 121 MB). Gates: GP-family, LinAlg and terminator unit tests 266/266 (net10.0); live parity
-  70/70.
+  70/70. Committed `874c64b`.
+- 07:25 — **step E, BruteForce tree rebuilds.** Profile (12.4 s): `PopulateTree` 76% — paths 3.5 s, `AddPath` 3.8 s
+  of which `EnumerateCandidates` 1.2 s (Python-faithful decimal arithmetic: a float repr, a decimal parse and a
+  correctly rounded conversion per candidate, for every newly expanded node, about a thousand per rebuild). (1) One path
+  buffer serves every trial of a rebuild (`AddPath` walks a path once and keeps nothing). (2) `CandidatesFor` caches the
+  candidate lists per rebuild, keyed by the progression's exact bits and kind (`ChoicesArgs.Equals` treats -0.0 as 0.0
+  and ignores `IsInt`, so it is not the key); a progression without a step throws on every call and is never cached.
+  Survey `bruteforce` (4,320 points, all of them): 13.9 → 11.6 s (base runs ranged 13.9–17.6 s on the loaded
+  machine), 13,967 → 5,448 MB (−61%), gen-0 collections 779 → 307; same hash. Gates: two new `BruteForceSamplerTests`
+  (the cache equals a fresh enumeration by bits and returns the same list again; -0.0 / 0.0 and int / float are
+  separate keys; the stepless progression throws twice and caches nothing), BruteForce unit tests 26/26; live
+  BruteForce parity 13/13; hash probe 36/36. Left for later: caching each finished trial's path across rebuilds (the
+  path of a finished trial never changes; 28% of the time).
 
 ## 6. Findings and notes for the owner
 

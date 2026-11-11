@@ -351,6 +351,56 @@ public class BruteForceSamplerTests
     }
 
     /// <summary>
+    ///     Plan 15: a tree rebuild enumerates each progression's candidates once, through <c>CandidatesFor</c>. The cached
+    ///     list equals a fresh enumeration bit for bit and is returned again for the same progression; progressions that
+    ///     <c>ChoicesArgs.Equals</c> calls equal but whose bits differ (-0.0 and 0.0) or whose kind differs (int and float)
+    ///     get lists of their own.
+    /// </summary>
+    [TestMethod]
+    public void CandidatesFor_CachesPerExactProgression_AndMatchesAFreshEnumeration()
+    {
+        var cache = new Dictionary<(long, long, bool, long, bool), List<double>>();
+        var cases = new[]
+        {
+            new BruteForceSampler.ChoicesArgs(0, 5, 1, isInt: true),
+            new BruteForceSampler.ChoicesArgs(-1.0, 1.0, 0.25, isInt: false),
+            new BruteForceSampler.ChoicesArgs(0.1, 0.7, 0.1, isInt: false),
+            new BruteForceSampler.ChoicesArgs(-0.0, 1.0, 0.5, isInt: false),
+            new BruteForceSampler.ChoicesArgs(0.0, 1.0, 0.5, isInt: false),
+            new BruteForceSampler.ChoicesArgs(0.0, 3.0, 1.0, isInt: false),
+            new BruteForceSampler.ChoicesArgs(0.0, 3.0, 1.0, isInt: true),
+        };
+        var lists = new List<List<double>>();
+        foreach (var args in cases)
+        {
+            List<double> cached = BruteForceSampler.CandidatesFor(args, cache);
+            List<double> fresh = BruteForceSampler.EnumerateCandidates(args);
+            cached.Select(BitConverter.DoubleToInt64Bits).Should().Equal(fresh.Select(BitConverter.DoubleToInt64Bits));
+            BruteForceSampler.CandidatesFor(args, cache).Should().BeSameAs(cached, "the same progression is enumerated once");
+            lists.Add(cached);
+        }
+        cache.Should().HaveCount(cases.Length, "-0.0 and 0.0, and int and float, are different keys");
+        lists.Distinct().Should().HaveCount(cases.Length);
+    }
+
+    /// <summary>
+    ///     Plan 15: a float progression without a step cannot be enumerated; through the cache it throws Optuna's
+    ///     <c>ValueError</c> on every call, as <c>EnumerateCandidates</c> does, and leaves nothing cached.
+    /// </summary>
+    [TestMethod]
+    public void CandidatesFor_AProgressionWithoutAStep_ThrowsEveryTime_AndCachesNothing()
+    {
+        var cache = new Dictionary<(long, long, bool, long, bool), List<double>>();
+        var args = new BruteForceSampler.ChoicesArgs(0.0, 1.0, null, isInt: false);
+        for (int i = 0; i < 2; i++)
+        {
+            Action enumerate = () => BruteForceSampler.CandidatesFor(args, cache);
+            enumerate.Should().Throw<NumSharp.ValueError>().WithMessage("FloatDistribution.step must be given*");
+        }
+        cache.Should().BeEmpty();
+    }
+
+    /// <summary>
     ///     A <see cref="Study" /> proxy that counts <see cref="Study.Stop" /> calls (Optuna's tests
     ///     use <c>patch.object(study, "stop")</c>). It shares the underlying storage/sampler so the
     ///     sampler observes the same trials, letting us assert the exact stop decisions.
