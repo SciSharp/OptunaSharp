@@ -272,4 +272,38 @@ public class Run2SamplerParityBugTests
             "A single direction cannot be retrieved from a multi-objective study. Consider using Study.directions to " +
             "retrieve a list containing all directions.");
     }
+
+    /// <summary>
+    ///     QA-80: cmaes's <c>CMA</c> and <c>SepCMA</c> constructors assert <c>_is_valid_bounds(bounds, mean)</c>
+    ///     ("invalid bounds"), so Optuna's first CMA-ES trial fails with <c>AssertionError</c> when the initial mean lies
+    ///     outside the search space: an <c>x0</c> outside the ranges, or <c>source_trials</c> whose best solutions lie
+    ///     outside the target's ranges (CmaEsSampler checks only parameter names). The port's <c>Cma</c> and
+    ///     <c>SepCma</c> omit the assertion (only <c>CmaWm</c> keeps it, as <c>ArgumentException("invalid bounds")</c>),
+    ///     so the study samples on around an out-of-bounds mean.
+    /// </summary>
+    /// <remarks>
+    ///     Measured with Optuna 5.0.0 / cmaes 0.13.1: <c>CmaEsSampler(x0={"x": 12.0, "y": 0.5}, seed=0)</c> over
+    ///     <c>x</c> in [0, 10], <c>y</c> in [0, 1], <c>optimize(n_trials=5)</c>: trial 0 (independent) COMPLETE, trial 1
+    ///     FAIL and <c>AssertionError: invalid bounds</c> raised, the same with <c>use_separable_cma=True</c> and
+    ///     <c>lr_adapt=True</c>; <c>x0={"x": 10.0}</c> (on the bound) runs identically on both sides. The port completes
+    ///     all five trials. The Warm-Starting fuzz (E51) hit it in 3 of 150 programs through <c>source_trials</c>
+    ///     ranges. The expected exception type follows the port's own mapping of this assertion in <c>CmaWm</c>.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void CmaEs_InitialMeanOutsideTheBounds_FailsLikeCmaesInvalidBoundsAssertion()
+    {
+        foreach (bool separable in new[] { false, true })
+        {
+            var study = Optuna.CreateStudy(sampler: new CmaEsSampler(
+                x0: new System.Collections.Generic.Dictionary<string, object?> { ["x"] = 12.0, ["y"] = 0.5 },
+                seed: 0, useSeparableCma: separable));
+
+            System.Action optimize = () => study.Optimize(t => t.SuggestFloat("x", 0, 10) + t.SuggestFloat("y", 0, 1),
+                nTrials: 5);
+
+            optimize.Should().Throw<System.ArgumentException>().WithMessage("invalid bounds", $"separable: {separable}");
+            System.Linq.Enumerable.Select(study.Trials, t => t.State).Should().Equal(TrialState.Complete, TrialState.Fail);
+        }
+    }
 }
