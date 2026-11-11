@@ -119,7 +119,7 @@ Open after plan 14 (its §7):
   busy for 12 of 12.5 s (trimming the array pools after every gen-2 collection, and finalizing NumSharp blocks), and
   `LinAlg.SolveTriangular` with a matrix right-hand side solved one column at a time through a captured accessor, two
   arrays per column.
-- 07:00 — **step C, GP linear algebra and fit scratch.** (1) `LinAlg.SolveTriangular(matrix)` sweeps all right-hand
+- 07:02 — **step C, GP linear algebra and fit scratch.** (1) `LinAlg.SolveTriangular(matrix)` sweeps all right-hand
   sides at once (`SweepTriangular`: row `i` minus a coefficient times row `j`, vectorized across the right-hand sides,
   with a separate scalar branch per the owner's rule); a right solve works on the transposed block. Every element still
   gets `TriSolveVec`'s sequence. (2) `LinAlg.CholeskySolve(L, B, left)` runs both triangular solves of a Cholesky solve
@@ -137,7 +137,7 @@ Open after plan 14 (its §7):
   unit CI filter 2,193/2,193 on net10.0 and net8.0; live GP / terminator / TuRBO / SAASBO / REMBO / LinAlg parity
   70/70. Not found: the source of the NumSharp `UInt32` blocks the GP run left to the finalizer (not `SeedSequence`,
   which keeps a managed pool, nor `randint`, which defaults to int64). Committed `8588074`.
-- 07:15 — **step D, the forked regressor.** `Samplers/ModelBased/Gp/GPRegressor.cs` (TuRBO's fit, and the fork's
+- 07:07 — **step D, the forked regressor.** `Samplers/ModelBased/Gp/GPRegressor.cs` (TuRBO's fit, and the fork's
   posterior) takes step C's changes line for line: the fit's `FitScratch` (released when `FitInner` ends, and by
   `TurboGpFit` after its own L-BFGS-B), `CholeskySolve` for `C⁻¹`, `V` and `SolveCholesky`, the in-place transposed
   vector solve for the per-point posterior, `CacheMatrix` and the vector `SolveCholesky`. GP-family probe with TuRBO at
@@ -145,7 +145,7 @@ Open after plan 14 (its §7):
   unchanged (its embedded GP does not go through this fit); the GPSampler rows show step C (e.g. 26 trials 52 → 24 MB,
   two objectives 197 → 121 MB). Gates: GP-family, LinAlg and terminator unit tests 266/266 (net10.0); live parity
   70/70. Committed `874c64b`.
-- 07:25 — **step E, BruteForce tree rebuilds.** Profile (12.4 s): `PopulateTree` 76% — paths 3.5 s, `AddPath` 3.8 s
+- 07:16 — **step E, BruteForce tree rebuilds.** Profile (12.4 s): `PopulateTree` 76% — paths 3.5 s, `AddPath` 3.8 s
   of which `EnumerateCandidates` 1.2 s (Python-faithful decimal arithmetic: a float repr, a decimal parse and a
   correctly rounded conversion per candidate, for every newly expanded node, about a thousand per rebuild). (1) One path
   buffer serves every trial of a rebuild (`AddPath` walks a path once and keeps nothing). (2) `CandidatesFor` caches the
@@ -157,7 +157,7 @@ Open after plan 14 (its §7):
   separate keys; the stepless progression throws twice and caches nothing), BruteForce unit tests 26/26; live
   BruteForce parity 13/13; hash probe 36/36. Left for later: caching each finished trial's path across rebuilds (the
   path of a finished trial never changes; 28% of the time). Committed `6418e0b`.
-- 07:35 — **step F, TPE's trial split.** A split bench (`sbench`) on studies of 1,000 and 3,000 completed trials with
+- 07:25 — **step F, TPE's trial split.** A split bench (`sbench`) on studies of 1,000 and 3,000 completed trials with
   many ties: 175–190 µs and 155 KB per split at 1,000 trials, 705–735 µs and 476 KB at 3,000 — about 15% of a TPE
   trial. (1) `GetInfeasibleTrialScore` returns the empty loop's 0.0 for a trial that records no constraint
   (`ConstrainedOptimization.HasConstraints`: the two tests the dictionary's construction makes) instead of building an
@@ -172,7 +172,7 @@ Open after plan 14 (its §7):
   the LINQ code written out, shuffled histories with ties, both zeros, both infinities and NaN, both directions, every
   seventh group size; constraints in both formats still score infeasible); TPE, constraint and split unit tests
   117/117; hash probe 36/36. Committed `59b69dd`.
-- 07:45 — **step G, Parzen estimator construction.** Each numerical parameter computed its centers (logs, for the log
+- 07:29 — **step G, Parzen estimator construction.** Each numerical parameter computed its centers (logs, for the log
   kinds) and widths into arrays of their own and then copied both into arrays one longer for the prior kernel. The
   centers are now written straight into the prior-extended array and the widths computed into its slots:
   `ComputeSigmas`, `SortedRawSigmas` and `BinnedRawSigmas` gain span-filling cores (the binned one returns whether it
@@ -180,7 +180,19 @@ Open after plan 14 (its §7):
   as thin wrappers for `TpeBinnedSigmasTests`. Kernel bench: estimator build K=1,000 259–275 → 181 KB, K=3,000
   775–822 → 540 KB; output hash unchanged. Survey, all of plan 15 against the base: `tpe` 1,000 trials
   0.92 → 0.78 s, 358 → 261 KB per trial; `tpe-mixed` 1.32 → 1.05 s, 544 → 258 KB per trial; same hashes. Gates:
-  TPE, Parzen and PED-ANOVA unit tests 122/122; kernel-bench hash; hash probe 36/36.
+  TPE, Parzen and PED-ANOVA unit tests 122/122; kernel-bench hash; hash probe 36/36. Committed `eaed03a`. Unit CI
+  filter through step G: 2,199/2,199 (1 skipped) on net10.0 and net8.0; documentation gate (`check_documentation.cs`,
+  5,840 declarations) 0 issues; Core built with the documentation warnings as errors, both TFMs: 0 errors.
+- 07:45 — **step H, the evolution-strategy samplers' attribute keys.** SNES, xNES and OpenAI-ES spent most of their
+  per-trial allocation (147–187 KB) rebuilding one string: `AttrKeyGeneration` was an expression-bodied
+  `AttrPrefix + "generation"` read for every trial of the history by `GetSolutionTrials` and `CountRunningMembers` on
+  every ask. The two keys are now built once per sampler (`AttrPrefix` is a constant per sampler type), and the
+  completed-trials list is sized for the history. DE, PSO, LM-CMA and VkD-CMA concatenate `const` prefixes, which
+  the compiler folds; CMA-ES hands its keys to its trial history once, and the GA samplers read theirs once per newly
+  folded trial: none of those allocate per scan. Survey (machine loaded by other sessions, base and tree back to
+  back): SNES 3,000 trials 1.06 → 0.89 s, 173 → 59 KB per trial; xNES 2,000 0.90 → 0.86 s, 148 → 73 KB; OpenAI-ES
+  3,000 1.08 → 0.89 s, 188 → 61 KB; same hashes. Gates: ES, parallel-read and nJobs sampler tests 248/248; hash
+  probe 36/36 (SNES, xNES and OpenAI-ES studies included).
 
 ## 6. Findings and notes for the owner
 

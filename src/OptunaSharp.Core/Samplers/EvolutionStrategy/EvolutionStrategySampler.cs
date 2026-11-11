@@ -198,8 +198,18 @@ public abstract class EvolutionStrategySampler : BaseSampler
         return trans.Untransform(nd);
     }
 
-    private string AttrKeyGeneration => AttrPrefix + "generation";
-    private string AttrKeyOptimizer => AttrPrefix + "optimizer";
+    // Built once per sampler (plan 15): GetSolutionTrials and CountRunningMembers read the generation key for every
+    // trial of the history on every ask, and concatenating it there allocated a new string per trial per scan, most of
+    // the sampler's per-trial allocation. AttrPrefix is a constant per sampler type, so the cached keys are the strings
+    // the concatenation produced; a race between two first readers only builds an equal string twice.
+    private string? _attrKeyGeneration;
+    private string? _attrKeyOptimizer;
+
+    /// <summary>The system-attribute key that stamps a trial with the generation it was asked in.</summary>
+    private string AttrKeyGeneration => _attrKeyGeneration ??= AttrPrefix + "generation";
+
+    /// <summary>The system-attribute key prefix of the serialized optimizer state's chunks.</summary>
+    private string AttrKeyOptimizer => _attrKeyOptimizer ??= AttrPrefix + "optimizer";
 
     /// <summary>Reassembles serialized optimizer chunks in numeric chunk order.</summary>
     /// <param name="optimizerAttrs">Stored serialized optimizer chunks keyed by chunk identifier.</param>
@@ -278,8 +288,10 @@ public abstract class EvolutionStrategySampler : BaseSampler
     /// <returns>Completed trial snapshots.</returns>
     private static List<FrozenTrial> GetTrials(Study study)
     {
-        var completeTrials = new List<FrozenTrial>();
-        foreach (var t in study.GetTrialsInternal(deepcopy: false, states: null, useCache: true))
+        List<FrozenTrial> all = study.GetTrialsInternal(deepcopy: false, states: null, useCache: true);
+        // Sized for the whole history (plan 15): nearly every trial is complete, so the list never regrows on an ask.
+        var completeTrials = new List<FrozenTrial>(all.Count);
+        foreach (var t in all)
             if (t.State == TrialState.Complete)
                 completeTrials.Add(t);
         return completeTrials;
