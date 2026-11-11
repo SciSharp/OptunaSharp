@@ -171,7 +171,16 @@ Open after plan 14 (its §7):
   `motpe` 400 trials time unchanged, 440 → 405 KB per trial. Gates: new `TpeTrialSplitSortTests` (the split against
   the LINQ code written out, shuffled histories with ties, both zeros, both infinities and NaN, both directions, every
   seventh group size; constraints in both formats still score infeasible); TPE, constraint and split unit tests
-  117/117; hash probe 36/36.
+  117/117; hash probe 36/36. Committed `59b69dd`.
+- 07:45 — **step G, Parzen estimator construction.** Each numerical parameter computed its centers (logs, for the log
+  kinds) and widths into arrays of their own and then copied both into arrays one longer for the prior kernel. The
+  centers are now written straight into the prior-extended array and the widths computed into its slots:
+  `ComputeSigmas`, `SortedRawSigmas` and `BinnedRawSigmas` gain span-filling cores (the binned one returns whether it
+  wrote, and every refusing check runs before its first write), `StableArgsort` a span overload; the array forms stay
+  as thin wrappers for `TpeBinnedSigmasTests`. Kernel bench: estimator build K=1,000 259–275 → 181 KB, K=3,000
+  775–822 → 540 KB; output hash unchanged. Survey, all of plan 15 against the base: `tpe` 1,000 trials
+  0.92 → 0.78 s, 358 → 261 KB per trial; `tpe-mixed` 1.32 → 1.05 s, 544 → 258 KB per trial; same hashes. Gates:
+  TPE, Parzen and PED-ANOVA unit tests 122/122; kernel-bench hash; hash probe 36/36.
 
 ## 6. Findings and notes for the owner
 

@@ -265,25 +265,29 @@ internal sealed class ParzenEstimator
             high += step.Value / 2.0;
         }
 
-        var mus = observations;
+        // mus = observations (or their logs), then np.append(mus, [0.5 * (low + high)]) and
+        // np.append(sigmas, [high - low]). Plan 15: the centers and the widths are written straight into the arrays that
+        // carry the prior's slot, instead of into arrays of their own copied over afterwards: the same values, two
+        // arrays per parameter fewer per estimator (three on the log kinds).
+        int n = observations.Length;
+        var musWithPrior = new double[n + 1];
         if (log)
         {
-            mus = new double[observations.Length];
-            for (int i = 0; i < observations.Length; i++)
-                mus[i] = Math.Log(observations[i]);
+            for (int i = 0; i < n; i++)
+                musWithPrior[i] = Math.Log(observations[i]);
             low = Math.Log(low);
             high = Math.Log(high);
         }
+        else
+        {
+            Array.Copy(observations, musWithPrior, n);
+        }
+        ReadOnlySpan<double> mus = musWithPrior.AsSpan(0, n);
 
-        var sigmas = ComputeSigmas(mus, low, high, observations.Length, parameters);
+        var sigmasWithPrior = new double[n + 1];
+        ComputeSigmas(mus, low, high, n, parameters, sigmasWithPrior.AsSpan(0, n));
 
-        // mus = np.append(mus, [0.5 * (low + high)]); sigmas = np.append(sigmas, [high - low]).
-        var musWithPrior = new double[mus.Length + 1];
-        Array.Copy(mus, musWithPrior, mus.Length);
         musWithPrior[^1] = 0.5 * (low + high);
-
-        var sigmasWithPrior = new double[sigmas.Length + 1];
-        Array.Copy(sigmas, sigmasWithPrior, sigmas.Length);
         sigmasWithPrior[^1] = high - low;
 
         // The original (pre-log, pre-step-widen) low/high/step drive the batched kind.
@@ -309,12 +313,33 @@ internal sealed class ParzenEstimator
     /// <param name="parameters">Kernel construction and observation-weight configuration.</param>
     /// <returns>Per-observation kernel widths after endpoint and clipping heuristics.</returns>
     /// <remarks>
-    ///     The unclipped widths come from <see cref="BinnedRawSigmas" /> when it can prove they clip to exactly what Optuna's
+    ///     The unclipped widths come from <see cref="BinnedRawSigmas(double[], double, double, double, int, bool)" /> when it can prove they clip to exactly what Optuna's
     ///     sort gives (plan 14: the sort was a quarter of a 1,000-trial, 40-parameter TPE run), otherwise from
-    ///     <see cref="SortedRawSigmas" />, Optuna's sort-based computation. Both then go through the same clip.
+    ///     <see cref="SortedRawSigmas(double[], double, double, bool)" />, Optuna's sort-based computation. Both then go through the same clip.
     /// </remarks>
     internal static double[] ComputeSigmas(
         double[] mus, double low, double high, int nObservations, ParzenEstimatorParameters parameters)
+    {
+        var sigmas = new double[mus.Length];
+        ComputeSigmas(mus, low, high, nObservations, parameters, sigmas);
+        return sigmas;
+    }
+
+    /// <summary>
+    ///     <see cref="ComputeSigmas(double[], double, double, int, ParzenEstimatorParameters)" /> into a caller's buffer:
+    ///     the same widths, written to <paramref name="sigmas" /> (plan 15: the estimator passes the slots of its
+    ///     prior-extended array, so no width array is copied over afterwards).
+    /// </summary>
+    /// <param name="mus">Kernel centers in transformed numerical coordinates.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
+    /// <param name="nObservations">Number of historical observations represented by the kernels.</param>
+    /// <param name="parameters">Kernel construction and observation-weight configuration.</param>
+    /// <param name="sigmas">Receives one width per center; at least as long as <paramref name="mus" />, and not overlapping it.</param>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="sigmas" /> is shorter than <paramref name="mus" />.</exception>
+    internal static void ComputeSigmas(
+        ReadOnlySpan<double> mus, double low, double high, int nObservations, ParzenEstimatorParameters parameters,
+        Span<double> sigmas)
     {
         int n = mus.Length;
         double maxsigma = high - low;
@@ -333,14 +358,13 @@ internal sealed class ParzenEstimator
             minsigma = Eps;
         }
 
-        double[] sigmas = (parameters.ConsiderMagicClip
-                              ? BinnedRawSigmas(mus, low, high, minsigma, nBins, parameters.ConsiderEndpoints)
-                              : null)
-                          ?? SortedRawSigmas(mus, low, high, parameters.ConsiderEndpoints);
+        // The binned path writes the widths only when it succeeds; otherwise the sort writes them.
+        if (!(parameters.ConsiderMagicClip
+              && BinnedRawSigmas(mus, low, high, minsigma, nBins, parameters.ConsiderEndpoints, sigmas)))
+            SortedRawSigmas(mus, low, high, parameters.ConsiderEndpoints, sigmas);
 
         for (int t = 0; t < n; t++)
             sigmas[t] = MathUtil.Clip(sigmas[t], minsigma, maxsigma);
-        return sigmas;
     }
 
     /// <summary>
@@ -354,6 +378,24 @@ internal sealed class ParzenEstimator
     /// <param name="considerEndpoints">Whether the domain endpoints count as neighbors of the smallest and largest center.</param>
     /// <returns>One unclipped width per center, in the centers' order.</returns>
     internal static double[] SortedRawSigmas(double[] mus, double low, double high, bool considerEndpoints)
+    {
+        var sigmas = new double[mus.Length];
+        SortedRawSigmas(mus, low, high, considerEndpoints, sigmas);
+        return sigmas;
+    }
+
+    /// <summary>
+    ///     <see cref="SortedRawSigmas(double[], double, double, bool)" /> into a caller's buffer: the same widths, in the
+    ///     centers' order.
+    /// </summary>
+    /// <param name="mus">Kernel centers in transformed numerical coordinates; not modified.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
+    /// <param name="considerEndpoints">Whether the domain endpoints count as neighbors of the smallest and largest center.</param>
+    /// <param name="sigmas">Receives one unclipped width per center; at least as long as <paramref name="mus" />.</param>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="sigmas" /> is shorter than <paramref name="mus" />.</exception>
+    internal static void SortedRawSigmas(
+        ReadOnlySpan<double> mus, double low, double high, bool considerEndpoints, Span<double> sigmas)
     {
         int n = mus.Length;
 
@@ -381,14 +423,12 @@ internal sealed class ParzenEstimator
         }
 
         // sigmas = sorted_sigmas[np.argsort(sorted_indices)] — invert the (distinct) permutation.
-        var sigmas = new double[n];
         for (int t = 0; t < n; t++)
             sigmas[sortedIndices[t]] = sortedSigmas[t];
-        return sigmas;
     }
 
     /// <summary>
-    ///     Unclipped kernel widths that clip to exactly what <see cref="SortedRawSigmas" /> clips to, found in O(n) without
+    ///     Unclipped kernel widths that clip to exactly what <see cref="SortedRawSigmas(double[], double, double, bool)" /> clips to, found in O(n) without
     ///     sorting, or <see langword="null" /> when that cannot be proven for these centers (the caller then sorts).
     /// </summary>
     /// <param name="mus">Kernel centers in transformed numerical coordinates; not modified.</param>
@@ -420,9 +460,32 @@ internal sealed class ParzenEstimator
     internal static double[]? BinnedRawSigmas(
         double[] mus, double low, double high, double minsigma, int nBins, bool considerEndpoints)
     {
+        var sigmas = new double[mus.Length];
+        return BinnedRawSigmas(mus, low, high, minsigma, nBins, considerEndpoints, sigmas) ? sigmas : null;
+    }
+
+    /// <summary>
+    ///     <see cref="BinnedRawSigmas(double[], double, double, double, int, bool)" /> into a caller's buffer: true with
+    ///     the widths written to <paramref name="sigmas" />, or false with <paramref name="sigmas" /> untouched when the
+    ///     binned widths cannot be proven exact (the caller then sorts).
+    /// </summary>
+    /// <param name="mus">Kernel centers in transformed numerical coordinates; not modified.</param>
+    /// <param name="low">Lower endpoint of the numerical domain.</param>
+    /// <param name="high">Upper endpoint of the numerical domain.</param>
+    /// <param name="minsigma">The magic-clip floor every width is clipped up to; the bin width.</param>
+    /// <param name="nBins">How many bins of width <paramref name="minsigma" /> cover the domain.</param>
+    /// <param name="considerEndpoints">Whether the domain endpoints count as neighbors of the smallest and largest center.</param>
+    /// <param name="sigmas">Receives one width per center on success; at least as long as <paramref name="mus" />.</param>
+    /// <returns>Whether the widths were written.</returns>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="sigmas" /> is shorter than <paramref name="mus" />.</exception>
+    /// <remarks>Every check that can refuse runs before the first write, so a refusal leaves the buffer as it was.</remarks>
+    internal static bool BinnedRawSigmas(
+        ReadOnlySpan<double> mus, double low, double high, double minsigma, int nBins, bool considerEndpoints,
+        Span<double> sigmas)
+    {
         int n = mus.Length;
         if (n < 2 || nBins < 1 || nBins > 100 || !(high > low) || !(minsigma > 0) || !double.IsFinite(minsigma))
-            return null;
+            return false;
 
         // Per bin: the smallest center and its first index, the largest and its last index (stable-sort positions).
         Span<double> binMin = stackalloc double[nBins];
@@ -438,7 +501,7 @@ internal sealed class ParzenEstimator
             double v = mus[i];
             // Outside the domain (or NaN): the sort handles it; the bins assume every center lies in [low, high].
             if (!(v >= low && v <= high))
-                return null;
+                return false;
             int bin = (int)Math.Min(Math.Floor((v - low) / minsigma), nBins - 1);
             if (v < binMin[bin])
             {
@@ -456,12 +519,11 @@ internal sealed class ParzenEstimator
         for (int b = 0; b < nBins; b++)
         {
             if (binMinIndex[b] >= 0 && !(binMax[b] - binMin[b] <= minsigma))
-                return null;
+                return false;
         }
 
         // Every center not at its bin's extremes clips to minsigma; start everyone there and raise the extremes.
-        var sigmas = new double[n];
-        Array.Fill(sigmas, minsigma);
+        sigmas.Slice(0, n).Fill(minsigma);
 
         // Each bin's smallest center: its sorted predecessor is the previous non-empty bin's largest (or `low`).
         bool firstBin = true;
@@ -494,11 +556,11 @@ internal sealed class ParzenEstimator
             lastBin = false;
             nextMin = binMin[b];
         }
-        return sigmas;
+        return true;
     }
 
     /// <summary>
-    ///     The stable argsort <see cref="ComputeSigmas" /> uses: the permutation
+    ///     The stable argsort <see cref="ComputeSigmas(double[], double, double, int, ParzenEstimatorParameters)" /> uses: the permutation
     ///     <c>Enumerable.Range(0, n).OrderBy(i => values[i])</c> returns, with ties in index order, computed by
     ///     <see cref="Array.Sort{TKey, TValue}(TKey[], TValue[])" /> and an index sort of each run of equal keys.
     /// </summary>
@@ -512,10 +574,18 @@ internal sealed class ParzenEstimator
     ///     default comparer used, and its only freedom, the order inside a run of equal keys, is undone by sorting each
     ///     run's indices.
     /// </remarks>
-    internal static int[] StableArgsort(double[] values)
+    internal static int[] StableArgsort(double[] values) => StableArgsort(values.AsSpan());
+
+    /// <summary>
+    ///     <see cref="StableArgsort(double[])" /> over a span (plan 15: the estimator's centers are a slice of its
+    ///     prior-extended array): the same permutation, sorting a copy of the values as the array form sorted its clone.
+    /// </summary>
+    /// <param name="values">The values to order; not modified.</param>
+    /// <returns>The indices of <paramref name="values" /> in ascending order of value, equal values by index.</returns>
+    internal static int[] StableArgsort(ReadOnlySpan<double> values)
     {
         int n = values.Length;
-        var keys = (double[])values.Clone();
+        var keys = values.ToArray();
         var indices = new int[n];
         for (int i = 0; i < n; i++)
             indices[i] = i;
