@@ -162,4 +162,41 @@ public class Run2SqliteParityBugTests
         study.Trials[0].UserAttrs.Keys.Should().Equal(new[] { "a", "k" }, "Optuna's trial reads come through the (trial_id, key) index");
         storage.GetAllStudies()[0].UserAttrs.Keys.Should().Equal(new[] { "zz", "b", "m" }, "get_all_studies scans the table in insertion order");
     }
+
+    /// <summary>
+    ///     QA-75: opening a database whose schema predates the head revision without <c>skip_compatibility_check</c>
+    ///     raises Optuna's <c>RuntimeError</c> naming the runtime version as <c>version.__version__</c>, i.e.
+    ///     <c>5.0.0</c>; the port interpolates <c>OptunaSharpVersion.OptunaCompatibilityTarget</c>, which is
+    ///     <c>"5.0"</c>, so the verbatim message differs (both the SQLite and the EF Core storage use it).
+    /// </summary>
+    /// <remarks>
+    ///     Measured on copies of every Optuna upgrade-test asset (<c>refs/optuna/tests/storages_tests/rdb_tests/
+    ///     test_upgrade_assets</c>): the nine pre-3.2 databases give the same message on both sides except
+    ///     <c>5.0.0</c> / <c>5.0</c>; with <c>skip_compatibility_check=True</c> both open them and report the same
+    ///     current / head revisions and studies.
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void OldSchemaDatabase_CompatibilityErrorNamesOptunasFullVersion()
+    {
+        string asset = Path.Combine(RepoRoot(), "refs", "optuna", "tests", "storages_tests", "rdb_tests",
+            "test_upgrade_assets", "3.0.0.a.db");
+        if (!File.Exists(asset))
+            Assert.Inconclusive("refs/optuna submodule not initialized (`git submodule update --init refs/optuna`).");
+        string path = Path.Combine(Path.GetTempPath(), $"optunasharp-rdb-qa75-{Guid.NewGuid():N}.db");
+        File.Copy(asset, path);
+        _tempFiles.Add(path);
+
+        Action open = () => new RDBStorage("sqlite:///" + path.Replace('\\', '/'));
+
+        open.Should().Throw<NumSharp.RuntimeError>().WithMessage(
+            "The runtime optuna version 5.0.0 is no longer compatible with the table schema (set up by optuna 3.0.0). " +
+            "Please execute `$ optuna storage upgrade --storage $STORAGE_URL` for upgrading the storage.");
+    }
+
+    /// <summary>Returns the repository root, two levels above this source file, wherever the test binaries were built.</summary>
+    /// <param name="thisFile">Filled in by the compiler with this file's path.</param>
+    /// <returns>The absolute repository root.</returns>
+    private static string RepoRoot([System.Runtime.CompilerServices.CallerFilePath] string? thisFile = null)
+        => Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile)!, "..", ".."));
 }
