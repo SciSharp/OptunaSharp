@@ -85,3 +85,47 @@ Open after plan 14 (its §7):
   over 4,100 indexes × 5 `(d, seed)`; `Create`+`Generate` = `Random`; the past-the-end guard) and `ScrambledHaltonTests`
   (engine = the replaced per-call algorithm, written out, over 11 indexes × 4 `(dim, seed)`); QMC / GP / TuRBO / SAASBO
   unit tests 246/246; live QMC and Sobol parity 20/20; hash probe 36/36 identical.
+- 06:00 — a kernel bench (`kbench`, a friend assembly) times `ParzenEstimator` construction and `LogPdf` at 100, 1,000
+  and 3,000 kernels for 10 floats, a mixed space (floats, log floats, ints) and 10 ints, and hashes every output by its
+  bits. Finding: the **stepped (int) branch** was the slow one — 10 ints at 100 kernels took 1.8 ms and 976 KB per call,
+  against 0.1 ms and 7 KB for 10 floats — because its three `np.unique`-style dedups sorted with LINQ over up to
+  24 × n_kernels grid cells. The sampled profiler could not say where the continuous branch spent its time: a call-free
+  loop's time is charged to the next safe point (memset and GC-poll frames with no GC running), so the parts were timed
+  on their own and the JIT's code read instead.
+- 06:50 — **step B, TPE log density.** (1) The stepped branch moved to `AddDiscreteLogPdf`: the dedups hash
+  (`UniqueInverse`, first-occurrence order, NumPy's `==` grouping: ±0 together, every NaN alone) and every buffer is
+  rented. Same values: the unique set and its size are unchanged, the log mass is elementwise and picks its `erf` path
+  from the central count alone, and a group's members differ at most in the sign of a zero, which no log mass sees.
+  (2) The continuous accumulation (`AccumulateContinuous`) keeps each candidate's sums for a vector-wide kernel block in
+  a register across the dimensions and loads through `Vector.LoadUnsafe` at one offset (mu and sigma copied in as grid
+  rows; every length checked once up front): the JIT had emitted ~60 instructions per vector step, mostly bounds checks,
+  around one division. `-(z*z) / 2` became `* 0.5` (both are the correctly rounded half, the same bits). Same-process A/B,
+  best of five: 2.0–2.4× faster, same bits. Per the owner's rule (2026-11-11) the vector path and a separate scalar path
+  sit in an explicit if/else. Kernel bench per `LogPdf` call (24 candidates, 10 parameters), base → tree: floats
+  K=1,000 868 → 721 µs; mixed K=1,000 1,814 → 959 µs (415 → 20 KB); ints K=1,000 5,293 → 1,846 µs (1.9 MB → 18 KB),
+  K=100 1,838 → 1,203 µs (976 → 4 KB); identical hash over all nine configurations. Survey, 1,000 trials, warm:
+  `tpe` 1.44 → 1.15 s; new `tpe-int` (10 ints) 4.08 → 2.39 s, 1,301 → 337 MB, gen-2 3 → 0; new `tpe-mixed`
+  1.51 → 1.02 s, 532 → 352 MB; same study hashes. Gates: new `TpeDiscreteKernelTests` (stepped `LogPdf` against the
+  replaced branch over sorted dedups, both sides of the `erf` switch; `UniqueInverse` against the sorted dedup's grouping
+  and representatives; both accumulate branches against the replaced loop; the up-front length check) with the plan 13
+  `TpeExactKernelTests`; unit CI filter 2,190/2,190 on net10.0 and net8.0; live TPE / PED-ANOVA / truncnorm parity
+  35/35; hash probe 36/36 identical.
+
+## 6. Findings and notes for the owner
+
+- **NumSharp `NDIter` / `NDExpr` / `np.evaluate` (asked 2026-11-11).** `NDExpr` compiles an elementwise tree over
+  `NDIter` operands into one IL kernel with a SIMD body (numexpr-style `np.evaluate`, no intermediate arrays), and its
+  generator keeps multiplications and additions unfused, so an elementwise tree would keep its bits. No hot path in
+  Core runs on `NDArray` arithmetic any more, though: plans 13 and 14 moved TPE, the RNG draws and the samplers' kernels
+  to loops over `double[]`; what still goes through NumSharp is LAPACK (`LinAlg`, OpenBLAS), the MT19937 generator and
+  a few small array steps (CMA-ES, NSGA-III); `Hypervolume.cs`'s `np.` mentions are comments, and the GP stack, DE, PSO
+  and the NES family are plain managed code (151 `new double[]` sites in `Gp/`, one NumSharp line per ES/DE/PSO file).
+  So there is no chain of `NDArray` temporaries for `np.evaluate` to fuse today. A reduction tree (`NDExpr.Sum`) would
+  need checking against NumPy's pairwise order before any use.
+- **QA-84 (parity, not performance; not changed).** TPE sums each candidate's continuous log terms over the
+  dimensions left to right, `((0 + t0) + t1) + …`; Optuna's `.sum(axis=-1)` runs over a C-contiguous last axis, which
+  NumPy sums pairwise (eight accumulators) from eight elements on. Measured with Optuna 5.0.0's own `_truncnorm.logpdf`
+  and NumPy 2.4.2: the pairwise model matches NumPy in 7,200 of 7,200 (candidate, kernel) entries for 8, 10 and 16
+  dimensions, the left-to-right sum differs in 31–54% of them. A ULP-level difference in the log densities of studies
+  with eight or more continuous parameters, the class of the documented `erf` divergence; fixing it changes results, so
+  it is recorded with an `[OpenBugs]` repro rather than changed here.

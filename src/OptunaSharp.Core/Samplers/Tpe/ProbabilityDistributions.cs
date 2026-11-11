@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using NumSharp;
 using OptunaSharp.Internal;
 
@@ -399,55 +398,9 @@ internal sealed class MixtureOfProductDistribution
                         break;
 
                     case BatchedNumericalDistributions dtn:
-                    {
                         // Discrete kind (truncated normal or log-normal).
-                        bool isLog = dtn.IsLog;
-                        double step = dtn.Step;
-                        var xcol = new double[nSamples];
-                        for (int s = 0; s < nSamples; s++)
-                            xcol[s] = x[s, i];
-
-                        var (xiUniq, xiInv) = UniqueInverse1d(xcol);
-                        var (muUniq, sigmaUniq, msInv) = UniqueInverse2d(dtn.Mu, dtn.Sigma);
-                        int nXi = xiUniq.Length;
-                        int nMs = muUniq.Length;
-
-                        var a = new double[nXi * nMs];
-                        var b = new double[nXi * nMs];
-                        for (int p = 0; p < nXi; p++)
-                        {
-                            double left = isLog ? Math.Log(xiUniq[p] - step / 2.0) : xiUniq[p] - step / 2.0;
-                            double right = isLog ? Math.Log(xiUniq[p] + step / 2.0) : xiUniq[p] + step / 2.0;
-                            for (int qi = 0; qi < nMs; qi++)
-                            {
-                                a[p * nMs + qi] = (left - muUniq[qi]) / sigmaUniq[qi];
-                                b[p * nMs + qi] = (right - muUniq[qi]) / sigmaUniq[qi];
-                            }
-                        }
-
-                        var logMass = LogGaussMassUnique(a, b);  // shape (nXi, nMs), row-major.
-                        for (int s = 0; s < nSamples; s++)
-                        {
-                            int row = xiInv[s] * nMs;
-                            for (int k = 0; k < nKernels; k++)
-                                weightedLogPdf[s * nKernels + k] += logMass[row + msInv[k]];
-                        }
-
-                        var normLow = new double[nMs];
-                        var normHigh = new double[nMs];
-                        for (int qi = 0; qi < nMs; qi++)
-                        {
-                            normLow[qi] = (dtn.AdaptedLow - muUniq[qi]) / sigmaUniq[qi];
-                            normHigh[qi] = (dtn.AdaptedHigh - muUniq[qi]) / sigmaUniq[qi];
-                        }
-                        var norm = TruncNorm.LogGaussMass(normLow, normHigh);
-                        for (int s = 0; s < nSamples; s++)
-                        {
-                            for (int k = 0; k < nKernels; k++)
-                                weightedLogPdf[s * nKernels + k] -= norm[msInv[k]];
-                        }
+                        AddDiscreteLogPdf(x, i, dtn, weightedLogPdf);
                         break;
-                    }
 
                     default:
                         throw new InvalidOperationException("Unknown batched distribution kind.");
@@ -526,10 +479,8 @@ internal sealed class MixtureOfProductDistribution
     ///         another order changes no element.
     ///     </para>
     ///     <para>
-    ///         <see cref="AccumulateDimension" /> adds one dimension's term to every kernel's sum, dimension after
-    ///         dimension, so each kernel's sum is still <c>((0 + t0) + t1) + …</c> in dimension order; vector lanes
-    ///         hold different kernels and never mix. .NET never contracts a multiply and an add into a fused
-    ///         multiply-add on its own, so a lane computes exactly what the scalar loop computes.
+    ///         <see cref="AccumulateContinuous" /> then adds each candidate's sum over the dimensions to its row, every
+    ///         sum still <c>((0 + t0) + t1) + …</c> in dimension order (see there for how the vector path keeps the bits).
     ///     </para>
     /// </remarks>
     private void AddContinuousLogPdf(
@@ -555,15 +506,18 @@ internal sealed class MixtureOfProductDistribution
                 xCont[s * nCont + c] = isLog ? Math.Log(x[s, col]) : x[s, col];
         }
 
-        // Standardized bounds a, b, log(sigma) and the log Gaussian mass per (kernel, dim): one rented buffer cut into
-        // four grids, each one row per dim over the kernels.
-        double[] gridBuffer = System.Buffers.ArrayPool<double>.Shared.Rent(4 * gridSize);
+        // Standardized bounds a, b, log(sigma), the log Gaussian mass, and the kernels' mu and sigma per (kernel, dim):
+        // one rented buffer cut into six grids, each one row per dim over the kernels. mu and sigma are copied into rows
+        // of their own so the accumulation reads every operand of a (kernel block, dim) at one offset.
+        double[] gridBuffer = System.Buffers.ArrayPool<double>.Shared.Rent(6 * gridSize);
         try
         {
             var aGrid = new Span<double>(gridBuffer, 0, gridSize);
             var bGrid = new Span<double>(gridBuffer, gridSize, gridSize);
             var logSigma = new Span<double>(gridBuffer, 2 * gridSize, gridSize);
             var logGaussMass = new Span<double>(gridBuffer, 3 * gridSize, gridSize);
+            var muGrid = new Span<double>(gridBuffer, 4 * gridSize, gridSize);
+            var sigmaGrid = new Span<double>(gridBuffer, 5 * gridSize, gridSize);
             for (int c = 0; c < nCont; c++)
             {
                 var nd = contDists[c];
@@ -577,27 +531,13 @@ internal sealed class MixtureOfProductDistribution
                     bGrid[row + k] = (adaptedHigh - mu[k]) / sigma[k];
                     logSigma[row + k] = Math.Log(sigma[k]);
                 }
+                mu.AsSpan(0, nKernels).CopyTo(muGrid.Slice(row, nKernels));
+                sigma.AsSpan(0, nKernels).CopyTo(sigmaGrid.Slice(row, nKernels));
             }
             TruncNorm.LogGaussMass(aGrid, bGrid, logGaussMass);
 
-            var sums = GC.AllocateUninitializedArray<double>(nKernels);
-            for (int s = 0; s < nSamples; s++)
-            {
-                // Each kernel's sum starts at +0.0 for every candidate, as the scalar loop's `double sum = 0.0` did.
-                Array.Clear(sums);
-                for (int c = 0; c < nCont; c++)
-                {
-                    var nd = contDists[c];
-                    int row = c * nKernels;
-                    AccumulateDimension(
-                        xCont[s * nCont + c], nd.Mu, nd.Sigma,
-                        aGrid.Slice(row, nKernels), bGrid.Slice(row, nKernels),
-                        logGaussMass.Slice(row, nKernels), logSigma.Slice(row, nKernels),
-                        sums);
-                }
-                for (int k = 0; k < nKernels; k++)
-                    weightedLogPdf[s * nKernels + k] += sums[k];
-            }
+            AccumulateContinuous(
+                xCont, nSamples, nCont, muGrid, sigmaGrid, aGrid, bGrid, logGaussMass, logSigma, weightedLogPdf, nKernels);
         }
         finally
         {
@@ -606,68 +546,179 @@ internal sealed class MixtureOfProductDistribution
     }
 
     /// <summary>
-    ///     Adds one continuous dimension's truncated-normal log density at <paramref name="x" /> to every kernel's sum:
-    ///     <c>(norm_logpdf((x - mu) / sigma) - log_gauss_mass) - log(sigma)</c>, NaN where the kernel's standardized
-    ///     interval is empty (<c>a == b</c>) and <c>-inf</c> where <c>x</c> falls outside it, as
-    ///     <c>np.select([a == b, (x &lt; a) | (x &gt; b)], [nan, -inf], default=out)</c>.
+    ///     Adds each candidate's continuous log density under each kernel to <paramref name="weightedLogPdf" />: the sum
+    ///     over the continuous dimensions of <c>(norm_logpdf((x - mu) / sigma) - log_gauss_mass) - log(sigma)</c>, with
+    ///     NaN where the kernel's standardized interval is empty (<c>a == b</c>) and <c>-inf</c> where <c>x</c> falls
+    ///     outside it, as <c>np.select([a == b, (x &lt; a) | (x &gt; b)], [nan, -inf], default=out)</c> in
+    ///     <c>_truncnorm.logpdf</c> followed by <c>.sum(axis=-1)</c>.
     /// </summary>
-    /// <param name="x">The candidate's coordinate in this dimension, log-transformed already for the log kinds.</param>
-    /// <param name="mu">The kernels' centers in this dimension.</param>
-    /// <param name="sigma">The kernels' standard deviations in this dimension.</param>
-    /// <param name="a">The kernels' standardized lower bounds.</param>
-    /// <param name="b">The kernels' standardized upper bounds.</param>
-    /// <param name="logGaussMass">The kernels' log Gaussian mass between <paramref name="a" /> and <paramref name="b" />.</param>
-    /// <param name="logSigma">The kernels' <c>log(sigma)</c>.</param>
-    /// <param name="sums">One running sum per kernel; this dimension's term is added to each.</param>
+    /// <param name="xCont">
+    ///     The candidates' continuous coordinates, log-transformed already for the log kinds, one row of
+    ///     <paramref name="nCont" /> per candidate (<c>[s * n_cont + c]</c>); at least n_samples × n_cont long.
+    /// </param>
+    /// <param name="nSamples">The number of candidates.</param>
+    /// <param name="nCont">The number of continuous dimensions.</param>
+    /// <param name="muGrid">
+    ///     The kernels' centers, one row of n_kernels per dimension (<c>[c * n_kernels + k]</c>); at least
+    ///     n_cont × n_kernels long, like every grid.
+    /// </param>
+    /// <param name="sigmaGrid">The kernels' standard deviations, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="aGrid">The kernels' standardized lower bounds, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="bGrid">The kernels' standardized upper bounds, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="logGaussMass">The log Gaussian mass between the bounds, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="logSigma">The kernels' <c>log(sigma)</c>, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="weightedLogPdf">
+    ///     (n_samples, n_kernels) row-major and at least that long; each candidate's sum per kernel is added in place.
+    /// </param>
+    /// <param name="nKernels">The number of kernels.</param>
+    /// <exception cref="ArgumentException">
+    ///     A grid, <paramref name="xCont" /> or <paramref name="weightedLogPdf" /> is shorter than the sizes imply; nothing
+    ///     is read or written then.
+    /// </exception>
     /// <remarks>
-    ///     The vector path computes every lane with the scalar path's operations in the scalar path's order: the same
-    ///     division (never a multiplication by the reciprocal), the same subtraction order, the NaN and <c>-inf</c>
-    ///     overrides applied last. The only freedom it takes is the sign of zero in <c>-(z * z)</c>, which the
-    ///     subtraction of the normal's log constant right after removes. The tail that does not fill a vector takes
-    ///     the scalar path.
+    ///     <para>
+    ///         Each element gets exactly the scalar loop's operations: the sum starts at +0.0, receives the dimensions'
+    ///         terms in dimension order, <c>((0 + t0) + t1) + …</c>, and is then added to the candidate's row
+    ///         (<c>row + sum</c>). In the vector path a lane holds one kernel, so lanes never mix; the kernels after the
+    ///         last full vector take the scalar path, the same kernels as before. The vector path computes every lane
+    ///         with the scalar path's operations in the scalar path's order: the same division by sigma (never a
+    ///         multiplication by its reciprocal), the same subtraction order, the NaN and <c>-inf</c> overrides applied
+    ///         last. Its only freedom is the sign of zero in <c>-(z * z)</c>, which the subtraction of the normal's log
+    ///         constant right after removes. .NET never contracts a multiply and an add into a fused multiply-add on its
+    ///         own.
+    ///     </para>
+    ///     <para>
+    ///         <b>Sums in registers, unchecked loads (plan 15).</b> The kernels are visited one vector-wide block at a
+    ///         time, and each candidate's sums for the block stay in a register across the dimensions; before, a buffer
+    ///         of n_kernels sums was cleared, read and written once per dimension and then added to the row, for every
+    ///         candidate. Only the order in which different elements are computed changed. The loads go through
+    ///         <see cref="System.Numerics.Vector.LoadUnsafe{T}(ref T, nuint)" /> at one offset per (block, dimension),
+    ///         which is why mu and sigma come as grid rows: with a span slice and a jagged-array lookup per operand, the
+    ///         bounds checks were most of the loop's 60 instructions, and the unchecked loop runs 2.0 to 2.4 times
+    ///         faster (same-process A/B, 100 to 3,000 kernels, same bits). Every length is checked once, up front, so no
+    ///         load or store can leave its buffer. The halving in <c>-(z * z) / 2</c> is a multiplication by 0.5:
+    ///         dividing by two and multiplying by a half give the correctly rounded value of the same real number (and
+    ///         pass a NaN through alike), so the bits are equal, and the division by sigma that remains is the loop's
+    ///         slowest instruction.
+    ///     </para>
     /// </remarks>
-    private static void AccumulateDimension(
-        double x, double[] mu, double[] sigma,
-        ReadOnlySpan<double> a, ReadOnlySpan<double> b, ReadOnlySpan<double> logGaussMass, ReadOnlySpan<double> logSigma,
-        double[] sums)
+    internal static void AccumulateContinuous(
+        ReadOnlySpan<double> xCont, int nSamples, int nCont,
+        ReadOnlySpan<double> muGrid, ReadOnlySpan<double> sigmaGrid,
+        ReadOnlySpan<double> aGrid, ReadOnlySpan<double> bGrid, ReadOnlySpan<double> logGaussMass, ReadOnlySpan<double> logSigma,
+        Span<double> weightedLogPdf, int nKernels)
     {
-        int n = sums.Length;
-        int k = 0;
-        if (System.Numerics.Vector.IsHardwareAccelerated && n >= System.Numerics.Vector<double>.Count)
+        // The unchecked loads below rely on these sizes; checking them here keeps every access inside its buffer.
+        long gridSize = (long)nCont * nKernels;
+        if (nSamples < 0 || nCont < 0 || nKernels < 0
+            || xCont.Length < (long)nSamples * nCont || weightedLogPdf.Length < (long)nSamples * nKernels
+            || muGrid.Length < gridSize || sigmaGrid.Length < gridSize || aGrid.Length < gridSize
+            || bGrid.Length < gridSize || logGaussMass.Length < gridSize || logSigma.Length < gridSize)
+            throw new ArgumentException("A continuous log-density buffer is shorter than its sizes imply.");
+
+        if (System.Numerics.Vector.IsHardwareAccelerated && nKernels >= System.Numerics.Vector<double>.Count)
         {
+            // Vector path: whole vector-wide kernel blocks here, then the kernels after the last whole block on the
+            // scalar path, as before.
+            int k = 0;
             int width = System.Numerics.Vector<double>.Count;
-            var xv = new System.Numerics.Vector<double>(x);
-            var two = new System.Numerics.Vector<double>(2.0);
+            var half = new System.Numerics.Vector<double>(0.5);
             var logC = new System.Numerics.Vector<double>(TruncNorm.NormPdfLogC);
             var nan = new System.Numerics.Vector<double>(double.NaN);
             var negativeInfinity = new System.Numerics.Vector<double>(double.NegativeInfinity);
-            for (; k <= n - width; k += width)
+            ref double x0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(xCont);
+            ref double mu0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(muGrid);
+            ref double sigma0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(sigmaGrid);
+            ref double a0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(aGrid);
+            ref double b0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(bGrid);
+            ref double logGaussMass0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(logGaussMass);
+            ref double logSigma0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(logSigma);
+            ref double row0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(weightedLogPdf);
+            for (; k <= nKernels - width; k += width)
             {
-                var muV = new System.Numerics.Vector<double>(mu, k);
-                var sigmaV = new System.Numerics.Vector<double>(sigma, k);
-                var aV = new System.Numerics.Vector<double>(a[k..]);
-                var bV = new System.Numerics.Vector<double>(b[k..]);
-                var xstd = (xv - muV) / sigmaV;
-                var normLogPdf = -(xstd * xstd) / two - logC;
-                var val = (normLogPdf - new System.Numerics.Vector<double>(logGaussMass[k..]))
-                          - new System.Numerics.Vector<double>(logSigma[k..]);
-                val = System.Numerics.Vector.ConditionalSelect(
-                    System.Numerics.Vector.LessThan(xstd, aV) | System.Numerics.Vector.GreaterThan(xstd, bV),
-                    negativeInfinity, val);
-                val = System.Numerics.Vector.ConditionalSelect(System.Numerics.Vector.Equals(aV, bV), nan, val);
-                (new System.Numerics.Vector<double>(sums, k) + val).CopyTo(sums, k);
+                for (int s = 0; s < nSamples; s++)
+                {
+                    // +0.0 in every lane, as the scalar loop's `double sum = 0.0`.
+                    var sum = System.Numerics.Vector<double>.Zero;
+                    nuint xRow = (nuint)s * (nuint)nCont;
+                    // g walks this kernel block's column down the dimension rows: c * n_kernels + k.
+                    nuint g = (nuint)k;
+                    for (int c = 0; c < nCont; c++, g += (nuint)nKernels)
+                    {
+                        var aV = System.Numerics.Vector.LoadUnsafe(ref a0, g);
+                        var bV = System.Numerics.Vector.LoadUnsafe(ref b0, g);
+                        var xv = new System.Numerics.Vector<double>(System.Runtime.CompilerServices.Unsafe.Add(ref x0, xRow + (nuint)c));
+                        var xstd = (xv - System.Numerics.Vector.LoadUnsafe(ref mu0, g)) / System.Numerics.Vector.LoadUnsafe(ref sigma0, g);
+                        var normLogPdf = -(xstd * xstd) * half - logC;
+                        var val = (normLogPdf - System.Numerics.Vector.LoadUnsafe(ref logGaussMass0, g))
+                                  - System.Numerics.Vector.LoadUnsafe(ref logSigma0, g);
+                        val = System.Numerics.Vector.ConditionalSelect(
+                            System.Numerics.Vector.LessThan(xstd, aV) | System.Numerics.Vector.GreaterThan(xstd, bV),
+                            negativeInfinity, val);
+                        val = System.Numerics.Vector.ConditionalSelect(System.Numerics.Vector.Equals(aV, bV), nan, val);
+                        sum += val;
+                    }
+                    nuint o = (nuint)s * (nuint)nKernels + (nuint)k;
+                    System.Numerics.Vector.StoreUnsafe(System.Numerics.Vector.LoadUnsafe(ref row0, o) + sum, ref row0, o);
+                }
             }
+            AccumulateContinuousScalar(
+                xCont, nSamples, nCont, muGrid, sigmaGrid, aGrid, bGrid, logGaussMass, logSigma, weightedLogPdf, nKernels, k);
         }
-
-        for (; k < n; k++)
+        else
         {
-            double xstd = (x - mu[k]) / sigma[k];
-            double val = TruncNorm.NormLogPdf(xstd) - logGaussMass[k] - logSigma[k];
-            if (a[k] == b[k])
-                val = double.NaN;
-            else if (xstd < a[k] || xstd > b[k])
-                val = double.NegativeInfinity;
-            sums[k] += val;
+            // Scalar path: no vector hardware, or fewer kernels than one vector holds.
+            AccumulateContinuousScalar(
+                xCont, nSamples, nCont, muGrid, sigmaGrid, aGrid, bGrid, logGaussMass, logSigma, weightedLogPdf, nKernels, 0);
+        }
+    }
+
+    /// <summary>
+    ///     The scalar path of <see cref="AccumulateContinuous" /> for the kernels from <paramref name="firstKernel" /> on:
+    ///     every kernel when there is no vector path, and the kernels after the vector path's last whole block otherwise.
+    /// </summary>
+    /// <param name="xCont">The candidates' continuous coordinates, laid out as for <see cref="AccumulateContinuous" />.</param>
+    /// <param name="nSamples">The number of candidates.</param>
+    /// <param name="nCont">The number of continuous dimensions.</param>
+    /// <param name="muGrid">The kernels' centers, one row of n_kernels per dimension.</param>
+    /// <param name="sigmaGrid">The kernels' standard deviations, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="aGrid">The kernels' standardized lower bounds, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="bGrid">The kernels' standardized upper bounds, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="logGaussMass">The log Gaussian mass between the bounds, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="logSigma">The kernels' <c>log(sigma)</c>, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="weightedLogPdf">(n_samples, n_kernels) row-major; each candidate's sum per kernel is added in place.</param>
+    /// <param name="nKernels">The number of kernels.</param>
+    /// <param name="firstKernel">The first kernel this path handles; the kernels before it are left alone.</param>
+    /// <exception cref="IndexOutOfRangeException">A buffer is shorter than the sizes imply (the caller checks this first).</exception>
+    /// <remarks>
+    ///     The reference arithmetic the vector path reproduces lane by lane: the sum starts at +0.0, receives the
+    ///     dimensions' terms in dimension order and is then added to the candidate's row. Every access is bounds-checked;
+    ///     it handles at most a vector's width less one kernel per call on vector hardware.
+    /// </remarks>
+    private static void AccumulateContinuousScalar(
+        ReadOnlySpan<double> xCont, int nSamples, int nCont,
+        ReadOnlySpan<double> muGrid, ReadOnlySpan<double> sigmaGrid,
+        ReadOnlySpan<double> aGrid, ReadOnlySpan<double> bGrid, ReadOnlySpan<double> logGaussMass, ReadOnlySpan<double> logSigma,
+        Span<double> weightedLogPdf, int nKernels, int firstKernel)
+    {
+        for (int k = firstKernel; k < nKernels; k++)
+        {
+            for (int s = 0; s < nSamples; s++)
+            {
+                double sum = 0.0;
+                for (int c = 0; c < nCont; c++)
+                {
+                    int g = c * nKernels + k;
+                    double xstd = (xCont[s * nCont + c] - muGrid[g]) / sigmaGrid[g];
+                    double val = TruncNorm.NormLogPdf(xstd) - logGaussMass[g] - logSigma[g];
+                    if (aGrid[g] == bGrid[g])
+                        val = double.NaN;
+                    else if (xstd < aGrid[g] || xstd > bGrid[g])
+                        val = double.NegativeInfinity;
+                    sum += val;
+                }
+                weightedLogPdf[s * nKernels + k] += sum;
+            }
         }
     }
 
@@ -690,69 +741,246 @@ internal sealed class MixtureOfProductDistribution
     }
 
     /// <summary>
-    ///     Python <c>_log_gauss_mass_unique(a, b)</c>: dedup the raveled (a, b) pairs, evaluate
-    ///     <c>_log_gauss_mass</c> once per unique pair, then scatter back. This is not merely an
-    ///     optimization here — it fixes the array size passed to <c>erf</c>, which switches between
-    ///     the exact and the vectorized approximation at 2000 elements (see <see cref="Erf" />).
+    ///     The discrete branch of Python <c>_MixtureOfProductDistribution.log_pdf</c> for one stepped coordinate (a
+    ///     discrete truncated normal or log-normal): adds the log Gaussian mass of each candidate's cell
+    ///     <c>[x - step / 2, x + step / 2]</c> under each kernel to <paramref name="weightedLogPdf" />, then subtracts
+    ///     each kernel's log mass over the adapted domain.
     /// </summary>
-    /// <param name="a">First numerical array operand.</param>
-    /// <param name="b">Second numerical array operand.</param>
-    /// <returns>Gaussian interval log masses expanded back to the original input order.</returns>
-    private static double[] LogGaussMassUnique(double[] a, double[] b)
+    /// <param name="x">The candidates, one row per sample and one column per coordinate.</param>
+    /// <param name="column">This coordinate's column in <paramref name="x" />.</param>
+    /// <param name="dtn">This coordinate's batched distributions; their step is positive.</param>
+    /// <param name="weightedLogPdf">
+    ///     Log densities, (n_samples, n_kernels) row-major and at least that long (a rented buffer may be longer); this
+    ///     coordinate's terms are added in place.
+    /// </param>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="weightedLogPdf" /> is shorter than n_samples × n_kernels.</exception>
+    /// <remarks>
+    ///     <para>
+    ///         Python, for each stepped coordinate <c>i</c>:
+    ///         <code>
+    ///         xi_uniq, xi_inv = np.unique(x[:, i], return_inverse=True)
+    ///         mu_uniq, sigma_uniq, mu_sigma_inv = _unique_inverse_2d(d.mu, d.sigma)
+    ///         left = np.log(xi_uniq - step / 2) if is_log else (xi_uniq - step / 2)
+    ///         right = np.log(xi_uniq + step / 2) if is_log else (xi_uniq + step / 2)
+    ///         weighted_log_pdf += _log_gauss_mass_unique(
+    ///             (left[:, np.newaxis] - mu_uniq) / sigma_uniq,
+    ///             (right[:, np.newaxis] - mu_uniq) / sigma_uniq,
+    ///         )[np.ix_(xi_inv, mu_sigma_inv)]
+    ///         weighted_log_pdf -= _truncnorm._log_gauss_mass(
+    ///             (d.adapted_low - mu_uniq) / sigma_uniq, (d.adapted_high - mu_uniq) / sigma_uniq
+    ///         )[mu_sigma_inv]
+    ///         </code>
+    ///         The dedup inside <c>_log_gauss_mass_unique</c> is not merely an optimization: it fixes the array size
+    ///         passed to <c>erf</c>, which switches between the exact and the vectorized approximation at 2000 elements
+    ///         (see <see cref="Erf" />).
+    ///     </para>
+    ///     <para>
+    ///         <b>Hashed dedups, same bits (plan 15).</b> The three dedups (the candidates' values, the kernels, and the
+    ///         candidate-by-kernel grid of standardized cell bounds) used to sort with LINQ, the grid being up to
+    ///         n_samples × n_kernels pairs: with ten integer parameters and a thousand kernels one call took 5 ms and
+    ///         allocated 1.9 MB. <see cref="UniqueInverse" /> finds the same groups by hashing, in order of first
+    ///         occurrence instead of sorted, and every buffer is rented. Nothing computed depends on that order: the
+    ///         unique set and its size are the same,
+    ///         <see cref="TruncNorm.LogGaussMass(ReadOnlySpan{double}, ReadOnlySpan{double}, Span{double})" /> is
+    ///         elementwise and picks its <c>erf</c> path from the number of central elements alone, and each sum still
+    ///         receives the same terms in the same order (the cell's log mass, then minus the domain's). The members of a
+    ///         group differ at most in the sign of a zero, which no log mass depends on (<c>ndtr(±0)</c> is 0.5 either
+    ///         way and both zeros take the same side of every comparison), so which member represents it does not
+    ///         matter either.
+    ///     </para>
+    /// </remarks>
+    internal static void AddDiscreteLogPdf(double[,] x, int column, BatchedNumericalDistributions dtn, double[] weightedLogPdf)
     {
-        var (aUniq, bUniq, inv) = UniqueInverse2d(a, b);
-        var lgmUniq = TruncNorm.LogGaussMass(aUniq, bUniq);
-        var result = new double[a.Length];
-        for (int j = 0; j < a.Length; j++)
-            result[j] = lgmUniq[inv[j]];
-        return result;
-    }
+        int nSamples = x.GetLength(0);
+        double[] mu = dtn.Mu, sigma = dtn.Sigma;
+        int nKernels = mu.Length;
+        bool isLog = dtn.IsLog;
+        double step = dtn.Step;
+        // AdaptedLow / AdaptedHigh recompute a logarithm per access on the log kinds: the same value every time.
+        double adaptedLow = dtn.AdaptedLow, adaptedHigh = dtn.AdaptedHigh;
 
-    /// <summary>NumPy <c>np.unique(x, return_inverse=True)</c> for a 1-D array.</summary>
-    /// <param name="x">Input numerical coordinates or observation rows.</param>
-    /// <returns>Sorted unique values and inverse indices reconstructing the input.</returns>
-    private static (double[] Uniq, int[] Inv) UniqueInverse1d(double[] x)
-    {
-        int n = x.Length;
-        var order = Enumerable.Range(0, n).OrderBy(i => x[i]).ToArray();
-        var uniq = new List<double>();
-        var inv = new int[n];
-        for (int k = 0; k < n; k++)
+        // Candidate- and kernel-sized buffers, cut from one rented array each: the column, its unique values (and the
+        // 1-D dedup's second component, the same values again), the unique kernels, the domain's standardized bounds
+        // and log mass per unique kernel; and the two inverse maps.
+        double[] perCall = System.Buffers.ArrayPool<double>.Shared.Rent(Math.Max(3 * nSamples + 5 * nKernels, 1));
+        int[] perCallIndexes = System.Buffers.ArrayPool<int>.Shared.Rent(Math.Max(nSamples + nKernels, 1));
+        try
         {
-            int idx = order[k];
-            if (k == 0 || x[idx] != x[order[k - 1]])
-                uniq.Add(x[idx]);
-            inv[idx] = uniq.Count - 1;
+            var xcol = new Span<double>(perCall, 0, nSamples);
+            var xiUniq = new Span<double>(perCall, nSamples, nSamples);
+            var xiUniqAgain = new Span<double>(perCall, 2 * nSamples, nSamples);
+            var muUniq = new Span<double>(perCall, 3 * nSamples, nKernels);
+            var sigmaUniq = new Span<double>(perCall, 3 * nSamples + nKernels, nKernels);
+            var normLow = new Span<double>(perCall, 3 * nSamples + 2 * nKernels, nKernels);
+            var normHigh = new Span<double>(perCall, 3 * nSamples + 3 * nKernels, nKernels);
+            var norm = new Span<double>(perCall, 3 * nSamples + 4 * nKernels, nKernels);
+            var xiInv = new Span<int>(perCallIndexes, 0, nSamples);
+            var msInv = new Span<int>(perCallIndexes, nSamples, nKernels);
+
+            for (int s = 0; s < nSamples; s++)
+                xcol[s] = x[s, column];
+            // np.unique of one array: a value paired with itself matches another pair exactly when the values compare
+            // equal, so the pair dedup groups the values as the 1-D one did.
+            int nXi = UniqueInverse(xcol, xcol, xiUniq, xiUniqAgain, xiInv);
+            int nMs = UniqueInverse(mu, sigma, muUniq, sigmaUniq, msInv);
+
+            // The standardized cell bounds of every (unique candidate, unique kernel) pair, row-major by candidate, their
+            // dedup, and the log mass of each unique pair; sized by the dedups above, so rented only now.
+            int gridSize = nXi * nMs;
+            double[] grid = System.Buffers.ArrayPool<double>.Shared.Rent(Math.Max(5 * gridSize, 1));
+            int[] gridIndexes = System.Buffers.ArrayPool<int>.Shared.Rent(Math.Max(gridSize, 1));
+            try
+            {
+                var a = new Span<double>(grid, 0, gridSize);
+                var b = new Span<double>(grid, gridSize, gridSize);
+                var aUniq = new Span<double>(grid, 2 * gridSize, gridSize);
+                var bUniq = new Span<double>(grid, 3 * gridSize, gridSize);
+                var logMassUniq = new Span<double>(grid, 4 * gridSize, gridSize);
+                var gridInv = new Span<int>(gridIndexes, 0, gridSize);
+                for (int p = 0; p < nXi; p++)
+                {
+                    double left = isLog ? Math.Log(xiUniq[p] - step / 2.0) : xiUniq[p] - step / 2.0;
+                    double right = isLog ? Math.Log(xiUniq[p] + step / 2.0) : xiUniq[p] + step / 2.0;
+                    for (int qi = 0; qi < nMs; qi++)
+                    {
+                        a[p * nMs + qi] = (left - muUniq[qi]) / sigmaUniq[qi];
+                        b[p * nMs + qi] = (right - muUniq[qi]) / sigmaUniq[qi];
+                    }
+                }
+                int nUnique = UniqueInverse(a, b, aUniq, bUniq, gridInv);
+                // Exactly the unique pairs, as _log_gauss_mass_unique passes them: their count picks the erf path.
+                TruncNorm.LogGaussMass(aUniq[..nUnique], bUniq[..nUnique], logMassUniq);
+
+                for (int s = 0; s < nSamples; s++)
+                {
+                    int row = xiInv[s] * nMs;
+                    for (int k = 0; k < nKernels; k++)
+                        weightedLogPdf[s * nKernels + k] += logMassUniq[gridInv[row + msInv[k]]];
+                }
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<double>.Shared.Return(grid);
+                System.Buffers.ArrayPool<int>.Shared.Return(gridIndexes);
+            }
+
+            for (int qi = 0; qi < nMs; qi++)
+            {
+                normLow[qi] = (adaptedLow - muUniq[qi]) / sigmaUniq[qi];
+                normHigh[qi] = (adaptedHigh - muUniq[qi]) / sigmaUniq[qi];
+            }
+            // Python skips the dedup here ("very unlikely to observe duplications"), so the count is the unique kernels'.
+            TruncNorm.LogGaussMass(normLow[..nMs], normHigh[..nMs], norm);
+            for (int s = 0; s < nSamples; s++)
+            {
+                for (int k = 0; k < nKernels; k++)
+                    weightedLogPdf[s * nKernels + k] -= norm[msInv[k]];
+            }
         }
-        return (uniq.ToArray(), inv);
+        finally
+        {
+            System.Buffers.ArrayPool<double>.Shared.Return(perCall);
+            System.Buffers.ArrayPool<int>.Shared.Return(perCallIndexes);
+        }
     }
 
     /// <summary>
-    ///     Python <c>_unique_inverse_2d(a, b)</c>: the unique (a, b) row pairs sorted
-    ///     lexicographically, plus the inverse mapping original-index → unique-index.
+    ///     The unique (a, b) pairs of two equally long arrays, in order of first occurrence, and for each position the
+    ///     index of its pair among them: Python's <c>_unique_inverse_2d(a, b)</c>, and <c>np.unique(x,
+    ///     return_inverse=True)</c> when both arrays are <c>x</c>, except that those return the pairs sorted.
     /// </summary>
-    /// <param name="a">First numerical array operand.</param>
-    /// <param name="b">Second numerical array operand.</param>
-    /// <returns>Sorted unique paired values and inverse indices reconstructing the input pairs.</returns>
-    private static (double[] AUniq, double[] BUniq, int[] Inv) UniqueInverse2d(double[] a, double[] b)
+    /// <param name="a">The pairs' first components.</param>
+    /// <param name="b">The pairs' second components; as long as <paramref name="a" />, and may be the same span.</param>
+    /// <param name="uniqueA">
+    ///     Receives the unique pairs' first components; at least as long as <paramref name="a" /> and overlapping neither
+    ///     input.
+    /// </param>
+    /// <param name="uniqueB">Receives their second components; the same requirements as <paramref name="uniqueA" />.</param>
+    /// <param name="inverse">
+    ///     Receives, for each position of <paramref name="a" />, the index of its pair in <paramref name="uniqueA" /> and
+    ///     <paramref name="uniqueB" />; at least as long as <paramref name="a" />.
+    /// </param>
+    /// <returns>The number of unique pairs, written to the front of <paramref name="uniqueA" /> and <paramref name="uniqueB" />.</returns>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="b" /> or an output is shorter than <paramref name="a" />.</exception>
+    /// <remarks>
+    ///     <para>
+    ///         Two pairs are the same when both components compare equal with <c>==</c>, the test NumPy's version applies
+    ///         to neighbors after sorting (<c>(a_order[1:] != a_order[:-1]) | (b_order[1:] != b_order[:-1])</c>): -0.0
+    ///         equals 0.0, and a NaN equals nothing, so a pair holding a NaN is always a new one. The pair kept for a group
+    ///         is its first occurrence, as with the stable LINQ sort this replaced. Only the order of the unique pairs
+    ///         differs from Python's, and no caller computes anything that depends on it.
+    ///     </para>
+    ///     <para>
+    ///         An open-addressing table with linear probing, at most half full, holds each unique pair's index plus one
+    ///         (zero marks an empty slot). Pairs holding a NaN are never stored, because no later pair can match them, so
+    ///         they cannot pile up in one probe chain either.
+    ///     </para>
+    /// </remarks>
+    internal static int UniqueInverse(
+        ReadOnlySpan<double> a, ReadOnlySpan<double> b, Span<double> uniqueA, Span<double> uniqueB, Span<int> inverse)
     {
         int n = a.Length;
-        var order = Enumerable.Range(0, n).OrderBy(i => a[i]).ThenBy(i => b[i]).ToArray();
-        var aUniq = new List<double>();
-        var bUniq = new List<double>();
-        var inv = new int[n];
-        for (int k = 0; k < n; k++)
+        int capacity = (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)Math.Max(2 * n, 16));
+        int mask = capacity - 1;
+        int[] table = System.Buffers.ArrayPool<int>.Shared.Rent(capacity);
+        try
         {
-            int idx = order[k];
-            int prev = order[k - 1 < 0 ? 0 : k - 1];
-            // NumPy's `!=` treats -0.0 == 0.0 and NaN != NaN, matching C# `!=` on double.
-            if (k == 0 || a[idx] != a[prev] || b[idx] != b[prev])
+            // A rented array holds a previous caller's entries: every slot must read as empty first.
+            Array.Clear(table, 0, capacity);
+            int count = 0;
+            for (int i = 0; i < n; i++)
             {
-                aUniq.Add(a[idx]);
-                bUniq.Add(b[idx]);
+                double ai = a[i], bi = b[i];
+                if (double.IsNaN(ai) || double.IsNaN(bi))
+                {
+                    uniqueA[count] = ai;
+                    uniqueB[count] = bi;
+                    inverse[i] = count++;
+                    continue;
+                }
+                int slot = PairHash(ai, bi) & mask;
+                while (true)
+                {
+                    int entry = table[slot];
+                    if (entry == 0)
+                    {
+                        uniqueA[count] = ai;
+                        uniqueB[count] = bi;
+                        inverse[i] = count++;
+                        table[slot] = count;
+                        break;
+                    }
+                    if (uniqueA[entry - 1] == ai && uniqueB[entry - 1] == bi)
+                    {
+                        inverse[i] = entry - 1;
+                        break;
+                    }
+                    slot = (slot + 1) & mask;
+                }
             }
-            inv[idx] = aUniq.Count - 1;
+            return count;
         }
-        return (aUniq.ToArray(), bUniq.ToArray(), inv);
+        finally
+        {
+            System.Buffers.ArrayPool<int>.Shared.Return(table);
+        }
+    }
+
+    /// <summary>A hash of a pair of doubles, equal for any two pairs whose components compare equal.</summary>
+    /// <param name="a">The first component; not NaN.</param>
+    /// <param name="b">The second component; not NaN.</param>
+    /// <returns>A well-mixed 32-bit value, possibly negative; callers mask it to a power-of-two table size.</returns>
+    private static int PairHash(double a, double b)
+    {
+        // -0.0 == 0.0, so the two zeros must hash alike: both hash as +0.0. Any other values that compare equal have
+        // the same bits.
+        ulong ka = a == 0.0 ? 0UL : (ulong)BitConverter.DoubleToInt64Bits(a);
+        ulong kb = b == 0.0 ? 0UL : (ulong)BitConverter.DoubleToInt64Bits(b);
+        // SplitMix64's finalizer over both keys: doubles of integers differ only in their high bits, which the
+        // multiplications and shifts spread over the low bits the mask keeps.
+        ulong h = (ka * 0x9E3779B97F4A7C15UL) ^ kb;
+        h = (h ^ (h >> 30)) * 0xBF58476D1CE4E5B9UL;
+        h = (h ^ (h >> 27)) * 0x94D049BB133111EBUL;
+        return (int)(h ^ (h >> 31));
     }
 }
