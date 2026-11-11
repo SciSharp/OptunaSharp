@@ -22,7 +22,23 @@ internal static class ScrambledSobol
     /// <param name="n">The number of elements or points to process.</param>
     /// <param name="seed">The seed controlling the reproducible random stream.</param>
     /// <returns>The scrambled Sobol sample matrix with rows for points and columns for dimensions.</returns>
-    internal static double[,] Random(int d, int n, int seed)
+    internal static double[,] Random(int d, int n, int seed) => Create(d, seed).Generate(n);
+
+    /// <summary>
+    ///     Builds the scrambled engine of <c>Sobol(d, scramble=True, seed)</c>: draws the digital shift and the
+    ///     linear-matrix-scramble cube from <c>default_rng(seed)</c> in scipy's order and scrambles the direction
+    ///     numbers. Every point of the sequence is then a pure function of this state.
+    /// </summary>
+    /// <param name="d">The number of Sobol dimensions.</param>
+    /// <param name="seed">The seed controlling the reproducible random stream.</param>
+    /// <returns>An immutable engine that can be shared across threads and reused for any point index.</returns>
+    /// <exception cref="NumSharp.ValueError">The dimension is outside the supported direction-number table.</exception>
+    /// <remarks>
+    ///     Building is the expensive part — <c>d·bits²</c> rng draws and the <c>O(d·bits³)</c> scramble — so a caller
+    ///     that needs several points of the same <c>(d, seed)</c> sequence (QMCSampler asks for one point per trial)
+    ///     keeps the engine instead of rebuilding it for every point.
+    /// </remarks>
+    internal static Engine Create(int d, int seed)
     {
         int bits = QuasiMonteCarlo.SobolBits;  // 30
         uint[][] sv = QuasiMonteCarlo.SobolSv(d);
@@ -30,7 +46,9 @@ internal static class ScrambledSobol
 
         // _scramble(): the digital shift then the lower-triangular LMS matrices, in this rng order.
         // shift[i] = Σ_j M[i,j]·2^j  with M = integers(2, size=(d, bits)).
-        long[] shiftBits = rng.integers(2, null, new Shape(d, bits)).ToArray<long>();
+        long[] shiftBits;
+        using (NDArray drawn = rng.integers(2, null, new Shape(d, bits)))
+            shiftBits = drawn.ToArray<long>();
         var shift = new uint[d];
         for (int i = 0; i < d; i++)
         {
@@ -43,25 +61,102 @@ internal static class ScrambledSobol
 
         // ltm = tril(integers(2, size=(d, bits, bits))) — the full cube is drawn (upper entries too),
         // then masked to the lower triangle; _cscramble forces the diagonal to 1.
-        long[] ltm = rng.integers(2, null, new Shape(d, bits, bits)).ToArray<long>();
+        long[] ltm;
+        using (NDArray drawn = rng.integers(2, null, new Shape(d, bits, bits)))
+            ltm = drawn.ToArray<long>();
         Cscramble(d, bits, ltm, sv);
+        return new Engine(d, bits, shift, sv);
+    }
 
-        // Generate: point 0 is the shift; each subsequent point XORs a direction number (Gray code).
-        double scale = 1.0 / Math.Pow(2.0, bits);
-        var sample = new double[n, d];
-        var quasi = (uint[])shift.Clone();
-        for (int j = 0; j < d; j++)
-            sample[0, j] = quasi[j] * scale;
-        for (int k = 1; k < n; k++)
+    /// <summary>
+    ///     A scrambled Sobol' sequence for one <c>(d, seed)</c>: the digital shift and the scrambled direction
+    ///     numbers, from which any point is computed without generating the points before it.
+    /// </summary>
+    /// <remarks>
+    ///     Immutable after construction, so one instance can serve concurrent callers; nothing it returns aliases its
+    ///     state. Point <c>k</c> of the Gray-code construction is <c>shift XOR</c> the direction numbers of the bits set
+    ///     in <c>gray(k) = k ^ (k &gt;&gt; 1)</c>, because step <c>k</c> XORs in the direction number of the lowest set bit
+    ///     of <c>k</c>, which is exactly the bit by which <c>gray(k)</c> differs from <c>gray(k - 1)</c>. The integer
+    ///     state is therefore the same as after stepping, and the conversion to double is the same multiplication, so
+    ///     <see cref="Point" /> and <see cref="Generate" /> agree bit for bit.
+    /// </remarks>
+    internal sealed class Engine
+    {
+        private readonly int _bits;
+        private readonly uint[] _shift;
+        private readonly uint[][] _sv;
+        private readonly double _scale;
+
+        /// <summary>Wraps a finished scramble; the arrays are owned by the engine from here on.</summary>
+        /// <param name="dim">The number of Sobol dimensions.</param>
+        /// <param name="bits">The number of direction-number bits (scipy's 30).</param>
+        /// <param name="shift">The digital shift, one integer per dimension; point 0 of the sequence.</param>
+        /// <param name="sv">The scrambled direction numbers, <c>[dim][bits]</c>.</param>
+        internal Engine(int dim, int bits, uint[] shift, uint[][] sv)
         {
-            int l = LowZeroBit((uint)(k - 1));
+            Dim = dim;
+            _bits = bits;
+            _shift = shift;
+            _sv = sv;
+            _scale = 1.0 / Math.Pow(2.0, bits);
+        }
+
+        /// <summary>The number of dimensions every point of this sequence has.</summary>
+        internal int Dim { get; }
+
+        /// <summary>
+        ///     The first <paramref name="n" /> points — <c>random(n)</c> on a fresh engine: point 0 is the shift and
+        ///     each later point XORs one direction number into the previous one (Gray code).
+        /// </summary>
+        /// <param name="n">The number of points to produce.</param>
+        /// <returns>A new <c>[n, Dim]</c> matrix the caller owns.</returns>
+        internal double[,] Generate(int n)
+        {
+            int d = Dim;
+            var sample = new double[n, d];
+            var quasi = (uint[])_shift.Clone();
+            for (int j = 0; j < d; j++)
+                sample[0, j] = quasi[j] * _scale;
+            for (int k = 1; k < n; k++)
+            {
+                int l = LowZeroBit((uint)(k - 1));
+                for (int j = 0; j < d; j++)
+                {
+                    quasi[j] ^= _sv[j][l - 1];
+                    sample[k, j] = quasi[j] * _scale;
+                }
+            }
+            return sample;
+        }
+
+        /// <summary>
+        ///     The point at <paramref name="index" /> — <c>fast_forward(index)</c> then <c>random(1)</c> — computed
+        ///     directly from <c>gray(index)</c> in <c>O(Dim·bits)</c> instead of by generating every earlier point.
+        /// </summary>
+        /// <param name="index">The zero-based sequence index; smaller than <c>2^bits</c>.</param>
+        /// <returns>A new array of <see cref="Dim" /> coordinates in <c>[0, 1)</c>, bit-identical to row
+        ///     <paramref name="index" /> of <see cref="Generate" />.</returns>
+        /// <exception cref="NumSharp.ValueError">The index is past the last point of a <c>bits</c>-bit sequence.</exception>
+        internal double[] Point(ulong index)
+        {
+            // The stepping form would index past the direction numbers here; scipy refuses to draw past 2^bits too.
+            if (index >= 1UL << _bits)
+                throw new ValueError($"The Sobol' sequence has only 2**{_bits} points; index {index} is past its end.");
+            ulong gray = index ^ (index >> 1);
+            int d = Dim;
+            var point = new double[d];
             for (int j = 0; j < d; j++)
             {
-                quasi[j] ^= sv[j][l - 1];
-                sample[k, j] = quasi[j] * scale;
+                uint quasi = _shift[j];
+                uint[] svj = _sv[j];
+                // XOR is associative and commutative, so the order of the set bits does not matter.
+                for (ulong g = gray, b = 0; g != 0; g >>= 1, b++)
+                    if ((g & 1UL) != 0)
+                        quasi ^= svj[b];
+                point[j] = quasi * _scale;
             }
+            return point;
         }
-        return sample;
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using NumSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
@@ -45,6 +46,26 @@ public class QMCSampler : BaseSampler
 
     /// <summary>The last sample-id attribute key computed; <see langword="null" /> before the first relative sample.</summary>
     private string? _lastKeyQmcId;
+
+    /// <summary>
+    ///     The scrambled Sobol' sequence of this sampler's seed for the last dimension asked for (plan 15), or
+    ///     <see langword="null" /> before the first scrambled Sobol' sample.
+    /// </summary>
+    /// <remarks>
+    ///     Optuna rebuilds <c>qmc.Sobol(d, seed)</c> and fast-forwards it on every trial; the port used to do the same,
+    ///     re-drawing the scramble and generating every point up to <c>sample_id</c>, which made a study O(n²). The
+    ///     sequence is a pure function of <c>(d, seed)</c> and the seed never changes, so the engine is built once per
+    ///     dimension and each point is computed directly. Read and written with <see cref="Volatile" />: the engine is
+    ///     immutable, so concurrent trials may share it, and a race only builds an equal engine twice.
+    /// </remarks>
+    private ScrambledSobol.Engine? _scrambledSobol;
+
+    /// <summary>
+    ///     The scrambled Halton sequence of this sampler's seed for the last dimension asked for (plan 15), or
+    ///     <see langword="null" /> before the first scrambled Halton sample. Kept for the same reason as
+    ///     <see cref="_scrambledSobol" />: its digit permutations were re-drawn on every trial.
+    /// </summary>
+    private ScrambledHalton.Engine? _scrambledHalton;
     private readonly BaseSampler _independentSampler;
     private readonly bool _warnIndependentSampling;
     private readonly string _qmcType;
@@ -239,22 +260,31 @@ public class QMCSampler : BaseSampler
             if (!_scramble)
                 return QuasiMonteCarlo.SobolPoint(d, (ulong)sampleId);
             // Scrambled Sobol': `Sobol(d, seed, scramble=True).fast_forward(sample_id).random(1)` is the
-            // point at index sample_id of the scrambled sequence (verified bit-exact vs scipy). The
-            // engine is stateless here — reconstructed per call from (d, seed) — so parallel trials need
-            // no lock (the sample_id counter itself is already serialized through the storage attr).
-            double[,] pts = ScrambledSobol.Random(d, sampleId + 1, (int)_seed);
-            var row = new double[d];
-            for (int j = 0; j < d; j++)
-                row[j] = pts[sampleId, j];
-            return row;
+            // point at index sample_id of the scrambled sequence (verified bit-exact vs scipy). The engine is
+            // a pure function of (d, seed), so it is built once and kept (plan 15); it is immutable, so
+            // parallel trials need no lock (the sample_id counter itself is already serialized through the
+            // storage attr).
+            ScrambledSobol.Engine? sobol = Volatile.Read(ref _scrambledSobol);
+            if (sobol is null || sobol.Dim != d)
+            {
+                sobol = ScrambledSobol.Create(d, (int)_seed);
+                Volatile.Write(ref _scrambledSobol, sobol);
+            }
+            return sobol.Point((ulong)sampleId);
         }
         // Halton.
         if (!_scramble)
             return QuasiMonteCarlo.HaltonPoint(d, (ulong)sampleId);
         // Scrambled Halton: `Halton(d, seed, scramble=True).fast_forward(sample_id).random(1)` is the
         // Owen-permuted point at index sample_id (verified bit-exact vs scipy). Like scrambled Sobol' the
-        // engine is stateless — rebuilt per call from (d, seed) — and permutation init is its only rng draw.
-        return ScrambledHalton.Point(d, (ulong)sampleId, (int)_seed);
+        // engine is a pure function of (d, seed) — permutation init is its only rng draw — so it is kept.
+        ScrambledHalton.Engine? halton = Volatile.Read(ref _scrambledHalton);
+        if (halton is null || halton.Dim != d)
+        {
+            halton = ScrambledHalton.Create(d, (int)_seed);
+            Volatile.Write(ref _scrambledHalton, halton);
+        }
+        return halton.Point((ulong)sampleId);
     }
 
     /// <summary>Python <c>_find_sample_id</c>: a per-(engine, search space[, seed]) counter in the study attrs.</summary>
