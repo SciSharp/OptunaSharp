@@ -558,7 +558,7 @@ internal class Cma : ICmaOptimizer
     internal double[] SampleSolution()
     {
         var (b, d) = EigenDecomposition();
-        double[] z = _rng.randn(_nDim).ToArray<double>();  // ~ N(0, I)
+        double[] z = NumPyDraws.Randn(_rng, _nDim);  // ~ N(0, I)
         double[] y = LinAlg.Dot(LinAlg.Dot(b, Diag(d)), z);  // ~ N(0, C)
         var x = new double[_nDim];
         for (int i = 0; i < _nDim; i++)

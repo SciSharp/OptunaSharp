@@ -13,6 +13,7 @@
 using System;
 using System.Collections.Generic;
 using NumSharp;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.ModelBased.Saas;
 
@@ -442,7 +443,7 @@ internal sealed class NoUTurnSampler
     /// <returns>A momentum vector with the metric's marginal variances.</returns>
     private double[] SampleMomentum(NumPyRandom rng)
     {
-        double[] z = rng.randn(_dim).ToArray<double>();
+        double[] z = NumPyDraws.Randn(rng, _dim);
         var r = new double[_dim];
         for (int d = 0; d < _dim; d++)
             r[d] = z[d] * _momentumStd[d];

@@ -134,7 +134,7 @@ internal sealed class RandomEmbeddingProjection
             // function of its identity — independent of when or on which worker it is first requested.
             var rng = np.random.RandomState();
             rng.seed(RowSeed(key.Run, key.Name));
-            return rng.randn(_dim).ToArray<double>();
+            return NumPyDraws.Randn(rng, _dim);
         });
 
     /// <summary>

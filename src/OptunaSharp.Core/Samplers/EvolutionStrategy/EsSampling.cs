@@ -9,6 +9,7 @@
 // optimizers agree bit-for-bit and stay byte-reproducible against a numpy `RandomState` reference.
 
 using NumSharp;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.EvolutionStrategy;
 
@@ -56,7 +57,7 @@ internal static class EsSampling
     {
         // One flat draw preserves numpy's C-order fill (verified byte-identical to np.random.randn); the
         // reshape below is a pure view split, so element order is untouched.
-        double[] flat = rng.randn(rows * cols).ToArray<double>();
+        double[] flat = NumPyDraws.Randn(rng, rows * cols);
         var matrix = new double[rows][];
         for (int i = 0; i < rows; i++)
         {

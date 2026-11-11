@@ -325,7 +325,7 @@ internal sealed class TurboOptimizer
 
         // z is drawn once (before the jitter loop) so the sample is identical regardless of how many jitter
         // levels the Cholesky needs — keeping the result reproducible from the per-trial seed.
-        double[] z = rng.randn(n).ToArray<double>();
+        double[] z = NumPyDraws.Randn(rng, n);
 
         double[]? sample = null;
         foreach (double jitter in JitterLevels)

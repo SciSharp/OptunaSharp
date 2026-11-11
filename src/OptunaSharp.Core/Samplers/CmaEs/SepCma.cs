@@ -359,7 +359,7 @@ internal class SepCma : ICmaOptimizer
     private double[] SampleSolution()
     {
         double[] d = EigenDecomposition();
-        double[] z = _rng.randn(_nDim).ToArray<double>();  // ~ N(0, I)
+        double[] z = NumPyDraws.Randn(_rng, _nDim);  // ~ N(0, I)
         var x = new double[_nDim];
         for (int i = 0; i < _nDim; i++)
             x[i] = _mean[i] + _sigma * (d[i] * z[i]);  // y = D * z ; x = m + σ y

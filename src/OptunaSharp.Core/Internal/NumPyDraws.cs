@@ -122,4 +122,19 @@ internal static class NumPyDraws
         using NDArray draws = rng.normal(loc, scale, new Shape(n));
         return draws.ToArray<double>();
     }
+
+    /// <summary>NumPy <c>rng.randn(n)</c>: <paramref name="n" /> standard normal draws, in draw order (plan 15).</summary>
+    /// <param name="rng">The generator to draw from; its state, including the cached second Gaussian of the polar method, advances exactly as <c>rng.randn(n)</c> advances it.</param>
+    /// <param name="n">The number of draws.</param>
+    /// <returns>A new array holding the draws in the order NumPy fills them.</returns>
+    /// <remarks>
+    ///     The very NumSharp call the samplers made (<c>rng.randn(n).ToArray&lt;double&gt;()</c>), with the array it returns
+    ///     disposed instead of left to the finalizer: CMA-ES draws one per sampled point, so each ask dropped at least one
+    ///     finalizable array. Whatever NumSharp's <c>randn</c> throws for a bad count propagates unchanged.
+    /// </remarks>
+    internal static double[] Randn(NumPyRandom rng, int n)
+    {
+        using NDArray draws = rng.randn(n);
+        return draws.ToArray<double>();
+    }
 }

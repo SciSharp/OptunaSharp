@@ -590,7 +590,7 @@ internal sealed class JanusOptimizer
                 var archived = new double[centers.Count][];
                 for (int k = 0; k < centers.Count; k++)
                 {
-                    double[] zk = _rng.randn(_d).ToArray<double>();
+                    double[] zk = NumPyDraws.Randn(_rng, _d);
                     var nk = new double[_d];
                     for (int i = 0; i < _d; i++) nk[i] = zk[i] * sqrtEig[i] * sig;   // normal · √eig · σ
                     double[] y = MatVec(eigvecs, nk);                                // eigvecs @ noise
@@ -615,7 +615,7 @@ internal sealed class JanusOptimizer
         var samples = new double[count][];
         for (int k = 0; k < count; k++)
         {
-            double[] zk = _rng.randn(_d).ToArray<double>();
+            double[] zk = NumPyDraws.Randn(_rng, _d);
             var nk = new double[_d];
             for (int i = 0; i < _d; i++) nk[i] = zk[i] * sqrtEig[i];
             double[] y = MatVec(eigvecs, nk);                 // eigvecs @ (√eigvals ⊙ z)

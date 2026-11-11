@@ -412,7 +412,7 @@ internal sealed class VkdCma : ICmaOptimizer
     /// <summary>Draws a vector of independent standard-normal values from the optimizer stream.</summary>
     /// <param name="n">Number of vector entries to produce.</param>
     /// <returns>The newly drawn standard-normal vector.</returns>
-    private double[] Randn(int n) => _rng.randn(n).ToArray<double>();
+    private double[] Randn(int n) => NumPyDraws.Randn(_rng, n);
 
     // ---- Tell (GaussVkDSampler.update + the ES mean recombination) ----------------------------
 

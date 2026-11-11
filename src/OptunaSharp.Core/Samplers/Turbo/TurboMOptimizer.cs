@@ -127,7 +127,7 @@ internal static class TurboMOptimizer
 
             // Draw this region's independent Thompson realization on the shared stream, in region order, so the
             // outcome is a pure function of (seed, labels) regardless of how the host schedules trials.
-            double[] z = rng.randn(n).ToArray<double>();
+            double[] z = NumPyDraws.Randn(rng, n);
             double[] sample = ThompsonSample(region.CandidateMean, region.CandidateCov, z);
 
             for (int i = 0; i < n; i++)
