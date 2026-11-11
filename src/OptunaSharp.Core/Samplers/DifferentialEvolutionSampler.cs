@@ -87,6 +87,18 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
     // sampler's monitor.
     private readonly HandedOutPoints _handedOut = new();
 
+    /// <summary>
+    ///     The last stored optimizer text this instance parsed, and the state parsed from it (plan 15): the text changes
+    ///     once per generation, and every ask in between parsed the same JSON again. Guarded by the sampler's monitor,
+    ///     like every hook; a per-worker instance has its own.
+    /// </summary>
+    /// <remarks>
+    ///     Safe to share across asks because <see cref="De.FromState" /> never changes the state it reads: the
+    ///     <see cref="De" /> constructor clones every population row and the values, and the rest are numbers. A parse
+    ///     that throws stores nothing, so the next ask parses (and throws) again, as before.
+    /// </remarks>
+    private (string Text, DeState State)? _parsedState;
+
     /// <param name="nStartupTrials">Minimum independent trials before DE begins; DE always waits for at
     ///     least <c>populationSize</c> completed trials to seed the initial population, whichever is larger.</param>
     /// <param name="independentSampler">Sampler for parameters outside the relative search space (default <see cref="RandomSampler" />).</param>
@@ -343,25 +355,36 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
 
     /// <summary>Decodes a persisted optimizer tag and reconstructs its matching state type.</summary>
     /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
-    /// <returns>The optimizer reconstructed from the tagged state.</returns>
+    /// <returns>A new optimizer reconstructed from the tagged state; the caller may change it freely.</returns>
     /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
     /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type, or is the literal null.</exception>
     /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
     /// <exception cref="System.ArgumentOutOfRangeException">The stored text has no <c>&lt;tag&gt;\n</c> line.</exception>
-    private static De DeserializeOptimizer(string optimizerStr)
+    /// <remarks>Parses the JSON only when the text differs from the last one parsed (<see cref="_parsedState" />); a new optimizer is built from the state every time.</remarks>
+    private De DeserializeOptimizer(string optimizerStr)
     {
+        // The same stored text as the last parse: the same state, without parsing the JSON again (see _parsedState).
+        // The whole text, tag included, is the key, so a hit has passed the tag check before.
+        if (_parsedState is { } parsed && string.Equals(parsed.Text, optimizerStr, StringComparison.Ordinal))
+            return De.FromState(parsed.State);
+
         int nl = optimizerStr.IndexOf('\n');
         string tag = optimizerStr[..nl];
         string json = optimizerStr[(nl + 1)..];
         if (tag != "de")
             throw new NotSupportedException($"Unknown optimizer state tag '{tag}'.");
-        return De.FromState(OptimizerStateJson.Deserialize<DeState>(json));
+        DeState state = OptimizerStateJson.Deserialize<DeState>(json);
+        _parsedState = (optimizerStr, state);
+        return De.FromState(state);
     }
 
     /// <summary>Finds the newest stored optimizer snapshot in completed trial history.</summary>
     /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
     /// <returns>The newest available optimizer, or null when no stored snapshot exists.</returns>
-    private static De? RestoreOptimizer(List<FrozenTrial> completedTrials)
+    /// <exception cref="System.NotSupportedException">The newest stored snapshot carries an unknown optimizer tag.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The newest stored snapshot's payload is not valid JSON for the state type.</exception>
+    /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
+    private De? RestoreOptimizer(List<FrozenTrial> completedTrials)
     {
         for (int idx = completedTrials.Count - 1; idx >= 0; idx--)
         {
