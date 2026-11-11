@@ -85,14 +85,14 @@ Open after plan 14 (its §7):
   over 4,100 indexes × 5 `(d, seed)`; `Create`+`Generate` = `Random`; the past-the-end guard) and `ScrambledHaltonTests`
   (engine = the replaced per-call algorithm, written out, over 11 indexes × 4 `(dim, seed)`); QMC / GP / TuRBO / SAASBO
   unit tests 246/246; live QMC and Sobol parity 20/20; hash probe 36/36 identical.
-- 06:00 — a kernel bench (`kbench`, a friend assembly) times `ParzenEstimator` construction and `LogPdf` at 100, 1,000
+- 06:10 — a kernel bench (`kbench`, a friend assembly) times `ParzenEstimator` construction and `LogPdf` at 100, 1,000
   and 3,000 kernels for 10 floats, a mixed space (floats, log floats, ints) and 10 ints, and hashes every output by its
   bits. Finding: the **stepped (int) branch** was the slow one — 10 ints at 100 kernels took 1.8 ms and 976 KB per call,
   against 0.1 ms and 7 KB for 10 floats — because its three `np.unique`-style dedups sorted with LINQ over up to
   24 × n_kernels grid cells. The sampled profiler could not say where the continuous branch spent its time: a call-free
   loop's time is charged to the next safe point (memset and GC-poll frames with no GC running), so the parts were timed
   on their own and the JIT's code read instead.
-- 06:50 — **step B, TPE log density.** (1) The stepped branch moved to `AddDiscreteLogPdf`: the dedups hash
+- 06:38 — **step B, TPE log density** (`397e60f`). (1) The stepped branch moved to `AddDiscreteLogPdf`: the dedups hash
   (`UniqueInverse`, first-occurrence order, NumPy's `==` grouping: ±0 together, every NaN alone) and every buffer is
   rented. Same values: the unique set and its size are unchanged, the log mass is elementwise and picks its `erf` path
   from the central count alone, and a group's members differ at most in the sign of a zero, which no log mass sees.
@@ -110,6 +110,33 @@ Open after plan 14 (its §7):
   and representatives; both accumulate branches against the replaced loop; the up-front length check) with the plan 13
   `TpeExactKernelTests`; unit CI filter 2,190/2,190 on net10.0 and net8.0; live TPE / PED-ANOVA / truncnorm parity
   35/35; hash probe 36/36 identical.
+
+- 06:40 — `motpe` profile: Optuna 5 resolves `multivariate=None` to True for one objective and False for several (the
+  port does the same), so MOTPE samples each parameter on its own; its cost is in the same kernels. BruteForce (12 s,
+  14 GB for 4,320 points) rebuilds its tree from every trial per parameter and per finished trial, which is Optuna's
+  design; an incremental tree is possible but was judged too risky for this pass (backlog).
+- 06:45 — `gp` at 150 trials: 11.0 s, 37.6 MB allocated per trial, **782 gen-2 collections**; the finalizer thread was
+  busy for 12 of 12.5 s (trimming the array pools after every gen-2 collection, and finalizing NumSharp blocks), and
+  `LinAlg.SolveTriangular` with a matrix right-hand side solved one column at a time through a captured accessor, two
+  arrays per column.
+- 07:00 — **step C, GP linear algebra and fit scratch.** (1) `LinAlg.SolveTriangular(matrix)` sweeps all right-hand
+  sides at once (`SweepTriangular`: row `i` minus a coefficient times row `j`, vectorized across the right-hand sides,
+  with a separate scalar branch per the owner's rule); a right solve works on the transposed block. Every element still
+  gets `TriSolveVec`'s sequence. (2) `LinAlg.CholeskySolve(L, B, left)` runs both triangular solves of a Cholesky solve
+  on one block, no intermediate matrix and no materialized `Lᵀ` (solving with `Lᵀ` stored upper reads the coefficients
+  that sweeping `L` transposed reads, in the same direction); the GP's fit (`C⁻¹`), `Posterior` (`V`) and
+  `SolveCholesky` use it. (3) `LinAlg.SolveTriangular(a, b, upper, transposeA)` for vectors reads `a` transposed in
+  place; the per-point posterior, `CacheMatrix` and the vector `SolveCholesky` no longer transpose the factor per call.
+  (4) `LossAndGrad` keeps its nine n × n buffers on the regressor across the fit's evaluations (`FitScratch`, dropped
+  when the fit ends so a cached regressor does not keep them). Survey (base → tree, same hashes): `gp` 150 trials
+  15.6 → 13.2 s (machine loaded; 11.0 → 9.7 s after (1) alone), 5,509 → 1,408 MB (−74%), gen-2 collections
+  795 → 143; 60 trials 0.71 → 0.56 s, 425 → 142 MB. Gates: `LinAlgTests` +3 (the matrix solve against the replaced
+  one-at-a-time code over every triangle, side, size 1–17 and 1–33 right-hand sides; `CholeskySolve` against the two
+  spelled-out solves; the transposed vector solve against a materialized transpose), 15/15; GP-family probe (GPSampler
+  float, mixed, deterministic, constrained, two objectives; TuRBO; SAASBO-MAP; REMBO) 8/8 identical; hash probe 36/36;
+  unit CI filter 2,193/2,193 on net10.0 and net8.0; live GP / terminator / TuRBO / SAASBO / REMBO / LinAlg parity
+  70/70. Not found: the source of the NumSharp `UInt32` blocks the GP run left to the finalizer (not `SeedSequence`,
+  which keeps a managed pool, nor `randint`, which defaults to int64).
 
 ## 6. Findings and notes for the owner
 

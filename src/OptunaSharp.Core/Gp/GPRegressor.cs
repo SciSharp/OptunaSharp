@@ -151,10 +151,18 @@ internal sealed class GPRegressor
 
     /// <summary>The squared distance <c>S[i,j] = Σ_d squared_X_diff[i,j,d] · w[d]</c>.</summary>
     /// <returns>The pairwise length-scale-weighted squared distances between input rows.</returns>
-    private double[,] SquaredDistance()
+    private double[,] SquaredDistance() => SquaredDistance(new double[_n, _n]);
+
+    /// <summary>
+    ///     <see cref="SquaredDistance()" /> into a caller's n × n buffer, every element overwritten: the same sums in the
+    ///     same order, for <see cref="LossAndGrad" />, which reuses one buffer across the fit's evaluations (plan 15).
+    /// </summary>
+    /// <param name="s">The n × n buffer to fill; its previous contents are irrelevant.</param>
+    /// <returns><paramref name="s" />, holding the weighted squared distances between the training rows.</returns>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="s" /> is smaller than n × n.</exception>
+    private double[,] SquaredDistance(double[,] s)
     {
         double[] w = InverseSquaredLengthscales;
-        var s = new double[_n, _n];
         for (int i = 0; i < _n; i++)
             for (int j = 0; j < _n; j++)
             {
@@ -241,10 +249,9 @@ internal sealed class GPRegressor
             mean[i] = s;
         }
 
-        // V = cov_fx_fX @ C⁻¹ = solve( X (L Lᵀ) = cov_fx_fX ) via two right-side triangular solves.
-        double[,] lt = Transpose(_covYYChol);
-        double[,] tmp = LinAlg.SolveTriangular(lt, covFxFX, upper: true, left: false);   // X Lᵀ = cov_fx_fX
-        double[,] v = LinAlg.SolveTriangular(_covYYChol, tmp, upper: false, left: false); // X L = tmp
+        // V = cov_fx_fX @ C⁻¹ = solve( X (L Lᵀ) = cov_fx_fX ) via two right-side triangular solves (X Lᵀ = cov_fx_fX,
+        // then X L = that), fused on one block (plan 15).
+        double[,] v = LinAlg.CholeskySolve(_covYYChol, covFxFX, left: false);
 
         var variance = new double[b];
         for (int i = 0; i < b; i++)
@@ -344,10 +351,10 @@ internal sealed class GPRegressor
         for (int j = 0; j < _nAll; j++)
             mean += k[j] * _covYYInvY[j];
 
-        // V = C⁻¹ kᵀ via inv(Lᵀ)·inv(L)·k.
+        // V = C⁻¹ kᵀ via inv(Lᵀ)·inv(L)·k. The Lᵀ solve reads L transposed in place, the same operations as solving with
+        // a materialized Lᵀ, without an n × n allocation per point (plan 15).
         double[] invLk = LinAlg.SolveTriangular(_covYYChol, k, upper: false);
-        double[,] lt = Transpose(_covYYChol);
-        double[] v = LinAlg.SolveTriangular(lt, invLk, upper: true);
+        double[] v = LinAlg.SolveTriangular(_covYYChol, invLk, upper: false, transposeA: true);
 
         double rawVar = scale;
         for (int j = 0; j < _nAll; j++)
@@ -429,10 +436,13 @@ internal sealed class GPRegressor
         NoiseVar = nv;
 
         // ---- forward: S, M(S), M'(S), K, C = K + ν·I, Cholesky ----
-        double[,] sq = SquaredDistance();
-        var k0 = new double[_n, _n];   // M(S)
-        var mp = new double[_n, _n];   // M'(S)
-        var c = new double[_n, _n];    // C = s·M(S) + ν·I
+        // The n × n scratch below lives on the regressor across the fit's evaluations (plan 15): every element is
+        // rewritten before it is read on each call, so a reused buffer holds what a fresh one would.
+        _fitScratch ??= new FitScratch(_n);
+        double[,] sq = SquaredDistance(_fitScratch.Distance);
+        double[,] k0 = _fitScratch.K0;   // M(S)
+        double[,] mp = _fitScratch.Mp;   // M'(S)
+        double[,] c = _fitScratch.C;     // C = s·M(S) + ν·I
         for (int i = 0; i < _n; i++)
             for (int j = 0; j < _n; j++)
             {
@@ -455,12 +465,10 @@ internal sealed class GPRegressor
         double loss = -mll - logPrior;
 
         // ---- backward: C⁻¹ = L⁻ᵀL⁻¹, α = C⁻¹y, G = ½(ααᵀ - C⁻¹) ----
-        var identity = new double[_n, _n];
-        for (int i = 0; i < _n; i++)
-            identity[i, i] = 1.0;
-        double[,] invL = LinAlg.SolveTriangular(l, identity, upper: false);   // L⁻¹
-        double[,] lt = Transpose(l);
-        double[,] cInv = LinAlg.SolveTriangular(lt, invL, upper: true);        // L⁻ᵀL⁻¹ = C⁻¹
+        // The identity is built once per regressor; the solve only reads it. C⁻¹ = L⁻ᵀL⁻¹ is the solve with L, then Lᵀ,
+        // of the identity, the two triangular solves this used to spell out, fused on one block (plan 15).
+        double[,] identity = _fitScratch.Identity;
+        double[,] cInv = LinAlg.CholeskySolve(l, identity, left: true);        // L⁻ᵀL⁻¹ = C⁻¹
         double[] alpha = LinAlg.Dot(cInv, _yTrain);
 
         // ∂MLL/∂ν = ½(α·α - tr(C⁻¹))
@@ -474,9 +482,9 @@ internal sealed class GPRegressor
         double dmllDNoise = 0.5 * (MathUtil.PairwiseSum(alphaSq) - traceCInv);
 
         // G = ½(ααᵀ - C⁻¹); ∂MLL/∂s = Σ G⊙M(S); P = G⊙M'(S); ∂MLL/∂w[d] = s·Σ P⊙D[:,:,d]
-        var g = new double[_n, _n];
-        var gK0 = new double[_n * _n];
-        var p = new double[_n, _n];
+        double[,] g = _fitScratch.G;
+        double[] gK0 = _fitScratch.GK0;
+        double[,] p = _fitScratch.P;
         int flat = 0;
         for (int i = 0; i < _n; i++)
             for (int j = 0; j < _n; j++)
@@ -489,7 +497,7 @@ internal sealed class GPRegressor
         double dmllDScale = MathUtil.PairwiseSum(gK0);
 
         var dmllDW = new double[n];
-        var pd = new double[_n * _n];
+        double[] pd = _fitScratch.Pd;
         for (int d = 0; d < n; d++)
         {
             flat = 0;
@@ -514,6 +522,73 @@ internal sealed class GPRegressor
         return (loss, grad);
     }
 
+    /// <summary>
+    ///     <see cref="LossAndGrad" />'s n × n scratch, created on its first call and reused by every later one (plan 15).
+    /// </summary>
+    /// <remarks>
+    ///     A fit evaluates the loss dozens of times, and each evaluation used to allocate nine n × n arrays: from 104
+    ///     training points on, each is a large-object-heap allocation, which is collected only with generation 2, so a
+    ///     150-trial GP study ran hundreds of full collections. Reuse is safe because one regressor's fit evaluates its
+    ///     loss on one thread, one call at a time (the fit runs inside the sampler's lock on a regressor of its own), and
+    ///     every call rewrites each buffer before reading it.
+    /// </remarks>
+    private FitScratch? _fitScratch;
+
+    /// <summary>
+    ///     Drops <see cref="LossAndGrad" />'s n × n scratch once a fit has finished evaluating the loss, so a regressor
+    ///     kept for its posterior (or as the next fit's warm start) does not keep nine n × n arrays alive with it.
+    /// </summary>
+    /// <remarks>A later <see cref="LossAndGrad" /> call simply allocates the scratch again.</remarks>
+    internal void ReleaseFitScratch() => _fitScratch = null;
+
+    /// <summary>The n × n buffers <see cref="LossAndGrad" /> reuses across one fit's evaluations.</summary>
+    private sealed class FitScratch
+    {
+        /// <summary>The weighted squared distances S.</summary>
+        internal readonly double[,] Distance;
+
+        /// <summary>The Matérn 5/2 values M(S).</summary>
+        internal readonly double[,] K0;
+
+        /// <summary>The Matérn 5/2 derivatives M'(S).</summary>
+        internal readonly double[,] Mp;
+
+        /// <summary>The covariance C = s·M(S) + ν·I.</summary>
+        internal readonly double[,] C;
+
+        /// <summary>The identity, the right-hand side whose solve gives L⁻¹; never written after construction.</summary>
+        internal readonly double[,] Identity;
+
+        /// <summary>G = ½(ααᵀ - C⁻¹).</summary>
+        internal readonly double[,] G;
+
+        /// <summary>G ⊙ M(S), flattened row-major for the pairwise sum.</summary>
+        internal readonly double[] GK0;
+
+        /// <summary>P = G ⊙ M'(S).</summary>
+        internal readonly double[,] P;
+
+        /// <summary>P ⊙ D[:, :, d] for one dimension d at a time, flattened row-major for the pairwise sum.</summary>
+        internal readonly double[] Pd;
+
+        /// <summary>Allocates the buffers for <paramref name="n" /> training points.</summary>
+        /// <param name="n">The number of training points.</param>
+        internal FitScratch(int n)
+        {
+            Distance = new double[n, n];
+            K0 = new double[n, n];
+            Mp = new double[n, n];
+            C = new double[n, n];
+            Identity = new double[n, n];
+            for (int i = 0; i < n; i++)
+                Identity[i, i] = 1.0;
+            G = new double[n, n];
+            GK0 = new double[n * n];
+            P = new double[n, n];
+            Pd = new double[n * n];
+        }
+    }
+
     private double[,]? _covYYChol;
     private double[] _covYYInvY = Array.Empty<double>();
 
@@ -528,10 +603,9 @@ internal sealed class GPRegressor
         for (int i = 0; i < _n; i++)
             c[i, i] += NoiseVar;
         _covYYChol = LinAlg.Cholesky(c);
-        // C⁻¹y = L⁻ᵀ(L⁻¹y).
+        // C⁻¹y = L⁻ᵀ(L⁻¹y); the Lᵀ solve reads L transposed in place (plan 15), the same operations as before.
         double[] invLy = LinAlg.SolveTriangular(_covYYChol, _yTrain, upper: false);
-        double[,] lt = Transpose(_covYYChol);
-        _covYYInvY = LinAlg.SolveTriangular(lt, invLy, upper: true);
+        _covYYInvY = LinAlg.SolveTriangular(_covYYChol, invLy, upper: false, transposeA: true);
     }
 
     /// <summary>
@@ -638,11 +712,11 @@ internal sealed class GPRegressor
     {
         if (left)
         {
-            double[,] tmp = LinAlg.SolveTriangular(l, b, upper: false, left: true);           // L (Lᵀ X) = B
-            return LinAlg.SolveTriangular(Transpose(l), tmp, upper: true, left: true);         // Lᵀ X = tmp
+            // L (Lᵀ X) = B, then Lᵀ X = tmp: both triangular solves fused on one block (plan 15).
+            return LinAlg.CholeskySolve(l, b, left: true);
         }
-        double[,] rt = LinAlg.SolveTriangular(Transpose(l), b, upper: true, left: false);       // (X L) Lᵀ = B
-        return LinAlg.SolveTriangular(l, rt, upper: false, left: false);                        // X L = rt
+        // (X L) Lᵀ = B, then X L = rt: both triangular solves fused on one block (plan 15).
+        return LinAlg.CholeskySolve(l, b, left: false);
     }
 
     /// <summary><c>_solve_cholesky(L, b)</c> for a vector right-hand side (<c>left=True</c>): <c>C⁻¹b = L⁻ᵀ(L⁻¹b)</c>.</summary>
@@ -652,7 +726,8 @@ internal sealed class GPRegressor
     internal static double[] SolveCholesky(double[,] l, double[] b)
     {
         double[] invLb = LinAlg.SolveTriangular(l, b, upper: false);
-        return LinAlg.SolveTriangular(Transpose(l), invLb, upper: true);
+        // Lᵀ read in place (plan 15): the operations of solving with a materialized Lᵀ, without the n × n copy.
+        return LinAlg.SolveTriangular(l, invLb, upper: false, transposeA: true);
     }
 
     /// <summary>
@@ -715,9 +790,20 @@ internal sealed class GPRegressor
         // 0.99 * minimum_noise is subtracted to keep the initial noise strictly above the floor.
         initial[nParams + 1] = Math.Log(NoiseVar - 0.99 * minimumNoise);
 
-        LBfgsB.Result res = LBfgsB.Minimize(
-            rawParams => LossAndGrad(rawParams, minimumNoise, deterministicObjective),
-            initial, bounds: null, m: 10, factr: 1e7, pgtol: gtol, maxfun: 15000, maxiter: 15000, maxls: 20);
+        LBfgsB.Result res;
+        try
+        {
+            res = LBfgsB.Minimize(
+                rawParams => LossAndGrad(rawParams, minimumNoise, deterministicObjective),
+                initial, bounds: null, m: 10, factr: 1e7, pgtol: gtol, maxfun: 15000, maxiter: 15000, maxls: 20);
+        }
+        finally
+        {
+            // The fitted regressor outlives its fit (posterior queries, the next trial's warm start), and nothing
+            // after the fit evaluates the loss again: drop the n × n scratch now instead of keeping it alive with it.
+            // On a failed fit the regressor is discarded, so this only frees the buffers earlier.
+            ReleaseFitScratch();
+        }
         if (res.WarnFlag != 0)
             throw new InvalidOperationException("Optimization failed");
 

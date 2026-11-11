@@ -196,6 +196,27 @@ internal static class LinAlg
         => TriSolveVec(a, b, upper, transpose: false);
 
     /// <summary>
+    ///     Triangular solve with a vector right-hand side against <paramref name="a" />'s transpose, read in place:
+    ///     <c>SolveTriangular(a, b, upper, transposeA: true)</c> computes exactly what
+    ///     <c>SolveTriangular(Transpose(a), b, !upper)</c> does, without materializing the transpose.
+    /// </summary>
+    /// <param name="a">The triangular coefficient matrix as stored; with <paramref name="transposeA" />, its transpose is solved with.</param>
+    /// <param name="b">The right-hand side; its length is the system size.</param>
+    /// <param name="upper">Whether <paramref name="a" /> is upper triangular as stored.</param>
+    /// <param name="transposeA">Whether to solve with <paramref name="a" />'s transpose.</param>
+    /// <returns>The solution vector.</returns>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="a" /> is smaller than the system <paramref name="b" /> defines.</exception>
+    /// <remarks>
+    ///     Plan 15: the GP's per-point posterior and its covariance cache solved <c>Lᵀ v = w</c> by transposing the
+    ///     Cholesky factor first, an n × n allocation per call (on the large-object heap from about a hundred training
+    ///     points) inside the acquisition's local search. Reading <c>a[j, i]</c> for <c>op(a)[i, j]</c> yields the same
+    ///     coefficients, and the substitution direction follows from <paramref name="upper" /> XOR
+    ///     <paramref name="transposeA" />, so the operations and their order are unchanged.
+    /// </remarks>
+    internal static double[] SolveTriangular(double[,] a, double[] b, bool upper, bool transposeA)
+        => TriSolveVec(a, b, upper, transposeA);
+
+    /// <summary>
     ///     Triangular solve with a matrix right-hand side — torch's
     ///     <c>solve_triangular(a, b, upper, left)</c>. <paramref name="left" /> <c>true</c> solves
     ///     <c>a X = b</c> (column by column); <c>false</c> solves <c>X a = b</c> (row by row).
@@ -205,38 +226,251 @@ internal static class LinAlg
     /// <param name="upper">Whether the supplied coefficient matrix is upper triangular.</param>
     /// <param name="left">True solves with the coefficient matrix on the left; false solves with it on the right.</param>
     /// <returns>The solution of the requested left- or right-sided triangular system.</returns>
+    /// <remarks>
+    ///     <para>
+    ///         Every right-hand side is solved with <see cref="TriSolveVec" />'s operations in its order: for each
+    ///         unknown, <c>s = b[i]</c>, then <c>s -= op(a)[i, j] * x[j]</c> for the solved unknowns <c>j</c> in
+    ///         ascending order, then <c>x[i] = s / op(a)[i, i]</c>.
+    ///     </para>
+    ///     <para>
+    ///         <b>All right-hand sides at once (plan 15).</b> The right-hand sides are independent, so they are swept
+    ///         together, one unknown at a time, by <see cref="SweepTriangular" /> over a row-major block holding one
+    ///         right-hand side per column: each update is a row of the block minus a coefficient times an earlier row,
+    ///         contiguous and vectorized across the right-hand sides, and each element still receives its
+    ///         right-hand side's own sequence above. A left solve's right-hand sides are already <paramref name="b" />'s
+    ///         columns; a right solve's are <paramref name="b" />'s rows, so the block is <paramref name="b" />
+    ///         transposed and the solution is transposed back. Before, each right-hand side was copied out, solved
+    ///         through a captured accessor with two-dimensional bounds checks, and copied back, with two arrays
+    ///         allocated per right-hand side: the GP sampler spent 43% of its time here (its kernel fit inverts the
+    ///         Cholesky factor, its posterior solves thousands of candidate rows per call).
+    ///     </para>
+    /// </remarks>
     internal static double[,] SolveTriangular(double[,] a, double[,] b, bool upper, bool left = true)
     {
         int rows = b.GetLength(0);
         int cols = b.GetLength(1);
-        int n = a.GetLength(0);
         var result = new double[rows, cols];
 
         if (left)
         {
-            var column = new double[n];
-            for (int c = 0; c < cols; c++)
+            // a X = b: the right-hand sides are b's columns, so b itself is the block (n unknowns × cols sides). The
+            // system's size is a's, as TriSolveVec took it.
+            int n = a.GetLength(0);
+            double[] block = System.Buffers.ArrayPool<double>.Shared.Rent(Math.Max(n * cols, 1));
+            try
             {
+                var y = new Span<double>(block, 0, n * cols);
                 for (int i = 0; i < n; i++)
-                    column[i] = b[i, c];
-                double[] solved = TriSolveVec(a, column, upper, transpose: false);
+                    for (int c = 0; c < cols; c++)
+                        y[i * cols + c] = b[i, c];
+                SweepTriangular(a, upper, transpose: false, y, n, cols);
                 for (int i = 0; i < n; i++)
-                    result[i, c] = solved[i];
+                    for (int c = 0; c < cols; c++)
+                        result[i, c] = y[i * cols + c];
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<double>.Shared.Return(block);
             }
         }
         else
         {
-            var rowVec = new double[n];
-            for (int r = 0; r < rows; r++)
+            // X a = b, i.e. aᵀ Xᵀ = bᵀ: the right-hand sides are b's rows, so the block is bᵀ (n unknowns × rows sides).
+            int n = a.GetLength(0);
+            double[] block = System.Buffers.ArrayPool<double>.Shared.Rent(Math.Max(n * rows, 1));
+            try
             {
-                for (int j = 0; j < n; j++)
-                    rowVec[j] = b[r, j];
-                double[] solved = TriSolveVec(a, rowVec, upper, transpose: true);
-                for (int j = 0; j < n; j++)
-                    result[r, j] = solved[j];
+                var y = new Span<double>(block, 0, n * rows);
+                for (int r = 0; r < rows; r++)
+                    for (int j = 0; j < n; j++)
+                        y[j * rows + r] = b[r, j];
+                SweepTriangular(a, upper, transpose: true, y, n, rows);
+                for (int r = 0; r < rows; r++)
+                    for (int j = 0; j < n; j++)
+                        result[r, j] = y[j * rows + r];
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<double>.Shared.Return(block);
             }
         }
         return result;
+    }
+
+    /// <summary>
+    ///     Solves with a Cholesky factorization <c>C = L Lᵀ</c>: <c>C⁻¹ B</c> when <paramref name="left" />, else
+    ///     <c>B C⁻¹</c>; exactly the values of the two triangular solves the GP stack spelled out:
+    ///     <c>SolveTriangular(Lᵀ, SolveTriangular(L, B, upper: false), upper: true)</c> on the left,
+    ///     <c>SolveTriangular(L, SolveTriangular(Lᵀ, B, upper: true, left: false), upper: false, left: false)</c> on the
+    ///     right.
+    /// </summary>
+    /// <param name="l">The lower-triangular Cholesky factor L; its upper triangle is not read.</param>
+    /// <param name="b">The right-hand sides: n × k on the left, k × n on the right.</param>
+    /// <param name="left">True for <c>C⁻¹ B</c>, false for <c>B C⁻¹</c>.</param>
+    /// <returns>A new matrix of <paramref name="b" />'s shape holding the solution.</returns>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="b" />'s solved dimension is smaller than <paramref name="l" />'s.</exception>
+    /// <remarks>
+    ///     <para>
+    ///         Plan 15: both triangular solves run on one block of right-hand sides (<paramref name="b" />, or its
+    ///         transpose on the right), back to back, through <see cref="SweepTriangular" />: no intermediate matrix, no
+    ///         materialized <c>Lᵀ</c>, two copies instead of four. The values are the same because each step reads the
+    ///         same coefficients in the same order: solving with <c>Lᵀ</c> stored as an upper-triangular matrix reads
+    ///         <c>Lᵀ[i, j]</c>, which is what sweeping <c>L</c> read transposed reads, and the substitution direction is
+    ///         the same (back substitution). On the left the steps are L (forward) then <c>Lᵀ</c> (backward); on the
+    ///         right, the first solve <c>X Lᵀ = B</c> is a forward sweep with <c>L</c> as stored and the second
+    ///         <c>X L = …</c> a backward sweep with <c>L</c> read transposed: the same two sweeps over the transposed
+    ///         block.
+    ///     </para>
+    /// </remarks>
+    internal static double[,] CholeskySolve(double[,] l, double[,] b, bool left)
+    {
+        int rows = b.GetLength(0);
+        int cols = b.GetLength(1);
+        int n = l.GetLength(0);
+        var result = new double[rows, cols];
+        // The block holds one right-hand side per column: b's columns on the left, b's rows (b transposed) on the right.
+        int width = left ? cols : rows;
+        double[] blockBuffer = System.Buffers.ArrayPool<double>.Shared.Rent(Math.Max(n * width, 1));
+        try
+        {
+            var y = new Span<double>(blockBuffer, 0, n * width);
+            if (left)
+            {
+                for (int i = 0; i < n; i++)
+                    for (int c = 0; c < cols; c++)
+                        y[i * cols + c] = b[i, c];
+            }
+            else
+            {
+                for (int r = 0; r < rows; r++)
+                    for (int j = 0; j < n; j++)
+                        y[j * rows + r] = b[r, j];
+            }
+
+            SweepTriangular(l, upper: false, transpose: false, y, n, width);   // L, forward
+            SweepTriangular(l, upper: false, transpose: true, y, n, width);    // Lᵀ, backward
+
+            if (left)
+            {
+                for (int i = 0; i < n; i++)
+                    for (int c = 0; c < cols; c++)
+                        result[i, c] = y[i * cols + c];
+            }
+            else
+            {
+                for (int r = 0; r < rows; r++)
+                    for (int j = 0; j < n; j++)
+                        result[r, j] = y[j * rows + r];
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<double>.Shared.Return(blockBuffer);
+        }
+        return result;
+    }
+
+    /// <summary>
+    ///     Solves <c>op(a) Y = B</c> in place for a block of right-hand sides, one per column of the row-major block
+    ///     <paramref name="y" />, which holds <c>B</c> on entry and <c>Y</c> on return; <c>op(a)</c> is <paramref name="a" />
+    ///     or, with <paramref name="transpose" />, its transpose. Forward substitution when the effective system is lower
+    ///     triangular (<paramref name="upper" /> XOR <paramref name="transpose" /> is false), back substitution otherwise.
+    /// </summary>
+    /// <param name="a">The triangular coefficient matrix in its stored orientation; only the effective triangle is read.</param>
+    /// <param name="upper">Whether <paramref name="a" /> is upper triangular as stored.</param>
+    /// <param name="transpose">Whether to solve with <paramref name="a" />'s transpose.</param>
+    /// <param name="y">The block, <paramref name="n" /> rows (unknowns) of <paramref name="width" /> right-hand sides, row-major.</param>
+    /// <param name="n">The number of unknowns per right-hand side; <paramref name="a" /> is at least n × n.</param>
+    /// <param name="width">The number of right-hand sides.</param>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="a" /> is smaller than n × n or <paramref name="y" /> is shorter than n × width.</exception>
+    /// <remarks>
+    ///     Row <c>i</c> starts as <c>b[i]</c>, then for each solved row <c>j</c> in ascending order becomes
+    ///     <c>row_i - op(a)[i, j] * row_j</c>, then <c>row_i / op(a)[i, i]</c>: per element, exactly
+    ///     <see cref="TriSolveVec" />'s <c>s -= op(a)[i, j] * x[j]</c> sequence and final division. Elements of a row
+    ///     never mix, so the vector path computes each with the scalar path's operations (.NET never fuses the
+    ///     multiplication and the subtraction on its own); the elements after the last whole vector take the scalar path.
+    /// </remarks>
+    private static void SweepTriangular(double[,] a, bool upper, bool transpose, Span<double> y, int n, int width)
+    {
+        // Transposition reverses which triangle holds the dependencies; XOR picks the substitution direction without
+        // materializing the transposed coefficient matrix, as TriSolveVec does.
+        bool effectiveUpper = upper ^ transpose;
+        if (!effectiveUpper)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                Span<double> rowI = y.Slice(i * width, width);
+                for (int j = 0; j < i; j++)
+                    SubtractScaledRow(rowI, transpose ? a[j, i] : a[i, j], y.Slice(j * width, width));
+                DivideRow(rowI, a[i, i]);
+            }
+        }
+        else
+        {
+            for (int i = n - 1; i >= 0; i--)
+            {
+                Span<double> rowI = y.Slice(i * width, width);
+                for (int j = i + 1; j < n; j++)
+                    SubtractScaledRow(rowI, transpose ? a[j, i] : a[i, j], y.Slice(j * width, width));
+                DivideRow(rowI, a[i, i]);
+            }
+        }
+    }
+
+    /// <summary><c>row[k] = row[k] - coefficient * other[k]</c> for every element, the substitution update of one unknown.</summary>
+    /// <param name="row">The row being solved; updated in place.</param>
+    /// <param name="coefficient">The coefficient of the already-solved unknown <paramref name="other" /> holds.</param>
+    /// <param name="other">An already-solved row, as long as <paramref name="row" />.</param>
+    /// <exception cref="IndexOutOfRangeException"><paramref name="other" /> is shorter than <paramref name="row" />.</exception>
+    private static void SubtractScaledRow(Span<double> row, double coefficient, ReadOnlySpan<double> other)
+    {
+        int width = row.Length;
+        if (System.Numerics.Vector.IsHardwareAccelerated && width >= System.Numerics.Vector<double>.Count)
+        {
+            // Vector path: whole vectors here, the elements after the last one on the scalar path below.
+            int vectorWidth = System.Numerics.Vector<double>.Count;
+            var coefficients = new System.Numerics.Vector<double>(coefficient);
+            int k = 0;
+            for (; k <= width - vectorWidth; k += vectorWidth)
+            {
+                var updated = new System.Numerics.Vector<double>(row[k..]) - coefficients * new System.Numerics.Vector<double>(other[k..]);
+                updated.CopyTo(row[k..]);
+            }
+            for (; k < width; k++)
+                row[k] -= coefficient * other[k];
+        }
+        else
+        {
+            // Scalar path: no vector hardware, or a row narrower than one vector.
+            for (int k = 0; k < width; k++)
+                row[k] -= coefficient * other[k];
+        }
+    }
+
+    /// <summary><c>row[k] = row[k] / divisor</c> for every element: the final division by the unknown's diagonal coefficient.</summary>
+    /// <param name="row">The row being solved; updated in place.</param>
+    /// <param name="divisor">The diagonal coefficient.</param>
+    /// <remarks>A division, never a multiplication by the reciprocal, which would round differently.</remarks>
+    private static void DivideRow(Span<double> row, double divisor)
+    {
+        int width = row.Length;
+        if (System.Numerics.Vector.IsHardwareAccelerated && width >= System.Numerics.Vector<double>.Count)
+        {
+            // Vector path: whole vectors here, the elements after the last one on the scalar path below.
+            int vectorWidth = System.Numerics.Vector<double>.Count;
+            var divisors = new System.Numerics.Vector<double>(divisor);
+            int k = 0;
+            for (; k <= width - vectorWidth; k += vectorWidth)
+                (new System.Numerics.Vector<double>(row[k..]) / divisors).CopyTo(row[k..]);
+            for (; k < width; k++)
+                row[k] /= divisor;
+        }
+        else
+        {
+            // Scalar path: no vector hardware, or a row narrower than one vector.
+            for (int k = 0; k < width; k++)
+                row[k] /= divisor;
+        }
     }
 
     /// <summary>
