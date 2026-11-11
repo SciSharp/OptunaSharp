@@ -306,4 +306,32 @@ public class Run2SamplerParityBugTests
             System.Linq.Enumerable.Select(study.Trials, t => t.State).Should().Equal(TrialState.Complete, TrialState.Fail);
         }
     }
+
+    /// <summary>
+    ///     QA-80 (second assertion): cmaes' <c>CMA</c> constructor also asserts its learning rates
+    ///     (<c>c1 &lt;= 1 - cmu</c>, "invalid learning rate for the rank-one update", then <c>cmu</c>, <c>c_sigma</c>,
+    ///     <c>cc</c>). With <c>popsize=1</c>, <c>mu = 0</c> makes <c>mu_eff</c> NaN, the comparison fails and Optuna's
+    ///     first CMA-ES trial FAILs with <c>AssertionError</c>. The port's <c>Cma</c> has none of these assertions: it
+    ///     builds the optimizer with NaN rates, completes trial 1, and fails trial 2 with
+    ///     <c>ValueError("`nan` is invalid value.")</c> instead.
+    /// </summary>
+    /// <remarks>
+    ///     Measured with Optuna 5.0.0 / cmaes 0.13.1: <c>CmaEsSampler(seed=0, popsize=1)</c> over a float and an int,
+    ///     <c>optimize(n_trials=8)</c>: states COMPLETE, FAIL and <c>AssertionError: invalid learning rate for the
+    ///     rank-one update</c>, the same with <c>with_margin=True</c> and <c>lr_adapt=True</c>
+    ///     (<c>use_separable_cma=True</c> raises <c>ZeroDivisionError</c>); the port gives COMPLETE, COMPLETE, FAIL in
+    ///     all four. <c>popsize=2</c> is identical on both sides. The expected type follows the port's mapping of
+    ///     cmaes assertions (<c>ArgumentException</c>, as for "invalid bounds" in <c>CmaWm</c>).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void CmaEs_PopulationOfOne_FailsLikeCmaesLearningRateAssertion()
+    {
+        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 0, popsize: 1));
+
+        System.Action optimize = () => study.Optimize(t => t.SuggestFloat("x", 0, 10) + t.SuggestInt("y", 0, 5), nTrials: 8);
+
+        optimize.Should().Throw<System.ArgumentException>().WithMessage("invalid learning rate for the rank-one update");
+        System.Linq.Enumerable.Select(study.Trials, t => t.State).Should().Equal(TrialState.Complete, TrialState.Fail);
+    }
 }
