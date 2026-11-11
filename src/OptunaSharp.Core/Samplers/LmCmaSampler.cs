@@ -282,27 +282,50 @@ public sealed class LmCmaSampler : BaseSampler
     private static string SerializeOptimizer(LmCma optimizer)
         => "lmcma\n" + OptimizerStateJson.Serialize(optimizer.ToState());
 
+    /// <summary>
+    ///     The last stored optimizer text this instance parsed, and the state parsed from it (plan 15, as
+    ///     <c>DifferentialEvolutionSampler</c> keeps it): the text changes once per generation, and every ask in between
+    ///     parsed the same JSON again. Guarded by the sampler's monitor, like every hook; a per-worker instance has its
+    ///     own.
+    /// </summary>
+    /// <remarks>
+    ///     Safe to share across asks because FromState never changes the state it reads: the <see cref="LmCma" /> rebuilt from it copies every array out of the state (Clone, Array.Copy and row copies) and reads the rest as numbers. A parse that throws
+    ///     stores nothing, so the next ask parses (and throws) again, as before.
+    /// </remarks>
+    private (string Text, LmCmaState State)? _parsedState;
+
     /// <summary>Decodes a persisted optimizer tag and reconstructs its matching state type.</summary>
     /// <param name="optimizerStr">Tagged serialized optimizer state, after any chunk reassembly.</param>
-    /// <returns>The optimizer reconstructed from the tagged state.</returns>
+    /// <returns>A new optimizer reconstructed from the tagged state; the caller may change it freely.</returns>
     /// <exception cref="System.NotSupportedException">The serialized optimizer tag is unknown.</exception>
     /// <exception cref="System.Text.Json.JsonException">The persisted optimizer payload is not valid JSON for its state type, or is the literal null.</exception>
     /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
     /// <exception cref="System.ArgumentOutOfRangeException">The stored text has no <c>&lt;tag&gt;\n</c> line.</exception>
-    private static LmCma DeserializeOptimizer(string optimizerStr)
+    /// <remarks>Parses the JSON only when the text differs from the last one parsed (<see cref="_parsedState" />); a new optimizer is built from the state every time.</remarks>
+    private LmCma DeserializeOptimizer(string optimizerStr)
     {
+        // The same stored text as the last parse: the same state, without parsing the JSON again (see _parsedState).
+        // The whole text, tag included, is the key, so a hit has passed the tag check before.
+        if (_parsedState is { } parsed && string.Equals(parsed.Text, optimizerStr, StringComparison.Ordinal))
+            return LmCma.FromState(parsed.State);
+
         int nl = optimizerStr.IndexOf('\n');
         string tag = optimizerStr[..nl];
         string json = optimizerStr[(nl + 1)..];
         if (tag != "lmcma")
             throw new NotSupportedException($"Unknown optimizer state tag '{tag}'.");
-        return LmCma.FromState(OptimizerStateJson.Deserialize<LmCmaState>(json));
+        LmCmaState state = OptimizerStateJson.Deserialize<LmCmaState>(json);
+        _parsedState = (optimizerStr, state);
+        return LmCma.FromState(state);
     }
 
     /// <summary>Finds the newest stored optimizer snapshot in completed trial history.</summary>
     /// <param name="completedTrials">Completed trial snapshots used as historical observations.</param>
     /// <returns>The newest available optimizer, or null when no stored snapshot exists.</returns>
-    private static LmCma? RestoreOptimizer(List<FrozenTrial> completedTrials)
+    /// <exception cref="System.NotSupportedException">The newest stored snapshot carries an unknown optimizer tag.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The newest stored snapshot's payload is not valid JSON for the state type.</exception>
+    /// <exception cref="System.ArgumentException">The decoded state contains invalid optimizer constructor settings.</exception>
+    private LmCma? RestoreOptimizer(List<FrozenTrial> completedTrials)
     {
         for (int idx = completedTrials.Count - 1; idx >= 0; idx--)
         {
