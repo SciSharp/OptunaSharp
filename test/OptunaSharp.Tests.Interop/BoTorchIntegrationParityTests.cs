@@ -174,10 +174,10 @@ public class BoTorchIntegrationParityTests : OptunaInteropTestBase
     ///     eighth significant digit of <c>x</c> from the first BoTorch trial on (both sides deterministic run to run,
     ///     independent of torch's thread count and of whether constraints are present). This replay feeds the bridge's
     ///     own history into real <c>optuna_integration.BoTorchSampler</c> and compares each BoTorch suggestion: QA-82,
-    ///     measured 3.4e-8 maximum difference, where every other configuration in this class is 0. The objective
-    ///     suggests <c>x</c> before <c>n</c> on purpose: with <c>n</c> suggested first (alphabetical order, as every
-    ///     other case here does) the replay is identical, so the divergence depends on the suggestion order, not on
-    ///     the ranges (<c>n</c> in [0, 20] and <c>x</c> in [-5, 5] still differ).
+    ///     measured 3.4e-8 maximum difference, where every other configuration in this class is 0. Variants measured
+    ///     while narrowing it: <c>n</c> in [0, 20] 2.6e-8; <c>x</c> in [-5, 5] 9.8e-8; <c>n</c> suggested before
+    ///     <c>x</c> 3.1e-9; only <c>x</c> in [-5, 5] with <c>n</c> suggested first was identical. The divergence is
+    ///     therefore configuration-dependent; neither the ranges nor the suggestion order alone cause it.
     /// </summary>
     /// <exception cref="AssertInconclusiveException">Under CI, where this known-failing repro must not run.</exception>
     [TestMethod]
