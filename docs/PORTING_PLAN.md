@@ -193,7 +193,9 @@ BLAS/LAPACK drift from scipy's by ULPs — the documented GP boundary). The plot
   precedent): scale-type/bounds/steps construction, `NormalizeOneParam`/`UnnormalizeOneParam`/
   `RoundOneNormalizedParam` (affine + log/exp + floor-to-grid), `GetChoicesOfDiscreteParams`,
   `GetNormalizedParams`, `GetUnnormalizedParam`. **Bit-exact vs Optuna** (pure numpy — no erf/LAPACK;
-  `log`/`exp`/`floor` match Python bit-for-bit): scale-types/steps/indices, all discrete choice grids,
+  `log`/`exp`/`floor` match Python bit-for-bit; **corrected 2026-11-11, `4c224e9`:** the stepped grids'
+  `np.arange` fill (QA-49) and the rounding's `//` (QA-87) were not NumPy's until they moved onto NumSharp's
+  `np.arange` and `NDDivision.FloorDivDouble`): scale-types/steps/indices, all discrete choice grids,
   and the one-param transforms over a 60-config sweep (`Should().Be(0.0)`), plus the boxed int/log-float/
   categorical `get_unnormalized_param`. `SampleNormalizedParams` is a documented `NotImplementedException`
   (needs the 2.12 scrambled Sobol'). `GPRegressor.Kernel(X1,X2)` + `Posterior(x)` — the two-argument cross
@@ -679,8 +681,11 @@ moment OptunaSharp.Core loads. Keep it.
   **Parity (verified vs live Optuna 5.0.0.dev):** a **400-config offline differential** — 5 crossovers ×
   {2,3,4} objectives × 25 seeds + 25 constrained (set_constraint), ~10k trials — matched **byte-for-byte
   with zero divergence** (full study state: every trial's params/values, per-trial generation, parent-cache
-  trial-id lists). 15 unit tests (hardcoded seed=42 SO sequence, default reference points for M=2/3,
-  MO/crossover/custom-reference-point reproducibility, validation, experimental+deprecation warnings) + 11
+  trial-id lists). (**Extended 2026-11-11, `a9c7cee`:** from eight objectives on NumPy's pairwise row norms in the
+  association differ from the left-to-right sums the port used, which the 2-4-objective differential could not see
+  (QA-86); the norms, argmin and min now run through NumSharp, pinned by the live
+  `ManyObjectives_FullState_IsBitIdentical` at 8 and 10 objectives.) 15 unit tests (hardcoded seed=42 SO
+  sequence, default reference points for M=2/3, MO/crossover/custom-reference-point reproducibility, validation, experimental+deprecation warnings) + 11
   live full-state parity tests (2-/3-objective defaults, 4 crossovers, custom reference points, poly
   mutation, set_constraint). **Numeric due-diligence (all verified before porting):** `_filter_inf` and
   the reference-point association are bit-exact (the 4-operand `einsum("ni,pi,p,pm->npm")` reproduced
