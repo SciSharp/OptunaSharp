@@ -121,9 +121,18 @@ internal static class TurboGpFit
 
         try
         {
-            LBfgsB.Result res = LBfgsB.Minimize(
-                raw => gpr.LossAndGrad(raw, minimumNoise, deterministicObjective),
-                initial, bounds, m: 10, factr: 1e7, pgtol: gtol, maxfun: 15000, maxiter: 15000, maxls: 20);
+            LBfgsB.Result res;
+            try
+            {
+                res = LBfgsB.Minimize(
+                    raw => gpr.LossAndGrad(raw, minimumNoise, deterministicObjective),
+                    initial, bounds, m: 10, factr: 1e7, pgtol: gtol, maxfun: 15000, maxiter: 15000, maxls: 20);
+            }
+            finally
+            {
+                // The loss is not evaluated again; the regressor is kept for its posterior, without the fit's scratch.
+                gpr.ReleaseFitScratch();
+            }
             // A non-zero warn flag is scipy/Optuna's "Optimization failed" — treat as a fit failure and
             // fall back, rather than trusting an unconverged point that may violate the box.
             if (res.WarnFlag != 0)

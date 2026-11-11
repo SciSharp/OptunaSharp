@@ -136,7 +136,15 @@ Open after plan 14 (its §7):
   float, mixed, deterministic, constrained, two objectives; TuRBO; SAASBO-MAP; REMBO) 8/8 identical; hash probe 36/36;
   unit CI filter 2,193/2,193 on net10.0 and net8.0; live GP / terminator / TuRBO / SAASBO / REMBO / LinAlg parity
   70/70. Not found: the source of the NumSharp `UInt32` blocks the GP run left to the finalizer (not `SeedSequence`,
-  which keeps a managed pool, nor `randint`, which defaults to int64).
+  which keeps a managed pool, nor `randint`, which defaults to int64). Committed `8588074`.
+- 07:15 — **step D, the forked regressor.** `Samplers/ModelBased/Gp/GPRegressor.cs` (TuRBO's fit, and the fork's
+  posterior) takes step C's changes line for line: the fit's `FitScratch` (released when `FitInner` ends, and by
+  `TurboGpFit` after its own L-BFGS-B), `CholeskySolve` for `C⁻¹`, `V` and `SolveCholesky`, the in-place transposed
+  vector solve for the per-point posterior, `CacheMatrix` and the vector `SolveCholesky`. GP-family probe with TuRBO at
+  120 trials and REMBO at 60 (base → tree): all 8 hashes identical; TuRBO 4.64 → 4.28 s, 1,857 → 1,215 MB; REMBO
+  unchanged (its embedded GP does not go through this fit); the GPSampler rows show step C (e.g. 26 trials 52 → 24 MB,
+  two objectives 197 → 121 MB). Gates: GP-family, LinAlg and terminator unit tests 266/266 (net10.0); live parity
+  70/70.
 
 ## 6. Findings and notes for the owner
 
