@@ -167,6 +167,40 @@ public class BoTorchIntegrationParityTests : OptunaInteropTestBase
                     new[] { (n - 8.0) * (n - 8.0) + x * x, (n - 12.0) * (n - 12.0) + (x - 1.0) * (x - 1.0) });
             });
 
+    /// <summary>
+    ///     Parity QA run 2 (E63, <c>docs/qa/PARITY_QA_2026-11-10.md</c>): the configuration whose full studies diverged —
+    ///     two minimized objectives over <c>n</c> in [0, 4] and <c>x</c> in [0, 1], four startup trials, seed 0. A
+    ///     full Python study and the bridge's full study agree on the four startup trials and then differ in the
+    ///     eighth significant digit of <c>x</c> from the first BoTorch trial on (both sides deterministic run to run,
+    ///     independent of torch's thread count and of whether constraints are present). This replay feeds the bridge's
+    ///     own history into real <c>optuna_integration.BoTorchSampler</c> and compares each BoTorch suggestion: QA-82,
+    ///     measured 3.4e-8 maximum difference, where every other configuration in this class is 0.
+    /// </summary>
+    /// <exception cref="AssertInconclusiveException">Under CI, where this known-failing repro must not run.</exception>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [TestCategory("Slow")]
+    [TestCategory("OpenBugs")]
+    public void Run2SmallIntFloatMultiObjective_Qehvi_ByteExact()
+    {
+        // The interop job's Slow leg filters only `TestCategory=Slow`, not OpenBugs, so this known-failing repro must
+        // not run there; locally (no CI variable) it runs and fails until the divergence is fixed.
+        if (Environment.GetEnvironmentVariable("CI") == "true")
+            Assert.Inconclusive("OpenBugs repro (QA-82); the interop CI job does not filter OpenBugs.");
+        AssertReplay(
+            0, new[] { StudyDirection.Minimize, StudyDirection.Minimize }, cfExpr: "None",
+            considerRunning: false, constraintsFunc: null,
+            nStartup: 4, nCompletedBo: 4, nRunning: 0,
+            spaceExpr: "{'n': IntDistribution(0, 4), 'x': FloatDistribution(0.0, 1.0)}",
+            objective: t =>
+            {
+                double x = t.SuggestFloat("x", 0.0, 1.0);
+                long n = t.SuggestInt("n", 0, 4);
+                return (new() { ["x"] = x, ["n"] = n },
+                    new[] { x * x + 0.05 * n, Math.Pow(1.0 - x, 2) + 0.05 * (4 - n) });
+            });
+    }
+
     // ---- harness --------------------------------------------------------------------------------
 
     private void AssertReplay(
