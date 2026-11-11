@@ -129,6 +129,66 @@ public class NsgaiiiSamplerParityTests : OptunaInteropTestBase
             "study.optimize(_obj, n_trials=24)\n");
     }
 
+    /// <summary>
+    ///     The many-objective regime NSGA-III exists for: 8 and 10 minimized objectives (sums of squares around a
+    ///     distinct centre each, polynomial only, so both languages evaluate them alike), population 20, 200 trials,
+    ///     the default reference points (120 and 220 of them). From eight objectives on, NumPy's
+    ///     <c>np.linalg.norm(..., axis=2)</c> in <c>_associate_individuals_with_reference_points</c> sums each row
+    ///     pairwise; the left-to-right sum the port used until 2026-11-11 moved the reference-line distances by an ulp
+    ///     and changed the survivors in both rows below: the trajectory left Optuna's at trial 80 (8 objectives, seed
+    ///     4) and at trial 100 (10 objectives, seed 0); 6 of 8 seeds at 8 objectives happened to stay identical.
+    /// </summary>
+    /// <param name="nObjectives">The number of objectives (each over <c>nObjectives + 2</c> float parameters).</param>
+    /// <param name="seed">The sampler seed.</param>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(8, 4)]
+    [DataRow(10, 0)]
+    public void ManyObjectives_FullState_IsBitIdentical(int nObjectives, int seed)
+    {
+        PythonSession.EnsureOrInconclusive();
+
+        int nParams = nObjectives + 2;
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "nsga3",
+            sampler: new NSGAIIISampler(populationSize: 20, seed: seed),
+            directions: System.Linq.Enumerable.Repeat(StudyDirection.Minimize, nObjectives));
+        csStudy.Optimize(t =>
+        {
+            var x = new double[nParams];
+            for (int j = 0; j < nParams; j++)
+                x[j] = t.SuggestFloat($"x{j:D2}", 0.0, 1.0);
+            var f = new double[nObjectives];
+            for (int m = 0; m < nObjectives; m++)
+            {
+                double s = 0.0;
+                for (int j = 0; j < nParams; j++)
+                {
+                    double d = x[j] - ((m * 7 + j * 3) % 10) / 10.0;
+                    s += d * d;
+                }
+                f[m] = s;
+            }
+            return (IReadOnlyList<double>)f;
+        }, nTrials: 200);
+
+        AssertFullParity(csStudy,
+            "study = optuna.create_study(study_name='nsga3', " +
+            $"directions=['minimize'] * {nObjectives}, " +
+            $"sampler=optuna.samplers.NSGAIIISampler(population_size=20, seed={seed}))\n" +
+            "def _obj(t):\n" +
+            $"    x = [t.suggest_float(f'x{{j:02d}}', 0.0, 1.0) for j in range({nParams})]\n" +
+            "    f = []\n" +
+            $"    for m in range({nObjectives}):\n" +
+            "        s = 0.0\n" +
+            $"        for j in range({nParams}):\n" +
+            "            d = x[j] - ((m * 7 + j * 3) % 10) / 10.0\n" +
+            "            s += d * d\n" +
+            "        f.append(s)\n" +
+            "    return f\n" +
+            "study.optimize(_obj, n_trials=200)\n");
+    }
+
     [TestMethod]
     [TestCategory("RequiresPython")]
     [DataRow("uniform", 1)]

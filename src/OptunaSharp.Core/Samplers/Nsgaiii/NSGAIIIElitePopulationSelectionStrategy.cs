@@ -22,13 +22,18 @@ namespace OptunaSharp.Samplers.Nsgaiii;
 ///     <para><b>Bit-exact.</b> The whole pipeline matches Optuna bit-for-bit: <c>_filter_inf</c>,
 ///     the ideal-point subtraction, the ASF <c>einsum</c>/argmin extreme-point pick, the
 ///     reference-point association (numpy's 4-operand <c>einsum</c> replicated term-by-term, verified
-///     bit-identical over 2000 cases), the niching, and — since 2.15 — the hyperplane fit itself: the
+///     bit-identical over 2000 cases; its two <c>np.linalg.norm(axis=...)</c> calls and the axis
+///     <c>argmin</c>/<c>min</c> run through NumSharp, so the row sums take NumPy's pairwise order from
+///     eight objectives on — before 2026-11-11 they were left-to-right sums, exact only up to seven
+///     objectives), the niching, and — since 2.15 — the hyperplane fit itself: the
 ///     degeneracy <see cref="LinAlg.MatrixRank" /> branch and the <see cref="LinAlg.Solve" /> route
 ///     through NumSharp's <c>np.linalg.matrix_rank</c>/<c>solve</c> over the OpenBLAS LAPACK backend,
 ///     which is byte-identical to NumPy (the earlier managed reciprocal-multiplier LU drifted ~1 ULP
 ///     on a few percent of the extreme-point systems; the LAPACK route removes even that). Every RNG
 ///     draw (<c>rng.shuffle</c>) stays in lock-step. Confirmed byte-for-byte over a 400-config
-///     differential (5 crossovers × {2,3,4} objectives × 25 seeds + 25 constrained).</para>
+///     differential (5 crossovers × {2,3,4} objectives × 25 seeds + 25 constrained); the many-objective
+///     regime (8 and 10 objectives) is pinned by the live
+///     <c>NsgaiiiSamplerParityTests.ManyObjectives_FullState_IsBitIdentical</c>.</para>
 /// </summary>
 public class NSGAIIIElitePopulationSelectionStrategy
 {
@@ -298,9 +303,35 @@ public class NSGAIIIElitePopulationSelectionStrategy
     ///     Python <c>_associate_individuals_with_reference_points</c>: the closest reference point to
     ///     each individual and that Euclidean (perpendicular) distance.
     /// </summary>
-    /// <param name="objectiveMatrix">Objective vectors with one individual per row.</param>
+    /// <param name="objectiveMatrix">Normalized objective vectors with one individual per row.</param>
     /// <param name="referencePoints">Reference vectors, one row per point and one column per objective.</param>
-    /// <returns>Nearest reference-point indices and perpendicular distances for each individual.</returns>
+    /// <returns>
+    ///     For each individual, the index of the reference line closest to it and the distance to that line. A row
+    ///     with a NaN distance reports the first NaN's line and NaN, as <c>np.argmin</c> / <c>np.min</c> do.
+    /// </returns>
+    /// <remarks>
+    ///     <para>
+    ///         Same statements as Optuna's, so the bits follow NumPy at every objective count. The two norms and the
+    ///         axis-1 <c>argmin</c> / <c>min</c> are NumSharp's: a row norm over the last axis sums the squares in
+    ///         NumPy's pairwise order, which from eight objectives on is not a left-to-right sum (the former loop
+    ///         matched NumPy up to seven objectives and missed every distance from eight on, measured 2026-11-11
+    ///         over 54 random cases), and the axis argmin / min let a NaN distance win the row as in NumPy, where a
+    ///         strict <c>&lt;</c> loop skipped it. A 10-objective NSGA-III run (population 20, seed 0) left
+    ///         Optuna's trajectory at trial 100 before this.
+    ///     </para>
+    ///     <para>
+    ///         The 4-operand <c>einsum("ni,pi,p,pm->npm")</c> stays a hand port: NumPy's default <c>c_einsum</c>
+    ///         accumulates <c>((a·b)·c)·d</c> over <c>i</c> term by term, which the loop reproduces bit for bit,
+    ///         where NumSharp's <c>np.einsum</c> folds the operands pairwise through matrix products (the
+    ///         <c>optimize=</c> path) and matched NumPy in none of the 54 cases. Cost: one (individuals × reference
+    ///         points × objectives) tensor per generation, as in Optuna (about 15 ms at 200 individuals, 220
+    ///         reference points and 10 objectives).
+    ///     </para>
+    ///     <para>
+    ///         The caller (<see cref="Select" />) has already checked that the reference points have one column per
+    ///         objective, with Optuna's <c>ValueError</c>.
+    ///     </para>
+    /// </remarks>
     private static (int[] Closest, double[] Distance) AssociateIndividualsWithReferencePoints(
         double[,] objectiveMatrix, double[,] referencePoints)
     {
@@ -308,45 +339,44 @@ public class NSGAIIIElitePopulationSelectionStrategy
         int m = objectiveMatrix.GetLength(1);
         int r = referencePoints.GetLength(0);
 
-        // 1 / (norm(reference_points, axis=1) ** 2) — note norm then square (sqrt(s)**2 != s exactly).
-        var inv = new double[r];
+        // reference_point_norm_squared = np.linalg.norm(reference_points, axis=1) ** 2, then its reciprocal. The norm is
+        // rounded before it is squared (sqrt(s) ** 2 is not s in float64), as in Optuna.
+        double[] inverseNormSquared;
+        using (NDArray referenceArray = np.array(referencePoints))
+        using (NDArray referenceNorms = np.linalg.norm(referenceArray, axis: 1))
+            inverseNormSquared = referenceNorms.ToArray<double>();
         for (int q = 0; q < r; q++)
-        {
-            double s = 0.0;
-            for (int j = 0; j < m; j++) s += referencePoints[q, j] * referencePoints[q, j];
-            double t = Math.Sqrt(s);
-            inv[q] = 1.0 / (t * t);
-        }
+            inverseNormSquared[q] = 1.0 / (inverseNormSquared[q] * inverseNormSquared[q]);
 
-        var closest = new int[p];
-        var distance = new double[p];
+        // objective_matrix[:, np.newaxis, :] - perpendicular_vectors_to_reference_lines, where the perpendicular vectors
+        // are einsum("ni,pi,p,pm->npm", objective_matrix, reference_points, 1 / norm_squared, reference_points): each
+        // element is c_einsum's left-to-right sum over i of ((obj[n,i] * ref[q,i]) * inv[q]) * ref[q,k].
+        var differences = new double[p, r, m];
         for (int n = 0; n < p; n++)
         {
-            int best = 0;
-            double bestDist = double.NaN;
-            bool first = true;
             for (int q = 0; q < r; q++)
             {
-                // dist = norm(obj_n - perp_{n,q}); perp_{n,q,k} matches numpy's 4-operand
-                // einsum("ni,pi,p,pm->npm") accumulated term-by-term (bit-exact, verified).
-                double s = 0.0;
                 for (int k = 0; k < m; k++)
                 {
-                    double perp = 0.0;
+                    double perpendicular = 0.0;
                     for (int i = 0; i < m; i++)
-                        perp += objectiveMatrix[n, i] * referencePoints[q, i] * inv[q] * referencePoints[q, k];
-                    double diff = objectiveMatrix[n, k] - perp;
-                    s += diff * diff;
+                        perpendicular += objectiveMatrix[n, i] * referencePoints[q, i] * inverseNormSquared[q] * referencePoints[q, k];
+                    differences[n, q, k] = objectiveMatrix[n, k] - perpendicular;
                 }
-                double dist = Math.Sqrt(s);
-                // np.argmin / np.min keep the FIRST minimum on ties (strict <).
-                if (first || dist < bestDist) { bestDist = dist; best = q; first = false; }
             }
-            closest[n] = best;
-            distance[n] = bestDist;
         }
 
-        return (closest, distance);
+        // distance_from_reference_lines = np.linalg.norm(differences, axis=2); then np.argmin and np.min along axis 1,
+        // which keep the first minimum on ties and let the first NaN win a row.
+        using NDArray differenceArray = np.array(differences);
+        using NDArray distances = np.linalg.norm(differenceArray, axis: 2);
+        using NDArray closestArray = np.argmin(distances, axis: 1);
+        using NDArray distanceArray = np.amin(distances, axis: 1);
+        long[] closestIndices = closestArray.ToArray<long>();
+        var closest = new int[p];
+        for (int n = 0; n < p; n++)
+            closest[n] = (int)closestIndices[n];
+        return (closest, distanceArray.ToArray<double>());
     }
 
     /// <summary>
