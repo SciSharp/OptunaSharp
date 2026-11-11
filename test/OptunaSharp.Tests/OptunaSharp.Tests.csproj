@@ -49,6 +49,11 @@
          Copied next to the test assembly so Samplers/CmaPickleOracleTests checks OptunaSharp's pickle reader,
          writer and stored states byte for byte with NO Python. -->
     <None Include="oracle\cma_pickle_oracle.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Committed NumPy scalar-math oracle (bit patterns of NumPy 2.4.2's float64 log1p / expm1 / logaddexp on
+         win-amd64; regenerated on Windows by oracle/gen_numpy_scalar_math_oracle.py). Copied next to the test
+         assembly so Internal/MathUtilNumSharpModelTests replays it with NO Python. A Windows-only pin: NumPy's
+         log1p/expm1 call the platform libm. -->
+    <None Include="oracle\numpy_scalar_math.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

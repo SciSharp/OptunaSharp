@@ -1,5 +1,7 @@
 using System;
 using System.Globalization;
+using System.Runtime.CompilerServices;
+using NumSharp.Utilities;
 
 namespace OptunaSharp.Internal;
 
@@ -39,73 +41,92 @@ internal static class MathUtil
         => Math.Min(Math.Max(value, low), high);
 
     /// <summary>
-    ///     C99 / NumPy <c>np.log1p(x)</c> — <c>log(1 + x)</c> accurate for small <c>x</c>. .NET has
-    ///     no <c>Math.Log1p</c>; this correction-term form (<c>log(u) - ((u-1) - x)/u</c>, u = 1+x)
-    ///     is bit-identical to NumPy's <c>log1p</c> because <see cref="Math.Log(double)" /> already
-    ///     matches NumPy's <c>np.log</c> bit-for-bit (verified over 220k points, 0 ULP).
+    ///     NumPy's float64 <c>np.log1p(x)</c> for one value, bit for bit and without allocating: it runs NumSharp's public
+    ///     model of the UCRT routine NumPy calls (<see cref="NDLog1pExpm1Math.Log1p(double)" />), so a scalar call costs a
+    ///     few flops, never a 0-d <c>NDArray</c> left to the finalizer.
     /// </summary>
-    /// <param name="x">The scalar argument.</param>
-    /// <returns>The natural logarithm of one plus the argument, with correction near zero.</returns>
-    internal static double Log1p(double x)
-    {
-        if (double.IsNaN(x))
-            return double.NaN;
-        double u = 1.0 + x;
-        if (u == 1.0)
-            return x;  // |x| below the rounding of 1 + x (incl. x == 0): log1p(x) == x.
-        if (u <= 0.0)
-            return Math.Log(u);  // x <= -1: -inf at x == -1, NaN below — same as np.log(1 + x).
-        if (double.IsPositiveInfinity(u))
-            return Math.Log(u);
-        return Math.Log(u) - ((u - 1.0) - x) / u;
-    }
-
-    private static readonly double Loge2 = Math.Log(2.0);
+    /// <param name="x">The argument; any double, including NaN and the infinities.</param>
+    /// <returns>
+    ///     <c>log(1 + x)</c>, accurate near zero: <c>x</c> itself when <c>1 + x</c> rounds to 1, <c>-inf</c> at
+    ///     <c>x == -1</c>, the positive quiet NaN below <c>-1</c> (as the UCRT returns it), <c>+inf</c> at <c>+inf</c>,
+    ///     and a NaN argument passed through with its payload.
+    /// </returns>
+    /// <remarks>
+    ///     <para>
+    ///         The model is Goldberg's correction over the UCRT's own <c>log</c>,
+    ///         <c>u = 1 + x; log(u) - ((u - 1) - x) / u</c>, the form this helper used to inline. Measured against NumPy
+    ///         2.4.2 on Windows (2026-11-11, 600,000 seeded inputs over (-1, 1), tiny magnitudes and [1, 1e6]): 100%
+    ///         bit-identical, as was the former inline copy, so the switch to NumSharp changed no finite result.
+    ///     </para>
+    ///     <para>
+    ///         The only observable difference from the former copy is a NaN's bits: a NaN argument now keeps its payload
+    ///         instead of becoming <see cref="double.NaN" />, and <c>x &lt; -1</c> yields the positive quiet NaN where
+    ///         <see cref="Math.Log(double)" /> of a negative number returned the negative one. Both are NaN to every
+    ///         comparison; only code hashing raw bits could tell them apart.
+    ///     </para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static double Log1p(double x) => NDLog1pExpm1Math.Log1p(x);
 
     /// <summary>
-    ///     C99 / NumPy <c>np.expm1(x)</c> — <c>exp(x) - 1</c> accurate for small <c>x</c>. .NET has
-    ///     no <c>Math.Expm1</c>; this Kahan form (<c>(u-1)*x/log(u)</c>, u = exp(x)) is bit-identical
-    ///     to NumPy's <c>expm1</c> because <see cref="Math.Exp(double)" />/<see cref="Math.Log(double)" />
-    ///     already match NumPy's <c>np.exp</c>/<c>np.log</c> bit-for-bit (verified against Python over
-    ///     the TPE truncnorm input range).
+    ///     NumPy's float64 <c>np.expm1(x)</c> for one value, without allocating, through NumSharp's public model of the
+    ///     UCRT routine NumPy calls (<see cref="NDLog1pExpm1Math.Expm1(double)" />): NumPy's exact bits outside
+    ///     <c>[-ln 2, ln 1.5]</c>, within 2 ulp of them inside that band. Prefer it over any hand-written formula; none
+    ///     reproduces the UCRT inside the band.
     /// </summary>
-    /// <param name="x">The scalar argument.</param>
-    /// <returns>The exponential of the argument minus one, with correction near zero.</returns>
-    internal static double Expm1(double x)
-    {
-        if (double.IsNaN(x))
-            return double.NaN;
-        double u = Math.Exp(x);
-        if (u == 1.0)
-            return x;  // |x| below the rounding of exp(x): expm1(x) == x.
-        double y = u - 1.0;
-        if (y == -1.0)
-            return -1.0;  // exp(x) underflowed to 0 (x very negative).
-        if (double.IsPositiveInfinity(u))
-            return u;  // overflow.
-        return y * x / Math.Log(u);
-    }
+    /// <param name="x">The argument; any double, including NaN and the infinities.</param>
+    /// <returns>
+    ///     <c>exp(x) - 1</c>, accurate near zero: <c>-1</c> once <c>exp(x)</c> underflows (and for <c>-inf</c>),
+    ///     <c>+inf</c> on overflow, a zero's sign kept, and a NaN argument passed through with its payload.
+    /// </returns>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Why NumSharp's model and not Kahan's formula.</b> Outside the band the UCRT returns exactly
+    ///         <c>exp(x) - 1</c>, which the model reproduces. Inside it the UCRT evaluates an undocumented polynomial
+    ///         that is not correctly rounded and that no public formula reproduces, so the model runs Sun's
+    ///         <c>s_expm1.c</c>, the closest known. This helper used to compute Kahan's <c>(u - 1) * x / log(u)</c>
+    ///         with <c>u = exp(x)</c>, documented as bit-identical to NumPy; measured on 2026-11-11 against NumPy 2.4.2
+    ///         on Windows (200,000 seeded inputs per range), it was not:
+    ///     </para>
+    ///     <list type="bullet">
+    ///         <item><description>outside the band: Kahan 82.0% equal (worst 2 ulp); the model 100%;</description></item>
+    ///         <item><description><c>(-0.01, 0]</c>, <see cref="TruncNorm.NdtriExp" />'s flip branch: Kahan 62.4% (worst 3 ulp); the model 69.6% (worst 2);</description></item>
+    ///         <item><description><c>[0.01, 5]</c>, its initial-guess branch: Kahan 84.3% (worst 3 ulp); the model 96.7% (worst 2);</description></item>
+    ///         <item><description>the whole band: Kahan 50.9% (worst 4 ulp); the model 58.2% (worst 3).</description></item>
+    ///     </list>
+    ///     <para>
+    ///         <b>Consequence.</b> The switch moves TPE's truncated-normal quantiles (<see cref="TruncNorm.NdtriExp" />
+    ///         seeds its Newton iteration with this value) closer to NumPy's; it also changes their last bits relative
+    ///         to OptunaSharp builds before the switch, so a seeded TPE study can differ from an earlier release in the
+    ///         low bits. TPE's live parity was already erf-tolerance parity (the documented <see cref="Erf" /> class), and
+    ///         the residual in-band difference stays within that class.
+    ///     </para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static double Expm1(double x) => NDLog1pExpm1Math.Expm1(x);
 
     /// <summary>
-    ///     NumPy <c>np.logaddexp(a, b) = log(exp(a) + exp(b))</c>, computed stably. Reproduces
-    ///     NumPy's <c>npy_logaddexp</c> exactly (the <c>a == b</c> branch adds <c>log(2)</c> and
-    ///     handles the infinities); bit-identical to Python because it rides on the bit-exact
-    ///     <see cref="Log1p" /> and <see cref="Math.Exp(double)" />.
+    ///     NumPy's float64 <c>np.logaddexp(a, b) = log(exp(a) + exp(b))</c> for one pair, bit for bit and without
+    ///     allocating: NumSharp's public port of NumPy's <c>npy_logaddexp</c> statements
+    ///     (<see cref="NDLogAddExpMath.LogAddExp(double, double)" />) over the same UCRT <c>log1p</c> model as
+    ///     <see cref="Log1p" />. Use it wherever Optuna combines log-probabilities, including the cancellation regime
+    ///     (<c>a ≈ b</c>), where a <c>log1p</c> one ulp off is amplified into many result ulps.
     /// </summary>
     /// <param name="a">The logarithm of the first nonnegative addend.</param>
     /// <param name="b">The logarithm of the second nonnegative addend.</param>
-    /// <returns>The natural logarithm of exp(a) + exp(b), computed without unnecessary overflow.</returns>
-    internal static double LogAddExp(double a, double b)
-    {
-        if (a == b)
-            return a + Loge2;  // Also covers a == b == ±inf.
-        double tmp = a - b;
-        if (tmp > 0)
-            return a + Log1p(Math.Exp(-tmp));
-        if (tmp <= 0)
-            return b + Log1p(Math.Exp(tmp));
-        return tmp;  // NaN input.
-    }
+    /// <returns>
+    ///     The natural logarithm of <c>exp(a) + exp(b)</c>, computed without overflow: <c>a + log(2)</c> when
+    ///     <c>a == b</c> (same-signed infinities included), and NaN when either argument is NaN.
+    /// </returns>
+    /// <remarks>
+    ///     The statements are the ones this helper used to inline (the <c>a == b</c> shortcut, then the larger argument
+    ///     plus <c>log1p(exp(-|a - b|))</c>). Measured against NumPy 2.4.2 on Windows (2026-11-11, 400,000 seeded pairs,
+    ///     near-equal and wide): 100% bit-identical, as was the former copy. NumSharp's own <c>np.logaddexp</c> ran an
+    ///     fdlibm <c>log1p</c> one ulp off until its commit <c>16b0817a</c> (2026-11-05, release 0.80.0), which is why the
+    ///     copy existed.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static double LogAddExp(double a, double b) => NDLogAddExpMath.LogAddExp(a, b);
 
     /// <summary>
     ///     NumPy's <c>np.add.reduce</c> pairwise summation for a contiguous float64 array — the

@@ -592,7 +592,7 @@ internal sealed class MixtureOfProductDistribution
     ///         time, and each candidate's sums for the block stay in a register across the dimensions; before, a buffer
     ///         of n_kernels sums was cleared, read and written once per dimension and then added to the row, for every
     ///         candidate. Only the order in which different elements are computed changed. The loads go through
-    ///         <see cref="System.Numerics.Vector.LoadUnsafe{T}(ref T, nuint)" /> at one offset per (block, dimension),
+    ///         <see cref="System.Numerics.Vector.LoadUnsafe{T}(ref readonly T, nuint)" /> at one offset per (block, dimension),
     ///         which is why mu and sigma come as grid rows: with a span slice and a jagged-array lookup per operand, the
     ///         bounds checks were most of the loop's 60 instructions, and the unchecked loop runs 2.0 to 2.4 times
     ///         faster (same-process A/B, 100 to 3,000 kernels, same bits). Every length is checked once, up front, so no
