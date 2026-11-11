@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using NumSharp;
 using OptunaSharp.Collections;
@@ -368,25 +370,34 @@ public class Study
     ///         array in garbage per call, while a single list sized for every trial would waste the whole history on a
     ///         narrow filter (QMC's read of the running trials).
     ///     </para>
+    ///     <para>
+    ///         Compiled optimized from the first call (<see cref="MethodImplOptions.AggressiveOptimization" />), over a
+    ///         span of the list: the LINQ it replaces ships precompiled, and as tier-0 code these loops made the second
+    ///         thousands of asks of a process measurably slower (plan 15, SMS-EMOA 2,000 trials, until tiering caught up).
+    ///     </para>
     /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     internal static List<FrozenTrial> FilterByState(List<FrozenTrial> trials, IReadOnlyCollection<TrialState> states)
     {
         int mask = StateMask(states);
         if (mask < 0)
             return trials.Where(t => states.Contains(t.State)).ToList();
 
+        // The snapshot's items as a span: two plain indexed passes, no enumerator calls (the list is this thread's own
+        // snapshot, so nothing changes it while it is read).
+        ReadOnlySpan<FrozenTrial> span = CollectionsMarshal.AsSpan(trials);
         int count = 0;
-        foreach (FrozenTrial t in trials)
+        for (int i = 0; i < span.Length; i++)
         {
-            if (InStateMask(t.State, mask))
+            if (InStateMask(span[i].State, mask))
                 count++;
         }
 
         var result = new List<FrozenTrial>(count);
-        foreach (FrozenTrial t in trials)
+        for (int i = 0; i < span.Length; i++)
         {
-            if (InStateMask(t.State, mask))
-                result.Add(t);
+            if (InStateMask(span[i].State, mask))
+                result.Add(span[i]);
         }
         return result;
     }
@@ -422,6 +433,7 @@ public class Study
     /// <param name="state">The trial's state; a value outside 0–30 is in no mask.</param>
     /// <param name="mask">A mask from <see cref="StateMask" />.</param>
     /// <returns>True when the state is one of the mask's states.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool InStateMask(TrialState state, int mask)
         => (uint)state < 31 && ((mask >> (int)state) & 1) != 0;
 
