@@ -266,6 +266,14 @@ internal static class TpeTrialSplit
         int n = trials.Count;
         if (n < 2)
             return;
+        // Already ascending (always so on the multi-objective path, which builds both sides in the history's order):
+        // sorting would leave every trial where it is, so it is skipped. Copying out and back regardless made that path
+        // 10-20% slower than the in-place delegate sort it replaced (split bench, two objectives).
+        bool ascending = true;
+        for (int i = 1; i < n && ascending; i++)
+            ascending = trials[i - 1].Number < trials[i].Number;
+        if (ascending)
+            return;
         var numbers = new int[n];
         var items = new FrozenTrial[n];
         for (int i = 0; i < n; i++)

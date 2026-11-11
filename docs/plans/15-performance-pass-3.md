@@ -62,15 +62,31 @@ trial at 1,000 trials and grows with the history; GP allocates 7 MB per trial wi
 
 ## 4. Backlog
 
-Open after plan 14 (its §7):
+Open after plan 14 (its §7), with what this pass did about each:
 
 1. TPE: score candidates as ordered arrays instead of name-keyed dictionaries, drop the copies left in estimator
-   construction.
+   construction. — **The copies are gone (step G).** Ordered-array scoring was not attempted: the kernels (steps B, F)
+   were the larger costs.
 2. NSGA-II: precompute each trial's values and constraints, build parameters only for the selected parents, update the
-   joint search space in place.
-3. CMA-ES: an in-memory copy instead of the restore after each tell (must serialize to the same pickle).
-4. QMC, scrambled Sobol: the point at `sample_id` is found by generating every earlier point, O(n²) per study.
-5. NumSharp temporaries left to the finalizer in samplers plan 14 did not trace (GP, DE, PSO, the NES family, …).
+   joint search space in place. — Open (NSGA-II costs 30 µs per trial).
+3. CMA-ES: an in-memory copy instead of the restore after each tell (must serialize to the same pickle). — Open.
+4. QMC, scrambled Sobol: the point at `sample_id` is found by generating every earlier point, O(n²) per study. —
+   **Done (step A).**
+5. NumSharp temporaries left to the finalizer in samplers plan 14 did not trace (GP, DE, PSO, the NES family, …). —
+   **Traced:** GP, DE, PSO and the NES family are plain managed code; their per-trial memory was LOH churn (GP,
+   steps C and D) and history scans (steps H and I). Open: an unidentified source of NumSharp `UInt32` blocks the GP
+   run leaves to the finalizer.
+
+New, found by this pass and left open:
+
+6. BruteForce: cache each finished trial's path across rebuilds (a finished trial's path never changes; building
+   paths is 28% of its time). The per-rebuild categorical cache (`catCache`, first trial seen per name after
+   filtering) has to be reproduced exactly.
+7. DE: it deserializes its JSON optimizer state on every ask; a cached copy would need cloning before each mutation.
+8. Multi-objective split (MOTPE): `lvals` through nested LINQ, `UniqueRows` with a delegate sort. The sort is unstable
+   and its representative among equal rows (±0) reaches the hypervolume arithmetic, so changing it is not provably
+   bit-identical; the LINQ part is.
+9. Parity, not performance: QA-84 (§6).
 
 ## 5. Progress log
 
@@ -183,7 +199,7 @@ Open after plan 14 (its §7):
   TPE, Parzen and PED-ANOVA unit tests 122/122; kernel-bench hash; hash probe 36/36. Committed `eaed03a`. Unit CI
   filter through step G: 2,199/2,199 (1 skipped) on net10.0 and net8.0; documentation gate (`check_documentation.cs`,
   5,840 declarations) 0 issues; Core built with the documentation warnings as errors, both TFMs: 0 errors.
-- 07:45 — **step H, the evolution-strategy samplers' attribute keys.** SNES, xNES and OpenAI-ES spent most of their
+- 07:36 — **step H, the evolution-strategy samplers' attribute keys.** SNES, xNES and OpenAI-ES spent most of their
   per-trial allocation (147–187 KB) rebuilding one string: `AttrKeyGeneration` was an expression-bodied
   `AttrPrefix + "generation"` read for every trial of the history by `GetSolutionTrials` and `CountRunningMembers` on
   every ask. The two keys are now built once per sampler (`AttrPrefix` is a constant per sampler type), and the
@@ -193,11 +209,23 @@ Open after plan 14 (its §7):
   back): SNES 3,000 trials 1.06 → 0.89 s, 173 → 59 KB per trial; xNES 2,000 0.90 → 0.86 s, 148 → 73 KB; OpenAI-ES
   3,000 1.08 → 0.89 s, 188 → 61 KB; same hashes. Gates: ES, parallel-read and nJobs sampler tests 248/248; hash
   probe 36/36 (SNES, xNES and OpenAI-ES studies included). Committed `7be356d`.
-- 07:42 — **step I, the other samplers' history lists.** DE, PSO, LM-CMA, VkD-CMA, JANUS and JANUS-DE collect their
+- 07:39 — **step I, the other samplers' history lists.** DE, PSO, LM-CMA, VkD-CMA, JANUS and JANUS-DE collect their
   completed trials into a list grown from empty on every ask; it is now sized for the history (the same contents in
   the same order). Survey, back to back, same hashes: DE 115 → 91 KB per trial, PSO 143 → 120, LM-CMA 119 → 95,
   VkD-CMA 73 → 60, JANUS 112 → 98; wall times within the loaded machine's noise. DE's remaining per-trial cost is
   deserializing its JSON optimizer state on every ask (backlog). Gates: their unit tests 103/103; hash probe 36/36.
+  Committed `a1fbe9a`.
+- 07:45 — **A regression in step F, found and fixed.** Re-measuring the split bench for a planned step J (the
+  multi-objective `lvals` as plain loops) showed the **two-objective split 10–20% slower than the base** — step F's
+  own measurements had shown it too, and I had put it down to noise. Cause: the multi-objective path builds both sides
+  in the history's order, so step F's `SortByNumber` copied two already-ordered lists out and back where the old
+  in-place delegate sort barely moved anything. Fix: `SortByNumber` returns at once when the list is already strictly
+  ascending by number (sorting would leave every trial in place). Best of five alternating runs, base → fixed:
+  one objective 165.9 → 125.5 µs (1,000 trials), 693.6 → 551.7 µs (3,000); two objectives 540.3 → 489.8 µs,
+  1,505.2 → 1,320.1 µs; same split hash. Step J itself was dropped: the loop version measured ~250 µs slower at
+  3,000 trials than the LINQ it replaced, for a reason not found (the property it reads is a plain field). Lesson:
+  re-run a step's A/B in both orders before calling a difference noise. Gates: split, TPE and multi-objective unit
+  tests 134/134; hash probe 36/36.
 
 ## 6. Findings and notes for the owner
 
