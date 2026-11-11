@@ -82,8 +82,14 @@ public class SmsEmoaSampler : BaseSampler
     /// <summary>The steady-state population of one study, advanced one completed offspring at a time.</summary>
     private sealed class StudyPopulation
     {
-        /// <summary>Trial ids of the current μ survivors; <c>null</c> until the initial population is complete.</summary>
-        public List<int>? SurvivorIds;
+        /// <summary>Trial numbers of the current μ survivors; <c>null</c> until the initial population is complete.</summary>
+        /// <remarks>
+        ///     Numbers rather than storage ids (plan 15): within one study a number names one trial for good, as its id
+        ///     does, so both resolve to the same records; a number is found in the number-ordered history by binary search,
+        ///     where an id needed a dictionary over the whole history rebuilt on every ask. A study recreated under the
+        ///     same id reuses numbers, but its population is discarded first (<see cref="Anchor" />).
+        /// </remarks>
+        public List<int>? SurvivorNumbers;
 
         /// <summary>The next trial number to fold into the population.</summary>
         public int NextNumber;
@@ -225,53 +231,50 @@ public class SmsEmoaSampler : BaseSampler
             static () => new StudyPopulation(),
             state => state.Anchor is not { } anchor || anchor.IsIn(completed));
 
-        var byNumber = new Dictionary<int, FrozenTrial>(completed.Count);
-        var byId = new Dictionary<int, FrozenTrial>(completed.Count);
-        foreach (var t in completed)
-        {
-            byNumber[t.Number] = t;
-            byId[t.TrialId] = t;
-        }
+        // Lookups by number: a binary search over the number-ordered history instead of the two dictionaries over every
+        // completed trial this method rebuilt on each ask (plan 15: half of the sampler's allocations, O(n) per ask).
+        var byNumber = TrialsByNumber.Over(completed);
 
-        if (population.SurvivorIds is null)
+        if (population.SurvivorNumbers is null)
         {
             var initial = new List<int>(_populationSize);
             for (int number = 0; number < _populationSize; number++)
             {
                 if (!byNumber.TryGetValue(number, out var t))
                     return new List<FrozenTrial>();   // initial population not contiguously complete yet
-                initial.Add(t.TrialId);
+                initial.Add(t.Number);
             }
-            population.SurvivorIds = initial;
+            population.SurvivorNumbers = initial;
             population.NextNumber = _populationSize;
-            population.Anchor = TrialAnchor.Of(byNumber[0]);
+            byNumber.TryGetValue(0, out var first);
+            population.Anchor = TrialAnchor.Of(first!);
         }
 
         double[] signs = DirectionSigns(study);
         while (byNumber.TryGetValue(population.NextNumber, out var offspring))
         {
-            var survivorTrials = ResolveIds(population.SurvivorIds, byId);
+            var survivorTrials = ResolveNumbers(population.SurvivorNumbers, byNumber);
             var merged = new List<FrozenTrial>(survivorTrials) { offspring };   // μ + 1
             var mergedLoss = merged.Select(t => Loss(t, signs)).ToArray();
             var (ideal, nadir) = IdealNadir(survivorTrials, signs);
 
             int[] keep = SmsEmoaSurvival.Select(mergedLoss, _populationSize, ideal, nadir, _hvReferenceEps);
-            population.SurvivorIds = keep.Select(i => merged[i].TrialId).ToList();
+            population.SurvivorNumbers = keep.Select(i => merged[i].Number).ToList();
             population.NextNumber++;
         }
 
-        return ResolveIds(population.SurvivorIds, byId);
+        return ResolveNumbers(population.SurvivorNumbers, byNumber);
     }
 
-    /// <summary>Resolves stored trial identifiers against available history in the requested order.</summary>
-    /// <param name="ids">Stored trial identifiers in requested order.</param>
-    /// <param name="byId">Available trial snapshots indexed by storage identifier.</param>
-    /// <returns>Available trials corresponding to the identifiers, in identifier order.</returns>
-    private static List<FrozenTrial> ResolveIds(List<int> ids, Dictionary<int, FrozenTrial> byId)
+    /// <summary>Resolves stored trial numbers against the available history, in the requested order.</summary>
+    /// <param name="numbers">Stored trial numbers in requested order.</param>
+    /// <param name="byNumber">The completed history, searchable by trial number.</param>
+    /// <returns>Available trials corresponding to the numbers, in the numbers' order; a number not in the history is skipped.</returns>
+    private static List<FrozenTrial> ResolveNumbers(List<int> numbers, TrialsByNumber byNumber)
     {
-        var result = new List<FrozenTrial>(ids.Count);
-        foreach (int id in ids)
-            if (byId.TryGetValue(id, out var t))
+        var result = new List<FrozenTrial>(numbers.Count);
+        foreach (int number in numbers)
+            if (byNumber.TryGetValue(number, out var t))
                 result.Add(t);
         return result;
     }

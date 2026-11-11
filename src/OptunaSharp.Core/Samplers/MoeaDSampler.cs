@@ -114,8 +114,15 @@ public class MoeaDSampler : BaseSampler
         /// <summary>Effective population size / number of subproblems.</summary>
         public int N;
 
-        /// <summary>Trial ids of the current per-subproblem solutions (size N); <c>null</c> until the initial population is complete.</summary>
-        public List<int>? PopulationIds;
+        /// <summary>Trial numbers of the current per-subproblem solutions (size N); <c>null</c> until the initial population is complete.</summary>
+        /// <remarks>
+        ///     Numbers rather than storage ids (plan 15): within one study a number names one trial for good, as its id
+        ///     does, so both resolve to the same records; a number is found in the number-ordered history by binary search
+        ///     (<see cref="TrialsByNumber" />), where an id needed a dictionary over the whole history rebuilt on every
+        ///     ask. A study recreated under the same id reuses numbers, but its decomposition is discarded first
+        ///     (<see cref="Anchor" />).
+        /// </remarks>
+        public List<int>? PopulationNumbers;
 
         /// <summary>Running ideal point z* (minimization convention, length m).</summary>
         public double[]? Ideal;
@@ -385,13 +392,13 @@ public class MoeaDSampler : BaseSampler
     private List<FrozenTrial> ReconstructPopulation(
         StudyDecomposition decomposition, Study study, List<FrozenTrial> completed, double[] signs)
     {
-        var byId = new Dictionary<int, FrozenTrial>(completed.Count);
-        foreach (var t in completed)
-            byId[t.TrialId] = t;
+        // Lookups by number: a binary search over the number-ordered history instead of a dictionary over every
+        // completed trial rebuilt on each ask (plan 15: over a third of the sampler's allocations, O(n) per ask).
+        var byNumber = TrialsByNumber.Over(completed);
 
         int m = signs.Length;
 
-        if (decomposition.PopulationIds is null)
+        if (decomposition.PopulationNumbers is null)
         {
             var initTrials = completed
                 .Where(t => !t.SystemAttrs.ContainsKey(AttrKeySubproblem))
@@ -400,13 +407,13 @@ public class MoeaDSampler : BaseSampler
             if (initTrials.Count < decomposition.N)
                 return new List<FrozenTrial>();   // initial population not complete yet
 
-            decomposition.PopulationIds = initTrials.Take(decomposition.N).Select(t => t.TrialId).ToList();
+            decomposition.PopulationNumbers = initTrials.Take(decomposition.N).Select(t => t.Number).ToList();
             decomposition.Anchor = TrialAnchor.Of(initTrials[0]);
             decomposition.Ideal = new double[m];
             for (int j = 0; j < m; j++) decomposition.Ideal[j] = double.PositiveInfinity;
-            foreach (int id in decomposition.PopulationIds)
+            foreach (int number in decomposition.PopulationNumbers)
             {
-                double[] loss = Loss(byId[id], signs);
+                double[] loss = Loss(Member(byNumber, number), signs);
                 for (int j = 0; j < m; j++)
                     if (loss[j] < decomposition.Ideal[j]) decomposition.Ideal[j] = loss[j];
             }
@@ -415,10 +422,15 @@ public class MoeaDSampler : BaseSampler
 
         // Fold every offspring not yet folded, in ascending trial-number order (steady-state: each fold
         // sees the population and ideal point left by the previous folds).
+        // The filter stays LINQ: the framework ships it precompiled, where a hand-written loop here ran as unoptimized
+        // tier-0 code for the first few thousand asks of a process and measured slower until it tiered up (plan 15).
         var newOffspring = completed
             .Where(t => t.SystemAttrs.ContainsKey(AttrKeySubproblem) && !decomposition.FoldedNumbers!.Contains(t.Number))
-            .OrderBy(t => t.Number)
             .ToList();
+        // LINQ's stable OrderBy(t => t.Number) leaves a list already in strictly ascending number order as it is, so it
+        // runs only when the history came out of order (plan 15: its buffers were 13% of the allocations).
+        if (!byNumber.IsAscending)
+            newOffspring = newOffspring.OrderBy(t => t.Number).ToList();
 
         foreach (var off in newOffspring)
         {
@@ -436,12 +448,12 @@ public class MoeaDSampler : BaseSampler
             int replaced = 0;
             foreach (int j in decomposition.Neighbors![sc])
             {
-                var current = byId[decomposition.PopulationIds[j]];
+                var current = Member(byNumber, decomposition.PopulationNumbers[j]);
                 double gOff = MoeadDecomposition.Scalarize(_scalarization, offLoss, decomposition.Weights![j], decomposition.Ideal!);
                 double gCur = MoeadDecomposition.Scalarize(_scalarization, Loss(current, signs), decomposition.Weights[j], decomposition.Ideal!);
                 if (gOff < gCur)
                 {
-                    decomposition.PopulationIds[j] = off.TrialId;
+                    decomposition.PopulationNumbers[j] = off.Number;
                     replaced++;
                     if (replaced >= _nReplacements) break;
                 }
@@ -449,8 +461,21 @@ public class MoeaDSampler : BaseSampler
             decomposition.FoldedNumbers!.Add(off.Number);
         }
 
-        return decomposition.PopulationIds.Select(id => byId[id]).ToList();
+        var members = new List<FrozenTrial>(decomposition.PopulationNumbers.Count);
+        foreach (int number in decomposition.PopulationNumbers)
+            members.Add(Member(byNumber, number));
+        return members;
     }
+
+    /// <summary>The population member with this trial number, which the completed history always holds.</summary>
+    /// <param name="byNumber">The completed history, searchable by number.</param>
+    /// <param name="number">A population member's trial number.</param>
+    /// <returns>The member's record.</returns>
+    /// <exception cref="KeyNotFoundException">The history does not hold the number: the exception the replaced id dictionary's indexer threw.</exception>
+    private static FrozenTrial Member(TrialsByNumber byNumber, int number)
+        => byNumber.TryGetValue(number, out FrozenTrial trial)
+            ? trial
+            : throw new KeyNotFoundException($"The given key '{number}' was not present in the dictionary.");
 
     /// <summary>Per-objective sign so every objective becomes a minimization (Optuna internal convention).</summary>
     /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
