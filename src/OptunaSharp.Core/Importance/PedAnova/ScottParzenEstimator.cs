@@ -126,11 +126,14 @@ internal sealed class ScottParzenEstimator
             high = Math.Log(high);
         }
 
-        double meanEst = SeqDot(obs, weights) / weightsSum;
+        // observations @ weights and (observations - mean_est) ** 2 @ weights are NumPy 1-D products (BLAS ddot once
+        // either side is float64), so they go through NumSharp's np.dot to round as Optuna's do. With integer-valued
+        // observations (no log) Optuna's first product is int64 @ int64, exact; so is ddot on those doubles below 2^53.
+        double meanEst = LinAlg.Dot(obs, weights) / weightsSum;
         var dev = new double[obs.Length];
         for (int i = 0; i < obs.Length; i++)
             dev[i] = (obs[i] - meanEst) * (obs[i] - meanEst);
-        double sigmaEst = Math.Sqrt(SeqDot(dev, weights) / Math.Max(1, weightsSum - 1));
+        double sigmaEst = Math.Sqrt(LinAlg.Dot(dev, weights) / Math.Max(1, weightsSum - 1));
 
         int q1Idx = BisectLeft(weightsCum, Math.Floor(weightsSum / 4.0));
         int q3Idx = BisectRight(weightsCum, Math.Floor(weightsSum * 3.0 / 4.0));
@@ -165,18 +168,6 @@ internal sealed class ScottParzenEstimator
         for (int s = 0; s < samples.Length; s++)
             result[s] = Math.Exp(logPdf[s]);
         return result;
-    }
-
-    /// <summary>Sequential (left-to-right) dot product — bit-exact vs NumPy's <c>@</c> for PED-ANOVA.</summary>
-    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
-    /// <param name="b">The second numerical operand; its dimensions must agree with the first operand.</param>
-    /// <returns>The scalar dot product accumulated sequentially in input order.</returns>
-    private static double SeqDot(double[] a, double[] b)
-    {
-        double sum = 0.0;
-        for (int i = 0; i < a.Length; i++)
-            sum += a[i] * b[i];
-        return sum;
     }
 
     /// <summary>NumPy <c>searchsorted(a, v, side="left")</c> for an ascending array (bisect left).</summary>

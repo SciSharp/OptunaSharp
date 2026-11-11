@@ -12,25 +12,26 @@ namespace OptunaSharp.Internal;
 ///     Phase 3.2 part 3e). Consumed by TPE's multi-objective trial split
 ///     (<see cref="TpeTrialSplit" />) and the GP log-EHVI acquisition function.
 ///
-///     <para><b>Numeric strategy.</b> NumPy <c>@</c>/<c>np.dot</c> is reproduced as a sequential dot
-///     and <c>.prod(axis=-1)</c> as a sequential product. <see cref="ComputeHypervolume" /> agrees
-///     with Optuna to ~1 ULP (verified bit-exact-to-tolerance over 120 mixed 2–6D cases, max relative
-///     error 2e-16). The HSSP greedy selection is a pure sequence of <c>np.argmax</c> (first-max)
-///     choices, so the resulting subset is deterministic and order-independent: the lazy-contribution
-///     skipping in <see cref="LazyContribsUpdate" /> only prunes strictly-smaller upper bounds, so
-///     every candidate tied at the maximum is evaluated regardless of the <c>argsort</c> tie order.</para>
+///     <para><b>Numeric strategy.</b> Optuna's NumPy <c>@</c>/<c>np.dot</c> products (the two- and
+///     three-objective volumes) run through NumSharp's <c>np.dot</c> via <see cref="LinAlg.Dot(double[], double[])" />
+///     and <see cref="LinAlg.Dot(double[,], double[])" />, i.e. the same OpenBLAS <c>ddot</c>/<c>dgemv</c> binary NumPy
+///     calls, so their sums round exactly as Optuna's do. <c>.prod(axis=-1)</c> stays a sequential product: NumPy
+///     multiplies along that axis in order, which a plain loop reproduces and NumSharp's <c>np.prod</c> does not promise
+///     for floats. Measured live against Optuna 5.0.0 (<c>HypervolumeParityTests</c>, 240 random 2- to 5-objective
+///     fronts): every <see cref="ComputeHypervolume" /> result is bit-identical (the former sequential dot differed in 37
+///     of them, by an ulp or two).</para>
 ///
-///     <para><b>[Misaligned] HSSP ≥3-objective zero-contribution ties.</b> The two-objective solver
-///     (<see cref="SolveHssp2d" />) is dot-free and matches Optuna exactly. For three or more
-///     objectives, once the greedily-selected points dominate the rest, every remaining candidate has
-///     a true marginal hypervolume of 0, computed as <c>H(S ∪ {i}) − H(S)</c>. Optuna's <c>np.dot</c>
-///     (BLAS) leaves a sub-ULP residual there (e.g. <c>-1.8e-15</c>) that the sequential dot cancels
-///     to an exact <c>0</c>, so <c>np.argmax</c> can pick a different — but hypervolume-equivalent —
-///     zero-contribution point. The selected subset is equally optimal (identical total hypervolume,
-///     same 1−1/e guarantee); only the tie resolution differs, and only in this degenerate case. It
-///     does not surface in realistic multi-objective TPE studies (2- and 3-objective trajectories
-///     match live Optuna to the erf tolerance in full lock-step). Same class as the TPE argsort and
-///     erf/ucrt notes.</para>
+///     <para><b>Subset selection.</b> The HSSP greedy selection is a pure sequence of <c>np.argmax</c> (first-max)
+///     choices, so the subset is deterministic, and the lazy-contribution skipping in
+///     <see cref="LazyContribsUpdate" /> only prunes strictly-smaller upper bounds, so every candidate tied at the
+///     maximum is evaluated whatever the <c>argsort</c> tie order. With three or more objectives a candidate's true
+///     marginal hypervolume can be exactly 0 (a box of zero volume, or one the selected points cover), computed as
+///     <c>H(S ∪ {i}) − H(S)</c>; Optuna's BLAS products leave a sub-ulp residual there (e.g. <c>-1.8e-15</c>) and
+///     <c>np.argmax</c> picks by it. The former sequential dot cancelled those residuals to an exact 0 and could pick a
+///     different, hypervolume-equivalent point (a documented [Misaligned] case); with NumPy's own products the
+///     residuals, and so the picks, are Optuna's (240 of 240 selections identical in <c>HypervolumeParityTests</c>,
+///     zero-volume ties included, against 237 before). The two-objective solver (<see cref="SolveHssp2d" />) is
+///     dot-free.</para>
 /// </summary>
 internal static class Hypervolume
 {
@@ -96,48 +97,66 @@ internal static class Hypervolume
         return double.IsFinite(hv) ? hv : double.PositiveInfinity;
     }
 
-    /// <summary>Python <c>wfg._compute_2d</c>.</summary>
+    /// <summary>
+    ///     Python <c>wfg._compute_2d</c>: the staircase area as one inner product, <c>edge_x @ edge_y</c>, taken through
+    ///     NumSharp's <c>np.dot</c> (BLAS <c>ddot</c>) so the sum rounds exactly as Optuna's does.
+    /// </summary>
     /// <param name="sortedParetoSols">Unique nondominated minimization rows in lexicographic order.</param>
     /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
-    /// <returns>The dominated area between the Pareto front and the reference point.</returns>
+    /// <returns>The dominated area between the Pareto front and the reference point, Optuna's bits.</returns>
+    /// <remarks>
+    ///     The edges are single subtractions, exact as NumPy's elementwise ones. Their products were once summed left to
+    ///     right; BLAS's <c>ddot</c> accumulates in several registers, so that loop differed from Optuna in the last bits on
+    ///     fronts of more than a handful of points (measured live: 37 of 240 random 2- to 5-objective volumes before the
+    ///     switch, 0 after).
+    /// </remarks>
     private static double Compute2d(double[][] sortedParetoSols, double[] referencePoint)
     {
         // rect_diag_y = concat([ref[1:], sols[:-1, 1]]); edge_x = ref[0]-sols[:,0];
         // edge_y = rect_diag_y - sols[:,1]; return edge_x @ edge_y.
         int n = sortedParetoSols.Length;
-        double dot = 0.0;
+        var edgeX = new double[n];
+        var edgeY = new double[n];
         for (int i = 0; i < n; i++)
         {
             double rectDiagY = i == 0 ? referencePoint[1] : sortedParetoSols[i - 1][1];
-            double edgeX = referencePoint[0] - sortedParetoSols[i][0];
-            double edgeY = rectDiagY - sortedParetoSols[i][1];
-            dot += edgeX * edgeY;
+            edgeX[i] = referencePoint[0] - sortedParetoSols[i][0];
+            edgeY[i] = rectDiagY - sortedParetoSols[i][1];
         }
-        return dot;
+        return LinAlg.Dot(edgeX, edgeY);
     }
 
-    /// <summary>Python <c>wfg._compute_3d</c> (O(N^2) cumulative-max voxel count).</summary>
+    /// <summary>
+    ///     Python <c>wfg._compute_3d</c> (O(N^2) cumulative-max voxel count): the two products
+    ///     <c>np.dot(np.dot(z_delta, y_delta), x_delta)</c> go through NumSharp's <c>np.dot</c> (BLAS <c>dgemv</c>, then
+    ///     <c>ddot</c>) so the volume rounds exactly as Optuna's does.
+    /// </summary>
     /// <param name="sortedParetoSols">Unique nondominated minimization rows in lexicographic order.</param>
     /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
-    /// <returns>The dominated three-dimensional volume relative to the reference point.</returns>
+    /// <returns>The dominated three-dimensional volume relative to the reference point, Optuna's bits.</returns>
+    /// <remarks>
+    ///     <c>z_delta</c> is a C-contiguous <c>double[,]</c> because that is the layout NumPy hands to BLAS after its two
+    ///     <c>np.maximum.accumulate</c> passes; a different layout would take another <c>gemv</c> route. Optuna orders the
+    ///     columns with <c>np.argsort</c> on the y coordinates, NumPy's default (unstable, SIMD) sort, and
+    ///     <see cref="StableArgsort" /> reproduces it only when those coordinates are distinct; tied y values can move a
+    ///     product to another BLAS accumulator, the documented argsort tie class.
+    /// </remarks>
     private static double Compute3d(double[][] sortedParetoSols, double[] referencePoint)
     {
         int n = sortedParetoSols.Length;
         var yOrder = StableArgsort(sortedParetoSols.Select(s => s[1]).ToArray());
 
-        var zDelta = new double[n][];
-        for (int r = 0; r < n; r++)
-            zDelta[r] = new double[n];
+        var zDelta = new double[n, n];
         for (int k = 0; k < n; k++)
-            zDelta[yOrder[k]][k] = referencePoint[2] - sortedParetoSols[yOrder[k]][2];
+            zDelta[yOrder[k], k] = referencePoint[2] - sortedParetoSols[yOrder[k]][2];
 
-        // np.maximum.accumulate axis=0 then axis=1.
+        // np.maximum.accumulate axis=0 then axis=1 (max is exact, so only the final values matter).
         for (int c = 0; c < n; c++)
             for (int r = 1; r < n; r++)
-                zDelta[r][c] = Math.Max(zDelta[r][c], zDelta[r - 1][c]);
+                zDelta[r, c] = Math.Max(zDelta[r, c], zDelta[r - 1, c]);
         for (int r = 0; r < n; r++)
             for (int c = 1; c < n; c++)
-                zDelta[r][c] = Math.Max(zDelta[r][c], zDelta[r][c - 1]);
+                zDelta[r, c] = Math.Max(zDelta[r, c], zDelta[r, c - 1]);
 
         var xVals = sortedParetoSols.Select(s => s[0]).ToArray();
         var yVals = yOrder.Select(idx => sortedParetoSols[idx][1]).ToArray();
@@ -149,16 +168,8 @@ internal static class Hypervolume
             yDelta[i] = (i < n - 1 ? yVals[i + 1] : referencePoint[1]) - yVals[i];
         }
 
-        // np.dot(np.dot(z_delta, y_delta), x_delta).
-        double result = 0.0;
-        for (int r = 0; r < n; r++)
-        {
-            double inner = 0.0;
-            for (int c = 0; c < n; c++)
-                inner += zDelta[r][c] * yDelta[c];
-            result += inner * xDelta[r];
-        }
-        return result;
+        // np.dot(np.dot(z_delta, y_delta), x_delta): a matrix-vector product, then an inner product.
+        return LinAlg.Dot(LinAlg.Dot(zDelta, yDelta), xDelta);
     }
 
     /// <summary>Python <c>wfg._compute_hv</c> — the WFG recursion for any dimension.</summary>

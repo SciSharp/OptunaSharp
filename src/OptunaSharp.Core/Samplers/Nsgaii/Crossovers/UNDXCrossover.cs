@@ -91,20 +91,24 @@ public class UNDXCrossover : BaseCrossover
         return child;
     }
 
-    /// <summary>Python <c>_normalized_x1_to_x2</c>: normalized vector from x1 to x2.</summary>
+    /// <summary>
+    ///     Python <c>_normalized_x1_to_x2</c>: the unit vector from x1 to x2, its length taken by NumSharp's
+    ///     <c>np.linalg.norm</c> (NumPy's <c>sqrt(x.dot(x))</c>, BLAS <c>ddot</c>) so it rounds as Optuna's does.
+    /// </summary>
     /// <param name="parentsParams">Numerical parent vectors, one parent per row and one parameter per column.</param>
-    /// <returns>A unit vector along the primary parent axis.</returns>
+    /// <returns>A unit vector along the primary parent axis (the raw difference over 1e-10 when the parents coincide).</returns>
+    /// <remarks>
+    ///     The length used to be a left-to-right sum of squares, which matches <c>ddot</c> on a few parameters only: over
+    ///     24 the children differed from Optuna's within the first generations (live:
+    ///     <c>UndxCrossover_ManyParameters_FullState_IsBitIdentical</c>).
+    /// </remarks>
     private static double[] NormalizedX1ToX2(double[][] parentsParams)
     {
         int n = parentsParams[0].Length;
         var v12 = new double[n];
-        double sumSq = 0.0;
         for (int i = 0; i < n; i++)
-        {
             v12[i] = parentsParams[1][i] - parentsParams[0][i];
-            sumSq += v12[i] * v12[i];
-        }
-        double m12 = Math.Sqrt(sumSq);
+        double m12 = LinAlg.Norm(v12);  // np.linalg.norm(v_12, ord=2) = sqrt(v_12.dot(v_12)).
         double denom = Math.Max(m12, 1e-10);  // np.clip(m_12, 1e-10, None).
         var e12 = new double[n];
         for (int i = 0; i < n; i++)
@@ -112,7 +116,11 @@ public class UNDXCrossover : BaseCrossover
         return e12;
     }
 
-    /// <summary>Python <c>_distance_from_x_to_psl</c>.</summary>
+    /// <summary>
+    ///     Python <c>_distance_from_x_to_psl</c>: the distance from x3 to the line through x1 and x2, with
+    ///     <c>np.dot(v_13, e_12)</c> and the closing <c>np.linalg.norm</c> taken through NumSharp (BLAS <c>ddot</c>, as
+    ///     NumPy's), so the scale of every child's perpendicular step is Optuna's to the last bit.
+    /// </summary>
     /// <param name="parentsParams">Numerical parent vectors, one parent per row and one parameter per column.</param>
     /// <returns>The perpendicular distance to the primary parent line.</returns>
     private static double DistanceFromXToPsl(double[][] parentsParams)
@@ -120,19 +128,14 @@ public class UNDXCrossover : BaseCrossover
         int n = parentsParams[0].Length;
         var e12 = NormalizedX1ToX2(parentsParams);
         var v13 = new double[n];
-        double dot = 0.0;
         for (int i = 0; i < n; i++)
-        {
             v13[i] = parentsParams[2][i] - parentsParams[0][i];
-            dot += v13[i] * e12[i];
-        }
-        double sumSq = 0.0;
+        double dot = LinAlg.Dot(v13, e12);
+        // v_12_3 = v_13 - np.dot(v_13, e_12) * e_12: NumPy scales e_12 first, then subtracts, element by element.
+        var v1223 = new double[n];
         for (int i = 0; i < n; i++)
-        {
-            double v = v13[i] - dot * e12[i];  // orthogonal component.
-            sumSq += v * v;
-        }
-        return Math.Sqrt(sumSq);
+            v1223[i] = v13[i] - dot * e12[i];
+        return LinAlg.Norm(v1223);
     }
 
     /// <summary>Python <c>_orthonormal_basis_vector_to_psl</c> → returns <c>Q.T[1:]</c> (n-1 rows of length n).</summary>

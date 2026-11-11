@@ -139,6 +139,12 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
     /// <param name="targetTrials">The trials defining the better-performing region whose density is compared.</param>
     /// <param name="regionTrials">The trials defining the reference region for density estimation.</param>
     /// <returns>The Pearson divergence between the better-performing and reference parameter densities.</returns>
+    /// <remarks>
+    ///     The final product and the Scott's-rule moments of <see cref="ScottParzenEstimatorFunctions" /> take NumPy's
+    ///     BLAS order through <see cref="LinAlg.Dot(double[], double[])" />; they used to be left-to-right sums, which
+    ///     agreed with Optuna end to end on the studies checked but not operation by operation. The densities themselves
+    ///     run through the truncated normal's erf, so the divergence stays within the documented erf tolerance of Optuna's.
+    /// </remarks>
     private double ComputePearsonDivergence(
         string paramName, BaseDistribution dist,
         IReadOnlyList<FrozenTrial> targetTrials, IReadOnlyList<FrozenTrial> regionTrials)
@@ -170,14 +176,16 @@ public sealed class PedAnovaImportanceEvaluator : BaseImportanceEvaluator
                 pdfLocal[g] = 1.0 / gridSize;
         }
 
-        // float(pdf_local @ ((pdf_top / pdf_local - 1) ** 2)), sequential dot (bit-exact vs @).
-        double sum = 0.0;
+        // float(pdf_local @ ((pdf_top / pdf_local - 1) ** 2)): the elementwise part is exact as NumPy's (an array ** 2
+        // is a multiplication), and the 1-D @ is BLAS ddot, so it goes through NumSharp's np.dot to accumulate in
+        // Optuna's order; a left-to-right sum rounds differently once the grid has more than a few points.
+        var squaredRatio = new double[gridSize];
         for (int g = 0; g < gridSize; g++)
         {
             double r = pdfTop[g] / pdfLocal[g] - 1.0;
-            sum += pdfLocal[g] * (r * r);
+            squaredRatio[g] = r * r;
         }
-        return sum;
+        return LinAlg.Dot(pdfLocal, squaredRatio);
     }
 
     /// <inheritdoc />

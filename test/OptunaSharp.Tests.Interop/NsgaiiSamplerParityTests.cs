@@ -224,6 +224,54 @@ public class NsgaiiSamplerParityTests : OptunaInteropTestBase
             "study.optimize(_obj, n_trials=24)\n");
     }
 
+    /// <summary>
+    ///     UNDX over 24 float parameters stays bit-identical to Optuna across 48 trials. UNDX takes three 1-D BLAS
+    ///     products per child (<c>np.dot(v_13, e_12)</c> and two <c>np.linalg.norm</c>, which NumPy computes as
+    ///     <c>sqrt(x.dot(x))</c>); over three parameters a left-to-right sum happens to round like BLAS's <c>ddot</c>, over
+    ///     24 it does not, so this pins the products to NumSharp's <c>np.dot</c> on NumPy's OpenBLAS.
+    /// </summary>
+    /// <param name="seed">The sampler seed both sides use.</param>
+    [TestMethod]
+    [TestCategory("RequiresPython")]
+    [DataRow(0)]
+    [DataRow(7)]
+    public void UndxCrossover_ManyParameters_FullState_IsBitIdentical(int seed)
+    {
+        // Same host pin as the three-parameter case: LAPACK's QR signs and BLAS's ddot are NumPy's only on x64 hosts.
+        PythonSession.EnsureBitExactHostOrInconclusive();
+        const int dims = 24;
+
+        var csStudy = Optuna.CreateStudy(
+            storage: new InMemoryStorage(), studyName: "nsga",
+            sampler: new NSGAIISampler(populationSize: 8, seed: seed, crossover: new UNDXCrossover()),
+            directions: new[] { StudyDirection.Minimize, StudyDirection.Maximize });
+        csStudy.Optimize(t =>
+        {
+            double first = 0, second = 0;
+            for (int i = 0; i < dims; i++)
+            {
+                double v = t.SuggestFloat("x" + i, -5, 5);
+                first += v * v;
+                second += v;
+            }
+            return (IReadOnlyList<double>)new[] { first, second };
+        }, nTrials: 48);
+
+        AssertFullParity(csStudy,
+            "study = optuna.create_study(study_name='nsga', directions=['minimize', 'maximize'], " +
+            $"sampler=optuna.samplers.NSGAIISampler(population_size=8, seed={seed}, " +
+            "crossover=optuna.samplers.nsgaii.UNDXCrossover()))\n" +
+            "def _obj(t):\n" +
+            "    first = 0.0\n" +
+            "    second = 0.0\n" +
+            $"    for i in range({dims}):\n" +
+            "        v = t.suggest_float('x' + str(i), -5, 5)\n" +
+            "        first += v * v\n" +
+            "        second += v\n" +
+            "    return (first, second)\n" +
+            "study.optimize(_obj, n_trials=48)\n");
+    }
+
     [TestMethod]
     [TestCategory("RequiresPython")]
     [DataRow(0)]

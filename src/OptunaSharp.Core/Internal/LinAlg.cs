@@ -12,7 +12,11 @@ namespace OptunaSharp.Internal;
 ///     <c>eigh</c> values+vectors, and <c>solve</c> match numpy 2.4.2 bit-for-bit). This is what
 ///     keeps the linalg-backed samplers byte-exact rather than managed-tolerance: NSGA-III's
 ///     hyperplane <see cref="Solve" />/<see cref="MatrixRank" /> (2.14, now byte-exact), CMA-ES's
-///     <see cref="Eigh" /> (2.16), and the GP stack's <see cref="Cholesky" /> (3.2).
+///     <see cref="Eigh" /> (2.16), and the GP stack's <see cref="Cholesky" /> (3.2). The vector
+///     products go the same way: Optuna's 1-D <c>@</c>/<c>np.dot</c> and <c>np.linalg.norm</c> are BLAS
+///     <c>ddot</c> in NumPy, so <see cref="Dot(double[], double[])" /> and <see cref="Norm" /> serve the
+///     hypervolume (2-D/3-D volumes and the subset selection on them), PED-ANOVA's moments and divergence, and
+///     UNDX crossover, which a left-to-right sum matched only on short vectors.
 ///
 ///     <para><see cref="SolveTriangular(double[,],double[],bool)" /> is the one primitive still
 ///     computed in managed code — a plain forward/back substitution, exact to a rounding. NumSharp
@@ -71,6 +75,35 @@ internal static class LinAlg
         using NDArray nb = np.array(b, copy: false);
         using NDArray product = np.dot(na, nb);
         return product.ToArray<double>();
+    }
+
+    /// <summary>
+    ///     Inner product of two vectors, <c>a · b</c> — <c>np.dot</c> / <c>a @ b</c> on 1-D operands, through NumSharp on
+    ///     the OpenBLAS binary NumPy bundles, so the result is NumPy's to the last bit. Use it wherever the Python port
+    ///     takes a 1-D <c>@</c> or <c>np.dot</c>: a sequential loop rounds differently from BLAS's unrolled
+    ///     multi-accumulator <c>ddot</c> on all but the shortest vectors.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector, as long as <paramref name="a" />.</param>
+    /// <returns>
+    ///     <c>Σ a[i]·b[i]</c> in NumPy's order: <c>0.0 + cblas_ddot(...)</c> per chunk, exactly as NumPy's
+    ///     <c>DOUBLE_dot</c> computes it (so an all-negative-zero product sums to <c>+0.0</c>), and <c>0.0</c> for empty
+    ///     vectors.
+    /// </returns>
+    /// <exception cref="NumSharp.IncorrectShapeException">The vectors differ in length (NumPy's "shapes not aligned" error).</exception>
+    /// <remarks>
+    ///     Both operands are viewed zero-copy (pinned, never written) and every transient array is disposed here, so a
+    ///     call allocates no array left to the finalizer. NumPy's <c>DOUBLE_dot</c> is what both <c>np.dot</c> and the
+    ///     <c>@</c> operator run for two vectors; NumSharp's OpenBLAS backend ports that routine, including its chunking.
+    ///     The result depends on the BLAS thread count and CPU kernel exactly as NumPy's does (see
+    ///     <see cref="BlasThreadPolicy" />).
+    /// </remarks>
+    internal static double Dot(double[] a, double[] b)
+    {
+        using NDArray na = np.array(a, copy: false);
+        using NDArray nb = np.array(b, copy: false);
+        using NDArray product = np.dot(na, nb);
+        return (double)product;
     }
 
     /// <summary>Outer product <c>a ⊗ b</c> — <c>np.outer</c> (an elementwise product, exact).</summary>
