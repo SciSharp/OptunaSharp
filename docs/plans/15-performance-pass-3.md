@@ -1,6 +1,8 @@
 # Plan 15 — third performance pass: speed and memory gaps (2026-11-11)
 
-> **Status: IN PROGRESS.** A four-hour working session, 2026-11-11 05:44 → 09:44 JST, on `main` after `b7ae717`.
+> **Status: IN PROGRESS.** A four-hour working session, 2026-11-11 05:44 → 09:44 JST, on `main` after `b7ae717`. At
+> 08:00: nine steps and one regression fix (`fb18c44`..`d521e16`), every seeded result unchanged; QA-84 recorded
+> (`96abe26`); results through `d521e16` in §7. Work continues on the backlog (§4) until 09:44.
 > This file is its central record: the rules, the baseline survey, the backlog, the progress log and the results.
 
 ## 1. The request
@@ -244,4 +246,61 @@ New, found by this pass and left open:
   and NumPy 2.4.2: the pairwise model matches NumPy in 7,200 of 7,200 (candidate, kernel) entries for 8, 10 and 16
   dimensions, the left-to-right sum differs in 31–54% of them. A ULP-level difference in the log densities of studies
   with eight or more continuous parameters, the class of the documented `erf` divergence; fixing it changes results, so
-  it is recorded with an `[OpenBugs]` repro rather than changed here.
+  it is recorded with an `[OpenBugs]` repro rather than changed here (`96abe26`).
+- **A journal-lock flake (not investigated further).** One full net10.0 unit run, on a machine loaded by other
+  sessions, failed `JournalConcurrencyTests.Lock_WithoutAGracePeriod_WaitsForALeftBehindLockUntilItIsRemoved` with
+  `UnauthorizedAccessException: Access to the path '…\optunasharp-journal-cc-….log.lock' is denied`; the test alone,
+  and its class three times in a row (21/21 each), passed, and net8.0 passed in the same run. Nothing in this pass
+  touches the journal. A plausible cause worth checking: on Windows, opening a file whose deletion is pending (deleted
+  while another handle is still open) fails with ACCESS_DENIED, which the lock's contention classification (HResult /
+  errno, `3a75811`) may not count as contention.
+
+## 7. Results
+
+Final survey, every workload, base `b7ae717` → tree `d521e16`, back to back per workload, warm repetition, the same
+probe and settings as §3. The machine was shared with other sessions (and, for this run, with the final unit suite),
+so allocations and collections are the dependable columns; times are compared pairwise. Every study hash is the same.
+
+| Workload | Trials | Warm time | Allocated | Per trial | gen-0/1/2 | GC pauses | Hash |
+|---|---|---|---|---|---|---|---|
+| random | 10000 | 0.399 → 0.367 s | 194 → 191 MB | 19.9 → 19.6 KB | 10/3/0 → 10/3/0 | 0.05 → 0.05 s | same |
+| tpe | 1000 | 0.865 → 0.726 s | 351 → 256 MB | 359.4 → 262.1 KB | 19/1/0 → 14/1/0 | 0.01 → 0.01 s | same |
+| tpe-int | 1000 | 2.971 → 1.405 s | 1,301 → 246 MB | 1,332.2 → 251.9 KB | 72/2/0 → 13/1/0 | 0.04 → 0.01 s | same |
+| tpe-mixed | 1000 | 1.410 → 0.893 s | 532 → 253 MB | 544.8 → 259.1 KB | 29/2/0 → 14/1/0 | 0.03 → 0.01 s | same |
+| motpe | 400 | 0.512 → 0.547 s | 172 → 151 MB | 440.3 → 386.6 KB | 9/1/0 → 8/1/0 | 0.00 → 0.00 s | same |
+| cmaes | 5000 | 0.946 → 0.831 s | 223 → 223 MB | 45.7 → 45.7 KB | 12/3/0 → 12/3/0 | 0.06 → 0.05 s | same |
+| cmaes-sep | 5000 | 0.608 → 0.575 s | 143 → 143 MB | 29.3 → 29.3 KB | 7/2/0 → 7/2/0 | 0.04 → 0.03 s | same |
+| qmc-sobol | 4000 | 2.727 → 0.143 s | 962 → 58 MB | 246.3 → 14.8 KB | 167/139/138 → 3/1/0 | 0.16 → 0.01 s | same |
+| qmc-halton | 4000 | 1.292 → 0.142 s | 644 → 58 MB | 164.9 → 14.8 KB | 39/38/2 → 3/1/0 | 0.57 → 0.01 s | same |
+| nsga2 | 5000 | 0.487 → 0.479 s | 161 → 159 MB | 33.0 → 32.6 KB | 8/2/0 → 8/2/0 | 0.03 → 0.03 s | same |
+| nsga3 | 3000 | 0.333 → 0.321 s | 101 → 101 MB | 34.5 → 34.5 KB | 5/0/0 → 5/0/0 | 0.01 → 0.01 s | same |
+| sms-emoa | 2000 | 0.444 → 0.415 s | 277 → 277 MB | 141.8 → 141.8 KB | 15/1/0 → 15/1/0 | 0.02 → 0.02 s | same |
+| age-moea2 | 2000 | 0.251 → 0.239 s | 72 → 72 MB | 36.9 → 36.9 KB | 4/2/0 → 4/2/0 | 0.02 → 0.02 s | same |
+| moead | 2000 | 0.494 → 0.503 s | 167 → 167 MB | 85.5 → 85.5 KB | 9/8/0 → 9/8/0 | 0.04 → 0.04 s | same |
+| rvea | 2000 | 0.199 → 0.190 s | 68 → 68 MB | 34.8 → 34.8 KB | 3/0/0 → 3/0/0 | 0.01 → 0.01 s | same |
+| de | 3000 | 1.163 → 1.122 s | 336 → 267 MB | 114.7 → 91.1 KB | 18/3/0 → 14/2/0 | 0.04 → 0.04 s | same |
+| pso | 3000 | 1.027 → 1.092 s | 420 → 351 MB | 143.4 → 119.8 KB | 24/4/1 → 19/3/0 | 0.04 → 0.04 s | same |
+| snes | 3000 | 0.985 → 0.795 s | 508 → 174 MB | 173.4 → 59.4 KB | 28/2/0 → 9/1/0 | 0.04 → 0.02 s | same |
+| xnes | 2000 | 0.927 → 0.658 s | 288 → 143 MB | 147.5 → 73.2 KB | 16/1/0 → 8/0/0 | 0.03 → 0.02 s | same |
+| openai-es | 3000 | 0.886 → 0.868 s | 550 → 178 MB | 187.7 → 60.8 KB | 30/2/0 → 9/1/0 | 0.04 → 0.02 s | same |
+| lm-cma | 3000 | 1.091 → 0.989 s | 348 → 279 MB | 118.8 → 95.2 KB | 19/2/0 → 15/2/0 | 0.04 → 0.03 s | same |
+| vkd-cma | 2000 | 0.641 → 0.657 s | 143 → 117 MB | 73.2 → 59.9 KB | 8/1/0 → 6/1/0 | 0.02 → 0.02 s | same |
+| janus | 2000 | 0.493 → 0.492 s | 219 → 193 MB | 112.1 → 98.8 KB | 12/0/0 → 10/0/0 | 0.02 → 0.02 s | same |
+| gp | 60 | 0.626 → 0.538 s | 425 → 137 MB | 7,253.3 → 2,338.1 KB | 38/32/24 → 21/20/17 | 0.02 → 0.01 s | same |
+| bruteforce | 4320 | 12.163 → 9.038 s | 13,966 → 5,446 MB | 3,310.5 → 1,290.9 KB | 780/219/2 → 305/52/2 | 0.97 → 0.43 s | same |
+
+- `motpe`'s row (0.512 → 0.547 s) is noise from the shared machine: six runs per side in both orders give base best
+  0.517 s (median 0.533), tree best 0.474 s (median about 0.51).
+- Larger runs measured during the steps: `gp` 150 trials 15.6 → 13.2 s, 5,509 → 1,408 MB, gen-2 collections
+  795 → 143 (step C; 11.0 → 9.7 s from the matrix solve alone on a quieter machine); TuRBO 120 trials 4.64 → 4.28 s,
+  1,857 → 1,215 MB (step D); the TPE split at 3,000 trials 693.6 → 551.7 µs (one objective) and 1,505.2 → 1,320.1 µs
+  (two objectives), best of five (step F and its fix).
+- Unchanged by design: random, CMA-ES, NSGA-II/III, SMS-EMOA, AGE-MOEA-2, MOEA/D, RVEA — none was in this pass's
+  scope (their per-trial costs were already 30–140 KB and tens of microseconds).
+
+Gates over the final tree: unit CI filter 2,199 passed, 1 skipped, 0 failed on net10.0 and net8.0 (the journal-lock
+flake of §6 did not recur); documentation gate (5,840 declarations) 0 issues and Core built with the documentation
+warnings as errors 0 errors, both rerun on `d521e16`; hash probe
+36/36 and GP-family probe 8/8 identical; the live-Optuna suites of every touched area passed at their steps (TPE /
+PED-ANOVA / truncnorm 35, GP family 70, BruteForce 13, QMC 20, ES / JANUS / VkD-CMA reference parity 39 + 6 skipped
+without the JANUS reference checkout).
