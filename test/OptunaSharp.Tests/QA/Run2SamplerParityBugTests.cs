@@ -334,4 +334,30 @@ public class Run2SamplerParityBugTests
         optimize.Should().Throw<System.ArgumentException>().WithMessage("invalid learning rate for the rank-one update");
         System.Linq.Enumerable.Select(study.Trials, t => t.State).Should().Equal(TrialState.Complete, TrialState.Fail);
     }
+
+    /// <summary>
+    ///     QA-83: an <c>x0</c> that lacks one of the search space's parameters fails CMA-ES's first trial on both sides,
+    ///     but with different errors. Optuna's <c>_SearchSpaceTransform.transform</c> asserts <c>name in params</c> with
+    ///     the message "Parameter configuration must contain all distributions."; the port's transform indexes the
+    ///     dictionary and lets <c>KeyNotFoundException</c> ("The given key 'y' was not present in the dictionary.")
+    ///     escape, which names the missing key but not the cause.
+    /// </summary>
+    /// <remarks>
+    ///     Measured with Optuna 5.0.0: <c>CmaEsSampler(x0={"x": 5.0}, seed=0)</c> over <c>x</c> and <c>y</c>,
+    ///     <c>optimize(n_trials=4)</c>: COMPLETE, FAIL and <c>AssertionError</c>; the port: COMPLETE, FAIL and the
+    ///     <c>KeyNotFoundException</c>. An <c>x0</c> with an extra parameter is accepted and identical on both sides. The
+    ///     expected type follows the port's mapping of Python assertions (<c>ArgumentException</c>, as in <c>CmaWm</c>).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void CmaEs_X0MissingAParameter_FailsWithOptunasTransformAssertion()
+    {
+        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(
+            x0: new System.Collections.Generic.Dictionary<string, object?> { ["x"] = 5.0 }, seed: 0));
+
+        System.Action optimize = () => study.Optimize(t => t.SuggestFloat("x", 0, 10) + t.SuggestFloat("y", 0, 1), nTrials: 4);
+
+        optimize.Should().Throw<System.ArgumentException>().WithMessage("Parameter configuration must contain all distributions.");
+        System.Linq.Enumerable.Select(study.Trials, t => t.State).Should().Equal(TrialState.Complete, TrialState.Fail);
+    }
 }
