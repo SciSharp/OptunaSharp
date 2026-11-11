@@ -88,7 +88,8 @@ internal static class TpeTrialSplit
     internal static (List<FrozenTrial> Below, List<FrozenTrial> Above) SplitTrials(
         Study study, IReadOnlyList<FrozenTrial> trials, int nBelow)
     {
-        var complete = new List<FrozenTrial>();
+        // Sized for the common case, where nearly every trial is complete, so the list never regrows (plan 15).
+        var complete = new List<FrozenTrial>(trials.Count);
         var pruned = new List<FrozenTrial>();
         var running = new List<FrozenTrial>();
         var infeasible = new List<FrozenTrial>();
@@ -114,16 +115,18 @@ internal static class TpeTrialSplit
         nBelow = Math.Max(0, nBelow - belowPruned.Count);
         var (belowInfeasible, aboveInfeasible) = SplitInfeasibleTrials(infeasible, nBelow);
 
-        var below = new List<FrozenTrial>(belowComplete);
+        var below = new List<FrozenTrial>(belowComplete.Count + belowPruned.Count + belowInfeasible.Count);
+        below.AddRange(belowComplete);
         below.AddRange(belowPruned);
         below.AddRange(belowInfeasible);
-        var above = new List<FrozenTrial>(aboveComplete);
+        var above = new List<FrozenTrial>(aboveComplete.Count + abovePruned.Count + aboveInfeasible.Count + running.Count);
+        above.AddRange(aboveComplete);
         above.AddRange(abovePruned);
         above.AddRange(aboveInfeasible);
         above.AddRange(running);
 
-        below.Sort((a, b) => a.Number.CompareTo(b.Number));
-        above.Sort((a, b) => a.Number.CompareTo(b.Number));
+        SortByNumber(below);
+        SortByNumber(above);
         return (below, above);
     }
 
@@ -149,11 +152,66 @@ internal static class TpeTrialSplit
     private static (List<FrozenTrial> Below, List<FrozenTrial> Above) SplitCompleteTrialsSingleObjective(
         IReadOnlyList<FrozenTrial> trials, Study study, int nBelow)
     {
-        // Python's `sorted` is stable; OrderBy/OrderByDescending are too (ties keep input order).
-        var sorted = study.Directions[0] == StudyDirection.Minimize
-            ? trials.OrderBy(t => t.Value!.Value).ToList()
-            : trials.OrderByDescending(t => t.Value!.Value).ToList();
-        return (sorted.Take(nBelow).ToList(), sorted.Skip(nBelow).ToList());
+        // Python's `sorted` is stable: ties keep input order. The trials are sorted by (value, position), descending
+        // values for a maximized objective, which is the order LINQ's stable OrderBy / OrderByDescending produced, with
+        // the same double.CompareTo semantics (NaN first, -0.0 equal to 0.0). Plan 15: (value, position) structs that
+        // compare themselves, so the generic sort calls CompareTo directly instead of a comparer through an interface,
+        // and the two sides built at their final sizes instead of three intermediate lists per ask.
+        int n = trials.Count;
+        bool descending = study.Directions[0] != StudyDirection.Minimize;
+        var keyed = new ValueThenPosition[n];
+        for (int i = 0; i < n; i++)
+            keyed[i] = new ValueThenPosition(trials[i].Value!.Value, i, descending);
+        Array.Sort(keyed);
+
+        var below = new List<FrozenTrial>(nBelow);
+        var above = new List<FrozenTrial>(n - nBelow);
+        for (int r = 0; r < n; r++)
+            (r < nBelow ? below : above).Add(trials[keyed[r].Position]);
+        return (below, above);
+    }
+
+    /// <summary>
+    ///     A trial's objective value and position, ordered by value (ascending, or descending for a maximized
+    ///     objective), ties by position: the order of a stable sort by value.
+    /// </summary>
+    /// <remarks>
+    ///     Values compare with <see cref="double.CompareTo(double)" />, the comparison LINQ's default comparer made, so NaN
+    ///     sorts first and -0.0 ties with 0.0; reversing its sign for the descending order is what
+    ///     <c>OrderByDescending</c> did. Positions are distinct, so the order is total and any correct sort yields it.
+    ///     Every element of one sort carries the same direction.
+    /// </remarks>
+    private readonly struct ValueThenPosition : IComparable<ValueThenPosition>
+    {
+        /// <summary>The trial's objective value.</summary>
+        internal readonly double Value;
+
+        /// <summary>The trial's position in the input list.</summary>
+        internal readonly int Position;
+
+        private readonly bool _descending;
+
+        /// <summary>Pairs a value with its position.</summary>
+        /// <param name="value">The trial's objective value.</param>
+        /// <param name="position">The trial's position in the input list.</param>
+        /// <param name="descending">Whether larger values come first; the same for every element of a sort.</param>
+        internal ValueThenPosition(double value, int position, bool descending)
+        {
+            Value = value;
+            Position = position;
+            _descending = descending;
+        }
+
+        /// <summary>Compares by value, then by position.</summary>
+        /// <param name="other">The element to compare with.</param>
+        /// <returns>Negative when this sorts first, positive when <paramref name="other" /> does, zero only for the same position.</returns>
+        public int CompareTo(ValueThenPosition other)
+        {
+            int byValue = Value.CompareTo(other.Value);
+            if (_descending)
+                byValue = -byValue;
+            return byValue != 0 ? byValue : Position.CompareTo(other.Position);
+        }
     }
 
     /// <summary>Python <c>_get_pruned_trial_score(trial, study)</c>.</summary>
@@ -193,12 +251,45 @@ internal static class TpeTrialSplit
         return (sorted.Take(nBelow).ToList(), sorted.Skip(nBelow).ToList());
     }
 
+    /// <summary>
+    ///     Sorts trials by number in place, as <c>trials.sort(key=lambda trial: trial.number)</c> does in
+    ///     <c>_split_trials</c>.
+    /// </summary>
+    /// <param name="trials">The trials to sort; their numbers are distinct.</param>
+    /// <remarks>
+    ///     Trial numbers are unique within a study, so every correct sort produces the same order, and sorting the
+    ///     numbers as primitive keys with the trials alongside gives exactly what the comparison-delegate sort gave
+    ///     (plan 15: the delegate was called about n log n times per ask on the above list).
+    /// </remarks>
+    private static void SortByNumber(List<FrozenTrial> trials)
+    {
+        int n = trials.Count;
+        if (n < 2)
+            return;
+        var numbers = new int[n];
+        var items = new FrozenTrial[n];
+        for (int i = 0; i < n; i++)
+        {
+            items[i] = trials[i];
+            numbers[i] = items[i].Number;
+        }
+        Array.Sort(numbers, items);
+        for (int i = 0; i < n; i++)
+            trials[i] = items[i];
+    }
+
     /// <summary>Python <c>_get_infeasible_trial_score(trial) = sum(v for v in constraints.values() if v > 0)</c>.</summary>
     /// <param name="trial">The trial whose recorded state and values are used.</param>
     /// <returns>The sum of positive constraint violations, or positive infinity when feasibility information is unavailable.</returns>
     private static double GetInfeasibleTrialScore(FrozenTrial trial)
     {
         double sum = 0.0;
+        // Most trials record no constraint, and then the loop below adds nothing: return its 0.0 without building the
+        // empty constraints dictionary (plan 15; the split scores every trial on every ask, so that was one dictionary
+        // per trial per ask, two thirds of what a 1,000-trial split allocated). A trial with any constraint, in the
+        // old list format or the per-key one, takes the original path.
+        if (!ConstrainedOptimization.HasConstraints(trial.SystemAttrs))
+            return sum;
         foreach (var v in trial.Constraints.Values)
         {
             if (v > 0)

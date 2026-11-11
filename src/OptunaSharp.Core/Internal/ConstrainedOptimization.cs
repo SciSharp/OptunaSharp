@@ -31,6 +31,30 @@ internal static class ConstrainedOptimization
         return feasibleTrials;
     }
 
+    /// <summary>
+    ///     Whether <see cref="GetConstraintsFromSystemAttrs" /> would return any constraint: the old-format list key holds
+    ///     a value, or some key carries the per-constraint prefix. Allocates nothing.
+    /// </summary>
+    /// <param name="systemAttrs">A trial's system attributes.</param>
+    /// <returns>False exactly when the constraints dictionary would be empty.</returns>
+    /// <remarks>
+    ///     The same two tests the dictionary's construction makes before adding an entry, so a false answer means that
+    ///     dictionary would be empty (an old-format list that is present but empty also reads as constraints here, and
+    ///     the caller then builds the empty dictionary as before).
+    /// </remarks>
+    internal static bool HasConstraints(IReadOnlyDictionary<string, object?> systemAttrs)
+    {
+        if (systemAttrs.TryGetValue(ConstraintsKey, out var con) && con is not null)
+            return true;
+        string prefix = ConstraintsKey + ":";
+        foreach (string key in systemAttrs.Keys)
+        {
+            if (key.StartsWith(prefix, System.StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
     /// <summary>Python <c>_get_constraints_from_system_attrs</c>.</summary>
     /// <param name="systemAttrs">The stored attributes carrying legacy and named constraint values.</param>
     /// <returns>The constraint values keyed by constraint name; named entries override legacy indexed entries.</returns>

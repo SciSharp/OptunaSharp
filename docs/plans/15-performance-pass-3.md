@@ -156,7 +156,22 @@ Open after plan 14 (its §7):
   (the cache equals a fresh enumeration by bits and returns the same list again; -0.0 / 0.0 and int / float are
   separate keys; the stepless progression throws twice and caches nothing), BruteForce unit tests 26/26; live
   BruteForce parity 13/13; hash probe 36/36. Left for later: caching each finished trial's path across rebuilds (the
-  path of a finished trial never changes; 28% of the time).
+  path of a finished trial never changes; 28% of the time). Committed `6418e0b`.
+- 07:35 — **step F, TPE's trial split.** A split bench (`sbench`) on studies of 1,000 and 3,000 completed trials with
+  many ties: 175–190 µs and 155 KB per split at 1,000 trials, 705–735 µs and 476 KB at 3,000 — about 15% of a TPE
+  trial. (1) `GetInfeasibleTrialScore` returns the empty loop's 0.0 for a trial that records no constraint
+  (`ConstrainedOptimization.HasConstraints`: the two tests the dictionary's construction makes) instead of building an
+  empty constraints dictionary per trial per split, two thirds of the bytes. (2) The partition lists are pre-sized
+  and both sides built at their final sizes. (3) The single-objective sort sorts (value, position) structs that
+  implement `IComparable<T>` (the order of LINQ's stable `OrderBy` / `OrderByDescending`, with `double.CompareTo`), so
+  the generic sort calls `CompareTo` directly; a struct `IComparer<int>` passed to `Span.Sort` is boxed and gained
+  nothing. (4) Both sides are sorted by number on primitive keys (`Array.Sort(int[], FrozenTrial[])`; numbers are
+  unique). Split bench: 130 µs / 52 KB at 1,000 trials, 553–576 µs / 154 KB at 3,000; same split hash. Survey,
+  interleaved: `tpe` 1,000 trials 0.94–0.99 → 0.86–0.88 s (all of plan 15 against the base), 358 → 300 KB per trial;
+  `motpe` 400 trials time unchanged, 440 → 405 KB per trial. Gates: new `TpeTrialSplitSortTests` (the split against
+  the LINQ code written out, shuffled histories with ties, both zeros, both infinities and NaN, both directions, every
+  seventh group size; constraints in both formats still score infeasible); TPE, constraint and split unit tests
+  117/117; hash probe 36/36.
 
 ## 6. Findings and notes for the owner
 
