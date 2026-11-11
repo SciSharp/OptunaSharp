@@ -37,8 +37,37 @@ public class Study
     {
         /// <summary>Whether this thread is currently executing an objective or its callbacks.</summary>
         internal bool InOptimizeLoop;
+
+        private List<FrozenTrial>? _cachedAllTrials;
+
         /// <summary>Trial-history snapshot reused within one trial; cleared when the next trial is asked.</summary>
-        internal List<FrozenTrial>? CachedAllTrials;
+        /// <remarks>
+        ///     Setting it, to a new snapshot or to null, also drops <see cref="CachedFiltered" />: that list was filtered
+        ///     from the snapshot being replaced, and a reset site (a tell, the end of an optimize worker) must not leave a
+        ///     reused thread holding a finished study's trials through it either.
+        /// </remarks>
+        internal List<FrozenTrial>? CachedAllTrials
+        {
+            get => _cachedAllTrials;
+            set
+            {
+                _cachedAllTrials = value;
+                CachedFiltered = null;
+                CachedFilteredSource = null;
+            }
+        }
+
+        /// <summary>
+        ///     The last list <see cref="GetTrialsCachedReadOnly" /> filtered, shared by every read-only read of the same
+        ///     states until the snapshot changes (plan 15).
+        /// </summary>
+        internal List<FrozenTrial>? CachedFiltered;
+
+        /// <summary>The snapshot <see cref="CachedFiltered" /> was filtered from: the memo answers only while it is still <see cref="CachedAllTrials" />.</summary>
+        internal List<FrozenTrial>? CachedFilteredSource;
+
+        /// <summary>The state mask <see cref="CachedFiltered" /> was filtered with: bit <c>s</c> set for each kept state <c>s</c>.</summary>
+        internal int CachedFilteredMask;
 
         /// <summary>
         ///     The worker's own sampler instance while this thread runs a trial of an <c>Optimize(nJobs)</c> call with
@@ -261,13 +290,140 @@ public class Study
             ThreadLocal.CachedAllTrials ??= Storage.GetAllTrials(StudyId, deepcopy: false);
             var trials = ThreadLocal.CachedAllTrials;
             var filteredTrials = states is not null
-                ? trials.Where(t => states.Contains(t.State)).ToList()
+                ? FilterByState(trials, states)
                 : trials;
             return deepcopy ? filteredTrials.Select(t => t.DeepCopy()).ToList() : filteredTrials;
         }
 
         return Storage.GetAllTrials(StudyId, deepcopy: deepcopy, states: states);
     }
+
+    /// <summary>
+    ///     <c>GetTrialsInternal(deepcopy: false, states, useCache: true)</c> for a caller that only reads the result: the
+    ///     same records in the same order, but one list shared by every such read of the same states until the trial
+    ///     snapshot changes, instead of a new filtered copy per read.
+    /// </summary>
+    /// <param name="states">The states to keep; the list is shared only between reads of the same set of states.</param>
+    /// <returns>
+    ///     Trials in ascending trial-number order. <b>Never change it</b>: a later read of the same states in the same trial
+    ///     returns this very list, so a change would leak into every one of them (the type says read-only for that reason;
+    ///     a caller that needs to change the history copies it, or calls <see cref="GetTrialsInternal" />).
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="states" /> is null.</exception>
+    /// <exception cref="NumSharp.KeyError">The study no longer exists in storage (on the read that takes the snapshot).</exception>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Why.</b> TPE reads the filtered history twice for each sampled trial in multivariate mode, and twice for
+    ///         <i>each parameter</i> in independent mode (MOTPE's default): each read copied the whole history, growing the
+    ///         list by doubling. Measured before plan 15 those copies were 12 % of a 1,000-trial TPE study's allocations.
+    ///     </para>
+    ///     <para>
+    ///         <b>Why it is the same history.</b> The memo is keyed by the snapshot list's identity and the state set, and
+    ///         the snapshot is the one <see cref="GetTrialsInternal" /> filters too, so both filter the same records with
+    ///         the same test. A record's state cannot change under the memo: the storages hand out records they never
+    ///         change afterwards (the in-memory and journal storages change a shallow copy and store that, plan 13 item S4),
+    ///         and the snapshot itself is replaced, which drops the memo, by the tell that ends the trial.
+    ///     </para>
+    /// </remarks>
+    internal IReadOnlyList<FrozenTrial> GetTrialsCachedReadOnly(TrialState[] states)
+    {
+        ArgumentNullException.ThrowIfNull(states);
+        ThreadLocalStudyAttribute local = ThreadLocal;
+        local.CachedAllTrials ??= Storage.GetAllTrials(StudyId, deepcopy: false);
+        List<FrozenTrial> all = local.CachedAllTrials;
+
+        int mask = StateMask(states);
+        if (mask >= 0 && local.CachedFiltered is { } memo && ReferenceEquals(local.CachedFilteredSource, all)
+            && local.CachedFilteredMask == mask)
+            return memo;
+
+        List<FrozenTrial> filtered = FilterByState(all, states);
+        // A set no mask can hold (a value outside the enum's small range) is filtered every time and never memoized, so
+        // the memo's key always describes its list exactly.
+        if (mask >= 0)
+        {
+            local.CachedFiltered = filtered;
+            local.CachedFilteredSource = all;
+            local.CachedFilteredMask = mask;
+        }
+        return filtered;
+    }
+
+    /// <summary>
+    ///     The trials of <paramref name="trials" /> whose state is in <paramref name="states" />, in order: what
+    ///     <c>trials.Where(t =&gt; states.Contains(t.State)).ToList()</c> returns, in a list allocated once at its final size.
+    /// </summary>
+    /// <param name="trials">The trials to filter; not changed.</param>
+    /// <param name="states">The states to keep; duplicates are harmless and an empty set keeps nothing.</param>
+    /// <returns>A new list the caller may change, holding the kept trials as the same references, in their order.</returns>
+    /// <remarks>
+    ///     <para>
+    ///         The membership test is a bit mask (<see cref="StateMask" />): enum equality is equality of the underlying
+    ///         values, so for states in 0–30 testing bit <c>state</c> answers exactly what <c>Contains</c> answers. A set
+    ///         holding any other value takes the LINQ expression itself. A trial whose own state lies outside 0–30 is never
+    ///         in a mask, as it is never in such a set.
+    ///     </para>
+    ///     <para>
+    ///         Two passes, count then fill, instead of a list grown by doubling: the doubling left about twice the final
+    ///         array in garbage per call, while a single list sized for every trial would waste the whole history on a
+    ///         narrow filter (QMC's read of the running trials).
+    ///     </para>
+    /// </remarks>
+    internal static List<FrozenTrial> FilterByState(List<FrozenTrial> trials, IReadOnlyCollection<TrialState> states)
+    {
+        int mask = StateMask(states);
+        if (mask < 0)
+            return trials.Where(t => states.Contains(t.State)).ToList();
+
+        int count = 0;
+        foreach (FrozenTrial t in trials)
+        {
+            if (InStateMask(t.State, mask))
+                count++;
+        }
+
+        var result = new List<FrozenTrial>(count);
+        foreach (FrozenTrial t in trials)
+        {
+            if (InStateMask(t.State, mask))
+                result.Add(t);
+        }
+        return result;
+    }
+
+    /// <summary>One bit per state of <paramref name="states" /> (bit <c>s</c> for state <c>s</c>), or -1 when a state lies outside 0–30.</summary>
+    /// <param name="states">The states to encode; enumerated once.</param>
+    /// <returns>The mask (never negative, and 0 for an empty set), or -1 when the set holds a state no mask can encode.</returns>
+    /// <remarks>Bit 31 would make the mask negative and collide with the -1 refusal, so state 31 is refused too: the enum's real values are 0–4.</remarks>
+    private static int StateMask(IReadOnlyCollection<TrialState> states)
+    {
+        int mask = 0;
+        if (states is TrialState[] array)
+        {
+            // An array is the common case (every sampler passes one); indexing it avoids boxing an enumerator per read.
+            for (int i = 0; i < array.Length; i++)
+            {
+                if ((uint)array[i] >= 31)
+                    return -1;
+                mask |= 1 << (int)array[i];
+            }
+            return mask;
+        }
+        foreach (TrialState state in states)
+        {
+            if ((uint)state >= 31)
+                return -1;
+            mask |= 1 << (int)state;
+        }
+        return mask;
+    }
+
+    /// <summary>Whether <paramref name="state" /> has its bit set in <paramref name="mask" />.</summary>
+    /// <param name="state">The trial's state; a value outside 0–30 is in no mask.</param>
+    /// <param name="mask">A mask from <see cref="StateMask" />.</param>
+    /// <returns>True when the state is one of the mask's states.</returns>
+    private static bool InStateMask(TrialState state, int mask)
+        => (uint)state < 31 && ((mask >> (int)state) & 1) != 0;
 
     /// <summary>
     ///     This study's trials as a zero-copy, fixed-membership window (see

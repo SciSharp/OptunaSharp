@@ -339,7 +339,8 @@ public class TPESampler : BaseSampler
             return new OrderedDict<string, object?>();
 
         var states = new[] { TrialState.Complete, TrialState.Pruned };
-        var trials = study.GetTrialsInternal(deepcopy: false, states: states, useCache: true);
+        // Only counted: the shared read-only list of this trial's snapshot, which Sample reads again (plan 15).
+        var trials = study.GetTrialsCachedReadOnly(states);
         // If the number of samples is insufficient, we run random trial.
         if (trials.Count < _nStartupTrials)
             return new OrderedDict<string, object?>();
@@ -352,7 +353,9 @@ public class TPESampler : BaseSampler
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
     {
         var states = new[] { TrialState.Complete, TrialState.Pruned };
-        var trials = study.GetTrialsInternal(deepcopy: false, states: states, useCache: true);
+        // Only counted and searched: the shared read-only list, read again by Sample and by every other parameter of this
+        // trial (plan 15).
+        var trials = study.GetTrialsCachedReadOnly(states);
 
         // If the number of samples is insufficient, we run random trial.
         if (trials.Count < _nStartupTrials)
@@ -591,8 +594,14 @@ public class TPESampler : BaseSampler
             ? new[] { TrialState.Complete, TrialState.Pruned, TrialState.Running }
             : new[] { TrialState.Complete, TrialState.Pruned };
         bool useCache = !_constantLiar;
-        List<FrozenTrial> trials;
-        if (_constantLiar && study.Storage.HasZeroCopyTrialsView)
+        IReadOnlyList<FrozenTrial> trials;
+        if (!_constantLiar)
+        {
+            // The cached read (useCache), as Optuna's _sample makes it. Only read from here on (counted, split, read by
+            // the estimators), so it is the shared list of this trial's snapshot rather than a copy per call (plan 15).
+            trials = study.GetTrialsCachedReadOnly(states);
+        }
+        else if (study.Storage.HasZeroCopyTrialsView)
         {
             // For constant_liar, filter out the current trial: here by never reading its record (plan 13, item S3). The
             // read below returns the stored records themselves, and a running record that is read must be copied before
@@ -603,11 +612,12 @@ public class TPESampler : BaseSampler
         }
         else
         {
-            trials = study.GetTrialsInternal(deepcopy: false, states: states, useCache: useCache);
+            List<FrozenTrial> read = study.GetTrialsInternal(deepcopy: false, states: states, useCache: useCache);
 
             if (_constantLiar)
                 // For constant_liar, filter out the current trial.
-                trials = trials.Where(t => trial.Number != t.Number).ToList();
+                read = read.Where(t => trial.Number != t.Number).ToList();
+            trials = read;
         }
 
         // Divide data into below and above.
@@ -620,7 +630,8 @@ public class TPESampler : BaseSampler
 
         // The same split as TpeTrialSplit.SplitTrials, reused while the same records are split again: every parameter
         // of an independent-TPE trial splits the same history (plan 13, item S5; see TpeSplitCache).
-        var (belowTrials, aboveTrials) = _splitCache.Split(study, trials, _gamma(n));
+        // The groups are only read by the two estimator builds below, so the cache's own lists serve without copies.
+        var (belowTrials, aboveTrials) = _splitCache.SplitShared(study, trials, _gamma(n));
 
         var mpeBelow = BuildParzenEstimator(study, searchSpace, belowTrials, handleBelow: true);
         var mpeAbove = BuildParzenEstimator(study, searchSpace, aboveTrials, handleBelow: false);

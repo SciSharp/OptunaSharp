@@ -470,6 +470,48 @@ internal sealed class TpeSplitCache
         ArgumentNullException.ThrowIfNull(study);
         ArgumentNullException.ThrowIfNull(trials);
 
+        Refresh(study, trials, nBelow);
+
+        // Copies: the cached lists must survive a caller that changes what it was given.
+        return (new List<FrozenTrial>(_below), new List<FrozenTrial>(_above));
+    }
+
+    /// <summary>
+    ///     <see cref="Split" /> without its defensive copies, for a caller that only reads the two groups: the cached lists
+    ///     themselves (plan 15).
+    /// </summary>
+    /// <param name="study">The study the records belong to; its storage and id are part of the key.</param>
+    /// <param name="trials">The records to split, in the order the sampler read them.</param>
+    /// <param name="nBelow">The number of trials the preferred group should hold.</param>
+    /// <returns>
+    ///     The preferred and the remaining records by trial number, the same groups <see cref="Split" /> returns. <b>Never
+    ///     change them</b>: a later call that reuses this split returns these very lists.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="study" /> or <paramref name="trials" /> is null.</exception>
+    /// <exception cref="Exception">Whatever <see cref="TpeTrialSplit.SplitTrials" /> throws on a miss; nothing is cached then.</exception>
+    /// <remarks>
+    ///     Safe to share: a split's lists are built by <see cref="TpeTrialSplit.SplitTrials" />, stored, and never changed
+    ///     afterwards; a miss replaces the fields with new lists, so a list already handed out keeps its contents. TPE's
+    ///     estimator build only reads them, and copying them cost two history-sized arrays per sampled parameter in
+    ///     independent mode.
+    /// </remarks>
+    internal (IReadOnlyList<FrozenTrial> Below, IReadOnlyList<FrozenTrial> Above) SplitShared(
+        Study study, IReadOnlyList<FrozenTrial> trials, int nBelow)
+    {
+        ArgumentNullException.ThrowIfNull(study);
+        ArgumentNullException.ThrowIfNull(trials);
+
+        Refresh(study, trials, nBelow);
+        return (_below, _above);
+    }
+
+    /// <summary>Makes the cached split the split of these records: computes and stores it unless it already is.</summary>
+    /// <param name="study">The study the records belong to; its storage and id are part of the key.</param>
+    /// <param name="trials">The records to split, in the order the sampler read them.</param>
+    /// <param name="nBelow">The number of trials the preferred group should hold.</param>
+    /// <exception cref="Exception">Whatever <see cref="TpeTrialSplit.SplitTrials" /> throws on a miss; nothing is cached then.</exception>
+    private void Refresh(Study study, IReadOnlyList<FrozenTrial> trials, int nBelow)
+    {
         if (!Matches(study, trials, nBelow))
         {
             var (below, above) = TpeTrialSplit.SplitTrials(study, trials, nBelow);
@@ -485,9 +527,6 @@ internal sealed class TpeSplitCache
             _above = above;
             Computed++;
         }
-
-        // Copies: the cached lists must survive a caller that changes what it was given.
-        return (new List<FrozenTrial>(_below), new List<FrozenTrial>(_above));
     }
 
     /// <summary>Whether the cached split was computed from exactly these records of this study with this size.</summary>
