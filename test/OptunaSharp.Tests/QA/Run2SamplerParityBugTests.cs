@@ -360,4 +360,104 @@ public class Run2SamplerParityBugTests
         optimize.Should().Throw<System.ArgumentException>().WithMessage("Parameter configuration must contain all distributions.");
         System.Linq.Enumerable.Select(study.Trials, t => t.State).Should().Equal(TrialState.Complete, TrialState.Fail);
     }
+
+    /// <summary>
+    ///     QA-84 (found 2026-11-11 by plan 15, after the run): Optuna sums a candidate's continuous log terms over the
+    ///     dimensions with <c>_truncnorm.logpdf(...).sum(axis=-1)</c>, a reduction over a C-contiguous last axis, which
+    ///     NumPy performs with its pairwise sum: from eight elements on, eight accumulators, then
+    ///     <c>((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))</c>, then the remainder. The port adds the terms left to
+    ///     right from +0.0, so with eight or more continuous parameters many sums differ in their last bits.
+    /// </summary>
+    /// <remarks>
+    ///     Measured with Optuna 5.0.0's own <c>_truncnorm.logpdf</c> on its own array layout and NumPy 2.4.2: the
+    ///     pairwise model below matches NumPy in all 7,200 (candidate, kernel) entries for 8, 10 and 16 dimensions, and a
+    ///     left-to-right sum differs in 31–54% of them. The test isolates the order: both sides sum the port's own
+    ///     per-dimension terms (computed as <c>AccumulateContinuous</c> computes them), so only the summation can differ.
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void Tpe_ContinuousLogPdf_SumsTheDimensionsPairwiseLikeNumPy()
+    {
+        var rng = new System.Random(84);
+        const int nSamples = 24, nCont = 10, nKernels = 300;
+        int gridSize = nCont * nKernels;
+        var mu = new double[gridSize];
+        var sigma = new double[gridSize];
+        var a = new double[gridSize];
+        var b = new double[gridSize];
+        var logSigma = new double[gridSize];
+        for (int g = 0; g < gridSize; g++)
+        {
+            mu[g] = rng.NextDouble() * 20 - 10;
+            sigma[g] = 0.2 + rng.NextDouble() * 5;
+            a[g] = (-10 - mu[g]) / sigma[g];
+            b[g] = (10 - mu[g]) / sigma[g];
+            logSigma[g] = System.Math.Log(sigma[g]);
+        }
+        double[] logGaussMass = OptunaSharp.Internal.TruncNorm.LogGaussMass(a, b);
+        var xCont = new double[nSamples * nCont];
+        for (int i = 0; i < xCont.Length; i++)
+            xCont[i] = rng.NextDouble() * 20 - 10;
+
+        var actual = new double[nSamples * nKernels];
+        OptunaSharp.Samplers.Tpe.MixtureOfProductDistribution.AccumulateContinuous(
+            xCont, nSamples, nCont, mu, sigma, a, b, logGaussMass, logSigma, actual, nKernels);
+
+        int differing = 0;
+        var terms = new double[nCont];
+        for (int s = 0; s < nSamples; s++)
+        {
+            for (int k = 0; k < nKernels; k++)
+            {
+                for (int c = 0; c < nCont; c++)
+                {
+                    int g = c * nKernels + k;
+                    double xstd = (xCont[s * nCont + c] - mu[g]) / sigma[g];
+                    double val = OptunaSharp.Internal.TruncNorm.NormLogPdf(xstd) - logGaussMass[g] - logSigma[g];
+                    if (a[g] == b[g])
+                        val = double.NaN;
+                    else if (xstd < a[g] || xstd > b[g])
+                        val = double.NegativeInfinity;
+                    terms[c] = val;
+                }
+                // weighted_log_pdf (zero here) += the row's NumPy sum.
+                double expected = 0.0 + NumPyPairwiseSum(terms);
+                if (System.BitConverter.DoubleToInt64Bits(actual[s * nKernels + k]) != System.BitConverter.DoubleToInt64Bits(expected))
+                    differing++;
+            }
+        }
+
+        differing.Should().Be(0, "NumPy sums each (candidate, kernel) row of the dimensions pairwise");
+    }
+
+    /// <summary>
+    ///     NumPy's <c>pairwise_sum</c> for a contiguous run of at most 128 elements (one block): left to right from 0.0
+    ///     below eight elements; from eight on, eight accumulators over whole groups of eight, combined as
+    ///     <c>((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))</c>, then the remaining elements added left to right.
+    /// </summary>
+    /// <param name="x">The elements, at most 128 of them.</param>
+    /// <returns>Their sum in NumPy's order.</returns>
+    private static double NumPyPairwiseSum(double[] x)
+    {
+        int n = x.Length;
+        if (n < 8)
+        {
+            double res0 = 0.0;
+            for (int i = 0; i < n; i++)
+                res0 += x[i];
+            return res0;
+        }
+        var r = new double[8];
+        System.Array.Copy(x, r, 8);
+        int j = 8;
+        for (; j < n - n % 8; j += 8)
+        {
+            for (int l = 0; l < 8; l++)
+                r[l] += x[j + l];
+        }
+        double res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        for (; j < n; j++)
+            res += x[j];
+        return res;
+    }
 }
