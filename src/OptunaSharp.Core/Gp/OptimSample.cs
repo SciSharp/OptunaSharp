@@ -20,21 +20,23 @@ internal static class OptimSample
     /// <param name="acqf">The acquisition function to maximize over its normalized search space.</param>
     /// <param name="nSamples">The number of observations or generated sample rows.</param>
     /// <param name="rng">The random generator whose state is advanced when drawing samples.</param>
-    /// <returns>The best sampled normalized point and its acquisition value.</returns>
+    /// <returns>
+    ///     The best sampled normalized point and its acquisition value; when an acquisition value is NaN, the first NaN
+    ///     point and NaN, as NumPy's <c>np.argmax</c> picks it.
+    /// </returns>
+    /// <exception cref="NumSharp.ValueError"><paramref name="nSamples" /> is 0 (NumPy's <c>attempt to get argmax of an empty sequence</c>).</exception>
     internal static (double[] X, double Value) OptimizeAcqfSample(
         IAcquisitionFunc acqf, int nSamples, NumPyRandom rng)
     {
         double[,] xs = acqf.SearchSpace.SampleNormalizedParams(nSamples, rng);
         double[] res = acqf.EvalAcqfNoGrad(xs);
 
-        int bestI = 0;
-        double best = res[0];
-        for (int i = 1; i < res.Length; i++)
-            if (res[i] > best)  // np.argmax — first maximum
-            {
-                best = res[i];
-                bestI = i;
-            }
+        // best_i = np.argmax(res), through NumSharp: the first maximum, or the first NaN when one is NaN (NumPy treats a
+        // NaN as maximal; a strict > loop would skip it). One call per optimization, after nSamples acqf evaluations.
+        int bestI;
+        using (NDArray values = np.array(res, copy: false))
+        using (NDArray index = np.argmax(values))
+            bestI = (int)(long)index;
 
         int dim = xs.GetLength(1);
         var x = new double[dim];

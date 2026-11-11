@@ -212,20 +212,25 @@ internal static class ParallelCoordinatePlot
         return annotations.ToArray();
     }
 
-    /// <summary>NumPy <c>np.linspace(min, max, num)</c> — endpoint forced exact.</summary>
+    /// <summary>
+    ///     NumPy <c>np.linspace(min, max, num)</c>, computed by NumSharp's <c>np.linspace</c> — Optuna's
+    ///     <c>np.linspace(*dim.range, num=5)</c> tick values for an axis without tick values of its own.
+    /// </summary>
     /// <param name="min">First endpoint.</param>
     /// <param name="max">Last endpoint.</param>
-    /// <param name="num">Number of samples; must be at least two for the intended spacing.</param>
-    /// <returns>Equally spaced values with the final element set exactly to max.</returns>
-    /// <exception cref="System.IndexOutOfRangeException">No samples are allocated but the endpoint is written.</exception>
+    /// <param name="num">Number of samples (the renderer passes 5).</param>
+    /// <returns>Equally spaced values with the final element set exactly to <paramref name="max" />.</returns>
+    /// <remarks>
+    ///     For ordinary ranges this is <c>i * step + min</c> with the endpoint forced, as the former hand loop computed.
+    ///     NumSharp also keeps NumPy's zero-step branch (a range so narrow that <c>(max - min) / (num - 1)</c> underflows
+    ///     to 0: NumPy then divides and multiplies by the span instead), which the hand loop lacked; it is the same
+    ///     routine Core's parallel-coordinate data builder uses (QA-54's class).
+    /// </remarks>
+    /// <exception cref="NumSharp.ValueError"><paramref name="num" /> is negative (<c>Number of samples, -1, must be non-negative.</c>).</exception>
     private static double[] Linspace(double min, double max, int num)
     {
-        var result = new double[num];
-        double step = (max - min) / (num - 1);
-        for (int i = 0; i < num; i++)
-            result[i] = min + i * step;
-        result[num - 1] = max;
-        return result;
+        using NumSharp.NDArray grid = NumSharp.np.linspace(min, max, num);
+        return grid.ToArray<double>();
     }
 
     /// <summary>Compares axis values using the renderer's relative tick-matching tolerance.</summary>

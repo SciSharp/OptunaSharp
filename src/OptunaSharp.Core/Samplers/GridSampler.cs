@@ -136,6 +136,10 @@ public class GridSampler : BaseSampler
         => GetType() == typeof(GridSampler) ? new GridSampler(this) : null;
 
     /// <inheritdoc />
+    /// <exception cref="NumSharp.ValueError">
+    ///     The grid is empty (a parameter's value list is empty) and the trial needs a grid point: NumPy's
+    ///     <c>choice</c> error, <c>'a' cannot be empty unless no samples are taken</c>, as in Optuna.
+    /// </exception>
     public override void BeforeTrial(Study study, FrozenTrial trial)
     {
         // Instead of returning param values, GridSampler puts the target grid id as a system
@@ -172,9 +176,16 @@ public class GridSampler : BaseSampler
         }
 
         // In distributed optimization, multiple workers may simultaneously pick up the same grid.
-        // To make the conflict less frequent, the grid is chosen randomly. numpy's
-        // choice(target_grids) with no size/replace/p reduces to target_grids[randint(0, len)].
-        int gridId = targetGrids[(int)NumPyDraws.RandInt(_rng.Rng, 0, targetGrids.Count)];
+        // To make the conflict less frequent, the grid is chosen randomly:
+        // grid_id = int(self._rng.rng.choice(target_grids)), through NumSharp's port of the legacy RandomState.choice.
+        // Without size, replace=False or p it draws target_grids[randint(0, len)], the stream the former shortcut used,
+        // and an empty list (a search space with an empty value list, whose grid is empty) raises NumPy's own
+        // ValueError, "'a' cannot be empty unless no samples are taken" (QA-55), where the shortcut's randint(0, 0)
+        // raised "low >= high". One call per trial past the grid's first pass.
+        int gridId;
+        using (NDArray candidates = np.array(targetGrids.Select(g => (long)g).ToArray()))
+        using (NDArray picked = _rng.Rng.choice(candidates))
+            gridId = (int)(long)picked;
 
         study.Storage.SetTrialSystemAttr(trial.TrialId, "search_space", _searchSpaceAttr);
         study.Storage.SetTrialSystemAttr(trial.TrialId, "grid_id", gridId);

@@ -123,18 +123,27 @@ internal static class PlotlyColors
         return (int)Math.Round(d, MidpointRounding.ToEven);
     }
 
-    /// <summary>NumPy <c>np.quantile(sorted, q)</c> with the default linear interpolation.</summary>
-    /// <param name="sorted">Nonempty values already sorted in ascending order.</param>
+    /// <summary>
+    ///     NumPy <c>np.quantile(sorted, q)</c> with the default linear method, computed by NumSharp's <c>np.quantile</c>
+    ///     — the rank plot's colorbar tick values (<c>_get_tick_info</c>).
+    /// </summary>
+    /// <param name="sorted">Nonempty values already sorted in ascending order (NumPy sorts again; the order only saves work).</param>
     /// <param name="q">Quantile position from zero through one, inclusive.</param>
-    /// <returns>Linearly interpolated quantile matching NumPy's default method.</returns>
-    /// <exception cref="System.IndexOutOfRangeException">The input is empty or the quantile produces an index outside the array.</exception>
+    /// <returns>The linearly interpolated quantile, bit for bit NumPy's; NaN when the values hold a NaN.</returns>
+    /// <remarks>
+    ///     NumPy interpolates with <c>_lerp</c>: <c>a + (b - a) * t</c> below <c>t = 0.5</c> and <c>b - (b - a) * (1 - t)</c>
+    ///     from it on, so the 75% tick between two values is not the textbook <c>a + (b - a) * t</c> (<c>[-3.3, 0.2]</c>:
+    ///     NumPy <c>-0.675</c>, textbook <c>-0.6749999999999998</c>); a NaN anywhere makes every quantile NaN. The former
+    ///     hand interpolation used the textbook form and skipped the NaN rule. The label's <c>%g</c> hides most last-bit
+    ///     differences, but the value is now NumPy's. Five calls per rank plot.
+    /// </remarks>
+    /// <exception cref="System.IndexOutOfRangeException">The input is empty (NumPy's <c>IndexError: index -1 is out of bounds for axis 0 with size 0</c>).</exception>
+    /// <exception cref="NumSharp.ValueError"><paramref name="q" /> is outside [0, 1] (<c>Quantiles must be in the range [0, 1]</c>).</exception>
     public static double QuantileSorted(double[] sorted, double q)
     {
-        double pos = q * (sorted.Length - 1);
-        int lo = (int)Math.Floor(pos);
-        int hi = (int)Math.Ceiling(pos);
-        double frac = pos - lo;
-        return sorted[lo] + frac * (sorted[hi] - sorted[lo]);
+        using NumSharp.NDArray values = NumSharp.np.array(sorted, copy: false);
+        using NumSharp.NDArray quantile = NumSharp.np.quantile(values, q);
+        return (double)quantile;
     }
 
     /// <summary>

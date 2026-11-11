@@ -293,7 +293,11 @@ internal sealed class MixtureOfProductDistribution
                     ret[s, col] = Math.Exp(ret[s, col]);
             }
 
-            // ret[:, disc_inds] = clip(low + round((v - low) / step) * step, low, high).
+            // ret[:, disc_inds] = clip(low + round((v - low) / step) * step, low, high). NumPy clips the (n, k) block
+            // against per-column bounds: with one discrete column (k == 1) the bounds broadcast with stride 0 and NumPy
+            // runs its const loop (a tie keeps the value); with two or more the inner loop walks the columns and runs
+            // the general loop (a tie takes the bound). The two differ only at a zero tie (QA-30).
+            bool constLoop = discInds.Count == 1;
             foreach (int col in discInds)
             {
                 var nd = (BatchedNumericalDistributions)Distributions[col];
@@ -302,7 +306,7 @@ internal sealed class MixtureOfProductDistribution
                 {
                     double v = ret[s, col];
                     double rounded = low + Math.Round((v - low) / step, MidpointRounding.ToEven) * step;
-                    ret[s, col] = MathUtil.Clip(rounded, low, high);
+                    ret[s, col] = constLoop ? MathUtil.Clip(rounded, low, high) : MathUtil.ClipGeneral(rounded, low, high);
                 }
             }
         }

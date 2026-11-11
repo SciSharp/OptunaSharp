@@ -206,9 +206,10 @@ public class StudyParityBugTests
     }
 
     /// <summary>
-    ///     QA-50: <c>enqueue_trial(..., skip_if_exists=True)</c> must compare infinite parameter values the way
-    ///     <c>np.isclose</c> does — equal infinities are duplicates, nothing else is close to an infinity — but the
-    ///     port evaluates <c>|a - b| &lt;= 1e-5 * |b|</c> on them, which inverts both cases.
+    ///     QA-50 (fixed 2026-11-11): <c>enqueue_trial(..., skip_if_exists=True)</c> must compare infinite parameter values
+    ///     the way <c>np.isclose</c> does — equal infinities are duplicates, nothing else is close to an infinity. The port
+    ///     evaluated <c>|a - b| &lt;= 1e-5 * |b|</c> on them, which inverted both cases; it now calls
+    ///     <c>MathUtil.IsClose</c>, NumPy's full formula.
     /// </summary>
     /// <remarks>
     ///     <c>Study._should_skip_enqueue</c> calls <c>np.isclose(new, existing, atol=0.0, equal_nan=True)</c>; NumPy only
@@ -219,7 +220,6 @@ public class StudyParityBugTests
     ///     trials in the three studies below; the port keeps 2, 1 and 1. Found by the D95 probe of the duplicate check.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void EnqueueTrial_SkipIfExists_ComparesInfinitiesLikeNumpyIsclose()
     {
         int TrialsAfter(double existing, double enqueued)

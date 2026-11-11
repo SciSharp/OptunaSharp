@@ -222,7 +222,9 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
         // UCB over the search space. (Original: LCB over the search space.)
         double ucbOverTopN = Max(ucbAcqf.EvalAcqfNoGrad(normalizedTopNParams));
         double sampledUcb = OptimSample.OptimizeAcqfSample(ucbAcqf, optimizeNSamples, rng!).Value;
-        double standardizedUcbValue = Math.Max(ucbOverTopN, sampledUcb);
+        // Python's builtin max(a, b) keeps a unless b > a: a NaN first argument wins, a NaN second argument loses, and
+        // -0.0 / 0.0 keep the first. Math.Max would return NaN for either NaN and +0.0 for the zero pair.
+        double standardizedUcbValue = sampledUcb > ucbOverTopN ? sampledUcb : ucbOverTopN;
 
         var lcbAcqf = new LCB(gpr, searchSpace, beta);
         // LCB over the top trials. (Original: UCB over the top trials.)
@@ -232,16 +234,23 @@ public class RegretBoundEvaluator : BaseImprovementEvaluator
         return standardizedUcbValue - standardizedLcbValue;  // standardized regret bound
     }
 
-    /// <summary>Returns the largest value in the supplied sequence.</summary>
-    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
-    /// <returns>The largest value in the supplied sequence.</returns>
+    /// <summary>
+    ///     NumPy's <c>ndarray.max()</c> / <c>np.max</c> through NumSharp — the regret bound's maxima of the UCB and LCB
+    ///     acquisition values over the top trials. A NaN anywhere makes the maximum NaN, as in NumPy.
+    /// </summary>
+    /// <param name="a">The acquisition values, one per top trial; at least one.</param>
+    /// <returns>The largest value, or NaN when any value is NaN.</returns>
+    /// <remarks>
+    ///     Acquisition values turn NaN when the standardized values overflow (values near the float maximum, QA-53's
+    ///     class); NumPy then returns a NaN regret bound. The former strict <c>&gt;</c> loop skipped NaNs and returned a
+    ///     finite bound. Two calls per evaluation, next to a GP fit and 2,048 acquisition samples.
+    /// </remarks>
+    /// <exception cref="NumSharp.ValueError"><paramref name="a" /> is empty (NumPy's <c>zero-size array to reduction operation maximum which has no identity</c>).</exception>
     private static double Max(double[] a)
     {
-        double m = a[0];
-        for (int i = 1; i < a.Length; i++)
-            if (a[i] > m)
-                m = a[i];
-        return m;
+        using NDArray values = np.array(a, copy: false);
+        using NDArray max = np.amax(values);
+        return (double)max;
     }
 }
 

@@ -74,7 +74,9 @@ public class SamplerParityBugTests
 
     /// <summary>
     ///     QA-29: TPE must pick the candidate with <c>np.argmax</c>'s semantics, where the first NaN acquisition
-    ///     value wins; the port's <c>ArgMax</c> skips NaN (its comment assumes the values are finite).
+    ///     value wins. The port's <c>ArgMax</c> skipped NaN until 2026-11-11; it now follows NumPy's rule (pinned by
+    ///     <c>NumPyReductionOrderTests.ArgMaxPorts_FirstNanThenFirstMaximum_LikeNumPysArgmax</c>), but this run still
+    ///     differs at trial 5 through the documented erf / UCRT tolerance (the last paragraph of the remarks).
     /// </summary>
     /// <remarks>
     ///     The acquisition value is <c>log l(x) - log g(x)</c>. When a candidate's probability mass is zero under
@@ -86,6 +88,15 @@ public class SamplerParityBugTests
     ///     (<c>235956546695320384</c>), the port index 11 (<c>114</c>). Replacing <c>np.argmax</c> with the port's
     ///     loop in Python reproduces <c>114</c>, which isolates the cause. Only the first six trials are compared,
     ///     because later ones also carry the documented erf ULP tolerance.
+    ///     <para>
+    ///         Since the argmax fix the port picks its first NaN, but its NaNs are not Optuna's: the candidates carry the
+    ///         erf / UCRT ULP tolerance, and candidate 1 is <c>222479646760819</c> where Optuna draws
+    ///         <c>222479646760813</c>. At that magnitude the bin <c>[log(x - 0.5), log(x + 0.5)]</c> spans about one
+    ///         double, and for the port's value it collapses: both log densities are <c>-inf</c>, the acquisition is NaN
+    ///         at index 1 (Optuna's is <c>-0.29165848147553675</c>), and the port picks <c>222479646760819</c> (measured
+    ///         2026-11-11; Optuna's NaNs are at 5, 6, 8, 9 and 21, the port's at 1, 5, 6, 8, 9 and 21). The remaining
+    ///         difference is the erf class, so this reproduction passes only once that tolerance is closed.
+    ///     </para>
     /// </remarks>
     [TestMethod]
     [OpenBugs]
@@ -160,9 +171,11 @@ public class SamplerParityBugTests
     }
 
     /// <summary>
-    ///     QA-41: sampling a float range whose span is not finite must fail without consuming the random stream, as
-    ///     numpy's <c>RandomState.uniform</c> does with <c>OverflowError('Range exceeds valid bounds')</c>; the port
-    ///     draws anyway, returns <c>inf</c> for <c>[1e-3, inf)</c> and shifts every later random value of the study.
+    ///     QA-41 (fixed upstream in NumSharp 0.80.0): sampling a float range whose span is not finite must fail without
+    ///     consuming the random stream, as numpy's <c>RandomState.uniform</c> does with
+    ///     <c>OverflowError('Range exceeds valid bounds')</c>; the port drew anyway, returned <c>inf</c> for
+    ///     <c>[1e-3, inf)</c> and shifted every later random value of the study, until NumSharp's legacy
+    ///     <c>RandomState</c> became NumPy's <c>legacy-distributions.c</c> line for line (NumSharp <c>f87b4d04</c>).
     /// </summary>
     /// <remarks>
     ///     <c>FloatDistribution</c> accepts infinite bounds in both languages, so the failure comes from the sampler:
@@ -178,7 +191,6 @@ public class SamplerParityBugTests
     ///     state-machine fuzz.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void RandomSampler_InfiniteRange_RaisesOverflowWithoutDrawingLikeNumpyUniform()
     {
         var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 0));
@@ -192,9 +204,10 @@ public class SamplerParityBugTests
     }
 
     /// <summary>
-    ///     QA-42 (root cause): <c>randint(low, low + 1)</c> must return <c>low</c> without consuming the stream, as
-    ///     numpy's bounded-integer generator does (<c>random_bounded_uint64_fill</c> returns <c>off</c> when the range
-    ///     is 0); NumSharp's <c>MT19937.Next(1)</c> draws a 32-bit word and masks it to 0.
+    ///     QA-42 (root cause; fixed upstream in NumSharp 0.80.0): <c>randint(low, low + 1)</c> must return <c>low</c>
+    ///     without consuming the stream, as numpy's bounded-integer generator does (<c>random_bounded_uint64_fill</c>
+    ///     returns <c>off</c> when the range is 0); NumSharp's <c>MT19937.Next(1)</c> drew a 32-bit word and masked it to
+    ///     0 until its legacy <c>RandomState</c> rewrite (NumSharp <c>f87b4d04</c>).
     /// </summary>
     /// <remarks>
     ///     numpy 2.4.2, <c>RandomState(0)</c>: after <c>randint(0, 1)</c> (or <c>choice(1)</c>) the next
@@ -205,7 +218,6 @@ public class SamplerParityBugTests
     ///     <c>Next(int)</c> / <c>NextLong(long)</c>), or in the call sites.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void RandInt_SingleValueRange_DrawsNothingLikeNumpy()
     {
         var rng = new LazyRandomState(0).Rng;
@@ -215,9 +227,10 @@ public class SamplerParityBugTests
     }
 
     /// <summary>
-    ///     QA-42: NSGA-II's parent tournament over a single remaining candidate must leave the random stream
-    ///     untouched, as Optuna's <c>_select_parent</c> does (<c>rng.choice(1)</c> draws nothing); the port consumes a
-    ///     word per call, so with <c>population_size=2</c> every child after the first generation differs.
+    ///     QA-42 (fixed upstream in NumSharp 0.80.0): NSGA-II's parent tournament over a single remaining candidate must
+    ///     leave the random stream untouched, as Optuna's <c>_select_parent</c> does (<c>rng.choice(1)</c> draws nothing);
+    ///     the port consumed a word per call, so with <c>population_size=2</c> every child after the first generation
+    ///     differed.
     /// </summary>
     /// <remarks>
     ///     <c>_select_parents</c> excludes the parents already chosen, so with a population of 2 the second parent is
@@ -230,7 +243,6 @@ public class SamplerParityBugTests
     ///     sampler-option fuzz (20 of 600 programs, all with population 2 or 3).
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void NsgaII_PopulationOfTwo_SecondParentDrawLeavesStreamLikeOptuna()
     {
         var study = Optuna.CreateStudy(sampler: new NSGAIISampler(populationSize: 2, mutationProb: 0.0, seed: 0));
@@ -275,9 +287,10 @@ public class SamplerParityBugTests
     }
 
     /// <summary>
-    ///     QA-48 (a): the TPE <c>weights</c> validation errors must print the rejected array the way NumPy's
-    ///     <c>str(ndarray)</c> does (<c>[ 0.5  -0.25]</c>, <c>[0.]</c>); the port joins Python float reprs with one
-    ///     space (<c>[0.5 -0.25]</c>, <c>[0.0]</c>), so the exception text differs.
+    ///     QA-48 (a) (fixed 2026-11-11): the TPE <c>weights</c> validation errors must print the rejected array the way
+    ///     NumPy's <c>str(ndarray)</c> does (<c>[ 0.5  -0.25]</c>, <c>[0.]</c>). The port joined Python float reprs with
+    ///     one space (<c>[0.5 -0.25]</c>, <c>[0.0]</c>); it now prints with NumSharp's <c>NDArray.ToString()</c>, a port of
+    ///     NumPy's array printer.
     /// </summary>
     /// <remarks>
     ///     <c>_ParzenEstimator._call_weights_func</c> formats the array with an f-string, i.e. NumPy's array printer:
@@ -288,7 +301,6 @@ public class SamplerParityBugTests
     ///     Optuna 5.0.0 raises the two messages below (found by the D92 TPE option probe).
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void Tpe_InvalidWeights_MessagePrintsArrayLikeNumpy()
     {
         static double Objective(Trial t) =>
@@ -374,10 +386,10 @@ public class SamplerParityBugTests
     }
 
     /// <summary>
-    ///     QA-49: the GP search space must build a stepped parameter's grid exactly as <c>np.arange(low, high + step / 2,
-    ///     step)</c> does — every value <c>low + i * ((low + step) - low)</c> — but the port's <c>GpSearchSpace.Arange</c>
-    ///     computes <c>low + i * step</c>, so the normalized grid differs in its last bits whenever
-    ///     <c>(low + step) - low != step</c>.
+    ///     QA-49 (fixed 2026-11-11): the GP search space must build a stepped parameter's grid exactly as
+    ///     <c>np.arange(low, high + step / 2, step)</c> does — every value <c>low + i * ((low + step) - low)</c>. The port's
+    ///     <c>GpSearchSpace.Arange</c> computed <c>low + i * step</c>, so the normalized grid differed in its last bits
+    ///     whenever <c>(low + step) - low != step</c>; it now calls NumSharp's <c>np.arange</c>, which fills NumPy's way.
     /// </summary>
     /// <remarks>
     ///     NumPy's <c>arange</c> stores <c>start</c> and <c>start + step</c> and fills the rest with
@@ -388,7 +400,6 @@ public class SamplerParityBugTests
     ///     Optuna 5.0.0's <c>get_choices_of_discrete_params()</c> for that distribution is the grid asserted below.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void GpSearchSpace_SteppedFloatGrid_UsesNumpyArangeStep()
     {
         var space = new OptunaSharp.Gp.GpSearchSpace(new Dictionary<string, BaseDistribution>
@@ -401,9 +412,9 @@ public class SamplerParityBugTests
     }
 
     /// <summary>
-    ///     QA-49, the user-visible effect: <see cref="GPSampler" /> suggests a stepped float by unnormalizing the
-    ///     grid point it picked, without rounding it again, so the port's <c>low + i * step</c> grid reaches
-    ///     <c>trial.params</c> — <c>0.9999999999999998</c> where Optuna suggests <c>1.0</c>.
+    ///     QA-49, the user-visible effect (fixed 2026-11-11): <see cref="GPSampler" /> suggests a stepped float by
+    ///     unnormalizing the grid point it picked, without rounding it again, so the grid reaches <c>trial.params</c>; the
+    ///     former <c>low + i * step</c> grid gave <c>0.9999999999999998</c> where Optuna suggests <c>1.0</c>.
     /// </summary>
     /// <remarks>
     ///     <c>_get_unnormalized_param</c> only clips a float to <c>[low, high]</c>; the grid value
@@ -414,7 +425,6 @@ public class SamplerParityBugTests
     ///     the port.)
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void GpSampler_SteppedFloat_SuggestsNumpyGridValues()
     {
         var study = Optuna.CreateStudy(sampler: new GPSampler(seed: 0, nStartupTrials: 2));
@@ -425,9 +435,30 @@ public class SamplerParityBugTests
     }
 
     /// <summary>
-    ///     QA-53: when every GP acquisition value is NaN, Optuna's discrete line search hands scipy's Brent minimizer
-    ///     the bracket <c>(inf, NaN, inf)</c> and fails the suggestion with scipy's bracket <c>ValueError</c>; the port
-    ///     returns a parameter value (<c>16</c> here) instead.
+    ///     The GP search space's discrete rounding, <c>_round_one_normalized_param</c>, takes
+    ///     <c>(param_value - low + 0.5 * step) // step</c>: NumPy's <c>floor_divide</c> floors the EXACT quotient, so a point
+    ///     on a grid midpoint rounds down where <c>Math.Floor(a / b)</c> (the port until 2026-11-11) rounded up a whole
+    ///     grid step. The Sobol'-style dyadic point <c>0.75</c> on <c>[-7.82, -6.67]</c> step <c>0.05</c> unnormalizes to the
+    ///     midpoint <c>-6.945</c>; <c>a = 0.9</c> and <c>0.9 // 0.05</c> is <c>17</c> (the double <c>0.05</c> is a little over
+    ///     1/20), but <c>0.9 / 0.05</c> rounds to <c>18.0</c>. Optuna 5.0.0 / NumPy 2.4.2 return the normalized
+    ///     <c>0.7291666666666661</c> (grid point <c>-6.970000000000001</c>); the former rounding gave <c>0.7708333333333333</c>
+    ///     (<c>-6.92</c>). About 1 in 800 random or dyadic points on stepped grids hit such a case.
+    /// </summary>
+    [TestMethod]
+    public void GpSearchSpace_RoundingAGridMidpoint_FloorsTheExactQuotientLikeNumpy()
+    {
+        double rounded = OptunaSharp.Gp.GpSearchSpace.RoundOneNormalizedParam(
+            0.75, OptunaSharp.Gp.GpSearchSpace.ScaleType.Linear, (-7.82, -6.67), 0.05);
+
+        BitConverter.DoubleToInt64Bits(rounded).Should().Be(0x3FE7555555555550L,
+            $"NumPy's floor_divide puts 0.75 on grid point 17 (0.7291666666666661), not {rounded:R}");
+    }
+
+    /// <summary>
+    ///     QA-53 (fixed 2026-11-11): when every GP acquisition value is NaN, Optuna's discrete line search hands scipy's
+    ///     Brent minimizer the bracket <c>(inf, NaN, inf)</c> and fails the suggestion with scipy's bracket
+    ///     <c>ValueError</c>; the port returned a parameter value (<c>16</c> here) until <c>GPSampler.ColumnMax</c> became
+    ///     NumSharp's NaN-propagating <c>np.amax</c>.
     /// </summary>
     /// <remarks>
     ///     Objective values <c>1.7e308, 1.7e308, -1.7e308</c> overflow <c>_standardize_values</c> (the mean is
@@ -444,7 +475,6 @@ public class SamplerParityBugTests
     ///     maximum); found by the D94 probe.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void GpSampler_AllNaNAcquisition_IntLineSearchRaisesBracketErrorLikeScipy()
     {
         var study = Optuna.CreateStudy(sampler: new GPSampler(seed: 0, nStartupTrials: 3));
@@ -461,9 +491,10 @@ public class SamplerParityBugTests
     }
 
     /// <summary>
-    ///     QA-55: a <see cref="GridSampler" /> whose search space has an empty value list must fail the first trial with
-    ///     NumPy's <c>choice</c> error, <c>'a' cannot be empty unless no samples are taken</c>; the port's shortcut
-    ///     <c>target_grids[randint(0, len)]</c> fails with NumSharp's <c>randint</c> message <c>low &gt;= high</c> instead.
+    ///     QA-55 (fixed 2026-11-11): a <see cref="GridSampler" /> whose search space has an empty value list must fail the
+    ///     first trial with NumPy's <c>choice</c> error, <c>'a' cannot be empty unless no samples are taken</c>; the port's
+    ///     shortcut <c>target_grids[randint(0, len)]</c> failed with NumSharp's <c>randint</c> message <c>low &gt;= high</c>
+    ///     until it became NumSharp's own <c>RandomState.choice</c>.
     /// </summary>
     /// <remarks>
     ///     Optuna validates no grid's length, so <c>{"x": []}</c> builds an empty grid; <c>sample_relative</c> finds no
@@ -474,7 +505,6 @@ public class SamplerParityBugTests
     ///     unused and missing parameters, <c>True</c> / <c>1</c> choices) match Optuna 5.0.0.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void GridSampler_EmptyValueList_FailsWithNumpyChoiceMessage()
     {
         var study = Optuna.CreateStudy(sampler: new GridSampler(

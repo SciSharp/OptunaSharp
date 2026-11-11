@@ -404,39 +404,63 @@ public class GPSampler : BaseSampler
         return (gprs, thresholds);
     }
 
-    /// <summary>NumPy <c>np.argmax</c>: the first index of the maximum (−inf-safe for all-infeasible masks).</summary>
-    /// <param name="values">Scores compared to choose the first maximum.</param>
-    /// <returns>The first maximum index.</returns>
+    /// <summary>
+    ///     NumPy <c>np.argmax</c> through NumSharp — the constrained branch's <c>np.argmax(y_with_neginf)</c>: the first
+    ///     index of the maximum, or of the first NaN when there is one (a NaN is maximal in NumPy's argmax).
+    /// </summary>
+    /// <param name="values">Scores compared to choose the first maximum; infeasible trials hold <c>-inf</c>.</param>
+    /// <returns>The first maximum index, the first NaN's index when any value is NaN, or 0 when every value is <c>-inf</c>.</returns>
+    /// <remarks>
+    ///     A standardized value is NaN when the objective values overflow <c>_standardize_values</c> (values near the
+    ///     float maximum). The former strict <c>&gt;</c> loop skipped such a NaN and returned the best finite trial
+    ///     (QA-53's class); NumSharp's argmax keeps NumPy's rule. One call per trial, next to a GP fit, so the NumSharp
+    ///     call's microseconds do not count.
+    /// </remarks>
+    /// <exception cref="NumSharp.ValueError"><paramref name="values" /> is empty (NumPy's <c>attempt to get argmax of an empty sequence</c>).</exception>
     private static int ArgMax(double[] values)
     {
-        int best = 0;
-        for (int i = 1; i < values.Length; i++)
-            if (values[i] > values[best]) best = i;
-        return best;
+        using NDArray array = np.array(values, copy: false);
+        using NDArray index = np.argmax(array);
+        return (int)(long)index;
     }
 
-    /// <summary>First argmax of column <paramref name="col" /> — <c>np.argmax(standardized_score_vals)</c> for a single objective.</summary>
-    /// <param name="mat">Matrix whose specified row participates in the operation.</param>
-    /// <param name="col">Zero-based column index or column-shaped matrix.</param>
-    /// <returns>The first row attaining the largest value in the selected column.</returns>
+    /// <summary>
+    ///     First argmax of column <paramref name="col" /> through NumSharp — <c>np.argmax(standardized_score_vals)</c>
+    ///     for a single objective, whose (n, 1) array flattens to that column. A NaN wins, as in NumPy.
+    /// </summary>
+    /// <param name="mat">The standardized score matrix, one row per completed trial.</param>
+    /// <param name="col">The zero-based column (objective) to search.</param>
+    /// <returns>The first row attaining the column's maximum, or holding its first NaN.</returns>
+    /// <remarks>The column is a strided NumSharp view of the copied matrix, reduced as NumPy reduces it.</remarks>
+    /// <exception cref="NumSharp.ValueError">The matrix has no rows (NumPy's <c>attempt to get argmax of an empty sequence</c>).</exception>
     private static int ArgMaxColumn(double[,] mat, int col)
     {
-        int best = 0;
-        for (int i = 1; i < mat.GetLength(0); i++)
-            if (mat[i, col] > mat[best, col]) best = i;
-        return best;
+        using NDArray matrix = np.array(mat);
+        using NDArray column = matrix[":", col];
+        using NDArray index = np.argmax(column);
+        return (int)(long)index;
     }
 
-    /// <summary>Max of column <paramref name="col" /> — <c>standardized_score_vals[:, col].max()</c>.</summary>
-    /// <param name="mat">Matrix whose specified row participates in the operation.</param>
-    /// <param name="col">Zero-based column index or column-shaped matrix.</param>
-    /// <returns>The maximum selected-column value, or negative infinity for an empty column.</returns>
+    /// <summary>
+    ///     Max of column <paramref name="col" /> through NumSharp — <c>standardized_score_vals[:, col].max()</c>, the
+    ///     LogEI / qLogEI threshold. A NaN anywhere in the column makes it NaN, as in NumPy.
+    /// </summary>
+    /// <param name="mat">The standardized score matrix, one row per completed trial.</param>
+    /// <param name="col">The zero-based column (objective) to reduce.</param>
+    /// <returns>The column's maximum, NaN when the column holds a NaN.</returns>
+    /// <remarks>
+    ///     QA-53: values near the float maximum overflow the standardization and leave NaNs in the column. NumPy's
+    ///     threshold is then NaN, every acquisition value is NaN, and an integer parameter's discrete line search fails
+    ///     in Brent's bracket check, as in Optuna; the former loop (<c>if (v &gt; max)</c> from <c>-inf</c>) skipped the
+    ///     NaNs and kept the acquisition finite, so the port suggested a value where Optuna raises.
+    /// </remarks>
+    /// <exception cref="NumSharp.ValueError">The matrix has no rows (NumPy's <c>zero-size array to reduction operation maximum which has no identity</c>).</exception>
     private static double ColumnMax(double[,] mat, int col)
     {
-        double max = double.NegativeInfinity;
-        for (int i = 0; i < mat.GetLength(0); i++)
-            if (mat[i, col] > max) max = mat[i, col];
-        return max;
+        using NDArray matrix = np.array(mat);
+        using NDArray column = matrix[":", col];
+        using NDArray max = np.amax(column);
+        return (double)max;
     }
 
     /// <summary><c>normalized_params[idx, np.newaxis]</c> — the single best point as a <c>(1, dim)</c> warmstart.</summary>

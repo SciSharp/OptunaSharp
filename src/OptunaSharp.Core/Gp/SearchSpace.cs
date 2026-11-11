@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NumSharp;
+using NumSharp.Utilities;
 using OptunaSharp.Distributions;
 using OptunaSharp.Internal;
 
@@ -13,7 +14,8 @@ namespace OptunaSharp.Gp;
 ///     Gaussian process works in: continuous parameters are affine- (or log-affine-) scaled,
 ///     discrete ones round to their grid, and categoricals carry their integer code. Every transform
 ///     is pure numpy in Optuna and reproduced bit-for-bit here (no <c>erf</c>, no LAPACK — <c>log</c>/
-///     <c>exp</c>/<c>floor</c> match Python bit-for-bit).
+///     <c>exp</c>/<c>floor</c> match Python bit-for-bit; the discrete grids are NumSharp's <c>np.arange</c>
+///     and the rounding's <c>//</c> is NumSharp's port of NumPy's <c>floor_divide</c>, since 2026-11-11).
 ///
 ///     <para><see cref="SampleNormalizedParams" /> draws the preliminary points from <b>scrambled</b>
 ///     Sobol' (<see cref="ScrambledSobol" />, a bit-exact port of <c>scipy.stats.qmc.Sobol(scramble=True)</c>)
@@ -265,38 +267,64 @@ internal sealed class GpSearchSpace
     /// <param name="bounds">The coordinate bounds used by this numerical operation.</param>
     /// <param name="step">The distribution's grid spacing; zero denotes a continuous coordinate.</param>
     /// <returns>The nearest admissible discrete coordinate in normalized space.</returns>
+    /// <remarks>
+    ///     Optuna's <c>(param_value - low + 0.5 * step) // step</c> is NumPy's <c>floor_divide</c>, which floors the
+    ///     exact quotient (<c>npy_divmod</c>: <c>fmod</c>, then <c>(a - mod) / b</c> snapped to an integer), not the
+    ///     rounded one: <c>0.9 // 0.05</c> is <c>17</c> where <c>Math.Floor(0.9 / 0.05)</c> is <c>18</c>, because the
+    ///     double <c>0.05</c> is a little above 1/20 and the quotient rounds up to 18. NumSharp's
+    ///     <see cref="NDDivision.FloorDivDouble(double, double)" /> is that routine, allocation-free. The former
+    ///     <c>Math.Floor(a / b)</c> picked the next grid point in about 1 of 800 roundings of random and dyadic
+    ///     (Sobol'-like) points (measured 2026-11-11 over 508,000 against NumPy 2.4.2).
+    /// </remarks>
     internal static double RoundOneNormalizedParam(double value, ScaleType scaleType, (double Low, double High) bounds, double step)
     {
         if (step == 0.0)
             return value;
         double unnormalized = UnnormalizeOneParam(value, scaleType, bounds, step);
         double rounded = MathUtilClip(
-            Math.Floor((unnormalized - bounds.Low + 0.5 * step) / step) * step + bounds.Low,
+            NDDivision.FloorDivDouble(unnormalized - bounds.Low + 0.5 * step, step) * step + bounds.Low,
             bounds.Low, bounds.High);
         return NormalizeOneParam(rounded, scaleType, bounds, step);
     }
 
-    /// <summary>NumPy <c>np.arange(start, stop, step)</c> — length <c>ceil((stop - start) / step)</c>, value <c>start + i·step</c>.</summary>
+    /// <summary>
+    ///     NumPy <c>np.arange(start, stop, step)</c>, computed by NumSharp's <c>np.arange</c>: length
+    ///     <c>ceil((stop - start) / step)</c>, elements <c>start</c>, <c>start + step</c>, then
+    ///     <c>start + i * delta</c> with <c>delta = (start + step) - start</c>.
+    /// </summary>
     /// <param name="start">The inclusive start of the interval or slice.</param>
     /// <param name="stop">The final value of the generated numerical interval.</param>
     /// <param name="step">The nonzero increment between successive grid values.</param>
-    /// <returns>The generated arithmetic progression, excluding its stop value.</returns>
+    /// <returns>The generated arithmetic progression, excluding its stop value; empty when <paramref name="stop" /> is not past <paramref name="start" />.</returns>
+    /// <remarks>
+    ///     NumPy fills the ramp with the step as it was stored, <c>(start + step) - start</c>, not with <c>step</c>
+    ///     (<c>PyArray_ArangeObj</c> and the dtype's <c>fill</c>), so a stepped float whose step does not survive that
+    ///     round trip gets other grid points: <c>FloatDistribution(0.1, 1.0, step=0.3)</c> ends its grid at
+    ///     <c>1.0</c> in Optuna, where the former <c>start + i * step</c> gave <c>0.9999999999999998</c> (QA-49; about
+    ///     half of random ranges differ somewhere). The grid is built once per discrete dimension per
+    ///     <c>GetChoicesOfDiscreteParams</c> call, so the NumSharp call's microseconds do not matter.
+    /// </remarks>
+    /// <exception cref="DivideByZeroException"><paramref name="step" /> is zero (NumPy's <c>ZeroDivisionError</c>); the callers only pass discrete steps, which are positive.</exception>
     private static double[] Arange(double start, double stop, double step)
     {
-        int count = (int)Math.Ceiling((stop - start) / step);
-        if (count < 0)
-            count = 0;
-        var a = new double[count];
-        for (int i = 0; i < count; i++)
-            a[i] = start + i * step;
-        return a;
+        using NDArray grid = np.arange(start, stop, step);
+        return grid.ToArray<double>();
     }
 
-    /// <summary>Returns the value bounded by the supplied interval endpoints.</summary>
-    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
+    /// <summary>
+    ///     NumPy <c>np.clip</c> against scalar bounds, through <see cref="MathUtil.Clip" />: Optuna's two clips here
+    ///     (<c>_get_unnormalized_param</c> on a 0-d value, <c>_round_one_normalized_param</c> on an array against
+    ///     <c>bounds[0]</c> / <c>bounds[1]</c>) both run NumPy's const loop, where a value equal to a bound keeps its own
+    ///     zero sign.
+    /// </summary>
+    /// <param name="value">The value to clip; a NaN stays NaN.</param>
     /// <param name="low">The lower endpoint of the allowed range.</param>
     /// <param name="high">The upper endpoint of the allowed range.</param>
-    /// <returns>The value bounded by the supplied interval endpoints.</returns>
+    /// <returns>The value when inside the range or on its edge, else the bound it crossed.</returns>
+    /// <remarks>
+    ///     The former <c>Math.Min(Math.Max(value, low), high)</c> turned <c>-0.0</c> on a <c>+0.0</c> bound into
+    ///     <c>+0.0</c> and back (QA-30's class).
+    /// </remarks>
     private static double MathUtilClip(double value, double low, double high)
-        => Math.Min(Math.Max(value, low), high);
+        => MathUtil.Clip(value, low, high);
 }

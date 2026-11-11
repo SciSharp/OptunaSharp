@@ -617,9 +617,16 @@ internal sealed class ParzenEstimator
         var w = wFull.Length > n ? wFull[..n] : wFull;
 
         // NOTE: the deprecated custom `weights` function is the only way to reach these guards
-        // (the default `default_weights` never does); the array in the message is formatted
-        // approximately rather than byte-for-byte with NumPy's ndarray repr.
-        string ArrRepr(double[] a) => "[" + string.Join(" ", a.Select(PythonRepr.FloatRepr)) + "]";
+        // (the default `default_weights` never does). Optuna's f-string prints the array with NumPy's str(ndarray):
+        // a common field width, a sign column when any element is negative, `0.` rather than `0.0`, scientific
+        // notation past NumPy's thresholds and line wrapping at 75 characters. NumSharp's NDArray.ToString() is that
+        // printer (np.array_str), so `[ 0.5  -0.25]` and `[0.]` come out as in Optuna (QA-48 a; a join of Python
+        // float reprs gave `[0.5 -0.25]` and `[0.0]`).
+        static string ArrRepr(double[] a)
+        {
+            using NDArray array = np.array(a);
+            return array.ToString();
+        }
 
         if (w.Any(x => x < 0))
             throw new ValueError(

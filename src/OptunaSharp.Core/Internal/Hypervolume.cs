@@ -461,19 +461,37 @@ internal static class Hypervolume
         return p;
     }
 
-    /// <summary>NumPy <c>np.argmax</c>: the first index of the maximum (values here are non-negative, finite or +inf).</summary>
-    /// <param name="values">The ordered values to aggregate or format.</param>
-    /// <returns>The index of the first largest value.</returns>
+    /// <summary>
+    ///     NumPy <c>np.argmax</c> over the hypervolume contributions: the first index of the maximum, or of the first NaN
+    ///     when there is one (NumPy treats a NaN as maximal and stops at it).
+    /// </summary>
+    /// <param name="values">The remaining candidates' hypervolume contributions; at least one.</param>
+    /// <returns>The index of the first NaN if any contribution is NaN, else the first index holding the largest one.</returns>
+    /// <remarks>
+    ///     Contributions are non-negative, finite or <c>+inf</c>, until a loss value of <c>-inf</c> makes the running
+    ///     hypervolume infinite: <c>_lazy_contribs_update</c>'s <c>inclusive_hvs - np.prod(...)</c> is then <c>inf - inf</c>
+    ///     and <c>np.minimum</c> carries the NaN into the contributions. Optuna's <c>np.argmax</c> selects that candidate;
+    ///     the former strict <c>&gt;</c> loop skipped it. The statements are NumPy's argmax loop (<c>!(v &lt;= best)</c>,
+    ///     stop at a NaN). NumSharp's <c>np.argmax</c> gives the same index, but this runs once per greedy selection step,
+    ///     where a NumSharp call (about 2.3 µs) would cost more than the step's own arithmetic on small fronts.
+    /// </remarks>
     private static int ArgMax(IReadOnlyList<double> values)
     {
         int best = 0;
         double bestVal = values[0];
+        // NumPy checks the first element on its own: a leading NaN is the answer.
+        if (double.IsNaN(bestVal))
+            return 0;
         for (int i = 1; i < values.Count; i++)
         {
-            if (values[i] > bestVal)
+            double value = values[i];
+            // !(value <= best) is true for a larger value and for a NaN; a NaN ends the search, as in NumPy.
+            if (!(value <= bestVal))
             {
-                bestVal = values[i];
+                bestVal = value;
                 best = i;
+                if (double.IsNaN(value))
+                    break;
             }
         }
         return best;

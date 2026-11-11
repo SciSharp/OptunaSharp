@@ -1053,11 +1053,11 @@ public class Study
                     && paramValue is not string && paramValue is not null)
                 {
                     PyFloat.TryConvert(existingParam, out double existingNumeric);
-                    // np.isclose(a, b, atol=0.0, equal_nan=True): |a - b| <= atol + rtol*|b|.
-                    // rtol is NOT passed, so it takes np.isclose's DEFAULT of 1e-5 (NOT 1e-8 — that
-                    // is _truncnorm's explicit rtol; this call uses the numpy default).
-                    isRepeated = double.IsNaN(newNumeric) && double.IsNaN(existingNumeric)
-                        || Math.Abs(newNumeric - existingNumeric) <= 1e-05 * Math.Abs(existingNumeric);
+                    // np.isclose(float(param_value), float(existing_param), atol=0.0, equal_nan=True). rtol is NOT passed,
+                    // so it takes np.isclose's DEFAULT of 1e-5 (NOT 1e-8 — that is _truncnorm's explicit rtol). NumPy's
+                    // isfinite(b) and a == b terms decide the infinities (QA-50): a repeated inf is skipped, and a finite
+                    // value or -inf enqueued over an inf is not, where the bare inequality had it the other way round.
+                    isRepeated = MathUtil.IsClose(newNumeric, existingNumeric, atol: 0.0, equalNan: true);
                 }
                 else
                 {

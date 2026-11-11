@@ -146,4 +146,25 @@ public class PlotlyParityBugTests
         ((double)figure.SelectToken("layout.yaxis13.domain[0]")!).Should().Be(0.0);
         ((double)figure.SelectToken("layout.yaxis13.domain[1]")!).Should().Be(0.19375);
     }
+
+    /// <summary>
+    ///     QA-88: the rank plot's colorbar quantiles are <c>np.quantile(sorted_target_values, coloridxs)</c>, which
+    ///     interpolates with NumPy's <c>_lerp</c>: <c>b - (b - a) * (1 - t)</c> from <c>t = 0.5</c> on. The 75% tick between
+    ///     <c>-3.3</c> and <c>0.2</c> is <c>-0.675</c> in NumPy 2.4.2 (<c>0xBFE599999999999A</c>); the textbook
+    ///     <c>a + (b - a) * t</c> the renderer used until 2026-11-11 gave <c>-0.6749999999999998</c>. It now calls
+    ///     NumSharp's <c>np.quantile</c>. <c>PlotlyColors</c> is internal to the Plotly package, hence the reflection.
+    /// </summary>
+    [TestMethod]
+    public void RankColorbarQuantile_TopQuartileBetweenTwoValues_InterpolatesLikeNumPysLerp()
+    {
+        var plotlyColors = typeof(PlotlyVisualization).Assembly
+            .GetType("OptunaSharp.Visualization.Plotly.Internal.PlotlyColors", throwOnError: true)!;
+        var quantileSorted = plotlyColors.GetMethod("QuantileSorted",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)!;
+
+        double quantile = (double)quantileSorted.Invoke(null, new object[] { new[] { -3.3, 0.2 }, 0.75 })!;
+
+        System.BitConverter.DoubleToInt64Bits(quantile).Should().Be(unchecked((long)0xBFE599999999999AUL),
+            $"np.quantile([-3.3, 0.2], 0.75) is -0.675, not {quantile:R}");
+    }
 }

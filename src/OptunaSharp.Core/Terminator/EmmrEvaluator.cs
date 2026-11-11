@@ -217,17 +217,25 @@ public class EMMREvaluator : BaseImprovementEvaluator
     /// <returns>The standard-normal probability density at the supplied argument.</returns>
     private static double NormPdf(double x) => Math.Exp(-Math.Pow(x, 2.0) / 2.0) / NormPdfC;
 
-    /// <summary><c>np.argmax</c> over the first <paramref name="count" /> entries (first maximum).</summary>
-    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
-    /// <param name="count">The number of leading values to include in the search.</param>
-    /// <returns>The index of the first largest value.</returns>
+    /// <summary>
+    ///     <c>np.argmax</c> over the first <paramref name="count" /> entries, through NumSharp — Optuna's
+    ///     <c>np.argmax(standarized_score_vals)</c> and <c>np.argmax(standarized_score_vals[:-1])</c>.
+    /// </summary>
+    /// <param name="a">The standardized score values, one per completed trial.</param>
+    /// <param name="count">The number of leading values to search (the whole array, or all but the last).</param>
+    /// <returns>The first index of the maximum among the leading values, or of the first NaN when one is NaN.</returns>
+    /// <remarks>
+    ///     NumPy treats a NaN as maximal: a standardized value is NaN when the objective values overflow the
+    ///     standardization (values near the float maximum, QA-53's class), and Optuna then takes the first NaN trial as
+    ///     the best one. The former strict <c>&gt;</c> loop skipped NaNs. Two calls per evaluation, next to two GP fits.
+    /// </remarks>
+    /// <exception cref="NumSharp.ValueError"><paramref name="count" /> is 0 (NumPy's <c>attempt to get argmax of an empty sequence</c>).</exception>
     private static int ArgMax(double[] a, int count)
     {
-        int best = 0;
-        for (int i = 1; i < count; i++)
-            if (a[i] > a[best])
-                best = i;
-        return best;
+        using NDArray values = np.array(a, copy: false);
+        using NDArray head = values[$":{count}"];
+        using NDArray index = np.argmax(head);
+        return (int)(long)index;
     }
 
     /// <summary>Returns a copy of the requested matrix row.</summary>

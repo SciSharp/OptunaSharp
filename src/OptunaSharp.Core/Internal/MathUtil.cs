@@ -32,13 +32,105 @@ internal static class MathUtil
         return y > x ? Math.BitIncrement(x) : Math.BitDecrement(x);
     }
 
-    /// <summary>NumPy <c>np.clip(value, low, high)</c> for scalars (NaN propagates).</summary>
-    /// <param name="value">The value to convert, format, or compare using the operation's stated convention.</param>
-    /// <param name="low">The lower endpoint of the allowed range.</param>
-    /// <param name="high">The upper endpoint of the allowed range.</param>
-    /// <returns>The value clamped to the interval; NaN propagates.</returns>
+    /// <summary>
+    ///     NumPy's <c>np.isclose(a, b, rtol, atol, equal_nan)</c> for two Python floats, in NumPy's own statements:
+    ///     <c>(|a - b| &lt;= atol + rtol * |b|) &amp; isfinite(b) | (a == b)</c>, plus "both NaN" when
+    ///     <paramref name="equalNan" /> is set. Use it wherever Optuna calls <c>np.isclose</c> on scalars in a loop.
+    /// </summary>
+    /// <param name="a">The value tested (NumPy's <c>a</c>).</param>
+    /// <param name="b">The reference value the relative tolerance scales with (NumPy's <c>b</c>; the test is not symmetric).</param>
+    /// <param name="rtol">The relative tolerance; NumPy's default is <c>1e-5</c>.</param>
+    /// <param name="atol">The absolute tolerance; NumPy's default is <c>1e-8</c>.</param>
+    /// <param name="equalNan">Whether two NaNs compare as close.</param>
+    /// <returns>
+    ///     Whether <paramref name="a" /> is within tolerance of <paramref name="b" />. Two equal infinities are close
+    ///     (<c>a == b</c>); a finite value is never close to an infinity, and two different infinities are not close.
+    /// </returns>
+    /// <remarks>
+    ///     The <c>isfinite(b)</c> and <c>a == b</c> terms are what a bare <c>|a - b| &lt;= atol + rtol * |b|</c> misses:
+    ///     with <c>b = inf</c> that inequality holds for every finite <c>a</c> (<c>inf &lt;= inf</c>), and with
+    ///     <c>a = b = inf</c> it fails (<c>inf - inf</c> is NaN). NumSharp's <c>np.isclose</c> computes the same answers
+    ///     (the unit tests compare the two on the edge cases), but a scalar call through it costs about 9 µs (two 0-d
+    ///     arrays and a result) against a few nanoseconds here, and callers such as <c>Study.ShouldSkipEnqueue</c> compare
+    ///     every parameter of every trial.
+    /// </remarks>
+    internal static bool IsClose(double a, double b, double rtol = 1e-5, double atol = 1e-8, bool equalNan = false)
+    {
+        // numpy.isclose: less_equal(abs(x - y), atol + rtol * abs(y)) & isfinite(y) | (x == y); the comparisons are false
+        // for a NaN operand, as NumPy's are under errstate(invalid='ignore').
+        bool close = Math.Abs(a - b) <= atol + rtol * Math.Abs(b) && double.IsFinite(b) || a == b;
+        // if equal_nan: result |= isnan(x) & isnan(y)
+        if (equalNan && double.IsNaN(a) && double.IsNaN(b))
+            close = true;
+        return close;
+    }
+
+    /// <summary>
+    ///     NumPy <c>np.clip(value, low, high)</c> where the bounds are scalars — NumPy's CONST loop
+    ///     (<c>_npy_clip_const_minmax_</c>): <c>value</c> is kept unless it lies strictly outside, so a tie keeps the
+    ///     value's own zero sign. Use it where Optuna clips a scalar, a 0-d value, or an array against scalar bounds.
+    /// </summary>
+    /// <param name="value">The value to clip; a NaN stays NaN.</param>
+    /// <param name="low">The lower bound; a NaN lower bound is the result.</param>
+    /// <param name="high">The upper bound; a NaN upper bound is the result when <paramref name="low" /> is not NaN.</param>
+    /// <returns>
+    ///     <paramref name="low" /> when the value is below it, <paramref name="high" /> when above it, else the value
+    ///     itself (<c>np.clip(-0.0, 0.0, 1.0)</c> is <c>-0.0</c>); the NaN bound when a bound is NaN.
+    /// </returns>
+    /// <remarks>
+    ///     <para>
+    ///         NumPy picks the loop per inner-loop call: with both bound strides 0 (scalar or 0-d bounds, a scalar value,
+    ///         or a column against one-element bounds) it runs <c>x &lt; lo ? lo : x; x &gt; hi ? hi : x</c>, after
+    ///         filling the call with a NaN bound when there is one; otherwise <see cref="ClipGeneral" />. The former
+    ///         <c>Math.Min(Math.Max(x, low), high)</c> orders <c>-0.0</c> below <c>+0.0</c>, so a tie at a zero bound
+    ///         took the other zero (QA-30: a stepped float with upper bound <c>-0.0</c> stored <c>-0.0</c> for its top
+    ///         grid point where Optuna stores <c>0.0</c>).
+    ///     </para>
+    ///     <para>
+    ///         NumSharp's <c>np.clip</c> makes the same decision (its port of NumPy's const-loop test) and gives the same
+    ///         answers (the unit tests compare them); this scalar form avoids a NumSharp call per sampled value.
+    ///     </para>
+    /// </remarks>
     internal static double Clip(double value, double low, double high)
-        => Math.Min(Math.Max(value, low), high);
+    {
+        // "min_val and/or max_val are nans": the call is filled with the NaN bound, the lower one first.
+        if (double.IsNaN(low))
+            return low;
+        if (double.IsNaN(high))
+            return high;
+        // The comparisons are false for a NaN value, which therefore passes through.
+        if (value < low)
+            value = low;
+        if (value > high)
+            value = high;
+        return value;
+    }
+
+    /// <summary>
+    ///     NumPy <c>np.clip</c>'s GENERAL loop for one element, <c>_NPY_MIN(_NPY_MAX(x, lo), hi)</c>: what an
+    ///     inner-loop call with array bounds (a nonzero bound stride) computes. A tie takes the bound.
+    /// </summary>
+    /// <param name="value">The value to clip; a NaN stays NaN.</param>
+    /// <param name="low">The lower bound for this element.</param>
+    /// <param name="high">The upper bound for this element.</param>
+    /// <returns>
+    ///     <c>max = isnan(x) ? x : (x &gt; lo ? x : lo)</c>, then <c>isnan(max) ? max : (max &lt; hi ? max : hi)</c>: a value
+    ///     equal to a bound comes back as the bound (<c>-0.0</c> against a <c>+0.0</c> bound is <c>+0.0</c>), and a NaN
+    ///     bound is the result unless the value is NaN.
+    /// </returns>
+    /// <remarks>
+    ///     TPE's discrete rounding, <c>np.clip(..., low_d, high_d)</c> over an (n, k) block with per-column bounds, runs
+    ///     this loop when k &gt;= 2 (the inner loop walks the k columns, so the bounds have a stride); with one discrete
+    ///     column the bounds broadcast with stride 0 and NumPy runs <see cref="Clip" />'s const loop instead (measured on
+    ///     NumPy 2.4.2, 2026-11-11). NumSharp's <c>np.clip</c> agrees on both layouts.
+    /// </remarks>
+    internal static double ClipGeneral(double value, double low, double high)
+    {
+        // clip.cpp: _NPY_MAX(a, b) = npy_isnan(a) ? a : PyArray_MAX(a, b), PyArray_MAX(a, b) = a > b ? a : b.
+        double max = double.IsNaN(value) ? value : (value > low ? value : low);
+        // _NPY_MIN(a, b) = npy_isnan(a) ? a : PyArray_MIN(a, b), PyArray_MIN(a, b) = a < b ? a : b.
+        return double.IsNaN(max) ? max : (max < high ? max : high);
+    }
 
     /// <summary>
     ///     NumPy's float64 <c>np.log1p(x)</c> for one value, bit for bit and without allocating: it runs NumSharp's public

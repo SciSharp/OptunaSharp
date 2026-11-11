@@ -485,16 +485,23 @@ internal static class OptimMixed
         return found;
     }
 
-    /// <summary>Returns the index of the first largest value.</summary>
-    /// <param name="a">The first numerical operand; its dimensions must agree with the operation described in the summary.</param>
-    /// <returns>The index of the first largest value.</returns>
+    /// <summary>
+    ///     NumPy <c>np.argmax</c> through NumSharp — the optimizer's <c>np.argmax(f_vals)</c>, <c>np.argmax(best_fvals)</c>
+    ///     and <c>np.argmax(fvals)</c>: the first index of the maximum, or of the first NaN when one is NaN.
+    /// </summary>
+    /// <param name="a">The acquisition values of the evaluated points; at least one.</param>
+    /// <returns>The index of the first NaN if any value is NaN, else the first index holding the largest value.</returns>
+    /// <remarks>
+    ///     NumPy treats a NaN as maximal; NaN acquisition values come from a NaN threshold (QA-53) or overflowing
+    ///     posteriors. The former strict <c>&gt;</c> loop skipped NaNs where they were not first. Each call follows an
+    ///     acquisition evaluation over all the points, which costs far more than the NumSharp call.
+    /// </remarks>
+    /// <exception cref="NumSharp.ValueError"><paramref name="a" /> is empty (NumPy's <c>attempt to get argmax of an empty sequence</c>).</exception>
     private static int Argmax(double[] a)
     {
-        int best = 0;
-        for (int i = 1; i < a.Length; i++)
-            if (a[i] > a[best])
-                best = i;
-        return best;
+        using NDArray values = np.array(a, copy: false);
+        using NDArray index = np.argmax(values);
+        return (int)(long)index;
     }
 
     /// <summary><c>np.min(np.diff(choices), initial=np.inf)</c> — smallest consecutive gap, +∞ if &lt; 2 points.</summary>

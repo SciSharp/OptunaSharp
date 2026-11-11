@@ -224,9 +224,10 @@ public class DistributionParityBugTests
     }
 
     /// <summary>
-    ///     QA-30: clipping a sampled value to a bound must keep the value's own sign of zero, as
-    ///     <c>np.clip</c> does; <c>MathUtil.Clip</c> is <c>Math.Min(Math.Max(x, low), high)</c>, whose IEEE
-    ///     minimum and maximum order <c>-0.0</c> below <c>+0.0</c>.
+    ///     QA-30 (fixed 2026-11-11): clipping a sampled value to a bound must keep the value's own sign of zero, as
+    ///     <c>np.clip</c>'s const loop does. <c>MathUtil.Clip</c> was <c>Math.Min(Math.Max(x, low), high)</c>, whose IEEE
+    ///     minimum and maximum order <c>-0.0</c> below <c>+0.0</c>; it is now NumPy's const loop (and
+    ///     <c>MathUtil.ClipGeneral</c> NumPy's general loop, for TPE's multi-column discrete clip).
     /// </summary>
     /// <remarks>
     ///     <c>np.clip(x, lo, hi)</c> returns <c>x</c> unless it lies strictly outside, so
@@ -239,7 +240,6 @@ public class DistributionParityBugTests
     ///     same helper. Unlike QA-1 the user has to pass a negative-zero bound, so it is rarer.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void SteppedFloat_NegativeZeroHigh_TopGridPointIsPositiveZero()
     {
         BitConverter.DoubleToInt64Bits(MathUtil.Clip(0.0, -1.0, -0.0)).Should().Be(0L, "np.clip keeps +0.0");
