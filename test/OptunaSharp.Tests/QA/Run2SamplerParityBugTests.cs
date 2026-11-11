@@ -229,4 +229,47 @@ public class Run2SamplerParityBugTests
             System.Linq.Enumerable.Skip(study.Trials, 12), t => (double)t.Params["x"]!));
         xs.Should().Equal(3.0, 0.0, 5.0, 12.0, 6.0, 14.0, 7.0, 15.0, 10.0, 1.0, 9.0, 13.0, 11.0, 8.0, 2.0, 4.0);
     }
+
+    /// <summary>
+    ///     QA-79: multi-objective TPE ranks the PRUNED trials it puts in its "below" group by their last intermediate
+    ///     value. Optuna's <c>_get_pruned_trial_score</c> reads <c>study.direction</c> for that, and on a multi-objective
+    ///     study the property raises <c>RuntimeError("A single direction cannot be retrieved from a multi-objective
+    ///     study. Consider using Study.directions to retrieve a list containing all directions.")</c>, so the first
+    ///     TPE trial fails. The port's <c>TpeTrialSplit.GetPrunedTrialScore</c> reads <c>study.Directions[0]</c>
+    ///     instead, ranks the pruned trials by the first objective's direction and samples on.
+    /// </summary>
+    /// <remarks>
+    ///     <c>Trial.report</c> refuses multi-objective studies on both sides, so the history comes from
+    ///     <c>add_trial</c> here; a journal or RDB written by another tool can hold the same records. Measured with
+    ///     Optuna 5.0.0: two objectives, <c>TPESampler(n_startup_trials=0, seed=0)</c>, one COMPLETE trial and four
+    ///     PRUNED trials with intermediate values added, then <c>optimize(n_trials=12)</c> raises the RuntimeError
+    ///     from the first trial's <c>suggest_float</c>; the port completes all 12 trials. The single-objective path is
+    ///     unaffected (<c>study.direction</c> is defined there).
+    /// </remarks>
+    [TestMethod]
+    [OpenBugs]
+    public void MultiObjectiveTpe_PrunedTrialsWithIntermediateValues_RaisesLikeOptunasDirectionProperty()
+    {
+        var study = Optuna.CreateStudy(directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },
+            sampler: new TPESampler(nStartupTrials: 0, seed: 0));
+        var distributions = new OptunaSharp.Collections.OrderedDict<string, OptunaSharp.Distributions.BaseDistribution>
+            { ["x"] = new OptunaSharp.Distributions.FloatDistribution(0, 1) };
+        study.AddTrial(FrozenTrial.CreateTrial(values: new[] { 0.5, 0.5 },
+            @params: new OptunaSharp.Collections.OrderedDict<string, object?> { ["x"] = 0.5 }, distributions: distributions));
+        study.AddTrial(FrozenTrial.CreateTrial(state: TrialState.Pruned,
+            @params: new OptunaSharp.Collections.OrderedDict<string, object?> { ["x"] = 0.2 }, distributions: distributions,
+            intermediateValues: new OptunaSharp.Collections.OrderedDict<long, double> { [0] = 0.3, [1] = 0.1 }));
+        for (int i = 0; i < 3; i++)
+            study.AddTrial(FrozenTrial.CreateTrial(state: TrialState.Pruned,
+                @params: new OptunaSharp.Collections.OrderedDict<string, object?> { ["x"] = 0.1 * i },
+                distributions: distributions,
+                intermediateValues: new OptunaSharp.Collections.OrderedDict<long, double> { [0] = 0.3 + i }));
+
+        System.Action optimize = () => study.Optimize(t => new[] { t.SuggestFloat("x", 0, 1), 1 - t.SuggestFloat("x", 0, 1) },
+            nTrials: 12);
+
+        optimize.Should().Throw<NumSharp.RuntimeError>().WithMessage(
+            "A single direction cannot be retrieved from a multi-objective study. Consider using Study.directions to " +
+            "retrieve a list containing all directions.");
+    }
 }

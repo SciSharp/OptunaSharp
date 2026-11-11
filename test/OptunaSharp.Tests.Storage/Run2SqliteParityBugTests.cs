@@ -194,6 +194,39 @@ public class Run2SqliteParityBugTests
             "Please execute `$ optuna storage upgrade --storage $STORAGE_URL` for upgrading the storage.");
     }
 
+    /// <summary>
+    ///     QA-74 (SQLite half): <c>RDBStorage(url, skip_table_creation=True)</c> over a database without Optuna's tables
+    ///     fails in Optuna's constructor. Its version manager reads <c>version_info</c> inside
+    ///     <c>_create_scoped_session</c>, which turns the <c>OperationalError</c> ("no such table: version_info") into
+    ///     <c>StorageInternalError</c> with the commit message, even with <c>skip_compatibility_check=True</c>. The port
+    ///     constructs the storage and fails later, on its first read, with Microsoft.Data.Sqlite's
+    ///     <c>SqliteException</c> ("SQLite Error 1: 'no such table: studies'.").
+    /// </summary>
+    /// <remarks>
+    ///     Measured with Optuna 5.0.0 / SQLAlchemy 2.0.45 on a fresh empty file: both keyword combinations raise
+    ///     <c>optuna.exceptions.StorageInternalError</c> from the constructor (the cause chains the
+    ///     <c>sqlite3.OperationalError</c>). Code that wraps storage creation in <c>except StorageInternalError</c> to
+    ///     detect an uninitialized database sees nothing from the port's constructor and an unrelated exception type
+    ///     afterwards.
+    /// </remarks>
+    [TestMethod]
+    [TestCategory("OpenBugs")]
+    public void SkipTableCreation_OverAnEmptyDatabase_RaisesStorageInternalErrorLikeOptuna()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"optunasharp-rdb-qa74-{Guid.NewGuid():N}.db");
+        _tempFiles.Add(path);
+        string url = "sqlite:///" + path.Replace('\\', '/');
+        const string optunaCommitMessage =
+            "An exception is raised during the commit. This typically happens due to invalid data in the commit, " +
+            "e.g. exceeding max length. ";
+
+        Action open = () => new RDBStorage(url, skipTableCreation: true);
+        Action openSkippingTheCheck = () => new RDBStorage(url, skipCompatibilityCheck: true, skipTableCreation: true);
+
+        open.Should().Throw<StorageInternalError>().WithMessage(optunaCommitMessage);
+        openSkippingTheCheck.Should().Throw<StorageInternalError>().WithMessage(optunaCommitMessage);
+    }
+
     /// <summary>Returns the repository root, two levels above this source file, wherever the test binaries were built.</summary>
     /// <param name="thisFile">Filled in by the compiler with this file's path.</param>
     /// <returns>The absolute repository root.</returns>
