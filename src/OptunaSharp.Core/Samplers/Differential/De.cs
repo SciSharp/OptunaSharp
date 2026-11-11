@@ -14,6 +14,7 @@
 using System;
 using System.Collections.Generic;
 using NumSharp;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Samplers.Differential;
 
@@ -179,7 +180,7 @@ internal sealed class De
 
         // Binomial crossover: inherit the mutant coordinate where U(0,1) < CR, else the target's; the
         // single j_rand coordinate is always taken from the mutant (guarantees a genuine offspring).
-        int jrand = (int)_rng.randint(0, _nDim);
+        int jrand = (int)NumPyDraws.RandInt(_rng, 0, _nDim);
         double[] cross = _rng.uniform(0.0, 1.0, new Shape(_nDim)).ToArray<double>();
         double[] tgt = _pop[target];
         var u = new double[_nDim];
@@ -248,7 +249,7 @@ internal sealed class De
     {
         while (true)
         {
-            int r = (int)_rng.randint(0, _popsize);
+            int r = (int)NumPyDraws.RandInt(_rng, 0, _popsize);
             if (exclude.Add(r)) return r;
         }
     }

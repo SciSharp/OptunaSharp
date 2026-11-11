@@ -207,7 +207,7 @@ public sealed class LmCmaSampler : BaseSampler
         }
 
         // Each trial reseeds so its single ask is reproducible and differs from its siblings' asks.
-        int seed = (int)_cmaRng.Rng.randint(1, 65536) + trial.Number;
+        int seed = (int)NumPyDraws.RandInt(_cmaRng.Rng, 1, 65536) + trial.Number;
         optimizer.ReseedRng(seed);
 
         // Non-mirrored generation: k is this candidate's 1-based position within the current generation.
@@ -353,7 +353,7 @@ public sealed class LmCmaSampler : BaseSampler
         for (int i = 0; i < nDim; i++) sigma0 = Math.Min(sigma0, (upper[i] - lower[i]) / 6);
         sigma0 = Math.Max(sigma0, Eps);
 
-        int seed = (int)_cmaRng.Rng.randint(1, 2147483646);
+        int seed = (int)NumPyDraws.RandInt(_cmaRng.Rng, 1, 2147483646);
         return new LmCma(mean, sigma0, seed: seed, populationSize: _popsize, nVectors: _nVectors);
     }
 

@@ -245,7 +245,7 @@ public sealed class DifferentialEvolutionSampler : BaseSampler
         }
 
         // Each trial reseeds so its single ask is reproducible and differs from its siblings' asks.
-        int seed = (int)_deRng.Rng.randint(1, 65536) + trial.Number;
+        int seed = (int)NumPyDraws.RandInt(_deRng.Rng, 1, 65536) + trial.Number;
         optimizer.ReseedRng(seed);
 
         double[] deParams = optimizer.AskCandidate(target);

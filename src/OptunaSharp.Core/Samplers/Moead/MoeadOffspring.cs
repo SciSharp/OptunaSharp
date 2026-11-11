@@ -101,7 +101,7 @@ internal static class MoeadOffspring
         double prob = mutationProb ?? 1.0 / Math.Max(1.0, nParams);
         foreach (var key in numericalSearchSpace.Keys)
         {
-            if ((double)rng.rand() >= prob)
+            if (NumPyDraws.Rand(rng) >= prob)
                 continue;
             var mutated = NsgaiiMutation.PerformMutation(
                 mutation, rng, study, searchSpace[key], childParams[key]);
@@ -128,11 +128,11 @@ internal static class MoeadOffspring
             int idx;
             if (used.Count >= n)
             {
-                idx = (int)rng.randint(0, n);   // pool exhausted: allow a repeat rather than loop forever
+                idx = (int)NumPyDraws.RandInt(rng, 0, n);   // pool exhausted: allow a repeat rather than loop forever
             }
             else
             {
-                do { idx = (int)rng.randint(0, n); } while (!used.Add(idx));
+                do { idx = (int)NumPyDraws.RandInt(rng, 0, n); } while (!used.Add(idx));
             }
             parents.Add(pool[idx]);
         }

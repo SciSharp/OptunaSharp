@@ -239,7 +239,7 @@ public class GPSampler : BaseSampler
                 double threshold = ColumnMax(standardizedScoreVals, 0);
                 if (hasRunning)
                 {
-                    int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
+                    int qmcSeed = (int)NumPyDraws.RandInt(_rng.Rng, 0, MaxQmcSeedValue);
                     acqf = new QLogEI(
                         gprsList[0], internalSearchSpace, threshold, _nQmcSamplesQei, qmcSeed,
                         normalizedParamsOfRunningTrials!);
@@ -250,7 +250,7 @@ public class GPSampler : BaseSampler
             }
             else
             {
-                int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
+                int qmcSeed = (int)NumPyDraws.RandInt(_rng.Rng, 0, MaxQmcSeedValue);
                 if (hasRunning)
                     acqf = new QLogEHVI(
                         gprsList.ToArray(), internalSearchSpace, standardizedScoreVals, _nQmcSamplesEhvi,
@@ -277,7 +277,7 @@ public class GPSampler : BaseSampler
                 double bestFeasibleY = yWithNegInf[iOpt];
                 if (hasRunning)
                 {
-                    int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
+                    int qmcSeed = (int)NumPyDraws.RandInt(_rng.Rng, 0, MaxQmcSeedValue);
                     acqf = new QLogCEI(
                         gprsList[0], internalSearchSpace, bestFeasibleY, _nQmcSamplesQei, qmcSeed,
                         constrGprList, constrThresholdList, normalizedParamsOfRunningTrials!);
@@ -299,7 +299,7 @@ public class GPSampler : BaseSampler
                 // Optuna 5.0.0 (#6804): with running trials the MO-constrained case is the q-batch
                 // qLogCEHVI (fantasy-conditioned); without them it stays the sequential LogCEHVI. Both
                 // branches draw exactly one QMC seed, so the sampler's RNG stream is unchanged.
-                int qmcSeed = (int)_rng.Rng.randint(0, MaxQmcSeedValue);
+                int qmcSeed = (int)NumPyDraws.RandInt(_rng.Rng, 0, MaxQmcSeedValue);
                 double[,]? yFeasible = isAllInfeasible ? null : FilterRows(standardizedScoreVals, isFeasible);
                 acqf = hasRunning
                     ? new QLogCEHVI(

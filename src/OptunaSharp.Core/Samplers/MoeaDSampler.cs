@@ -278,7 +278,7 @@ public class MoeaDSampler : BaseSampler
 
         // Mating pool: the subproblem's neighborhood with probability δ, else the whole population.
         IReadOnlyList<FrozenTrial> matingPool =
-            (double)_rng.Rng.rand() < _neighborSelectionProb
+            NumPyDraws.Rand(_rng.Rng) < _neighborSelectionProb
                 ? neighbors.Select(j => population[j]).ToList()
                 : population;
 

@@ -619,7 +619,7 @@ public class CmaEsSampler : BaseSampler
                     sigma: sigma0,
                     bounds: boundsArr,
                     nMaxResampling: 10 * nDim,
-                    seed: (int)_cmaRng.Rng.randint(1, 2147483646),
+                    seed: (int)NumPyDraws.RandInt(_cmaRng.Rng, 1, 2147483646),
                     populationSize: _popsize,
                     sigmaIsNumpyScalar: sigmaIsNumpy);
             }
@@ -653,13 +653,13 @@ public class CmaEsSampler : BaseSampler
                 bounds: boundsArr,
                 steps: steps,
                 nMaxResampling: 10 * nDim,
-                seed: (int)_cmaRng.Rng.randint(1, 2147483646),
+                seed: (int)NumPyDraws.RandInt(_cmaRng.Rng, 1, 2147483646),
                 populationSize: _popsize,
                 cov: cov,
                 sigmaIsNumpyScalar: sigmaIsNumpy);
         }
 
-        int seed = (int)_cmaRng.Rng.randint(1, 2147483646);
+        int seed = (int)NumPyDraws.RandInt(_cmaRng.Rng, 1, 2147483646);
         return new Cma(
             mean: mean,
             sigma: sigma0,

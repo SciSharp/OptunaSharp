@@ -174,7 +174,7 @@ public class GridSampler : BaseSampler
         // In distributed optimization, multiple workers may simultaneously pick up the same grid.
         // To make the conflict less frequent, the grid is chosen randomly. numpy's
         // choice(target_grids) with no size/replace/p reduces to target_grids[randint(0, len)].
-        int gridId = targetGrids[(int)_rng.Rng.randint(0, targetGrids.Count)];
+        int gridId = targetGrids[(int)NumPyDraws.RandInt(_rng.Rng, 0, targetGrids.Count)];
 
         study.Storage.SetTrialSystemAttr(trial.TrialId, "search_space", _searchSpaceAttr);
         study.Storage.SetTrialSystemAttr(trial.TrialId, "grid_id", gridId);

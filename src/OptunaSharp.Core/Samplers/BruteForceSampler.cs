@@ -139,7 +139,7 @@ public class BruteForceSampler : BaseSampler
             // later); sequentially every branch has one and this is Optuna's choice over all candidates.
             var choices = tree.ChoicesWithAFreeEnd(EnumerateCandidates(cArgs));
             // numpy's choice(choices) with no size/replace/p reduces to choices[randint(0, len)].
-            paramVal = choices[(int)_rng.Rng.randint(0, choices.Count)];
+            paramVal = choices[(int)NumPyDraws.RandInt(_rng.Rng, 0, choices.Count)];
         }
 
         object? external = paramDistribution.ToExternalRepr(paramVal);

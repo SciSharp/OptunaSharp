@@ -138,7 +138,7 @@ public abstract class EvolutionStrategySampler : BaseSampler
         }
 
         var optimizer = RestoreOptimizer(completedTrials)
-                        ?? CreateOptimizer(boxCenter, nDim, (uint)(int)_esRng.Rng.randint(1, 2147483646));
+                        ?? CreateOptimizer(boxCenter, nDim, (uint)(int)NumPyDraws.RandInt(_esRng.Rng, 1, 2147483646));
 
         if (optimizer.Dim != nDim)
         {

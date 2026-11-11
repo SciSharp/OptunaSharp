@@ -192,7 +192,7 @@ internal sealed class GpSearchSpace
     /// <returns>A matrix of sampled normalized points rounded onto each coordinate's support.</returns>
     internal double[,] SampleNormalizedParams(int n, NumPyRandom rng)
     {
-        int seed = (int)rng.randint(0, 2147483647);  // rng.randint(np.iinfo(np.int32).max)
+        int seed = (int)NumPyDraws.RandInt(rng, 0, 2147483647);  // rng.randint(np.iinfo(np.int32).max)
         double[,] values = ScrambledSobol.Random(Dim, n, seed);
         for (int i = 0; i < Dim; i++)
         {
