@@ -187,7 +187,7 @@ public class PrunerTests
     }
 
     /// <summary>
-    ///     The median of <c>[0.0, -0.0, -0.0, -1.0]</c> is <c>-0.0</c> in NumPy 2.4.2: its partition leaves the two
+    ///     QA-85: the median of <c>[0.0, -0.0, -0.0, -1.0]</c> is <c>-0.0</c> in NumPy 2.4.2: its partition leaves the two
     ///     <c>-0.0</c> as the interpolated neighbours. NumSharp 0.80.0's <c>np.nanpercentile</c> and <c>np.percentile</c>
     ///     return <c>+0.0</c> (they interpolate between <c>0.0</c> and <c>-0.0</c>, and <c>-0.0 - (-0.0 * 0.5)</c> is
     ///     <c>+0.0</c>), as did the sort-based port before 2026-11-11. An upstream NumSharp partition tie; no comparison can

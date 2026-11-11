@@ -87,8 +87,11 @@ Two [visualization](visualization.md) builders target multi-objective studies:
 | `study.best_trials` | `study.BestTrials` |
 | `study.set_metric_names([...])` | `study.SetMetricNames(new[] { ... })` |
 
-**Divergence.** The hypervolume subset-selection (HSSP) can order zero-contribution ties differently
-for 3-or-more objectives — a documented, tested edge case in the shared engine.
+**Parity.** The hypervolume computation and the hypervolume subset selection (HSSP) that breaks ties in
+multi-objective TPE match Optuna bit for bit, zero-contribution ties with 3 or more objectives included: the
+2- and 3-objective volumes use the same BLAS dot products NumPy uses (through NumSharp), so the tiny
+residuals that decide those ties are Optuna's own. In OptunaSharp 1.0.0 those ties could resolve to a
+different, equally good point.
 
 ## See also
 
