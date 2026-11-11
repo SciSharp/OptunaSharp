@@ -181,28 +181,32 @@ internal static class MathUtil
     }
 
     /// <summary>
-    ///     NumPy <c>np.linspace(start, stop, num)</c> (endpoint=True) — bit-identical to NumPy for
-    ///     the common case: <c>y[i] = i * step + start</c> with <c>step = (stop - start) / (num - 1)</c>,
-    ///     and the final element pinned to <paramref name="stop" /> exactly.
+    ///     NumPy <c>np.linspace(start, stop, num)</c> (endpoint=True), computed by NumSharp's <c>np.linspace</c>, which ports
+    ///     every branch NumPy takes, so the grid is NumPy's in every case, a step that underflows to zero included. Meant
+    ///     for the visualization grids and ticks (a call or two per plot); hot loops keep their own copies.
     /// </summary>
     /// <param name="start">The inclusive start of the interval or slice.</param>
     /// <param name="stop">The final value of the generated numerical interval.</param>
-    /// <param name="num">The number of values in the output grid.</param>
-    /// <returns>An evenly spaced grid including both endpoints when at least two values are requested.</returns>
+    /// <param name="num">The number of values in the output grid; zero or less gives an empty grid.</param>
+    /// <returns>
+    ///     An evenly spaced grid: <c>i * step + start</c>, the last element exactly <paramref name="stop" /> when there are
+    ///     two or more, <c>(i / (num - 1)) * (stop - start) + start</c> when the step underflows to zero, and for one
+    ///     element <c>0 * (stop - start) + start</c> (NaN when an end is infinite).
+    /// </returns>
+    /// <remarks>
+    ///     The former inline loop always took <c>i * step + start</c>. Over a subnormal range NumPy's step
+    ///     <c>delta / (num - 1)</c> is zero and NumPy switches to scaling <c>i / div</c> by <c>delta</c> (gh-5437), so every
+    ///     point but the last collapsed onto <paramref name="start" /> here: an EDF over values <c>0.0</c> and <c>5e-324</c>
+    ///     stayed at 0.5 until its last point where Optuna's reaches 1.0 at point 50 (parity QA-54). A negative
+    ///     <paramref name="num" /> keeps returning an empty grid instead of NumPy's <c>ValueError</c>, as before, because no
+    ///     caller passes one.
+    /// </remarks>
     internal static double[] Linspace(double start, double stop, int num)
     {
         if (num <= 0)
             return Array.Empty<double>();
-        if (num == 1)
-            return new[] { start };
-
-        int div = num - 1;
-        double step = (stop - start) / div;
-        var y = new double[num];
-        for (int i = 0; i < num; i++)
-            y[i] = i * step + start;  // arange(num) * step + start.
-        y[^1] = stop;  // endpoint override.
-        return y;
+        using NumSharp.NDArray grid = NumSharp.np.linspace(start, stop, num);
+        return grid.ToArray<double>();
     }
 
     /// <summary>

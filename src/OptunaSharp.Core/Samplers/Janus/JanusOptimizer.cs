@@ -206,7 +206,7 @@ internal sealed class JanusOptimizer
             if (t.Value is not null)
                 fval = _direction == StudyDirection.Maximize ? -t.Value.Value : t.Value.Value;
             else if (rae is not null)
-                fval = rae.Average();
+                fval = ComponentMean(rae);
             else
                 continue;
             _winX.Add(x);
@@ -217,6 +217,29 @@ internal sealed class JanusOptimizer
         int? m = LastComponentWidth();
         int window = ResolveGnWindow(m);
         TrimWindow(window);
+    }
+
+    /// <summary>
+    ///     The reference's <c>float(np.mean(rae))</c>: the objective value a valueless trial gets from its component
+    ///     losses, computed by NumSharp's <c>np.mean</c> (NumPy's pairwise sum, then one division) so it is the reference
+    ///     implementation's to the last bit for any number of components.
+    /// </summary>
+    /// <param name="rae">The trial's component losses, in their reported order.</param>
+    /// <returns>Their arithmetic mean; NaN for no components (NumPy's, without its RuntimeWarning).</returns>
+    /// <remarks>
+    ///     A LINQ <c>Average()</c> sums left to right, which rounds differently from NumPy's pairwise sum from eight
+    ///     components on. The branch is reached only by a harvested trial without a value, which the single-objective
+    ///     sampler's COMPLETE-only history does not produce today, so no current study changes; it keeps the port
+    ///     faithful should that history ever widen.
+    /// </remarks>
+    private static double ComponentMean(double[] rae)
+    {
+        // NumPy's mean of nothing is NaN (with a warning); answer it here rather than depend on the empty route.
+        if (rae.Length == 0)
+            return double.NaN;
+        using NDArray view = np.array(rae, copy: false);
+        using NDArray mean = np.mean(view);
+        return (double)mean;
     }
 
     /// <summary>Discards oldest trace observations beyond the requested fitting window.</summary>

@@ -143,8 +143,11 @@ public class PrunerTests
     ///     0.014999999999999902, 0.4760000000000001 and 0.2869999999999999; two ordinary rows; one value, where both
     ///     neighbours clamp to it; an index past the end, clamped to the last element; then the NaN rows: an index
     ///     landing on 2.0 whose next neighbour is inf, <c>inf * 0</c> at t = 0, <c>inf - inf</c> for a clamped
-    ///     infinite last element, and single or paired infinities; last, the two branches that keep an infinite
-    ///     neighbour infinite instead (<c>1 - inf * 0.25</c> and <c>1 + inf * 0.25</c>).
+    ///     infinite last element, and single or paired infinities; then the two branches that keep an infinite
+    ///     neighbour infinite instead (<c>1 - inf * 0.25</c> and <c>1 + inf * 0.25</c>); last, two rows whose result is a
+    ///     zero whose sign NumPy's partition decides among tied <c>-0.0</c>/<c>0.0</c> neighbours (NumSharp's
+    ///     <c>np.nanpercentile</c> partitions as NumPy does for these), and an all-NaN input. One tie pattern NumSharp 0.80.0
+    ///     still resolves differently is pinned by <see cref="NanPercentile_TiedSignedZeros_KeepNumpysZeroSign" />.
     /// </remarks>
     /// <param name="values">The completed trials' reports at one step, NaNs included.</param>
     /// <param name="percentile">The percentile asked for, in [0, 100].</param>
@@ -169,6 +172,9 @@ public class PrunerTests
     [DataRow(new[] { double.NegativeInfinity, double.PositiveInfinity }, 50.0, double.NaN)]
     [DataRow(new[] { double.NegativeInfinity, 1.0 }, 75.0, double.NegativeInfinity)]
     [DataRow(new[] { 1.0, double.PositiveInfinity }, 25.0, double.PositiveInfinity)]
+    [DataRow(new[] { -1.0, -0.0, 0.5, 0.0, -1.0, -1.0 }, 75.0, 0.0)]
+    [DataRow(new[] { 0.0, -0.0, -0.0, -0.0, 1.0, 0.0 }, 50.0, -0.0)]
+    [DataRow(new[] { double.NaN, double.NaN }, 50.0, double.NaN)]
     public void NanPercentile_IsBitIdenticalToNumpy(double[] values, double percentile, double expected)
     {
         double actual = PercentilePruner.NanPercentile(values, percentile);
@@ -178,6 +184,23 @@ public class PrunerTests
         else
             BitConverter.DoubleToInt64Bits(actual).Should().Be(BitConverter.DoubleToInt64Bits(expected),
                 $"numpy returns {expected:R} for {string.Join(", ", values)} at q={percentile}, not {actual:R}");
+    }
+
+    /// <summary>
+    ///     The median of <c>[0.0, -0.0, -0.0, -1.0]</c> is <c>-0.0</c> in NumPy 2.4.2: its partition leaves the two
+    ///     <c>-0.0</c> as the interpolated neighbours. NumSharp 0.80.0's <c>np.nanpercentile</c> and <c>np.percentile</c>
+    ///     return <c>+0.0</c> (they interpolate between <c>0.0</c> and <c>-0.0</c>, and <c>-0.0 - (-0.0 * 0.5)</c> is
+    ///     <c>+0.0</c>), as did the sort-based port before 2026-11-11. An upstream NumSharp partition tie; no comparison can
+    ///     observe the sign, so prune decisions are unaffected. Remove <c>[OpenBugs]</c> once NumSharp matches.
+    /// </summary>
+    [TestMethod]
+    [OpenBugs]
+    public void NanPercentile_TiedSignedZeros_KeepNumpysZeroSign()
+    {
+        double actual = PercentilePruner.NanPercentile(new[] { 0.0, -0.0, -0.0, -1.0 }, 50.0);
+
+        BitConverter.DoubleToInt64Bits(actual).Should().Be(BitConverter.DoubleToInt64Bits(-0.0),
+            $"numpy.nanpercentile([0.0, -0.0, -0.0, -1.0], 50) is -0.0, not {actual:R}");
     }
 
     /// <summary>

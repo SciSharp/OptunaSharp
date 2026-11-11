@@ -133,9 +133,11 @@ public class VisualizationParityBugTests
     }
 
     /// <summary>
-    ///     QA-54: the EDF grid must be NumPy's <c>np.linspace</c>, which switches to <c>(i / div) * delta + start</c> when
-    ///     the step <c>delta / div</c> underflows to zero; the port's <c>MathUtil.Linspace</c> always computes
-    ///     <c>i * step + start</c>, so over a subnormal range every point but the last collapses onto <c>start</c>.
+    ///     QA-54 (fixed 2026-11-11): the EDF grid must be NumPy's <c>np.linspace</c>, which switches to
+    ///     <c>(i / div) * delta + start</c> when the step <c>delta / div</c> underflows to zero; the port's
+    ///     <c>MathUtil.Linspace</c> always computed <c>i * step + start</c>, so over a subnormal range every point but the last
+    ///     collapsed onto <c>start</c>. <c>MathUtil.Linspace</c> now delegates to NumSharp's <c>np.linspace</c>, which ports
+    ///     that branch.
     /// </summary>
     /// <remarks>
     ///     NumPy's linspace keeps a "denormal" branch (gh-5437): with objective values <c>0.0</c> and <c>5e-324</c> the
@@ -147,7 +149,6 @@ public class VisualizationParityBugTests
     ///     Exotic input (a whole study inside the subnormal range).
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void Edf_SubnormalValueRange_GridFollowsNumpyLinspace()
     {
         var study = Optuna.CreateStudy();

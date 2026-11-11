@@ -171,17 +171,18 @@ public class PercentilePruner : BasePruner
     }
 
     /// <summary>
-    ///     NumPy <c>np.nanpercentile(values, q)</c> with the default <c>method="linear"</c>, ported operation for
-    ///     operation from numpy's <c>_quantile</c> (<c>_get_indexes</c>, <c>_get_gamma</c>, <c>_lerp</c>) so the
-    ///     cutoff, and therefore every prune decision, is bit-identical to Optuna's.
+    ///     NumPy <c>np.nanpercentile(values, q)</c> with the default <c>method="linear"</c>, computed by NumSharp's
+    ///     <c>np.nanpercentile</c>, which ports NumPy's <c>_quantile</c> statements and its <c>introselect</c> partition, so
+    ///     the cutoff, and therefore every prune decision, is Optuna's to the last bit (the sign of a zero result in all
+    ///     but rare tie patterns, see remarks).
     /// </summary>
     /// <remarks>
     ///     <para>Two numpy details decide the result, and a textbook <c>a + (b - a) * t</c> gets both wrong:</para>
     ///     <list type="bullet">
     ///         <item><description><c>_lerp</c> computes <c>b - (b - a) * (1 - t)</c> when <c>t &gt;= 0.5</c>. The two
-    ///         formulas differ in the last bit for ordinary data: the median of 0.01 and 0.03 is 0.02 here and in
-    ///         numpy but 0.019999999999999997 with the textbook formula, which flips the decision for a trial that
-    ///         reported exactly 0.02 (pre-release review item H4).</description></item>
+    ///         formulas differ in the last bit for ordinary data: the median of 0.01 and 0.03 is 0.02 in numpy but
+    ///         0.019999999999999997 with the textbook formula, which flips the decision for a trial that reported
+    ///         exactly 0.02 (pre-release review item H4).</description></item>
     ///         <item><description>The two neighbours are always combined, even when the virtual index lands exactly
     ///         on an element (<c>t == 0</c>) or at or past the last one (numpy clamps both neighbours to the last
     ///         element and measures <c>t</c> from index -1). An infinite neighbour therefore makes the result NaN
@@ -189,66 +190,35 @@ public class PercentilePruner : BasePruner
     ///         <c>[1, 2, inf]</c> is NaN, not 2, so the pruner keeps the trial exactly as Optuna does, while the
     ///         median of <c>[-inf, 1]</c> is <c>-inf</c>.</description></item>
     ///     </list>
-    ///     <para>NaN inputs are dropped first, as <c>nanpercentile</c> does; the order of the remaining values does
-    ///     not matter because they are sorted. Only the sign of a zero result can differ from numpy (its partition
-    ///     may order <c>-0.0</c> and <c>0.0</c> differently), which no comparison can observe.</para>
+    ///     <para>
+    ///         This was a hand port of those statements over a full sort, equal to NumPy in value everywhere but not in the
+    ///         sign of a zero result: NumPy's partition keeps a particular one of tied <c>-0.0</c>/<c>0.0</c> neighbours,
+    ///         and a sort does not reproduce which (596 of 600 seeded cases bit-identical on 2026-11-11, the four others a
+    ///         zero of the other sign). NumSharp's partition follows NumPy's, 600 of 600 on the same cases; one tie pattern
+    ///         still differs in NumSharp 0.80.0 (the median of <c>[0.0, -0.0, -0.0, -1.0]</c>: NumPy <c>-0.0</c>, NumSharp
+    ///         and the former port <c>+0.0</c>), pinned by an <c>[OpenBugs]</c> test for when NumSharp catches up. No
+    ///         comparison observes a zero's sign, so prune decisions match either way. A call costs a few microseconds,
+    ///         once per pruning check.
+    ///     </para>
     /// </remarks>
     /// <param name="values">Numerical observations consumed in their supplied order.</param>
     /// <param name="percentile">Percentage defining the retained reference cutoff, in [0, 100].</param>
     /// <returns>
-    ///     The interpolated percentile of the non-NaN values, or NaN when every value is NaN or there are none. With an
-    ///     infinite value among the two interpolated neighbours the result is NaN or infinite, exactly as numpy's
-    ///     (see remarks).
+    ///     The interpolated percentile of the non-NaN values, or NaN when every value is NaN or there are none (NumPy's
+    ///     result, without its RuntimeWarning). With an infinite value among the two interpolated neighbours the result is
+    ///     NaN or infinite, exactly as numpy's (see remarks).
     /// </returns>
     internal static double NanPercentile(IEnumerable<double> values, double percentile)
     {
-        var data = values.Where(v => !double.IsNaN(v)).ToArray();
+        double[] data = values as double[] ?? values.ToArray();
+        // NumPy answers an empty array through np.nanmean (NaN plus a warning); returning NaN here keeps that contract
+        // explicit instead of depending on the empty-input route.
         if (data.Length == 0)
             return double.NaN;
-        Array.Sort(data);
-
-        int n = data.Length;
-        // np.true_divide(q, 100), then the 'linear' method's virtual index (n - 1) * q, both in float64.
-        double quantile = percentile / 100.0;
-        double virtualIndex = (n - 1) * quantile;
-
-        // _get_indexes: the floor and the element after it. An index at or past the last element takes the last
-        // element for both neighbours (numpy stores -1); a negative one takes the first.
-        double previousIndex = Math.Floor(virtualIndex);
-        double nextIndex = previousIndex + 1;
-        if (virtualIndex >= n - 1)
-        {
-            previousIndex = -1;
-            nextIndex = -1;
-        }
-        if (virtualIndex < 0)
-        {
-            previousIndex = 0;
-            nextIndex = 0;
-        }
-
-        double previous = data[previousIndex < 0 ? n - 1 : (int)previousIndex];
-        double next = data[nextIndex < 0 ? n - 1 : (int)nextIndex];
-
-        // _get_gamma measures from the clamped index: a clamped -1 gives gamma = virtualIndex + 1 (>= 1), which
-        // sends _lerp down its `b - diff * (1 - t)` branch with diff == 0, or NaN when the last element is infinite.
-        double gamma = virtualIndex - previousIndex;
-        return Lerp(previous, next, gamma);
-    }
-
-    /// <summary>
-    ///     numpy's <c>_lerp(a, b, t)</c>: <c>a + (b - a) * t</c> below <c>t = 0.5</c> and <c>b - (b - a) * (1 - t)</c>
-    ///     from 0.5 on. The second form returns <c>b</c> exactly at <c>t == 1</c>, and choosing between the forms the
-    ///     way numpy does is what makes the median of two values bit-identical to numpy's.
-    /// </summary>
-    /// <param name="a">The lower neighbour (the value at the floor of the virtual index).</param>
-    /// <param name="b">The upper neighbour.</param>
-    /// <param name="t">The interpolation weight; numpy can pass values above 1 for a clamped index.</param>
-    /// <returns>The interpolated value; NaN or infinite when either neighbour is infinite, as in numpy.</returns>
-    private static double Lerp(double a, double b, double t)
-    {
-        double diff = b - a;
-        return t >= 0.5 ? b - diff * (1 - t) : a + diff * t;
+        // A zero-copy view: nanpercentile partitions a copy (overwrite_input=False), so the caller's values stay intact.
+        using NDArray view = np.array(data, copy: false);
+        using NDArray cutoff = np.nanpercentile(view, percentile);
+        return (double)cutoff;
     }
 
     /// <summary>Python <c>_is_first_in_interval_step</c>.</summary>

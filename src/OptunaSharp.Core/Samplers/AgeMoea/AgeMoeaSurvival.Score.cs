@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using NumSharp;
 
 namespace OptunaSharp.Samplers.AgeMoea;
 
@@ -137,10 +138,8 @@ internal partial class AgeMoeaSurvival
 
         double p = ComputeGeometry(front, extreme, n);
 
-        // nn = ||front||_p per row;  distances = pairwise / nn[:, None]
-        var nn = new double[m];
-        for (int i = 0; i < m; i++)
-            nn[i] = VectorNorm(front[i], p);
+        // nn = np.linalg.norm(front, p, axis=1);  distances = pairwise / nn[:, None]
+        double[] nn = RowNorms(front, p);
 
         double[][] sym = PairwiseDistances(front, p);
         // distances[a][b] = sym[a][b] / nn[a]
@@ -267,33 +266,41 @@ internal partial class AgeMoeaSurvival
     }
 
     /// <summary>
-    ///     <c>np.linalg.norm(x, ord=p)</c> for a vector, mirroring NumPy's branches: <c>ord==1</c> is
-    ///     the sum of absolute values (the common case, since the clamp makes <c>p==1.0</c> a mass
-    ///     point), <c>ord==2</c> is the Euclidean norm, and the general branch is
-    ///     <c>(Σ|x|^p)^(1/p)</c>.
+    ///     pymoo's <c>nn = np.linalg.norm(front, p, axis=1)</c>: the p-norm of every row of the normalized front,
+    ///     computed by NumSharp's <c>np.linalg.norm</c> with the same axis, so each row is reduced in NumPy's order. pymoo
+    ///     calls it from <c>survival_score</c>, which is plain NumPy (not one of the numba <c>fastmath</c> kernels).
     /// </summary>
-    /// <param name="x">Input numerical coordinates or observation rows.</param>
-    /// <param name="p">Minkowski norm exponent describing the front geometry.</param>
-    /// <returns>The vector p-norm.</returns>
-    internal static double VectorNorm(double[] x, double p)
+    /// <param name="front">The normalized front, one row per individual; rows must share one length.</param>
+    /// <param name="p">Minkowski norm exponent describing the front geometry (1 and 20 are the clamps; any positive value).</param>
+    /// <returns>One norm per row, in row order.</returns>
+    /// <remarks>
+    ///     <para>
+    ///         With an axis NumPy takes its per-order branches: <c>add.reduce(abs(x))</c> for <c>ord == 1</c>,
+    ///         <c>sqrt(add.reduce(x * x))</c> for 2, <c>add.reduce(abs(x) ** p) ** (1 / p)</c> otherwise (with
+    ///         <c>np.power</c>'s fast exponents), each <c>add.reduce</c> over a contiguous row, i.e. NumPy's pairwise sum.
+    ///         The former per-row <c>VectorNorm</c> summed left to right, the same for fronts of fewer than eight objectives
+    ///         and different in the last bits from eight on, AGE-MOEA-2's many-objective regime.
+    ///     </para>
+    ///     <para>
+    ///         At eight or more objectives pymoo's numba <c>fastmath</c> kernels (pairwise distances, corner search) may
+    ///         reassociate their own sums, so exact parity there also depends on them; this removes the divergence on the
+    ///         NumPy side. The live gate covers two and three objectives, where both forms agree.
+    ///     </para>
+    /// </remarks>
+    internal static double[] RowNorms(double[][] front, double p)
     {
-        if (double.IsPositiveInfinity(p))
-            return x.Max(Math.Abs);
-        if (p == 1.0)
-        {
-            double s = 0.0;
-            foreach (double v in x) s += Math.Abs(v);
-            return s;
-        }
-        if (p == 2.0)
-        {
-            double s = 0.0;
-            foreach (double v in x) s += v * v;
-            return Math.Sqrt(s);
-        }
-        double acc = 0.0;
-        foreach (double v in x) acc += Math.Pow(Math.Abs(v), p);
-        return Math.Pow(acc, 1.0 / p);
+        int m = front.Length;
+        if (m == 0)
+            return Array.Empty<double>();
+        int n = front[0].Length;
+        // The jagged rows are copied into one C-contiguous (m, n) block, the layout pymoo's array has.
+        var block = new double[m, n];
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < n; j++)
+                block[i, j] = front[i][j];
+        using NDArray view = np.array(block, copy: false);
+        using NDArray norms = np.linalg.norm(view, p, axis: 1);
+        return norms.ToArray<double>();
     }
 
     /// <summary>

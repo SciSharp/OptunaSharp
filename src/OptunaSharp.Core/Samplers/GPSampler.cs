@@ -521,32 +521,45 @@ public class GPSampler : BaseSampler
 
     /// <summary>
     ///     <c>_standardize_values</c> — clip non-finite values (<c>warn_and_convert_inf</c>) then
-    ///     per-objective standardize <c>(v − mean) / max(EPS, std)</c> (population std, matching
-    ///     <c>np.std</c>). Returns the standardized matrix plus the per-column means/stds (the
-    ///     constraint path needs the means/stds for its thresholds).
+    ///     per-objective standardize <c>(v − mean) / max(EPS, std)</c>, with the column means and population stds taken
+    ///     by NumSharp's <c>np.mean(values, axis=0)</c> / <c>np.std(values, axis=0)</c> over the whole
+    ///     <c>(n_trials, n_objectives)</c> matrix, NumPy's reduction schedule included. Returns the standardized matrix plus
+    ///     the per-column means/stds (the constraint path needs them for its thresholds).
     /// </summary>
     /// <param name="values">Objective observations with one trial per row and one objective per column.</param>
     /// <returns>Standardized objective columns, their original means, and standard deviations.</returns>
+    /// <remarks>
+    ///     <para>
+    ///         NumPy reduces axis 0 of a C-contiguous matrix by adding whole rows in order, a sequential sum per column;
+    ///         a single column, shape <c>(n, 1)</c>, collapses to one contiguous run and is summed pairwise instead. The
+    ///         former per-column <see cref="MathUtil.Mean" />/<see cref="MathUtil.Std" /> summed every column pairwise, so
+    ///         a multi-objective study with eight or more trials standardized differently from Optuna in the last bits
+    ///         (measured against NumPy 2.4.2: 17 of 45 two- and three-objective column statistics equal, all 9
+    ///         single-objective ones equal); NumSharp follows NumPy's schedule in both cases (54 of 54).
+    ///     </para>
+    ///     <para>The matrix is viewed zero-copy and every transient array is disposed before returning.</para>
+    /// </remarks>
     private static (double[,] Standardized, double[] Means, double[] Stds) StandardizeValues(double[,] values)
     {
         double[,] clipped = WarnAndConvertInf(values);
         int n = clipped.GetLength(0);
         int m = clipped.GetLength(1);
+        double[] means, stds;
+        using (NDArray view = np.array(clipped, copy: false))
+        using (NDArray meanArray = np.mean(view, axis: 0))
+        using (NDArray stdArray = np.std(view, axis: 0))
+        {
+            means = meanArray.ToArray<double>();
+            stds = stdArray.ToArray<double>();
+        }
+        // (clipped_values - means) / np.maximum(EPS, stds): one subtraction and one division per element, as NumPy's
+        // broadcast ufuncs compute them.
         var result = new double[n, m];
-        var means = new double[m];
-        var stds = new double[m];
         for (int j = 0; j < m; j++)
         {
-            var col = new double[n];
+            double denom = Math.Max(Eps, stds[j]);
             for (int t = 0; t < n; t++)
-                col[t] = clipped[t, j];
-            double mean = MathUtil.Mean(col);
-            double std = MathUtil.Std(col);
-            means[j] = mean;
-            stds[j] = std;
-            double denom = Math.Max(Eps, std);
-            for (int t = 0; t < n; t++)
-                result[t, j] = (col[t] - mean) / denom;
+                result[t, j] = (clipped[t, j] - means[j]) / denom;
         }
         return (result, means, stds);
     }
