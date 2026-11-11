@@ -67,7 +67,8 @@ public class Run2OptunaHubBridgeParityBugTests
     /// <remarks>
     ///     The same loss changes the trajectories of the NSGA-II-based hub samplers (<c>nsgaii_with_initial_trials</c>,
     ///     <c>speaii</c>: from the first generation boundary, trial 8 with <c>population_size=8</c>) and of
-    ///     <c>implicit_natural_gradient</c> (from trial 7), all reproducible natively. Unaffected in the same comparison:
+    ///     <c>implicit_natural_gradient</c> (from trial 7), and the Optuna team's <c>AutoSampler</c>
+    ///     (<c>samplers/auto_sampler</c>) differs from trial 1, all reproducible natively. Unaffected in the same comparison:
     ///     <c>differential_evolution</c>, <c>restart_cmaes</c>, <c>levy_flight_sampler</c>, <c>nelder_mead</c>,
     ///     <c>tpe_union_multivariate</c>, <c>random_search</c>. In the registry 26 samplers implement <c>after_trial</c>
     ///     and 25 read or write system attributes.
