@@ -812,7 +812,11 @@ internal sealed partial class JournalStorageReplayResult
     /// <summary>Number of log records already consumed by replay.</summary>
     internal int LogNumberRead;
     private string _workerIdPrefix;
-    private readonly Dictionary<int, FrozenStudy> _studies = new();
+
+    // Python's `self._studies: dict[int, FrozenStudy]`: creation order across deletions, as a dict appends new keys, where
+    // a Dictionary<int, ...> lists the next study in a deleted one's freed slot (QA-67; `optuna studies` on a journal file
+    // printed `a, c, d` and `optunasharp studies` `a, d, c`). The snapshot codecs write and read studies in this order.
+    private readonly OrderedDict<int, FrozenStudy> _studies = new();
     private readonly Dictionary<int, FrozenTrial> _trials = new();
 
     private readonly Dictionary<int, List<int>> _studyIdToTrialIds = new();

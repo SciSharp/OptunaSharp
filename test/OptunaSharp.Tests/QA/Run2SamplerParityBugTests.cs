@@ -54,9 +54,11 @@ public class Run2SamplerParityBugTests
     ///     <c>_preserve_niche_individuals</c> shows closest reference points <c>[0, 0]</c>, distances <c>[nan, nan]</c>
     ///     and the order <c>[1, 0]</c>. Any front whose members are all non-finite in one objective (an objective that
     ///     returns <c>inf</c> to signal a failed evaluation) reaches this path. Finite ties sort identically in both.
+    ///     <b>Fixed 2026-11-12:</b> the borderline front is sorted by <c>PyListSort</c>, a port of CPython 3.12's
+    ///     <c>list.sort</c>, with Python's tuple <c>&lt;</c> (<c>DistanceIndexLessThan</c>); checked against 353 recorded
+    ///     CPython sorts in <c>oracle/cpython_order.json</c>.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void Nsga3_AllInfiniteBorderlineFront_KeepsPythonsNichingOrder()
     {
         var seed0 = RunAllInfiniteFirstGeneration(0).Trials[2];
@@ -215,9 +217,11 @@ public class Run2SamplerParityBugTests
     ///     7, 15, 10, 1, 9, 13, 11, 8, 2, 4</c>; the port's 13th value is <c>4</c> instead of <c>11</c>, once four
     ///     unvisited grids remain (seed 2 parts at the same trial, seed 1 happens to agree). Matching it means
     ///     reproducing CPython's set layout for small ints (hash = value, 8-slot minimum table, linear probing).
+    ///     <b>Fixed 2026-11-12:</b> <c>GetUnvisitedGridIds</c> builds the differences with <c>PyIntSet</c>, a model of
+    ///     CPython 3.12's set table, so the list comes in CPython's iteration order; checked against 271 recorded
+    ///     differences in <c>oracle/cpython_order.json</c>. The <c>[Misaligned]</c> note in GridSampler is gone.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void GridSampler_ShiftedNumbering_PicksUnvisitedGridsInCPythonSetOrder()
     {
         var space = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.IReadOnlyList<OptunaSharp.Distributions.CategoricalChoice>>

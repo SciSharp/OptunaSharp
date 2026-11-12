@@ -59,9 +59,12 @@ public class Run2SqliteParityBugTests
     ///         The EF Core storage builds the same <c>IN</c> list (PostgreSQL allows 65,535 parameters, MySQL a packet's
     ///         worth) without a fallback either; it is not covered here.
     ///     </para>
+    ///     <b>Fixed 2026-11-12:</b> the read catches the SQLite errors Python raises as <c>OperationalError</c>, logs
+    ///     Optuna's warning and reads every trial of the base query, keeping the included ones and those above the
+    ///     watermark, as <c>_get_trials</c> does. EF Core never binds one variable per id (MySQL inlines the ids,
+    ///     PostgreSQL passes one array), so it needs no fallback.
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void CachedRefresh_TooManyRunningTrialsBelowTheWatermark_FallsBackLikeOptuna()
     {
         string path = Path.Combine(Path.GetTempPath(), $"optunasharp-rdb-qa59-{Guid.NewGuid():N}.db");
@@ -138,9 +141,10 @@ public class Run2SqliteParityBugTests
     ///     values already match (Optuna sorts parameters by <c>param_id</c>; intermediate values come by step through
     ///     the same kind of index, as in the port). Only key order differs; no sampler depends on it (they read system
     ///     attributes by key, CMA-ES sorts its keys).
+    ///     <b>Fixed 2026-11-12:</b> study and trial attribute reads order by <c>"key"</c> (the unique index's order);
+    ///     <c>get_all_studies</c> keeps insertion order, as Optuna's table scan does.
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void AttributeReads_ComeBackInKeyOrderLikeOptunasIndexScan()
     {
         string path = Path.Combine(Path.GetTempPath(), $"optunasharp-rdb-qa71-{Guid.NewGuid():N}.db");

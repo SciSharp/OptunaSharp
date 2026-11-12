@@ -682,25 +682,32 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
 
     /// <inheritdoc />
     public override OrderedDict<string, object?> GetStudyUserAttrs(int studyId)
-        => GetStudyAttrs("study_user_attributes", "study_user_attribute_id", studyId);
+        => GetStudyAttrs("study_user_attributes", studyId);
 
     /// <inheritdoc />
     public override OrderedDict<string, object?> GetStudySystemAttrs(int studyId)
-        => GetStudyAttrs("study_system_attributes", "study_system_attribute_id", studyId);
+        => GetStudyAttrs("study_system_attributes", studyId);
 
-    /// <summary>Loads and decodes all attributes of the selected kind for a study.</summary>
+    /// <summary>Loads and decodes all attributes of the selected kind for a study, in key order as Optuna reads them.</summary>
     /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
-    /// <param name="idColumn">The trusted identifier column used to group records.</param>
     /// <param name="studyId">The storage-wide study identifier, not its display name.</param>
-    /// <returns>Decoded attributes in their stored traversal order.</returns>
-    private OrderedDict<string, object?> GetStudyAttrs(string table, string idColumn, int studyId)
+    /// <returns>Decoded attributes in key order (SQLite's BINARY collation, byte order of the UTF-8 text).</returns>
+    /// <exception cref="NumSharp.KeyError">No study with <paramref name="studyId" /> exists.</exception>
+    /// <remarks>
+    ///     Optuna's <c>where_study_id</c> query has no <c>ORDER BY</c>; SQLite answers <c>WHERE study_id = ?</c> through
+    ///     the unique <c>(study_id, key)</c> autoindex, so <c>study.user_attrs</c> and <c>load_study</c> list keys
+    ///     sorted: set <c>zz, b, m</c>, read <c>b, m, zz</c>. The port ordered by the attribute id, insertion order
+    ///     (QA-71). <c>get_all_studies</c> scans the table instead and keeps insertion order on both sides
+    ///     (<see cref="LoadAllStudyAttrs" />).
+    /// </remarks>
+    private OrderedDict<string, object?> GetStudyAttrs(string table, int studyId)
     {
         lock (_lock)
         {
             EnsureStudyExists(studyId, null);
             var attrs = new OrderedDict<string, object?>();
             Query(
-                $"SELECT \"key\", value_json FROM {table} WHERE study_id = $p0 ORDER BY {idColumn}",
+                $"SELECT \"key\", value_json FROM {table} WHERE study_id = $p0 ORDER BY \"key\"",
                 null,
                 r => attrs[r.GetString(0)] = PyJson.Loads(r.GetString(1)),
                 studyId);
@@ -1215,6 +1222,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         var sql = new StringBuilder(
             "SELECT trial_id, number, state, datetime_start, datetime_complete FROM trials WHERE ");
         var args = new List<object?>();
+        string? baseSql = null;
+        int baseArgCount = 0;
 
         if (singleTrialId is not null)
         {
@@ -1242,6 +1251,10 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
                 if (i == 0)
                     return new List<FrozenTrial>();
             }
+
+            // Python's `query`, before the incremental conditions: the fallback below reads it whole.
+            baseSql = sql.ToString();
+            baseArgCount = args.Count;
 
             if (included.Count > 0 && trialIdGreaterThan > -1)
             {
@@ -1276,12 +1289,34 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         sql.Append(" ORDER BY trial_id");
 
         var trialRows = new List<(int TrialId, int Number, TrialState State, string? Start, string? Complete)>();
-        Query(sql.ToString(), null, r => trialRows.Add((
+        Action<SqliteDataReader> readTrialRow = r => trialRows.Add((
             (int)r.GetInt64(0),
             (int)r.GetInt64(1),
             RdbModels.StateFromDb(r.GetString(2)),
             r.IsDBNull(3) ? null : r.GetString(3),
-            r.IsDBNull(4) ? null : r.GetString(4))), args.ToArray());
+            r.IsDBNull(4) ? null : r.GetString(4)));
+        try
+        {
+            Query(sql.ToString(), null, readTrialRow, args.ToArray());
+        }
+        catch (SqliteException e) when (baseSql is not null && IsOperationalError(e))
+        {
+            // Python `_get_trials`: `except sqlalchemy_exc.OperationalError` - "likely exceeding the number of maximum
+            // allowed variables using IN". The cached refresh binds one variable per unfinished trial below the watermark,
+            // and past SQLite's limit (32,766 in the e_sqlite3 build Microsoft.Data.Sqlite ships) the read threw "too many
+            // SQL variables", so a study with that many trials left RUNNING could no longer be read (QA-59). Optuna logs
+            // the error, reads every trial the base query matches and keeps the included ones and those above the
+            // watermark, in trial-id order. Only the multi-trial read has this fallback, as only `_get_trials` does.
+            _logger.Warning($"Caught an error from sqlalchemy: {e.Message}. Falling back to a slower alternative.");
+            trialRows.Clear();
+            var keep = new HashSet<int>(included);
+            Query(baseSql + " ORDER BY trial_id", null, r =>
+            {
+                int trialId = (int)r.GetInt64(0);
+                if (keep.Contains(trialId) || trialId > trialIdGreaterThan)
+                    readTrialRow(r);
+            }, args.Take(baseArgCount).ToArray());
+        }
 
         if (trialRows.Count == 0)
             return new List<FrozenTrial>();
@@ -1290,8 +1325,8 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         var paramsByTrial = LoadTrialParams(trialIds);
         var valuesByTrial = LoadTrialValues(trialIds);
         var intermediateByTrial = LoadTrialIntermediateValues(trialIds);
-        var userByTrial = LoadTrialAttrs("trial_user_attributes", "trial_user_attribute_id", trialIds);
-        var systemByTrial = LoadTrialAttrs("trial_system_attributes", "trial_system_attribute_id", trialIds);
+        var userByTrial = LoadTrialAttrs("trial_user_attributes", trialIds);
+        var systemByTrial = LoadTrialAttrs("trial_system_attributes", trialIds);
 
         // One parse per distinct distribution text for this load (plan 13, item S9 as measured): a 40-parameter study
         // repeats 40 texts, and parsing every parameter row was 40 % of a 10,000-trial cold load, where the attribute
@@ -1451,13 +1486,19 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         return byTrial;
     }
 
-    /// <summary>Loads serialized trial attributes grouped by trial identifier.</summary>
+    /// <summary>Loads serialized trial attributes grouped by trial identifier, each trial's in key order.</summary>
     /// <param name="table">The trusted schema table name selected by the storage implementation.</param>
-    /// <param name="idColumn">The trusted identifier column used to group records.</param>
     /// <param name="trialIds">The storage-wide identifiers whose child records are read.</param>
-    /// <returns>Attribute rows grouped by storage-wide trial identifier.</returns>
-    private Dictionary<int, List<(string Key, string Json)>> LoadTrialAttrs(
-        string table, string idColumn, IReadOnlyList<int> trialIds)
+    /// <returns>Attribute rows grouped by storage-wide trial identifier, each group in key order.</returns>
+    /// <remarks>
+    ///     Optuna loads a trial's attributes with <c>selectinload</c> (<c>WHERE trial_id IN (...)</c>, no
+    ///     <c>ORDER BY</c>) or a lazy load (<c>WHERE trial_id = ?</c>); SQLite answers both through the unique
+    ///     <c>(trial_id, key)</c> autoindex, so <c>study.trials</c>, <c>get_trial</c> and <c>best_trial</c> list each
+    ///     trial's attributes sorted by key (BINARY collation), and <c>get_all_artifact_meta</c>, which walks the system
+    ///     attributes, lists artifacts in <c>artifacts:&lt;uuid&gt;</c> key order. The port ordered by attribute id,
+    ///     insertion order (QA-71); <c>ORDER BY trial_id, "key"</c> is that index's order.
+    /// </remarks>
+    private Dictionary<int, List<(string Key, string Json)>> LoadTrialAttrs(string table, IReadOnlyList<int> trialIds)
     {
         var byTrial = new Dictionary<int, List<(string, string)>>();
         ReadChildrenInChunks(
@@ -1469,7 +1510,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
                     byTrial[tid] = list = new List<(string, string)>();
                 list.Add((r.GetString(1), r.GetString(2)));
             },
-            orderBy: idColumn);
+            orderBy: "trial_id, \"key\"");
         return byTrial;
     }
 
@@ -1626,6 +1667,16 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     /// <returns>The serialized timestamp or null when the timestamp is absent.</returns>
     private static object? OrNull(DateTime? value)
         => value is null ? null : RdbModels.FormatDatetime(value.Value);
+
+    /// <summary>
+    ///     Whether an SQLite error is one Python's <c>sqlite3</c> raises as <c>OperationalError</c> (which SQLAlchemy
+    ///     wraps as its own <c>OperationalError</c>): the primary result codes ERROR (which covers "too many SQL
+    ///     variables"), PERM, ABORT, BUSY, LOCKED, READONLY, INTERRUPT, IOERR, FULL, CANTOPEN, PROTOCOL, EMPTY and SCHEMA.
+    /// </summary>
+    /// <param name="e">The provider exception to classify.</param>
+    /// <returns>Whether Optuna's <c>except OperationalError</c> would catch it.</returns>
+    private static bool IsOperationalError(SqliteException e)
+        => (e.SqliteErrorCode & 0xFF) is 1 or 3 or 4 or 5 or 6 or 8 or 9 or 10 or 13 or 14 or 15 or 16 or 17;
 
     /// <summary>Recognizes provider-specific uniqueness failures so duplicate studies can be translated consistently.</summary>
     /// <param name="e">The provider exception to classify or translate.</param>

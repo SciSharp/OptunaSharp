@@ -60,9 +60,10 @@ public class Run2EFCoreParityBugTests
     ///     <c>zz, b, m</c> in the port; trial user attributes <c>k, a</c> as <c>a, k</c>. On PostgreSQL 16 Optuna's own order
     ///     is not stable (sorted on the first read of a study, insertion order after <c>load_study</c>), so there is no
     ///     single target and no PostgreSQL case here.
+    ///     <b>Fixed 2026-11-12:</b> on MySQL the EF Core storage reads study and trial attributes ordered by key
+    ///     (the column collation's order, as InnoDB's unique indexes return them); PostgreSQL keeps insertion order.
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void MySqlAttributeReads_ComeBackInKeyOrderLikeOptuna()
     {
         EFCoreDbSession.EnsureAvailable(RdbProvider.MySql);

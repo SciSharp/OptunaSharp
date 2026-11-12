@@ -249,7 +249,10 @@ public class GridSampler : BaseSampler
 
     /// <summary>Finds unfinished grids, preferring those not currently assigned to running trials.</summary>
     /// <param name="study">Study supplying trial history, objective directions, and storage.</param>
-    /// <returns>Grid indices still requiring completion, preferring grids without running evaluations.</returns>
+    /// <returns>
+    ///     Grid indices still requiring completion, preferring grids without running evaluations, in CPython's
+    ///     set-iteration order (the order <c>rng.choice</c> indexes).
+    /// </returns>
     private List<int> GetUnvisitedGridIds(Study study)
     {
         // List up unvisited grids based on already finished ones.
@@ -274,20 +277,17 @@ public class GridSampler : BaseSampler
             }
         }
 
-        // [Misaligned] Python builds `list(set(range(n)) - visited - running)`, whose order is
-        // CPython's set-iteration order; we return ascending order instead. This is observable
-        // ONLY through the concurrency `choice(target_grids)` branch of before_trial (≥2 unvisited
-        // grids while trial.number >= n_min_trials), which single-threaded optimize never reaches
-        // — each trial finishes before the next, so the grid is exhausted (and the study stopped)
-        // by the fast path. Under real concurrency the chosen grid is timing-dependent in Optuna
-        // too, so bit-exact reproduction there is not a meaningful parity target.
-        var unvisitedGrids = Enumerable.Range(0, _nMinTrials)
-            .Where(g => !visitedGrids.Contains(g) && !runningGrids.Contains(g)).ToList();
+        // `list(set(range(n)) - set(visited_grids) - set(running_grids))`, in CPython's set-iteration order: before_trial
+        // indexes this list with `rng.choice`, so ascending order picked another grid for the same draw. That branch is
+        // not only concurrency's: a single-threaded optimize reaches it whenever the study's numbering is shifted
+        // (trials from add_trial / enqueue_trial, another sampler, a resumed study) and >= 2 grids remain, e.g. 12 added
+        // trials then a 16-point grid, where Optuna's 13th grid trial is x=11 and ascending order gave x=4 (QA-68).
+        var unvisitedGrids = PyIntSet.Range(_nMinTrials).Difference(visitedGrids).Difference(runningGrids).ToList();
 
         // If evaluations for all grids have been started, return grids that have not yet finished
         // because all grids should be evaluated before stopping the optimization.
         if (unvisitedGrids.Count == 0)
-            unvisitedGrids = Enumerable.Range(0, _nMinTrials).Where(g => !visitedGrids.Contains(g)).ToList();
+            unvisitedGrids = PyIntSet.Range(_nMinTrials).Difference(visitedGrids).ToList();
 
         return unvisitedGrids;
     }

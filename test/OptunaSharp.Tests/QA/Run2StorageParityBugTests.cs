@@ -63,6 +63,11 @@ public class Run2StorageParityBugTests
     ///         the port's <c>Trial</c> keeps a detached copy since <c>3a75811</c>). An aliasing artifact of Python's
     ///         copy-on-write rather than a designed contract, so LOW; the owner decides whether to copy it.
     ///     </para>
+    ///     <para>
+    ///         <b>Deferred</b> by the owner on 2026-11-12: the port keeps handing out snapshots for now and this repro
+    ///         stays open. Copying the aliasing would undo the copy-before-write that keeps <c>n_jobs</c> readers safe,
+    ///         unless the shared dictionaries became concurrent ones.
+    ///     </para>
     /// </remarks>
     [TestMethod]
     [OpenBugs]
@@ -155,9 +160,10 @@ public class Run2StorageParityBugTests
     ///     <c>load_study(study_name=None)</c>'s error message. The containers are <c>InMemoryStorage._studies</c> and
     ///     <c>JournalStorageReplayResult._studies</c>; an insertion-ordered dictionary (the repository's
     ///     <c>OrderedDict</c>) would keep Python's order.
+    ///     <b>Fixed 2026-11-12:</b> the in-memory storage and the journal's replay result keep their studies in an
+    ///     insertion-ordered <c>OrderedDict</c>, as Python's dicts do.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void StudyListing_AfterDeletions_KeepsCreationOrderLikePythonDicts()
     {
         NamesAfterDeletions(new InMemoryStorage()).Should().Equal("c", "d", "e", "f");

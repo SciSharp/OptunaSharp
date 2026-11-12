@@ -26,7 +26,11 @@ public class InMemoryStorage : BaseStorage
 
     private readonly Dictionary<int, (int StudyId, int Number)> _trialIdToStudyIdAndNumber = new();
     private readonly Dictionary<string, int> _studyNameToId = new();
-    private readonly Dictionary<int, StudyInfo> _studies = new();
+
+    // Python's `self._studies: dict[int, _StudyInfo]` lists studies in creation order across deletions: a dict appends a
+    // new key after the existing ones, while a Dictionary<int, ...> reuses a deleted study's freed slot and lists the next
+    // study there, which reached get_all_studies and load_study's name list (QA-67). Every access holds _lock.
+    private readonly OrderedDict<int, StudyInfo> _studies = new();
 
     private int _maxStudyId = -1;
     private int _maxTrialId = -1;

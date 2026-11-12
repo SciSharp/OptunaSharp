@@ -8,11 +8,12 @@ using OptunaSharp.Samplers;
 namespace OptunaSharp.Tests.QA;
 
 /// <summary>
-///     Open parity bugs in how Optuna's warnings reach the user, found by the 2026-11-10 parity QA run
-///     (<c>docs/qa/PARITY_QA_2026-11-10.md</c>, QA-77). Optuna raises them with Python's <c>warnings.warn</c>, which
-///     prints to stderr through <c>warnings.showwarning</c>, outside <c>optuna.logging</c>, once per distinct message and
-///     call site under the default filters. The port sends every warning through the <c>optuna</c> logger at WARNING
-///     level (<c>OptunaWarnings.Warn</c>). A test marked <c>[OpenBugs]</c> fails until its divergence is fixed.
+///     How Optuna's warnings reach the user, found by the 2026-11-10 parity QA run (<c>docs/qa/PARITY_QA_2026-11-10.md</c>,
+///     QA-77). Optuna raises them with Python's <c>warnings.warn</c>, which prints to stderr through
+///     <c>warnings.showwarning</c>, outside <c>optuna.logging</c>, once per distinct message and call site under the default
+///     filters. The port sends every warning through the <c>optuna</c> logger at WARNING level (<c>OptunaWarnings.Warn</c>).
+///     The owner chose to keep the logger on 2026-11-12, so both tests are <c>[Misaligned]</c>: they pin the port's
+///     behavior and record Optuna's.
 /// </summary>
 /// <remarks>
 ///     Both tests redirect stderr and rebuild the library logger around it, the way <c>LoggingTests</c> does, and put
@@ -32,9 +33,14 @@ public class Run2WarningParityBugTests
     ///     It will be replaced with [0, 0.9].</c> The port routes the warning through the logger, whose level then drops
     ///     it: nothing reaches stderr.
     /// </summary>
+    /// <remarks>
+    ///     <b>Misaligned</b> by the owner's decision of 2026-11-12 ("Keep the logger"): warnings stay on the <c>optuna</c>
+    ///     logger, so a log handler sees them and the verbosity governs them. This test pins that the port prints nothing
+    ///     at ERROR, where Optuna prints the warning once.
+    /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
-    public void Warnings_StillReachStderr_WhenVerbosityIsError()
+    [Misaligned]
+    public void Warnings_FollowTheLoggersVerbosity_SoErrorHidesThem()
     {
         string stderr = CaptureStderr(LogLevel.Error, () =>
         {
@@ -42,7 +48,7 @@ public class Run2WarningParityBugTests
             study.Optimize(t => t.SuggestFloat("x", 0, 1, step: 0.3), nTrials: 3);
         });
 
-        stderr.Should().Contain(StepWarning, "Python's warnings.warn ignores optuna.logging's verbosity");
+        stderr.Should().NotContain(StepWarning, "the logger at ERROR drops WARNING records; Python's warnings.warn would print it");
     }
 
     /// <summary>
@@ -50,11 +56,15 @@ public class Run2WarningParityBugTests
     ///     is shown once, so five trials suggesting the same non-divisible float show it once (measured: two distinct
     ///     warnings, two lines, for a float and an int parameter over five trials). The port logs it on every trial. This
     ///     half was already listed in the 2026-10-26 release review's LOW notes ("OptunaWarnings logs every
-    ///     occurrence"); this test pins it.
+    ///     occurrence").
     /// </summary>
+    /// <remarks>
+    ///     <b>Misaligned</b> by the owner's decision of 2026-11-12 ("Keep the logger"): every occurrence is a log record.
+    ///     This test pins five records for five trials, where Optuna prints one line.
+    /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
-    public void RepeatedWarning_IsShownOnceLikePythonsDefaultFilter()
+    [Misaligned]
+    public void RepeatedWarning_IsLoggedOnEveryOccurrence()
     {
         string stderr = CaptureStderr(LogLevel.Info, () =>
         {
@@ -62,7 +72,7 @@ public class Run2WarningParityBugTests
             study.Optimize(t => t.SuggestFloat("x", 0, 1, step: 0.3), nTrials: 5);
         });
 
-        Regex.Matches(stderr, Regex.Escape(StepWarning)).Count.Should().Be(1);
+        Regex.Matches(stderr, Regex.Escape(StepWarning)).Count.Should().Be(5, "Python's default filter would show it once");
     }
 
     /// <summary>

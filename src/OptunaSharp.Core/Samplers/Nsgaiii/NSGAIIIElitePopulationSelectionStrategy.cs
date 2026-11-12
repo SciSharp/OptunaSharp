@@ -458,12 +458,12 @@ public class NSGAIIIElitePopulationSelectionStrategy
             }
             else if (count == 0)
             {
-                // list.sort(reverse=True) on (distance, index) tuples (index is unique -> total order).
-                borderline.Sort((x, y) =>
-                {
-                    int c = y.Distance.CompareTo(x.Distance);
-                    return c != 0 ? c : y.Index.CompareTo(x.Index);
-                });
+                // list.sort(reverse=True) on (distance, index) tuples, through CPython's own sort: a NaN distance (a front
+                // with no finite value in some objective makes _filter_inf return NaN) compares neither smaller nor
+                // larger than anything, so only CPython's exact sequence of comparisons reproduces where such pairs end
+                // up; a comparer treating NaN as equal reversed an all-NaN front, and pop() then took the other pair
+                // (QA-56).
+                PyListSort.Sort(borderline, DistanceIndexLessThan, reverse: true);
             }
 
             var selected = borderline[^1];
@@ -475,6 +475,19 @@ public class NSGAIIIElitePopulationSelectionStrategy
 
         return additionalElitePopulation;
     }
+
+    /// <summary>
+    ///     CPython's <c>&lt;</c> on <c>(np.float64 distance, int index)</c> tuples, as <c>_preserve_niche_individuals</c>
+    ///     sorts them: equal distances compare by index; otherwise the distances compare, and a NaN distance is never
+    ///     less and never greater (each tuple holds its own float64 object, so two NaNs are not even identical).
+    /// </summary>
+    /// <param name="x">The left tuple.</param>
+    /// <param name="y">The right tuple.</param>
+    /// <returns>Whether <paramref name="x" /> &lt; <paramref name="y" /> in Python.</returns>
+    internal static bool DistanceIndexLessThan((double Distance, int Index) x, (double Distance, int Index) y)
+        // Tuple comparison: the first unequal element decides. `nan == nan` is False, so a NaN distance decides, and
+        // `nan < v` / `v < nan` are False.
+        => x.Distance == y.Distance ? x.Index < y.Index : x.Distance < y.Distance;
 
     /// <summary>Python <c>defaultdict(list)</c> access: auto-create the bucket for a missing key.</summary>
     /// <param name="dict">Dictionary mapping niche identifiers to mutable element lists.</param>

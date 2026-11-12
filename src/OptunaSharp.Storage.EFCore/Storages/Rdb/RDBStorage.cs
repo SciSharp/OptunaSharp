@@ -793,8 +793,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         using var ctx = NewContext();
         EnsureStudyExists(ctx, studyId);
         var attrs = new OrderedDict<string, object?>();
-        foreach (var row in ctx.StudyUserAttributes.AsNoTracking()
-                     .Where(a => a.StudyId == studyId).OrderBy(a => a.StudyUserAttributeId))
+        var rows = ctx.StudyUserAttributes.AsNoTracking().Where(a => a.StudyId == studyId);
+        foreach (var row in AttributesInKeyOrder ? rows.OrderBy(a => a.Key) : rows.OrderBy(a => a.StudyUserAttributeId))
             attrs[row.Key!] = PyJson.Loads(row.ValueJson!);
         return attrs;
     }
@@ -805,11 +805,26 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         using var ctx = NewContext();
         EnsureStudyExists(ctx, studyId);
         var attrs = new OrderedDict<string, object?>();
-        foreach (var row in ctx.StudySystemAttributes.AsNoTracking()
-                     .Where(a => a.StudyId == studyId).OrderBy(a => a.StudySystemAttributeId))
+        var rows = ctx.StudySystemAttributes.AsNoTracking().Where(a => a.StudyId == studyId);
+        foreach (var row in AttributesInKeyOrder ? rows.OrderBy(a => a.Key) : rows.OrderBy(a => a.StudySystemAttributeId))
             attrs[row.Key!] = PyJson.Loads(row.ValueJson!);
         return attrs;
     }
+
+    /// <summary>
+    ///     Whether a study's or a trial's attributes are read in key order (MySQL) rather than insertion order.
+    /// </summary>
+    /// <remarks>
+    ///     Optuna's attribute queries have no <c>ORDER BY</c> (<c>where_study_id</c>, a trial's <c>selectinload</c> or lazy
+    ///     load), so each backend returns rows in the order its plan finds them. InnoDB answers <c>WHERE study_id = ?</c>
+    ///     and <c>WHERE trial_id IN (...)</c> through the unique <c>(study_id, key)</c> / <c>(trial_id, key)</c> indexes,
+    ///     so on MySQL 8.0 <c>study.user_attrs</c>, <c>study.trials</c> and <c>get_all_artifact_meta</c> list keys in the
+    ///     column collation's order, which an <c>ORDER BY key</c> reproduces; the port listed them in insertion order
+    ///     (QA-71, measured). On PostgreSQL 16 Optuna's own order is unstable (sorted on a first read, insertion order
+    ///     after <c>load_study</c>), so the port keeps insertion order there. <c>get_all_studies</c> scans the tables
+    ///     without a <c>WHERE</c> and keeps insertion order on every backend (<see cref="LoadAllStudyAttrs" />).
+    /// </remarks>
+    private bool AttributesInKeyOrder => _provider == RdbProvider.MySql;
 
     /// <inheritdoc />
     public override List<FrozenStudy> GetAllStudies()
@@ -1326,7 +1341,7 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         using var ctx = NewContext();
         EnsureTrialExists(ctx, trialId);
         var trials = GetTrialsInternal(ctx, studyId: null, singleTrialId: trialId, states: null,
-            includedTrialIds: null, trialIdGreaterThan: -1);
+            includedTrialIds: null, trialIdGreaterThan: -1, AttributesInKeyOrder);
         return trials[0];
     }
 
@@ -1336,7 +1351,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     {
         using var ctx = NewContext();
         EnsureStudyExists(ctx, studyId);
-        return GetTrialsInternal(ctx, studyId, singleTrialId: null, states, includedTrialIds: null, trialIdGreaterThan: -1);
+        return GetTrialsInternal(ctx, studyId, singleTrialId: null, states, includedTrialIds: null, trialIdGreaterThan: -1,
+            AttributesInKeyOrder);
     }
 
     /// <summary>Loads explicitly included trials and trials newer than an incremental trial-id cursor.</summary>
@@ -1353,7 +1369,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     {
         using var ctx = NewContext();
         EnsureStudyExists(ctx, studyId);
-        return GetTrialsInternal(ctx, studyId, singleTrialId: null, states, includedTrialIds, trialIdGreaterThan);
+        return GetTrialsInternal(ctx, studyId, singleTrialId: null, states, includedTrialIds, trialIdGreaterThan,
+            AttributesInKeyOrder);
     }
 
     /// <summary>Materializes matching trial records and their parameters, values, and attributes.</summary>
@@ -1363,6 +1380,10 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     /// <param name="states">The allowed trial states, or null to include every state.</param>
     /// <param name="includedTrialIds">Trial identifiers to include even when they are at or below the incremental cursor.</param>
     /// <param name="trialIdGreaterThan">The exclusive lower trial-id bound for incremental reads.</param>
+    /// <param name="attributesInKeyOrder">
+    ///     Whether each trial's attributes come back in key order, as Optuna's index scans return them on MySQL
+    ///     (<see cref="AttributesInKeyOrder" />), instead of insertion order.
+    /// </param>
     /// <returns>Matching trial snapshots with their child records materialized.</returns>
     private static List<FrozenTrial> GetTrialsInternal(
         OptunaRdbContext ctx,
@@ -1370,7 +1391,8 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
         int? singleTrialId,
         IReadOnlyCollection<TrialState>? states,
         IReadOnlyCollection<int>? includedTrialIds,
-        int trialIdGreaterThan)
+        int trialIdGreaterThan,
+        bool attributesInKeyOrder)
     {
         // Python `_get_trials`: keep only tracked ids at or below the watermark; the rest are already
         // covered by the `trial_id > trial_id_greater_than` clause.
@@ -1428,13 +1450,19 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
             .Select(v => new { v.TrialId, v.Step, v.IntermediateValue, v.IntermediateValueType })
             .AsEnumerable().GroupBy(v => v.TrialId).ToDictionary(g => g.Key, g => g.ToList());
 
-        var userByTrial = ctx.TrialUserAttributes.AsNoTracking()
-            .Where(a => idSet.Contains(a.TrialId!.Value)).OrderBy(a => a.TrialUserAttributeId)
+        // GroupBy keeps each group's rows in query order, so (trial_id, key) - the unique index InnoDB reads them
+        // through for Optuna - gives every trial its attributes in key order (QA-71); otherwise insertion order.
+        var userAttrQuery = ctx.TrialUserAttributes.AsNoTracking().Where(a => idSet.Contains(a.TrialId!.Value));
+        var userByTrial = (attributesInKeyOrder
+                ? userAttrQuery.OrderBy(a => a.TrialId).ThenBy(a => a.Key)
+                : userAttrQuery.OrderBy(a => a.TrialUserAttributeId))
             .Select(a => new { a.TrialId, a.Key, a.ValueJson })
             .AsEnumerable().GroupBy(a => a.TrialId!.Value).ToDictionary(g => g.Key, g => g.ToList());
 
-        var systemByTrial = ctx.TrialSystemAttributes.AsNoTracking()
-            .Where(a => idSet.Contains(a.TrialId!.Value)).OrderBy(a => a.TrialSystemAttributeId)
+        var systemAttrQuery = ctx.TrialSystemAttributes.AsNoTracking().Where(a => idSet.Contains(a.TrialId!.Value));
+        var systemByTrial = (attributesInKeyOrder
+                ? systemAttrQuery.OrderBy(a => a.TrialId).ThenBy(a => a.Key)
+                : systemAttrQuery.OrderBy(a => a.TrialSystemAttributeId))
             .Select(a => new { a.TrialId, a.Key, a.ValueJson })
             .AsEnumerable().GroupBy(a => a.TrialId!.Value).ToDictionary(g => g.Key, g => g.ToList());
 
