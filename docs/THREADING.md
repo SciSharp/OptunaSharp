@@ -32,7 +32,10 @@
 - 2026-11-08: no Core sampler hands one point to two trials asked at once: the samplers that derived a candidate
   from state that changes only when a trial finishes now also look at the running trials, which leaves sequential
   runs unchanged; BruteForce diverges from Optuna's strict mode to do so; the Python bridges are measured and
-  pinned (§6.3; [plan 12](plans/12-parallel-read-duplicates.md)).
+  pinned (§6.3; [plan 12](plans/12-parallel-read-duplicates.md));
+- 2026-11-12: the genetic samplers redraw a child only when a running trial asked on *another thread* holds it, so a
+  batch one caller asks on one thread before telling it (Optuna's batch-optimization pattern) draws Optuna's
+  children again (owner's decision, QA-57 of `docs/qa/PARITY_QA_2026-11-10.md`; §6.3).
 
 No threading item is open. §12 lists the known limits.
 
@@ -669,16 +672,28 @@ and ends, around one native call to OpenBLAS).
   | `LmCmaSampler` | 8–10 | a Rademacher candidate no running trial of the generation holds (redrawn up to 32 times); otherwise an independent sample |
   | `TurboSampler`, `SaasboSampler` | every startup round, 7 | the first row of the startup Sobol design no completed or running trial holds (stamped `turbo:init`, `saasbo:init`); rows past the design are the sequence's next points |
   | `RandomEmbeddingSampler` | up to 21 | an acquisition fitted with the running trials' latents as constant lies, so its optimum moves |
-  | NSGA-II/III and their CPT variant, AGE-MOEA-2 and its CPT variant, SMS-EMOA, RVEA, MOEA/D, the JANUS multi-objective samplers | 1 in one run of 12–20 | a child generated again while a running trial holds it (up to 32 times); otherwise an independent sample |
+  | NSGA-II/III and their CPT variant, AGE-MOEA-2 and its CPT variant, SMS-EMOA, RVEA, MOEA/D, the JANUS multi-objective samplers | 1 in one run of 12–20 | a child generated again while a running trial asked on another thread holds it (up to 32 times); otherwise an independent sample. A batch asked on one thread is not redrawn (below) |
   | `BruteForceSampler`, both modes | strict 3–8 per 88 trials, default 0–1 | a point no running trial holds or will take (below) |
 
   - **Sequential runs are unchanged.** Every rule but JANUS's keys on *other* running trials, and a run of one trial
     at a time has none; JANUS's hands each slot of a generation out once, which consecutive trials asked one at a time
     do anyway. So such a run never skips a slot, redraws or lies, and seeded results, Optuna parity and JANUS's byte
-    parity with its reference are the same. (One edge: after a JANUS trial fails, its generation is never told, and
+    parity with its reference are the same.
+  - **One caller's batch follows Optuna in the genetic samplers** (owner's decision of 2026-11-12, QA-57). A caller
+    that asks several trials on one thread before telling any of them (Optuna's batch-optimization tutorial) keeps
+    them all running without any concurrency, and Optuna generates each of their children once. The genetic samplers
+    (the row above) therefore redraw a child only when a running trial asked on *another* thread holds it: each held
+    child records a token of the thread that claimed it (`AskingThread`, an object per thread, since .NET reuses the
+    managed ids of exited threads). Under `Optimize(nJobs)` every trial runs on one worker thread, and concurrent
+    callers ask on their own threads, so both are still steered apart. Seed 311031104, population 6, batches of 5:
+    trial 18 is Optuna's `v5=0.02621137972316322` again (it was trial 1's value, from a redrawn child). The other
+    rules still key on every other running trial, so a one-thread batch of PSO, DE, LM-CMA, JANUS, TuRBO, SAASBO,
+    REMBO or BruteForce is steered apart like concurrent asks; those samplers have no Optuna trajectory to follow,
+    except BruteForce, whose concurrency rule is already `[Misaligned]` (below). (One edge: after a JANUS trial fails, its generation is never told, and
     the trials past its slots are sampled independently instead of evaluating its candidates again.)
   - **Pinned by** `SamplerParallelReadTests`, over every Core sampler, both on eight threads (`ParallelReads.Fire`)
-    and in lockstep, every read of a round landing before any write (`ParallelReads.ReadInLockstep`), with the
+    and in lockstep, every read of a round landing before any write, each on a thread of its own as a concurrent
+    worker's (`ParallelReads.ReadInLockstep(readsOnOwnThreads: true)`), with the
     per-worker instances too; with populations larger than a round, so a generation's trials finish before the
     generation is complete; and in whole `Optimize(nJobs: 16)` runs, where no sampler that never re-proposes a
     finished point evaluated a point twice in 120 trials (xNES aside: its distribution can degenerate one trial at

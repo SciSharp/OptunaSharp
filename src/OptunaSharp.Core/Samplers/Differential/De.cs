@@ -4,8 +4,10 @@
 //   Rainer Storn and Kenneth Price. "Differential Evolution — A Simple and Efficient Heuristic for
 //   Global Optimization over Continuous Spaces." Journal of Global Optimization 11:341–359 (1997).
 //
-// DE has no `cmaes`/Optuna/OptunaHub counterpart, so — like `LmCma` — this is a native, textbook-faithful
-// implementation validated by convergence, with no upstream trajectory to bit-match. The RNG is
+// DE has no `cmaes`/Optuna counterpart; OptunaHub's `samplers/differential_evolution` is another
+// implementation this one does not follow (see `DifferentialEvolutionSampler`), so — like `LmCma` — this is
+// a native, textbook-faithful implementation validated by convergence, with no upstream trajectory to
+// bit-match. The RNG is
 // NumSharp's MT19937 `RandomState` (the project's "never System.Random" discipline). The optimizer
 // works in an arbitrary (unbounded) coordinate space: mutation/crossover never clamp, so a bounded
 // caller (both `DifferentialEvolutionSampler` and the JANUS `DePopulationHost`) clamps each candidate

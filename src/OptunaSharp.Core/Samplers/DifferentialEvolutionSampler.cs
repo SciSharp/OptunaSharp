@@ -8,9 +8,12 @@
 // protocol, following the `LmCmaSampler` idiom: the optimizer state is serialized into trial system
 // attrs (so a DE study resumes across process boundaries / distributed workers), each trial re-seeds
 // the optimizer and asks a single candidate, and every asked candidate is clamped to the transformed
-// box (DE is unconstrained, so bounds are the sampler's concession). DE is NOT part of the Optuna
-// ecosystem (no `cmaes` class, no Optuna sampler, no OptunaHub package), so — like `LmCmaSampler` —
-// this is a native implementation validated by convergence, with no upstream trajectory to bit-match.
+// box (DE is unconstrained, so bounds are the sampler's concession). Optuna itself has no DE sampler
+// (and `cmaes` no DE class). OptunaHub has one (`samplers/differential_evolution`, `DESampler`, since
+// 2024-12), but this port follows Storn & Price, not that package, so parameters, defaults and seeded
+// trajectories differ (the map is in the class remarks; QA-70 of docs/qa/PARITY_QA_2026-11-10.md, where
+// the owner chose on 2026-11-12 to keep this port). Like `LmCmaSampler` it is a native implementation
+// validated by convergence, with no upstream trajectory to bit-match.
 
 using System;
 using System.Collections.Generic;
@@ -48,6 +51,20 @@ namespace OptunaSharp.Samplers;
 ///
 ///     <para>Categorical parameters and single-value distributions are handled by the independent sampler,
 ///     as in <see cref="CmaEsSampler" />.</para>
+///
+///     <para><b>Not OptunaHub's <c>DESampler</c>.</b> OptunaHub's <c>samplers/differential_evolution</c> is another
+///     implementation of DE/rand/1/bin, which this class does not follow, so a study moved over from it gets other
+///     defaults and other trials (registry pinned in <c>refs/optunahub-registry</c>):</para>
+///     <list type="table">
+///         <listheader><term>OptunaHub <c>DESampler</c></term><description>This class</description></listheader>
+///         <item><term><c>population_size="auto"</c>: <c>max(20, 10d)</c> below 5 dimensions, <c>max(30, 10d)</c> up to 30,
+///             then <c>max(50, 5d)</c></term><description><c>popsize</c>: <c>max(8, 4 + ⌊3 ln d⌋)</c></description></item>
+///         <item><term><c>F=0.8</c></term><description><c>f = 0.8</c></description></item>
+///         <item><term><c>CR=0.7</c></term><description><c>cr = 0.9</c></description></item>
+///         <item><term>DE/rand/1/bin only</term><description><c>strategy</c>: <c>"rand1bin"</c> (default) or <c>"best1bin"</c></description></item>
+///         <item><term><c>search_space</c>, <c>debug</c>, <c>seed</c></term><description><c>seed</c>; the search space is
+///             inferred; plus <c>nStartupTrials</c>, <c>independentSampler</c>, <c>warnIndependentSampling</c></description></item>
+///     </list>
 /// </summary>
 /// <example>
 ///     <code>

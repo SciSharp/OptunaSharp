@@ -107,15 +107,19 @@ public class Run2SamplerParityBugTests
     ///     trial 1. Optuna generates one child and samples <c>v5</c> independently.
     /// </summary>
     /// <remarks>
-    ///     Optuna 5.0.0 (NSGA-II and NSGA-III alike): trial 18 is <c>lr2='a', v5=0.02621137972316322</c>; the port gives
+    ///     Optuna 5.0.0 (NSGA-II and NSGA-III alike): trial 18 is <c>lr2='a', v5=0.02621137972316322</c>; the port gave
     ///     <c>v5=0.00021556396515864647</c> (trial 1's value). Every random draw up to trial 18's mutation decisions is
-    ///     identical (MT19937 states compared at every ask); the extra <c>_child_generation_strategy</c> calls are the
+    ///     identical (MT19937 states compared at every ask); the extra <c>_child_generation_strategy</c> calls were the
     ///     divergence. THREADING.md states that runs asking one trial at a time keep Optuna parity; this run asks on one
     ///     thread too, but keeps five trials running, which Optuna's ask-and-tell tutorial recommends for batch
     ///     evaluation. Even under real concurrency the two partial children are not one point.
+    ///     <para>
+    ///         Fixed 2026-11-12 (owner's decision): a child is redrawn only when a running trial asked on another thread
+    ///         holds it (<c>HandedOutParams</c> records the claiming thread), so a batch asked on one thread draws exactly
+    ///         what Optuna draws, while concurrent workers stay steered apart (<c>SamplerParallelReadTests</c>).
+    ///     </para>
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void Nsga_BatchedAskTell_PartialChildIsNotRedrawn()
     {
         foreach (var sampler in new BaseSampler[]

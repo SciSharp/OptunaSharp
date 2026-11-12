@@ -12,8 +12,9 @@ namespace OptunaSharp.Tests.QA;
 /// <summary>
 ///     Open parity bugs in the distribution classes, found by the 2026-11-02 parity QA run
 ///     (<c>docs/qa/PARITY_QA_2026-11-02.md</c>, findings QA-1 to QA-10). Every expected value is what
-///     Optuna 5.0.0 returns on CPython 3.12 for the same call; each test fails today and passes once the
-///     divergence is fixed, at which point its <c>[OpenBugs]</c> attribute should be removed.
+///     Optuna 5.0.0 returns on CPython 3.12 for the same call; each <c>[OpenBugs]</c> test fails today and passes
+///     once the divergence is fixed, at which point the attribute should be removed. The <c>[Misaligned]</c> tests pin
+///     a divergence the owner chose to keep (QA-3, 2026-11-12) and record Optuna's values beside the port's.
 /// </summary>
 /// <remarks>
 ///     Most of these come from one root cause: <see cref="FloatDistribution" /> ports
@@ -133,42 +134,45 @@ public class DistributionParityBugTests
     }
 
     /// <summary>
-    ///     QA-3: magnitudes outside .NET decimal's range must follow Python's unbounded-exponent decimal; the
-    ///     port silently treats values below <c>1e-28</c> as zero, which can even leave <c>high &lt; low</c>.
+    ///     QA-3: Python adjusts a stepped float range with its unbounded-exponent <c>Decimal</c>; the port uses .NET
+    ///     <c>decimal</c>, which reads values below <c>1e-28</c> as zero. <b>Misaligned</b> by the owner's decision of
+    ///     2026-11-12 (question Q1, answered with QA-62): the port keeps .NET <c>decimal</c>, and this test pins its
+    ///     values.
     /// </summary>
     /// <remarks>
     ///     Python: <c>FloatDistribution(0.0, 5e-324, step=0.1).high</c> is <c>0.0</c> (with the "not divisible"
     ///     warning) and <c>FloatDistribution(5e-324, 0.30000000000000004, step=1.0).high</c> is <c>5e-324</c>.
-    ///     The port keeps <c>5e-324</c> in the first case and stores <c>high = 0.0 &lt; low</c> in the second,
-    ///     an invalid distribution that the constructor's own <c>low &lt;= high</c> check forbids.
+    ///     The port keeps <c>5e-324</c> in the first case and stores <c>high = 0.0</c> in the second, below its
+    ///     <c>low</c> of <c>5e-324</c> (the denormal <c>low</c> reads as zero): the documented cost of the decision,
+    ///     reached only by bounds or steps below <c>1e-28</c>.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
-    public void SteppedHigh_TinyMagnitudes_FollowPythonDecimal()
+    [Misaligned]
+    public void SteppedHigh_TinyMagnitudes_RoundLikeDotNetDecimal()
     {
-        new FloatDistribution(0.0, 5e-324, step: 0.1).High.Should().Be(0.0);
+        new FloatDistribution(0.0, 5e-324, step: 0.1).High.Should().Be(5e-324, "Optuna gives 0.0");
         var inverted = new FloatDistribution(5e-324, 0.30000000000000004, step: 1.0);
-        inverted.High.Should().BeGreaterThanOrEqualTo(inverted.Low, "a distribution must never end below its start");
-        inverted.High.Should().Be(5e-324);
+        inverted.High.Should().Be(0.0, "Optuna gives 5e-324; .NET decimal reads the denormal low as 0");
     }
 
     /// <summary>
     ///     QA-3 (Python raises): a stepped range whose quotient needs more than 28 digits makes Python's
     ///     decimal raise <c>InvalidOperation</c> (<c>DivisionImpossible</c>); the port builds the distribution.
+    ///     <b>Misaligned</b> by the owner's decision of 2026-11-12 (question Q1): the port keeps .NET <c>decimal</c>
+    ///     and accepts the range.
     /// </summary>
     /// <remarks>
     ///     Python: <c>FloatDistribution(0.0, 1e20, step=1e-09)</c> raises
-    ///     <c>decimal.InvalidOperation: [&lt;class 'decimal.DivisionImpossible'&gt;]</c>; NaN or infinite steps
-    ///     and bounds give <c>high=nan</c> or <c>InvalidOperation</c> where the port throws
-    ///     <see cref="FormatException" />. Whether the port should copy this Python limitation is an open
-    ///     question for the owner (see the QA journal); the test pins Optuna's observable behavior.
+    ///     <c>decimal.InvalidOperation: [&lt;class 'decimal.DivisionImpossible'&gt;]</c>; the port keeps
+    ///     <c>high = 1e20</c>. NaN or infinite steps and bounds give <c>high=nan</c> or <c>InvalidOperation</c> in
+    ///     Python where the port throws <see cref="FormatException" />, which the same decision keeps.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
-    public void SteppedHigh_QuotientBeyondDecimalPrecision_RaisesLikePython()
+    [Misaligned]
+    public void SteppedHigh_QuotientBeyondDecimalPrecision_IsAccepted()
     {
-        var act = () => new FloatDistribution(0.0, 1e20, step: 1e-09);
-        act.Should().Throw<Exception>("Python's decimal context (prec=28) raises DivisionImpossible here");
+        new FloatDistribution(0.0, 1e20, step: 1e-09).High.Should().Be(1e20,
+            "Python's decimal context (prec=28) raises DivisionImpossible here; the port's decimal computes the quotient");
     }
 
     /// <summary>

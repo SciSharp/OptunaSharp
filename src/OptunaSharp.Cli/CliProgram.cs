@@ -113,15 +113,32 @@ public static class CliProgram
         OptunaLogging.SetVerbosity(level);
     }
 
-    /// <summary>Attaches the optional log-file destination selected by the command line.</summary>
+    /// <summary>
+    ///     Handles <c>--log-file</c> as Optuna's <c>_set_log_file</c> does: the file is created (opened for append, as
+    ///     <c>logging.FileHandler</c>'s constructor opens it), and no OptunaSharp record is ever written to it.
+    /// </summary>
+    /// <remarks>
+    ///     Optuna attaches its <c>FileHandler</c> to Python's root logger (and sets the root to DEBUG), but the
+    ///     <c>optuna</c> logger is configured with <c>propagate = False</c>, so none of Optuna's records reach the file:
+    ///     measured at 0 bytes for <c>create-study</c>, with <c>-v</c>, and with <c>--debug</c> on a failing command,
+    ///     while stderr still shows the records. OptunaSharp's logging has no root logger above the <c>optuna</c> one, so
+    ///     attaching nothing is the exact equivalent. Copying this Optuna defect is the owner's decision of 2026-11-12
+    ///     (QA-65), as QA-46's slice-plot defect was copied. Creating the file keeps Optuna's failure mode too: a path
+    ///     whose directory does not exist fails the command before it runs, as <c>FileHandler</c>'s constructor does.
+    /// </remarks>
     /// <param name="pr">The parsed command-line options for the current invocation.</param>
+    /// <exception cref="IOException">The file cannot be created or opened (for example, its directory does not exist).</exception>
+    /// <exception cref="UnauthorizedAccessException">The process may not write the file.</exception>
     private static void SetLogFile(ParseResult pr)
     {
         string? logFile = pr.GetValue(LogFileOpt);
         if (logFile is null)
             return;
-        var writer = new StreamWriter(logFile, append: true) { AutoFlush = true };
-        OptunaLogging.AddHandler(new StreamLogHandler(writer));
+
+        // Opened for append and closed at once: the file exists afterwards, as Optuna's leaves it, and stays as it was.
+        using (new FileStream(logFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+        {
+        }
     }
 
     // ---- root/parser assembly — Optuna's _get_parser / _add_commands ---------------------------

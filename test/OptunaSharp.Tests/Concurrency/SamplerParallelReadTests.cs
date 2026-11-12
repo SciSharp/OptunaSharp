@@ -28,7 +28,8 @@ namespace OptunaSharp.Tests.Concurrency;
 ///         applies: seeded results, Optuna parity included, are unchanged.
 ///     </para>
 ///     <para>
-///         The volleys run on eight threads and in lockstep (every read of a round before any write). Rounds release a
+///         The volleys run on eight threads and in lockstep (every read of a round before any write, each on a thread of
+///         its own: the genetic samplers steer apart only children asked on different threads, QA-57). Rounds release a
 ///         generation together, so <see cref="ParallelReads_GenerationSpanningTwoRounds_HandsNoCandidateTwice" /> uses a
 ///         population larger than a round, and
 ///         <see cref="Optimize_SixteenWorkers_SamplerThatNeverRepeats_EvaluatesNoPointTwice" /> runs real
@@ -125,11 +126,15 @@ public class SamplerParallelReadTests
         bool multiObjective = SamplerNJobsSweepTests.MultiObjective.Contains(name);
 
         // On eight threads, whatever interleaving they take; then in lockstep, where every read of a round lands
-        // before any write, the interleaving a sampler that waits for stored parameters handles worst.
+        // before any write, the interleaving a sampler that waits for stored parameters handles worst. The lockstep
+        // reads run on threads of their own, as concurrent workers' do: the genetic samplers steer apart only children
+        // asked on different threads, and leave one caller's batch to Optuna's draws (QA-57, pinned against Optuna by
+        // Run2SamplerParityBugTests.Nsga_BatchedAskTell_PartialChildIsNotRedrawn).
         ParallelReads.Outcome threaded = ParallelReads.Fire(
             SamplerNJobsSweepTests.Make(name), multiObjective, ParallelReads.Space.Continuous, Rounds);
         ParallelReads.Outcome lockstep = ParallelReads.ReadInLockstep(
-            SamplerNJobsSweepTests.Make(name), multiObjective, ParallelReads.Space.Continuous, Rounds);
+            SamplerNJobsSweepTests.Make(name), multiObjective, ParallelReads.Space.Continuous, Rounds,
+            readsOnOwnThreads: true);
 
         AssertNoDuplicates(name, threaded, Rounds);
         AssertNoDuplicates(name, lockstep, Rounds);
@@ -170,7 +175,7 @@ public class SamplerParallelReadTests
                 "de" => new DifferentialEvolutionSampler(seed: 1, popsize: 12),
                 "pso" => new PsoSampler(seed: 1, popsize: 12),
                 _ => new LmCmaSampler(seed: 1, popsize: 12),
-            }, false, ParallelReads.Space.Continuous, Rounds);
+            }, false, ParallelReads.Space.Continuous, Rounds, readsOnOwnThreads: true);
 
         AssertNoDuplicates(name, threaded, Rounds);
         AssertNoDuplicates(name, lockstep, Rounds);
@@ -276,7 +281,8 @@ public class SamplerParallelReadTests
         }, seed: 1);
 
         ParallelReads.Outcome threaded = ParallelReads.Fire(Grid(), false, ParallelReads.Space.Discrete, DiscreteRounds);
-        ParallelReads.Outcome lockstep = ParallelReads.ReadInLockstep(Grid(), false, ParallelReads.Space.Discrete, DiscreteRounds);
+        ParallelReads.Outcome lockstep = ParallelReads.ReadInLockstep(
+            Grid(), false, ParallelReads.Space.Discrete, DiscreteRounds, readsOnOwnThreads: true);
 
         AssertNoDuplicates("grid", threaded, DiscreteRounds);
         AssertNoDuplicates("grid", lockstep, DiscreteRounds);
@@ -305,7 +311,7 @@ public class SamplerParallelReadTests
             DiscreteRounds);
         ParallelReads.Outcome lockstep = ParallelReads.ReadInLockstep(
             new BruteForceSampler(seed: 1, avoidPrematureStop: avoidPrematureStop), false, ParallelReads.Space.Discrete,
-            DiscreteRounds);
+            DiscreteRounds, readsOnOwnThreads: true);
 
         AssertNoDuplicates("bruteforce", threaded, DiscreteRounds);
         AssertNoDuplicates("bruteforce", lockstep, DiscreteRounds);

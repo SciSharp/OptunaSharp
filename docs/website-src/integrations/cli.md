@@ -95,6 +95,11 @@ through `--sampler-kwargs`. This is separate from `ask`'s distribution-based `--
 Common options include `--storage`, `--storage-class`, `-v` / `--verbose`, `-q` / `--quiet`,
 `--log-file`, and `--debug`. Use subcommand help for accepted state names and argument cardinality.
 
+`--log-file` behaves exactly as Optuna's: it creates the file and writes nothing to it. Optuna attaches its file
+handler to Python's root logger, which the `optuna` logger does not propagate to, so the log records still go only to
+stderr; OptunaSharp copies that on purpose, for byte-for-byte CLI parity. Redirect stderr to keep a log
+(`optunasharp ... 2>> run.log`).
+
 `-f value|json|table|yaml` selects a format. `study-names` defaults to `value`, listing commands to
 `table`, and `ask` to `json`. `--flatten` expands structured columns such as parameters, attributes,
 and multi-objective values. The differential tests compare `value`, `json`, and `table` output

@@ -223,6 +223,27 @@ internal sealed class HandedOutPoints
 }
 
 /// <summary>
+///     An identity for the thread running now, for telling a running trial asked on this thread (a batch one caller
+///     asked before telling any of it) from one asked on another (a concurrent worker): see
+///     <see cref="HandedOutParams" />.
+/// </summary>
+/// <remarks>
+///     A fresh object per thread, created on the thread's first use, rather than
+///     <see cref="Environment.CurrentManagedThreadId" />: .NET reuses a managed thread id once its thread has exited, so
+///     a trial asked on a thread that has since ended (a caller that handed the trial to another thread and returned)
+///     would pass for the new thread's own. A record holds its token strongly, and no other thread can ever obtain an
+///     equal one, since tokens compare by reference.
+/// </remarks>
+internal static class AskingThread
+{
+    // Per thread: each thread lazily creates its own token and never sees another thread's.
+    [ThreadStatic] private static object? t_token;
+
+    /// <summary>This thread's token, created on first use and the same object for the rest of the thread's life.</summary>
+    internal static object Current => t_token ??= new object();
+}
+
+/// <summary>
 ///     The relative parameters a sampler handed to trials that are still running, per study, so a parameter set a
 ///     running trial evaluates is generated again instead of handed to a second trial: <see cref="HandedOutPoints" />
 ///     for samplers whose candidates are parameter sets in external representation, not unit-box points (the genetic
@@ -236,20 +257,36 @@ internal sealed class HandedOutPoints
 ///         two running trials (NSGA-II and NSGA-III: one run in 12 to 20 at 8 workers).
 ///     </para>
 ///     <para>
-///         The rules of <see cref="HandedOutPoints" /> hold: every member is called under the sampler's monitor, a
-///         sequential run never redraws (so its random stream and seeded results are unchanged), and the record steers
-///         apart only the asks made through this sampler instance in this process. Parameter sets are compared with
-///         Python's <c>==</c> (<see cref="PyJson.ValueEquals(object, object)" />), so a NaN never matches.
+///         <b>Only children asked on another thread count</b> (owner's decision of 2026-11-12, QA-57). A caller that
+///         asks a batch of trials on one thread before telling any of them (Optuna's documented batch-optimization
+///         pattern) keeps several trials running without any concurrency, and Optuna generates each of their children
+///         once; redrawing there left Optuna's seeded trajectory (seed 311031104, population 6, batches of 5: trial 18).
+///         Concurrent workers, <c>Optimize(nJobs)</c>'s or a caller's own threads, ask on different threads, so they
+///         are still steered apart. Each held child records the token of the thread that claimed it
+///         (<see cref="AskingThread" />). The rule covers the samplers whose children Optuna generates (NSGA-II / III and
+///         their relatives) and the other users of this class alike; <see cref="HandedOutPoints" />, whose samplers have
+///         no Optuna trajectory to follow, keeps redrawing against every running trial.
+///     </para>
+///     <para>
+///         The rules of <see cref="HandedOutPoints" /> hold otherwise: every member is called under the sampler's
+///         monitor, a sequential run never redraws (so its random stream and seeded results are unchanged), and the
+///         record steers apart only the asks made through this sampler instance in this process. Parameter sets are
+///         compared with Python's <c>==</c> (<see cref="PyJson.ValueEquals(object, object)" />), so a NaN never matches.
 ///     </para>
 /// </remarks>
 internal sealed class HandedOutParams
 {
-    private readonly PerStudyState<Dictionary<int, OrderedDict<string, object?>>> _byStudy = new();
+    /// <summary>A running trial's child and the token of the thread that claimed it (<see cref="AskingThread" />).</summary>
+    /// <param name="Params">The child handed to the trial; recorded without a copy, so never changed afterwards.</param>
+    /// <param name="ClaimedOn">The claiming thread's token, compared by reference.</param>
+    private readonly record struct HeldChild(OrderedDict<string, object?> Params, object ClaimedOn);
+
+    private readonly PerStudyState<Dictionary<int, HeldChild>> _byStudy = new();
 
     /// <summary>
     ///     Hands the trial the first of <paramref name="candidate" /> and up to <see cref="HandedOutPoints.MaxRedraws" />
-    ///     redraws that no other running trial holds, and records it as the trial's parameters for the asks made while it
-    ///     runs.
+    ///     redraws that no running trial asked on another thread holds, and records it, with this thread's token, as the
+    ///     trial's parameters for the asks made while it runs.
     /// </summary>
     /// <param name="study">The trial's study, whose running trials are read from the storage.</param>
     /// <param name="trial">The trial being sampled.</param>
@@ -259,8 +296,9 @@ internal sealed class HandedOutParams
     ///     after handing it out.
     /// </param>
     /// <param name="redraw">
-    ///     Draws another candidate the same way. Called only while the previous draw is held, so a sequential run never
-    ///     calls it and its random stream, and with it every seeded result, is unchanged.
+    ///     Draws another candidate the same way. Called only while the previous draw is held by a trial asked on another
+    ///     thread, so a sequential run, or a batch one caller asks on one thread, never calls it, and its random stream,
+    ///     with it every seeded result and Optuna parity, is unchanged.
     /// </param>
     /// <returns>
     ///     The parameters handed to the trial, or <c>null</c> when every draw was held (a population collapsed onto one
@@ -275,7 +313,8 @@ internal sealed class HandedOutParams
         if (candidate.Count == 0)
             return candidate;
 
-        List<OrderedDict<string, object?>> held = HeldByOtherRunningTrials(study, trial);
+        object thisThread = AskingThread.Current;
+        List<OrderedDict<string, object?>> held = HeldByOtherThreadsRunningTrials(study, trial, thisThread);
         for (int redraws = 0; IsHeld(held, candidate); redraws++)
         {
             if (redraws == HandedOutPoints.MaxRedraws)
@@ -285,7 +324,7 @@ internal sealed class HandedOutParams
 
         // A redraw can come back empty (the strategy found no parents); then there is nothing to hold either.
         if (candidate.Count > 0)
-            Of(study)[trial.Number] = candidate;
+            Of(study)[trial.Number] = new HeldChild(candidate, thisThread);
         return candidate;
     }
 
@@ -295,17 +334,24 @@ internal sealed class HandedOutParams
     internal void Forget(Study study, int trialNumber) => Of(study).Remove(trialNumber);
 
     /// <summary>
-    ///     The parameter sets other running trials are evaluating. Entries of trials no longer running are dropped on the
-    ///     way.
+    ///     The parameter sets that other running trials, asked on other threads, are evaluating. Entries of trials no
+    ///     longer running are dropped on the way, whichever thread asked for them.
     /// </summary>
     /// <param name="study">The study, whose running trials are read from the storage.</param>
     /// <param name="current">The trial being sampled; never its own holder.</param>
-    /// <returns>The held parameter sets; empty without a storage read when nothing is recorded (a sequential run).</returns>
+    /// <param name="thisThread">
+    ///     The asking thread's token (<see cref="AskingThread.Current" />). Children claimed on this thread are left out:
+    ///     their trials belong to a batch this caller asked one after another, which Optuna does not redraw (QA-57).
+    /// </param>
+    /// <returns>
+    ///     The held parameter sets; empty without a storage read when nothing is recorded (a sequential run).
+    /// </returns>
     /// <exception cref="NumSharp.KeyError">The study no longer exists in storage.</exception>
-    private List<OrderedDict<string, object?>> HeldByOtherRunningTrials(Study study, FrozenTrial current)
+    private List<OrderedDict<string, object?>> HeldByOtherThreadsRunningTrials(
+        Study study, FrozenTrial current, object thisThread)
     {
         var sets = new List<OrderedDict<string, object?>>();
-        Dictionary<int, OrderedDict<string, object?>> handedOut = Of(study);
+        Dictionary<int, HeldChild> handedOut = Of(study);
         if (handedOut.Count == 0)
             return sets;
 
@@ -314,10 +360,16 @@ internal sealed class HandedOutParams
             running.Add(other.Number);
         foreach (int number in new List<int>(handedOut.Keys))
         {
-            if (running.Contains(number))
-                sets.Add(handedOut[number]);
-            else
+            if (!running.Contains(number))
+            {
                 handedOut.Remove(number);   // finished, or told by another process: it holds nothing any more
+                continue;
+            }
+
+            HeldChild child = handedOut[number];
+            // Reference comparison: a token is unique to its thread for the record's whole life (AskingThread).
+            if (!ReferenceEquals(child.ClaimedOn, thisThread))
+                sets.Add(child.Params);
         }
 
         return sets;
@@ -339,8 +391,8 @@ internal sealed class HandedOutParams
     /// <summary>This study's record, created on first use.</summary>
     /// <param name="study">The study.</param>
     /// <returns>The record, keyed by trial number.</returns>
-    private Dictionary<int, OrderedDict<string, object?>> Of(Study study)
-        => _byStudy.Resolve(study, static () => new Dictionary<int, OrderedDict<string, object?>>());
+    private Dictionary<int, HeldChild> Of(Study study)
+        => _byStudy.Resolve(study, static () => new Dictionary<int, HeldChild>());
 }
 
 /// <summary>

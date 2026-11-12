@@ -78,6 +78,12 @@ Expected storage exceptions map through gRPC statuses and back into typed except
 
 The wire format does not transfer sampler random state, executing objectives, artifact file contents, or heartbeat lifecycle operations. Matching stored history is not a claim that separately configured Python and C# workers will suggest identical future trials.
 
+### Dictionary order (a deliberate difference)
+
+Optuna's Python client rebuilds every trial from protobuf maps, and Python protobuf (upb) iterates a map in its own hash-table order. So through Optuna's `GrpcStorageProxy`, `trial.params`, `trial.distributions` and the attribute dictionaries come back in that hash order, not in the order the parameters were suggested: nine floats suggested as `u0, y1, depth2, x3, lr4, z5, a, b, c` read back as `depth2, u0, x3, b, y1, z5, lr4, c, a` (Optuna 5.0.0, grpcio 1.78.0, protobuf 6.33.5), whichever server answers. The C# client keeps the order the server sends: insertion order from a C# server, as every other OptunaSharp storage keeps it.
+
+Two samplers read that order. `QMCSampler` assigns Sobol dimensions in the order of the first trial's distributions, and `BruteForceSampler` builds its tree from it. So a seeded QMC or BruteForce study run through Optuna's proxy can differ from the same study run in memory, in Optuna itself; the same study through the C# client equals its in-memory run. Reproducing upb's internal layout was considered and declined (2026-11-12): it is an implementation detail of Python protobuf that can change with its version. The other samplers are unaffected.
+
 ## Transport and verification scope
 
 The default constructors on both sides use cleartext HTTP/2. HTTPS is available through the .NET [channel](client.md) and [host](server.md) configuration paths, but it must match the other endpoint's transport and trust configuration. An HTTPS C# client cannot communicate with an unchanged insecure Python endpoint. The default examples do not configure authentication.

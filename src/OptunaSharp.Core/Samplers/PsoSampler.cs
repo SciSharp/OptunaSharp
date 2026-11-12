@@ -10,8 +10,11 @@
 // protocol, following the `DifferentialEvolutionSampler` idiom exactly: the optimizer state is serialized
 // into trial system attrs (so a PSO study resumes across process boundaries / distributed workers), each
 // trial re-seeds the optimizer and asks a single candidate, and every asked candidate is clamped to the
-// transformed unit box. PSO is NOT part of the Optuna ecosystem (no `cmaes` class, no Optuna sampler, no
-// OptunaHub package), so — like `DifferentialEvolutionSampler` / `LmCmaSampler` — this is a native
+// transformed unit box. Optuna itself has no PSO sampler (and `cmaes` no PSO class). OptunaHub has one
+// (`samplers/pso`, `PSOSampler`, since 2025-09), but this port follows Kennedy & Eberhart with Shi &
+// Eberhart's decreasing inertia, not that package, so parameters, defaults and seeded trajectories differ
+// (the map is in the class remarks; QA-70 of docs/qa/PARITY_QA_2026-11-10.md, where the owner chose on
+// 2026-11-12 to keep this port). Like `DifferentialEvolutionSampler` / `LmCmaSampler` it is a native
 // implementation validated by convergence, with no upstream trajectory to bit-match. Plan 07 baseline.
 
 using System;
@@ -53,6 +56,21 @@ namespace OptunaSharp.Samplers;
 ///     <c>wMin</c> over <c>inertiaDecayGenerations</c> generations (constant at <c>wMin</c> thereafter).
 ///     Categorical parameters and single-value distributions are handled by the independent sampler, as in
 ///     <see cref="CmaEsSampler" />.</para>
+///
+///     <para><b>Not OptunaHub's <c>PSOSampler</c>.</b> OptunaHub's <c>samplers/pso</c> is another PSO, with a
+///     constant inertia, which this class does not follow, so a study moved over from it gets other defaults and
+///     other trials (registry pinned in <c>refs/optunahub-registry</c>):</para>
+///     <list type="table">
+///         <listheader><term>OptunaHub <c>PSOSampler</c></term><description>This class</description></listheader>
+///         <item><term><c>n_particles=10</c></term><description><c>popsize</c>: <c>max(10, 4 + ⌊3 ln d⌋)</c></description></item>
+///         <item><term><c>inertia=0.5</c>, constant</term><description><c>w = 0.9</c> decreasing linearly to
+///             <c>wMin = 0.4</c> over <c>inertiaDecayGenerations = 100</c></description></item>
+///         <item><term><c>cognitive=1.5</c>, <c>social=1.5</c></term><description><c>c1 = c2 = 1.49445</c></description></item>
+///         <item><term>velocity clamped to the full range of each parameter</term><description><c>maxVelocityRate = 0.2</c>
+///             of the unit box</description></item>
+///         <item><term><c>search_space</c>, <c>seed</c></term><description><c>seed</c>; the search space is inferred; plus
+///             <c>nStartupTrials</c>, <c>independentSampler</c>, <c>warnIndependentSampling</c></description></item>
+///     </list>
 /// </summary>
 /// <example>
 ///     <code>

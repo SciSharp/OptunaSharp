@@ -75,8 +75,9 @@ public class SmsEmoaSampler : BaseSampler
     // review item H3).
     private readonly PerStudyState<StudyPopulation> _populations = new();
 
-    // Per study: the child each running trial received, so a child equal to one a running trial evaluates is
-    // generated again (HandedOutParams). Entries leave with AfterTrial. Guarded by the sampler's monitor.
+    // Per study: the child each running trial received, so a child equal to one a running trial asked on another
+    // thread evaluates is generated again (HandedOutParams; one caller's single-thread batch is not redrawn, QA-57).
+    // Entries leave with AfterTrial. Guarded by the sampler's monitor.
     private readonly HandedOutParams _handedOutChildren = new();
 
     /// <summary>The steady-state population of one study, advanced one completed offspring at a time.</summary>

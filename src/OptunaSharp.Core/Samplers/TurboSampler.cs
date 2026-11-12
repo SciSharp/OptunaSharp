@@ -40,11 +40,26 @@ namespace OptunaSharp.Samplers;
 ///     uniformly better — it wins on multimodal/deceptive problems and can tie or slightly lose on easy ones;
 ///     the paper accordingly reports TuRBO-1 <b>and</b> TuRBO-5/-20 by regime.</para>
 ///
-///     <para><b>Beyond-core, convergence-validated.</b> TuRBO has no Optuna counterpart, so — like
+///     <para><b>Beyond-core, convergence-validated.</b> Optuna itself has no TuRBO. OptunaHub has one, by the
+///     Optuna team (<c>samplers/turbo</c>, <c>TuRBOSampler</c>, since 2025-09), which this class does not follow:
+///     it ports the paper (Eriksson et al. 2019), so a study moved over from the hub package gets other defaults
+///     and other trials (map below; QA-70, owner's decision of 2026-11-12 to keep this port). So — like
 ///     <see cref="LmCmaSampler" /> and <see cref="DifferentialEvolutionSampler" /> — it is validated by
 ///     convergence rather than parity. GP fitting + Thompson sampling ride the same native GP stack as
 ///     <see cref="GPSampler" /> (hand-derived Matérn-5/2 marginal-likelihood gradient, managed L-BFGS-B,
 ///     OpenBLAS Cholesky), so results are tolerance-reproducible on a platform, not bit-exact vs BoTorch.</para>
+///
+///     <para><b>OptunaHub's <c>TuRBOSampler</c> and this class</b> (registry pinned in <c>refs/optunahub-registry</c>):</para>
+///     <list type="table">
+///         <listheader><term>OptunaHub <c>TuRBOSampler</c></term><description>This class</description></listheader>
+///         <item><term><c>n_trust_region=5</c></term><description><c>numTrustRegions = 1</c> (TuRBO-1; pass 5 for TuRBO-5)</description></item>
+///         <item><term><c>n_startup_trials=4</c></term><description><c>nInit</c>: <c>2·d</c> Sobol points per (re)start</description></item>
+///         <item><term><c>failure_tolerance=5</c></term><description><c>failureTolerance</c>: the paper's <c>d</c></description></item>
+///         <item><term><c>success_tolerance=3</c>, <c>init_length=0.8</c>, <c>max_length=1.6</c>, <c>min_length=0.5**7</c></term><description><c>successTolerance = 3</c>,
+///             <c>lengthInit = 0.8</c>, <c>lengthMax = 1.6</c>, <c>lengthMin = 1/128</c>: the same values</description></item>
+///         <item><term><c>seed</c>, <c>independent_sampler</c>, <c>deterministic_objective</c>, <c>warn_independent_sampling</c></term><description>the
+///             same names in C# casing; plus <c>numCandidates</c>, <c>successMargin</c>, <c>minimumNoise</c></description></item>
+///     </list>
 ///
 ///     <para><b>Continuous / integer only.</b> The trust-region box is a continuous construct, so the
 ///     relative search space is Float/Int only; categorical and single-valued parameters are delegated to

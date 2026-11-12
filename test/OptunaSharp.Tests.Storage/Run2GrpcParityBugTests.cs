@@ -12,11 +12,12 @@ using OptunaSharp.Storages.Grpc;
 namespace OptunaSharp.Tests.Storage;
 
 /// <summary>
-///     Open parity bugs in the gRPC storage proxy found by the 2026-11-10 parity QA run
-///     (<c>docs/qa/PARITY_QA_2026-11-10.md</c>). Each test fails today and passes once fixed, at which point its
-///     <c>OpenBugs</c> category should be removed. Every test hosts the C# proxy server in-process over an
-///     <see cref="InMemoryStorage" /> and talks to it through the C# <see cref="GrpcStorageProxy" />, so no Python and
-///     no external service are needed.
+///     The gRPC storage proxy's dictionary order, found by the 2026-11-10 parity QA run
+///     (<c>docs/qa/PARITY_QA_2026-11-10.md</c>, QA-69): Optuna's proxy client returns trial dictionaries in Python
+///     protobuf's hash order, the port's keeps insertion order. The owner chose insertion order on 2026-11-12, so these
+///     tests are <c>Misaligned</c>: they pin the port's order and record Optuna's. Every test hosts the C# proxy server
+///     in-process over an <see cref="InMemoryStorage" /> and talks to it through the C# <see cref="GrpcStorageProxy" />,
+///     so no Python and no external service are needed.
 /// </summary>
 [TestClass]
 public class Run2GrpcParityBugTests
@@ -59,7 +60,9 @@ public class Run2GrpcParityBugTests
     ///     the Python protobuf runtime (upb) iterates a map in its hash-table order, not in insertion order. So through
     ///     Optuna's proxy <c>trial.params</c>, <c>trial.distributions</c> and the attribute dictionaries come back in a
     ///     fixed hash order whatever server sits behind it. The port's client keeps the wire order: insertion order
-    ///     from a C# server, the Python server's own serialization order from a Python server.
+    ///     from a C# server, the Python server's own serialization order from a Python server. <b>Misaligned</b> by the
+    ///     owner's decision of 2026-11-12 (question Q6): the port keeps insertion order, the order of every other
+    ///     storage, rather than reproduce an implementation detail of Python protobuf that can move with its version.
     /// </summary>
     /// <remarks>
     ///     <para>
@@ -80,13 +83,12 @@ public class Run2GrpcParityBugTests
     ///         TPE, CMA-ES, NSGA-II / III and Grid read sorted or per-parameter spaces and were unaffected.
     ///     </para>
     ///     <para>
-    ///         Whether the port should reproduce upb's map order (an implementation artifact of Python protobuf) or keep
-    ///         the order of every other storage is a decision for the owner (question Q6 in the journal).
+    ///         This test pins the port's insertion order; Optuna's order for the same calls is the one quoted above.
     ///     </para>
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
-    public void TrialDictionaries_ReadBackInOptunasProxyOrder()
+    [TestCategory("Misaligned")]
+    public void TrialDictionaries_ReadBackInInsertionOrder_NotOptunasUpbOrder()
     {
         var study = Optuna.CreateStudy(storage: _proxy, studyName: "order");
         var trial = study.Ask();
@@ -98,10 +100,11 @@ public class Run2GrpcParityBugTests
         study.Tell(trial, 0.0);
 
         var frozen = study.Trials[0];
-        frozen.Params.Keys.Should().Equal(new[] { "depth2", "u0", "x3", "b", "y1", "z5", "lr4", "c", "a" },
-            "Optuna's GrpcStorageProxy returns the parameters in protobuf (upb) map order");
-        frozen.Distributions.Keys.Should().Equal(new[] { "depth2", "u0", "x3", "b", "y1", "z5", "lr4", "c", "a" });
-        frozen.UserAttrs.Keys.Should().Equal(new[] { "a2", "zz", "k1" });
+        // Optuna through its own proxy: depth2, u0, x3, b, y1, z5, lr4, c, a (upb map order); user attrs a2, zz, k1.
+        frozen.Params.Keys.Should().Equal(new[] { "u0", "y1", "depth2", "x3", "lr4", "z5", "a", "b", "c" },
+            "the port keeps the suggestion order, as every other storage does");
+        frozen.Distributions.Keys.Should().Equal(new[] { "u0", "y1", "depth2", "x3", "lr4", "z5", "a", "b", "c" });
+        frozen.UserAttrs.Keys.Should().Equal(new[] { "k1", "a2", "zz" });
     }
 
     /// <summary>
@@ -109,20 +112,22 @@ public class Run2GrpcParityBugTests
     ///     the proxy. Optuna's relative search space follows the first trial's <c>distributions</c>, which its proxy
     ///     returns as <c>depth2, u0, y1</c>, so the first Sobol dimension goes to <c>depth2</c>: trial 3 is
     ///     <c>u0 = 0.25, y1 = 0.25, depth2 = 0.75</c>, where the in-memory study (and the port, on either storage) gives
-    ///     <c>u0 = 0.75, y1 = 0.25, depth2 = 0.25</c>.
+    ///     <c>u0 = 0.75, y1 = 0.25, depth2 = 0.25</c>. <b>Misaligned</b> (owner's decision of 2026-11-12): the port's
+    ///     proxy run equals its in-memory run, as Optuna's in-memory run does, not Optuna's proxy run.
     /// </summary>
     [TestMethod]
-    [TestCategory("OpenBugs")]
-    public void QmcThroughGrpc_AssignsDimensionsInOptunasProxyOrder()
+    [TestCategory("Misaligned")]
+    public void QmcThroughGrpc_AssignsDimensionsAsInMemory_NotInOptunasProxyOrder()
     {
         var study = Optuna.CreateStudy(storage: _proxy, studyName: "qmc", sampler: new QMCSampler(seed: 0));
         study.Optimize(t => t.SuggestFloat("u0", 0, 1) + t.SuggestFloat("y1", 0, 1) + t.SuggestFloat("depth2", 0, 1),
             nTrials: 4);
 
         var third = study.Trials[3].Params;
-        // Optuna 5.0.0 through GrpcStorageProxy (grpcio 1.78.0, protobuf 6.33.5 upb).
-        ((double)third["u0"]!).Should().Be(0.25);
+        // Optuna 5.0.0 in memory gives these too; through its GrpcStorageProxy (grpcio 1.78.0, protobuf 6.33.5 upb)
+        // it gives u0 = 0.25, y1 = 0.25, depth2 = 0.75.
+        ((double)third["u0"]!).Should().Be(0.75);
         ((double)third["y1"]!).Should().Be(0.25);
-        ((double)third["depth2"]!).Should().Be(0.75);
+        ((double)third["depth2"]!).Should().Be(0.25);
     }
 }

@@ -96,6 +96,15 @@ Prefer the modern types.
 from `1` when mapping a value back to its internal index — the choices collapse under Python equality.
 This is an accepted upstream behavior, reproduced deliberately and pinned by tests.
 
+**Divergence (kept on purpose).** When a stepped `FloatDistribution`'s range is not divisible by its step, Optuna
+lowers `high` to the last grid point with Python's `Decimal` (28 *significant* digits). OptunaSharp uses .NET
+`decimal` (28 digits *after the point*, nothing below `1e-28`), and the owner chose on 2026-11-12 to keep it. Ordinary
+ranges come out identical. Only tiny magnitudes differ: a bound or step whose shortest repr needs more than 28 decimal
+places (a 17-digit value below about `1e-11`) can leave `high` one ULP from Optuna's and `BruteForceSampler`'s grid one
+point longer; a bound below `1e-28` counts as zero; and a range whose step count needs more than 28 digits, such as
+`(0, 1e20, step: 1e-9)`, is accepted where Optuna raises `decimal.InvalidOperation`. The `FloatDistribution` API docs
+list the measured cases.
+
 ## See also
 
 [Study and Trials](study-and-trials.md) · [Search Spaces](search-spaces.md) · [Samplers](samplers.md) ·

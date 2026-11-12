@@ -86,7 +86,20 @@ arguments (see the knob reference below).
 
 TuRBO is **absent from Optuna core**, so — like [LM-CMA](lm-cma.md),
 [Differential Evolution](differential-evolution.md), and the [OpenAI-ES](openai-es.md) family — it is a
-*beyond-core*, convergence-validated sampler with no Optuna counterpart. It **reuses the native GP stack**
+*beyond-core*, convergence-validated sampler with no Optuna counterpart. OptunaHub does have a TuRBO, by the Optuna
+team ([`samplers/turbo`](https://hub.optuna.org/samplers/turbo/), `TuRBOSampler`, since 2025-09); OptunaSharp ports
+the paper instead and does not follow that package, so a study moved over from it gets other defaults and other
+trials, even with the same seed:
+
+| OptunaHub `TuRBOSampler` | OptunaSharp `TurboSampler` |
+|---|---|
+| `n_trust_region=5` | `numTrustRegions = 1` (TuRBO-1; pass 5 for TuRBO-5) |
+| `n_startup_trials=4` | `nInit`: `2·d` Sobol points per (re)start |
+| `failure_tolerance=5` | `failureTolerance`: the paper's `d` |
+| `success_tolerance=3`, `init_length=0.8`, `max_length=1.6`, `min_length=0.5**7` | `successTolerance = 3`, `lengthInit = 0.8`, `lengthMax = 1.6`, `lengthMin = 1/128`: the same values |
+| `seed`, `independent_sampler`, `deterministic_objective`, `warn_independent_sampling` | the same names in C# casing; plus `numCandidates`, `successMargin`, `minimumNoise` |
+
+The sampler **reuses the native GP stack**
 that [GP-BO](gp.md) ships (`GPRegressor`: Matérn-5/2 ARD, the hand-derived marginal-likelihood gradient,
 managed L-BFGS-B, OpenBLAS Cholesky), so no new surrogate machinery is introduced — the new code is the
 trust-region bookkeeping, the Sobol-in-TR candidate set, and the Thompson draw.

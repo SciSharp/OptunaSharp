@@ -5,9 +5,9 @@ using OptunaSharp.Samplers;
 namespace OptunaSharp.Tests.QA;
 
 /// <summary>
-///     Distribution parity bugs found by the 2026-11-10 parity QA run (<c>docs/qa/PARITY_QA_2026-11-10.md</c>). Expected
+///     Distribution parity findings of the 2026-11-10 parity QA run (<c>docs/qa/PARITY_QA_2026-11-10.md</c>). Optuna's
 ///     values are what Optuna 5.0.0 produces on CPython 3.12. A test marked <c>[OpenBugs]</c> fails until its divergence is
-///     fixed; the attribute is removed with the fix, and the test then guards against a regression.
+///     fixed; a test marked <c>[Misaligned]</c> pins a divergence the owner chose to keep.
 /// </summary>
 [TestClass]
 public class Run2DistributionParityBugTests
@@ -29,23 +29,23 @@ public class Run2DistributionParityBugTests
     ///         5.614297400888218e-13, 2e-15)</c> has 266 values ending at <c>5.594297400888218e-13</c> (the port: 267).
     ///     </para>
     ///     <para>
-    ///         QA-3 (values below <c>1e-28</c> parsing as zero, quotients beyond 28 digits) waits on the owner's
-    ///         question Q1; this test records that the same limitation reaches ordinary tiny steps, which may weigh on
-    ///         that decision.
+    ///         <b>Misaligned</b> by the owner's decision of 2026-11-12 (asked together with QA-3's question Q1): the port
+    ///         keeps .NET <c>decimal</c>, and this test pins its values. The FloatDistribution and BruteForce docs state
+    ///         the rounding.
     ///     </para>
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
-    public void SteppedHigh_ValuesBeyond28DecimalPlaces_FollowPythonDecimal()
+    [Misaligned]
+    public void SteppedHigh_ValuesBeyond28DecimalPlaces_RoundLikeDotNetDecimal()
     {
         var adjusted = new FloatDistribution(4.1271208719049127e-14, 4.085121318968367e-13, step: 1e-15);
-        adjusted.High.Should().Be(4.0827120871904913e-13);
+        adjusted.High.Should().Be(4.082712087190491e-13, "Optuna gives 4.0827120871904913e-13, one ULP above");
 
         var grid = new FloatDistribution(2.942974008882182e-14, 5.615524728866719e-13, step: 2e-15);
         grid.High.Should().Be(5.614297400888218e-13);
         var candidates = BruteForceSampler.EnumerateCandidates(
             new BruteForceSampler.ChoicesArgs(grid.Low, grid.High, grid.Step, isInt: false));
-        candidates.Should().HaveCount(266);
-        candidates[^1].Should().Be(5.594297400888218e-13);
+        candidates.Should().HaveCount(267, "Optuna lists 266 values");
+        candidates[^1].Should().Be(5.614297400888218e-13, "Optuna's last value is 5.594297400888218e-13");
     }
 }

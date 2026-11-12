@@ -13,9 +13,29 @@ namespace OptunaSharp.Distributions;
 ///     passed to samplers in general.
 /// </summary>
 /// <remarks>
-///     When <c>step</c> is not <c>null</c>, if the range <c>[low, high]</c> is not divisible by
-///     <c>step</c>, <c>high</c> will be replaced with the maximum of
-///     <c>k * step + low &lt; high</c>, where <c>k</c> is an integer.
+///     <para>
+///         When <c>step</c> is not <c>null</c>, if the range <c>[low, high]</c> is not divisible by
+///         <c>step</c>, <c>high</c> will be replaced with the maximum of
+///         <c>k * step + low &lt; high</c>, where <c>k</c> is an integer.
+///     </para>
+///     <para>
+///         <b>Tiny magnitudes round differently from Optuna (a kept difference).</b> Optuna does this arithmetic with
+///         Python's <c>Decimal</c> (28 <i>significant</i> digits, unbounded exponent); OptunaSharp uses .NET
+///         <c>decimal</c>, which keeps 28 digits <i>after the point</i> and reads anything below <c>1e-28</c> as zero.
+///         The owner chose on 2026-11-12 to keep it (QA-3 / QA-62 of the parity QA journals). Ordinary ranges are
+///         unaffected; three kinds of input differ:
+///     </para>
+///     <list type="bullet">
+///         <item>a bound or step whose shortest repr needs more than 28 decimal places (a 17-digit value below about
+///             <c>1e-11</c>) can leave <c>high</c> one ULP from Optuna's, and BruteForce's grid one point longer
+///             (<c>FloatDistribution(4.1271208719049127e-14, 4.085121318968367e-13, step: 1e-15)</c>:
+///             <c>4.082712087190491e-13</c>, Optuna <c>4.0827120871904913e-13</c>);</item>
+///         <item>a bound below <c>1e-28</c> counts as zero, so <c>(5e-324, 0.30000000000000004, step: 1.0)</c> ends at
+///             <c>0.0</c>, below its <c>low</c> (Optuna: <c>5e-324</c>);</item>
+///         <item>a range whose step count needs more than 28 digits (<c>(0, 1e20, step: 1e-09)</c>) is accepted, where
+///             Optuna raises <c>decimal.InvalidOperation</c>; a NaN or infinite bound or step throws
+///             <see cref="FormatException" />, where Optuna gives <c>high=nan</c> or <c>InvalidOperation</c>.</item>
+///     </list>
 /// </remarks>
 public class FloatDistribution : BaseDistribution
 {
@@ -151,7 +171,11 @@ public class FloatDistribution : BaseDistribution
     /// <returns>Hash code consistent with distribution equality.</returns>
     public override int GetHashCode() => HashCode.Combine(GetType(), Step, Low, High, Log);
 
-    /// <summary>Python <c>_adjust_discrete_uniform_high</c> (exact Decimal arithmetic on the shortest reprs).</summary>
+    /// <summary>
+    ///     Python <c>_adjust_discrete_uniform_high</c> on the shortest reprs, in .NET <c>decimal</c> where Python uses
+    ///     <c>Decimal</c>: identical for ordinary ranges, different for the tiny magnitudes the class remarks list (a
+    ///     kept difference, QA-3 / QA-62).
+    /// </summary>
     /// <param name="low">Inclusive lower endpoint of the parameter range.</param>
     /// <param name="high">Inclusive upper endpoint; a stepped range may lower it to the last reachable grid point.</param>
     /// <param name="step">Positive grid spacing used to align the upper endpoint.</param>

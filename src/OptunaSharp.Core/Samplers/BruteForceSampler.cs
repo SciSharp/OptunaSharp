@@ -434,6 +434,14 @@ public class BruteForceSampler : BaseSampler
     ///     Port of <c>optuna/samplers/_brute_force.py: _enumerate_candidates</c>. The ordered,
     ///     uniformly-spaced set of candidate values for one parameter (the children keys of a node).
     /// </summary>
+    /// <remarks>
+    ///     Float progressions run in .NET <c>decimal</c> where Python uses <c>Decimal</c>. They agree for ordinary
+    ///     ranges; a bound or step whose shortest repr needs more than 28 decimal places (a 17-digit value below about
+    ///     <c>1e-11</c>), or lies below <c>1e-28</c>, can give one candidate more or less (QA-62:
+    ///     <c>(2.942974008882182e-14, 5.614297400888218e-13, step 2e-15)</c> lists 267 values, Optuna 266). A kept
+    ///     difference, the owner's decision of 2026-11-12; <see cref="Distributions.FloatDistribution" /> lists the
+    ///     cases.
+    /// </remarks>
     /// <exception cref="ValueError">When <c>step</c> is <c>null</c> (the search space would be infinite).</exception>
     /// <param name="args">Finite numerical progression descriptor.</param>
     /// <returns>All internal numerical choices of the finite progression.</returns>

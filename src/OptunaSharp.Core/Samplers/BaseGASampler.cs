@@ -81,9 +81,10 @@ public abstract class BaseGASampler : BaseSampler
 
     /// <summary>
     ///     The children this sampler handed to trials that are still running, so a child equal to one a running trial
-    ///     evaluates is generated again instead of evaluated twice at once (<see cref="HandedOutParams" />). A subclass
-    ///     claims each child through it in <c>SampleRelative</c> and forgets the trial in <c>AfterTrial</c>; a
-    ///     sequential run never redraws, so its children, and Optuna parity, are unchanged.
+    ///     asked on another thread evaluates is generated again instead of evaluated twice at once
+    ///     (<see cref="HandedOutParams" />). A subclass claims each child through it in <c>SampleRelative</c> and forgets
+    ///     the trial in <c>AfterTrial</c>; a sequential run, and a batch one caller asks on one thread before telling it,
+    ///     never redraw, so their children, and Optuna parity, are unchanged (QA-57).
     /// </summary>
     /// <remarks>Guarded by the sampler's monitor, under which every sampler hook runs; not by <c>_trackerLock</c>.</remarks>
     private protected HandedOutParams HandedOutChildren { get; } = new();

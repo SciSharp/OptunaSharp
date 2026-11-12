@@ -7,8 +7,9 @@
 //   Yuhui Shi and Russell Eberhart. "A Modified Particle Swarm Optimizer." Proc. IEEE Congress on
 //   Evolutionary Computation, 1998 — the linearly-decreasing inertia weight (LDIW) used here.
 //
-// PSO has no `cmaes`/Optuna/OptunaHub counterpart, so — like `De`/`LmCma` — this is a native,
-// textbook-faithful implementation validated by convergence, with no upstream trajectory to bit-match.
+// PSO has no `cmaes`/Optuna counterpart; OptunaHub's `samplers/pso` is another PSO this one does not follow
+// (see `PsoSampler`), so — like `De`/`LmCma` — this is a native, textbook-faithful implementation validated by
+// convergence, with no upstream trajectory to bit-match.
 // The RNG is NumSharp's MT19937 `RandomState` (the project's "never System.Random" discipline). The
 // optimizer works in the transformed unit box [0,1]^d: the velocity/position updates never clamp, so a
 // bounded caller (`PsoSampler`) clamps each asked candidate to the box itself, and the next `Tell`

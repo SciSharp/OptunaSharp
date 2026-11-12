@@ -12,8 +12,9 @@
 // over a Sobol perturbation set restricted to the TR; the TR expands after consecutive successes, shrinks
 // after consecutive failures, and restarts once it collapses below a floor. This class holds the pure TR
 // geometry + Thompson-sampling math (no Optuna/GP wiring); `TurboSampler` drives it. TuRBO has no `cmaes`/
-// Optuna/OptunaHub counterpart, so — like `LmCma` / `De` — this is a native implementation validated by
-// convergence, not bit-matched to an upstream trajectory. RNG is NumSharp's MT19937 (never System.Random).
+// Optuna counterpart; OptunaHub's `samplers/turbo` is another implementation this one does not follow (see
+// `TurboSampler`), so — like `LmCma` / `De` — this is a native implementation validated by convergence, not
+// bit-matched to an upstream trajectory. RNG is NumSharp's MT19937 (never System.Random).
 
 using System;
 using NumSharp;

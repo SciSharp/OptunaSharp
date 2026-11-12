@@ -141,6 +141,10 @@ duplicate name raises `DuplicatedStudyError`, a write to a finished trial raises
   is byte-identical, so cross-language wire-compatibility is unchanged.
 - Insecure (cleartext HTTP/2) transport, matching Optuna's `grpc.insecure_channel` /
   `add_insecure_port`. Put it behind your own network boundary.
+- Trial dictionaries keep the order the server sends (insertion order from a C# server). Optuna's Python
+  client returns them in Python protobuf's hash order instead, which changes seeded `QMCSampler` and
+  `BruteForceSampler` runs through its proxy; OptunaSharp deliberately does not copy that (see the
+  cross-language page).
 
 ## License
 

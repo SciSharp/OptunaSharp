@@ -3,9 +3,12 @@
 // Reference: Qingfu Zhang & Hui Li, "MOEA/D: A Multiobjective Evolutionary Algorithm Based on
 // Decomposition", IEEE Transactions on Evolutionary Computation 11(6), 2007. The structure (Das-Dennis
 // weight vectors, neighborhood mating, ideal-point update, decomposition-based replacement) follows
-// pymoo's `MOEAD` (pymoo/algorithms/moo/moead.py, Apache-2.0). MOEA/D has NO Optuna/OptunaHub
-// counterpart, so — like `SmsEmoaSampler` / `LmCmaSampler` — it is a native, paper-faithful port
-// validated by convergence / hypervolume, not bit-matched to an upstream trajectory. Plan 07 baseline.
+// pymoo's `MOEAD` (pymoo/algorithms/moo/moead.py, Apache-2.0). Optuna itself has no MOEA/D. OptunaHub
+// does (`samplers/moead`, `MOEADSampler`, since 2024-09), but this port follows pymoo, not that package,
+// so names, parameters, defaults and seeded trajectories differ (the map is in the class remarks; QA-70
+// of docs/qa/PARITY_QA_2026-11-10.md, where the owner chose on 2026-11-12 to keep this port). Like
+// `SmsEmoaSampler` / `LmCmaSampler` it is a native, paper-faithful port validated by convergence /
+// hypervolume, not bit-matched to an upstream trajectory. Plan 07 baseline.
 //
 // Design (steady-state per-subproblem over Optuna's per-trial protocol, mirroring SmsEmoaSampler):
 //   • N = the Das-Dennis lattice size closest to (≤) the target `populationSize`; each weight vector is
@@ -43,11 +46,33 @@ namespace OptunaSharp.Samplers;
 ///     decomposition-based replacement. The scalarizing function is Tchebycheff by default
 ///     (<see cref="MoeadScalarization" /> also offers PBI and weighted sum).
 ///
-///     <para><b>Beyond-core.</b> MOEA/D has no Optuna / OptunaHub counterpart; like
-///     <see cref="SmsEmoaSampler" /> it is validated by convergence and achieved hypervolume, not
-///     bit-matched to an upstream. The crossover/mutation are the shared NSGA operators
+///     <para><b>Beyond-core.</b> Optuna has no MOEA/D. OptunaHub's <c>samplers/moead</c>
+///     (<c>MOEADSampler</c>) is another implementation of the algorithm, which this class does not follow: it
+///     ports pymoo's <c>MOEAD</c>, so a study moved over from the hub package gets other defaults and other
+///     trials (map below). Like <see cref="SmsEmoaSampler" /> it is validated by convergence and achieved
+///     hypervolume, not bit-matched to an upstream. The crossover/mutation are the shared NSGA operators
 ///     (<see cref="SBXCrossover" /> + <see cref="PolynomialMutation" /> by default), so only the selection
 ///     and replacement differ from the NSGA-II family.</para>
+///
+///     <para><b>OptunaHub's <c>MOEADSampler</c> and this class</b> (registry pinned in <c>refs/optunahub-registry</c>):</para>
+///     <list type="table">
+///         <listheader><term>OptunaHub <c>MOEADSampler</c></term><description>This class</description></listheader>
+///         <item><term><c>population_size=100</c></term><description><c>populationSize = 50</c>, rounded down to a
+///             Das-Dennis lattice size (the hub uses the number as given)</description></item>
+///         <item><term><c>n_neighbors=None</c> (then <c>population_size // 10</c>)</term><description><c>nNeighbors = 20</c></description></item>
+///         <item><term><c>scalar_aggregation_func="tchebycheff"</c> (also <c>"weighted_sum"</c>, <c>"PBI"</c>)</term><description><c>scalarization</c>:
+///             <see cref="MoeadScalarization.Tchebycheff" /> by default, plus PBI and weighted sum</description></item>
+///         <item><term><c>crossover=None</c>, meaning <c>UniformCrossover(swapping_prob)</c></term><description><c>crossover</c>:
+///             <see cref="SBXCrossover" /> by default</description></item>
+///         <item><term><c>mutation=None</c>, meaning <c>UniformMutation()</c></term><description><c>mutation</c>:
+///             <see cref="PolynomialMutation" /> by default</description></item>
+///         <item><term><c>crossover_prob=0.9</c> (otherwise a random parent is copied)</term><description>none: every
+///             offspring is crossed</description></item>
+///         <item><term><c>mutation_prob=None</c> (1 / number of parameters), <c>swapping_prob=0.5</c>, <c>seed</c></term><description><c>mutationProb</c>,
+///             <c>swappingProb</c>, <c>seed</c>, same defaults</description></item>
+///         <item><term>(mates within the neighborhood)</term><description><c>neighborSelectionProb = 0.9</c> (pymoo's
+///             <c>prob_neighbor_mating</c>) and <c>nReplacements = 2</c></description></item>
+///     </list>
 ///
 ///     <para><b>In-memory state.</b> The N-solution population, its ideal point and the folded-offspring
 ///     bookkeeping are reconstructed incrementally and held in memory for the study's process lifetime, so
@@ -97,8 +122,9 @@ public class MoeaDSampler : BaseSampler
     // count) into study B when the sampler was reused (pre-release review item H3).
     private readonly PerStudyState<StudyDecomposition> _studies = new();
 
-    // Per study: the child each running trial received, so a child equal to one a running trial evaluates is
-    // generated again (HandedOutParams). Entries leave with AfterTrial. Guarded by the sampler's monitor.
+    // Per study: the child each running trial received, so a child equal to one a running trial asked on another
+    // thread evaluates is generated again (HandedOutParams; one caller's single-thread batch is not redrawn, QA-57).
+    // Entries leave with AfterTrial. Guarded by the sampler's monitor.
     private readonly HandedOutParams _handedOutChildren = new();
     private bool _warnedSingleObjective;
 

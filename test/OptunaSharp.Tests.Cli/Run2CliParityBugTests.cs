@@ -190,18 +190,18 @@ public class Run2CliParityBugTests
     /// <summary>
     ///     QA-65: Optuna's <c>--log-file</c> attaches a <c>logging.FileHandler</c> to Python's ROOT logger, but the
     ///     <c>optuna</c> logger is configured with <c>propagate = False</c>, so none of Optuna's records reach it and the
-    ///     file stays empty; the port attaches its file handler to Optuna's own logger, so the file receives every log
-    ///     line. An Optuna defect the port does not copy; the owner decides (as for QA-46).
+    ///     file stays empty. The port used to attach its file handler to Optuna's own logger, so the file received every
+    ///     log line. Fixed 2026-11-12 by copying the defect (owner's decision, as for QA-46): the port creates the file
+    ///     and writes nothing to it.
     /// </summary>
     /// <remarks>
     ///     Measured with Optuna 5.0.0: <c>optuna --log-file f.log create-study …</c> leaves <c>f.log</c> at 0 bytes, also
     ///     with <c>-v</c> and with <c>--debug</c> on a failing <c>delete-study</c>; stderr still shows the log lines (the
-    ///     <c>optuna</c> logger's own handler). <c>optunasharp --log-file f.log create-study …</c> writes
-    ///     <c>[I …] A new study created in RDB with name: f</c>. The CLI runs as a separate process because its log-file
-    ///     handler is never detached and would capture later tests' logs.
+    ///     <c>optuna</c> logger's own handler). <c>optunasharp --log-file f.log create-study …</c> used to write
+    ///     <c>[I …] A new study created in RDB with name: f</c>. The CLI runs as a separate process, as a real invocation
+    ///     does, so nothing the command attaches outlives it.
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void LogFile_ReceivesNoOptunaRecords_LikeOptuna()
     {
         string path = Path.Combine(Path.GetTempPath(), $"optunasharp-cli-qa65-{Guid.NewGuid():N}.db");

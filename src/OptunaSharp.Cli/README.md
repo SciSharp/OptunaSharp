@@ -24,7 +24,9 @@ and `redis://` URLs work out of the box; journal-file storage is built in.
 ## Commands
 
 Every command mirrors its Optuna counterpart, including the shared options
-`--storage` / `--storage-class` / `-v` / `-q` / `--log-file` / `--debug`.
+`--storage` / `--storage-class` / `-v` / `-q` / `--log-file` / `--debug`. Like Optuna's, `--log-file` creates the
+file but writes nothing to it (Optuna's handler sits on Python's root logger, which the `optuna` logger does not
+propagate to); redirect stderr to keep a log.
 
 | Command | What it does |
 |---|---|

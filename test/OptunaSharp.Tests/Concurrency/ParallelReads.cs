@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using OptunaSharp.Samplers;
 
@@ -31,8 +32,8 @@ namespace OptunaSharp.Tests.Concurrency;
 ///     <para>
 ///         <see cref="Fire" /> runs whatever interleaving the threads take, so a sampler whose result depends on which
 ///         reads landed before which writes repeats a varying count. <see cref="ReadInLockstep" /> makes the one
-///         interleaving where every read of a round lands before any write, on one thread, so its counts repeat exactly
-///         and a test can pin them.
+///         interleaving where every read of a round lands before any write, in a fixed order (on the calling thread, or
+///         each read on a thread of its own), so its counts repeat exactly and a test can pin them.
 ///     </para>
 /// </remarks>
 internal static class ParallelReads
@@ -168,20 +169,35 @@ internal static class ParallelReads
     ///     repeats exactly, for counts a test can pin.
     /// </summary>
     /// <remarks>
-    ///     Independent parameters (all of BruteForce's and Grid's, the startup draws of the others) are sampled in the
-    ///     suggests, one trial after another, so each of those reads sees the earlier trials' parameters, as a sampler
-    ///     monitor serializes them in <see cref="Fire" /> too. Each relative read starts from an empty history cache, as a
-    ///     trial's first read on a thread of its own does.
+    ///     <para>
+    ///         Independent parameters (all of BruteForce's and Grid's, the startup draws of the others) are sampled in the
+    ///         suggests, one trial after another, so each of those reads sees the earlier trials' parameters, as a sampler
+    ///         monitor serializes them in <see cref="Fire" /> too. Each relative read starts from an empty history cache,
+    ///         as a trial's first read on a thread of its own does.
+    ///     </para>
+    ///     <para>
+    ///         <b>Which thread reads.</b> By default every relative read runs on the calling thread: a batch one caller asks
+    ///         before telling any of it, as Optuna's batch-optimization tutorial does. The genetic samplers follow Optuna
+    ///         there and do not steer the batch's children apart (QA-57). With <paramref name="readsOnOwnThreads" /> each
+    ///         relative read runs on a thread of its own, started and joined in turn, so the order of the reads, and with
+    ///         it the counts, stay exactly repeatable while every trial is asked for by a different thread, as concurrent
+    ///         workers ask.
+    ///     </para>
     /// </remarks>
     /// <param name="sampler">The study's sampler, shared by every trial.</param>
     /// <param name="multiObjective">Whether the study minimizes two objectives instead of one.</param>
     /// <param name="space">The search space each trial suggests.</param>
     /// <param name="rounds">How many rounds to read; each asks and tells <paramref name="shooters" /> trials.</param>
     /// <param name="shooters">How many trials read in each round before any of them writes.</param>
+    /// <param name="readsOnOwnThreads">
+    ///     Whether each trial's relative read runs on a dedicated thread (concurrent workers) rather than on the calling
+    ///     thread (one caller's batch); see the remarks.
+    /// </param>
     /// <returns>The trial count and the repeated points, classified as by <see cref="Fire" />.</returns>
-    /// <exception cref="Exception">Whatever the sampler, a suggest or a tell throws, unchanged.</exception>
+    /// <exception cref="Exception">Whatever the sampler, a suggest or a tell throws, unchanged (a read's on its own thread too).</exception>
     internal static Outcome ReadInLockstep(
-        BaseSampler sampler, bool multiObjective, Space space, int rounds, int shooters = 8)
+        BaseSampler sampler, bool multiObjective, Space space, int rounds, int shooters = 8,
+        bool readsOnOwnThreads = false)
     {
         Study study = multiObjective
             ? Optuna.CreateStudy(sampler: sampler, directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize })
@@ -195,6 +211,29 @@ internal static class ParallelReads
 
             foreach (Trial trial in trials)
             {
+                if (readsOnOwnThreads)
+                {
+                    // A fresh thread per read, joined before the next starts: the reads keep their order, and each
+                    // trial's child is claimed on a thread of its own, as a concurrent worker's is. A new thread's history
+                    // cache is empty, so no reset is needed. A failure is rethrown here with its original stack.
+                    ExceptionDispatchInfo? failure = null;
+                    var reader = new Thread(() =>
+                    {
+                        try
+                        {
+                            _ = trial.RelativeParams;
+                        }
+                        catch (Exception e)
+                        {
+                            failure = ExceptionDispatchInfo.Capture(e);
+                        }
+                    });
+                    reader.Start();
+                    reader.Join();
+                    failure?.Throw();
+                    continue;
+                }
+
                 // In Fire each trial reads on its own thread, whose history cache its first read fills; on this one
                 // thread the previous trial's read filled it, so drop it and let this read take its own snapshot.
                 study.ThreadLocal.CachedAllTrials = null;
