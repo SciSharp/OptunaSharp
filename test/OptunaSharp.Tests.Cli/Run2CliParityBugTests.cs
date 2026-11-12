@@ -79,9 +79,13 @@ public class Run2CliParityBugTests
     ///         best-effort; these change the values' types, not only their bytes. The key quoting (<c>"y"</c>, YAML 1.1's
     ///         boolean <c>y</c>) and double instead of single quotes read back the same and are not asserted.
     ///     </para>
+    ///     <para>
+    ///         <b>Fixed 2026-11-12:</b> <c>-f yaml</c> goes through <c>PyYamlSafeDump</c>, a port of PyYAML's
+    ///         <c>safe_dump</c> pinned byte for byte by <see cref="PyYamlSafeDumpOracleTests" /> (763 cases); YamlDotNet is
+    ///         gone from the CLI.
+    ///     </para>
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void TrialsYaml_FloatsAndDatetimes_KeepTheirTypesLikePyYaml()
     {
         string path = Path.Combine(Path.GetTempPath(), $"optunasharp-cli-qa61-{Guid.NewGuid():N}.db");
@@ -127,9 +131,11 @@ public class Run2CliParityBugTests
     ///         values []". Both fail the trial. <c>CliParityTests</c>' setup runs these two commands too, but ignores
     ///         their exit codes, so its fixture silently kept two RUNNING trials.
     ///     </para>
+    ///     <para>
+    ///         <b>Fixed 2026-11-12:</b> an omitted <c>--values</c> binds <c>null</c>, as <c>--directions</c> already did.
+    ///     </para>
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void Tell_StateWithoutValues_FinishesTheTrialLikeOptuna()
     {
         string path = Path.Combine(Path.GetTempPath(), $"optunasharp-cli-qa63-{Guid.NewGuid():N}.db");
@@ -165,9 +171,10 @@ public class Run2CliParityBugTests
     ///     <c>--sampler CmaEsSampler --sampler-kwargs '{"x0": {"x": 0.25}, "sigma0": 0.1, "seed": 1}'</c> and
     ///     <c>--sampler NSGAIIISampler --sampler-kwargs '{"reference_points": [[1.0]], "seed": 1}'</c> ask normally
     ///     (exit 0). The port exits 1 for all three. GridSampler is the natural CLI sampler for a shell-driven grid sweep.
+    ///     <b>Fixed 2026-11-12:</b> <c>SamplerFactory</c> binds JSON objects to string-keyed dictionaries, JSON arrays to
+    ///     lists, arrays and a rectangular <c>double[,]</c>, and grid values to <c>CategoricalChoice</c>.
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void Ask_StructuredSamplerKwargs_ConstructTheSamplerLikeOptuna()
     {
         string path = Path.Combine(Path.GetTempPath(), $"optunasharp-cli-qa64-{Guid.NewGuid():N}.db");
@@ -181,10 +188,13 @@ public class Run2CliParityBugTests
             "--sampler", "GridSampler", "--sampler-kwargs", "{\"search_space\": {\"x\": [0.5]}}");
         Run(out int cmaExit, "ask", "--storage", url, "--study-name", "s", "--search-space", space,
             "--sampler", "CmaEsSampler", "--sampler-kwargs", "{\"x0\": {\"x\": 0.25}, \"sigma0\": 0.1, \"seed\": 1}");
+        Run(out int nsga3Exit, "ask", "--storage", url, "--study-name", "s", "--search-space", space,
+            "--sampler", "NSGAIIISampler", "--sampler-kwargs", "{\"reference_points\": [[1.0]], \"seed\": 1}");
 
         gridExit.Should().Be(0);
         grid.Should().Be("{\"number\": 0, \"params\": {\"x\": 0.5}}\n");
         cmaExit.Should().Be(0);
+        nsga3Exit.Should().Be(0);
     }
 
     /// <summary>

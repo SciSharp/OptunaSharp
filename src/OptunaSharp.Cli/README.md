@@ -2,12 +2,12 @@
 
 The **`optunasharp` command-line tool** — a faithful port of the [Optuna](https://github.com/optuna/optuna)
 CLI (`optuna/cli.py`) for [OptunaSharp](https://github.com/SciSharp/OptunaSharp), built on
-[System.CommandLine](https://learn.microsoft.com/dotnet/standard/commandline/) and
-[YamlDotNet](https://github.com/aaubry/YamlDotNet).
+[System.CommandLine](https://learn.microsoft.com/dotnet/standard/commandline/).
 
 Create and inspect studies and drive ask/tell trials from the shell, against **journal-file**,
-**SQLite** (`RDBStorage`) and **Redis** storages — with **byte-identical `value`/`json`/`table`
-output** to the `optuna` command (verified live against Optuna 5.0.0.dev).
+**SQLite** (`RDBStorage`) and **Redis** storages — with **byte-identical `value`/`json`/`table`/`yaml`
+output** to the `optuna` command (verified live against Optuna 5.0.0; `yaml` is a port of PyYAML's `safe_dump`,
+pinned by a 763-case corpus).
 
 Part of the [SciSharp STACK](https://github.com/SciSharp).
 

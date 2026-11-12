@@ -7,7 +7,6 @@ using System.Linq;
 using System.Text;
 using OptunaSharp;
 using OptunaSharp.Internal;
-using YamlDotNet.Serialization;
 
 namespace OptunaSharp.Cli;
 
@@ -45,8 +44,8 @@ internal sealed class PyTuple : IReadOnlyList<object?>
 ///     <c>_convert_to_dict</c>, <c>_dump_value</c>, <c>_dump_table</c>, <c>CellValue</c> and
 ///     <c>_format_output</c>. The <c>value</c>/<c>table</c> formats render through Core's
 ///     <see cref="PythonRepr" /> (CPython <c>str()</c>/<c>repr()</c>), <c>json</c> through Core's
-///     <see cref="PyJson" /> (<c>json.dumps</c>), so the stdout bytes match the <c>optuna</c> command.
-///     <c>yaml</c> is best-effort over YamlDotNet (PyYAML's exact byte output is not a parity target).
+///     <see cref="PyJson" /> (<c>json.dumps</c>), and <c>yaml</c> through <see cref="PyYamlSafeDump" /> (PyYAML's
+///     <c>safe_dump</c>), so the stdout bytes match the <c>optuna</c> command.
 /// </summary>
 internal static class OutputFormat
 {
@@ -402,43 +401,17 @@ internal static class OutputFormat
         }
     }
 
-    // ------------------------------------------------------------------ yaml (best-effort)
+    // ------------------------------------------------------------------ yaml
 
-    // WithQuotingNecessaryStrings(true) quotes scalars that YAML 1.1's implicit resolver (PyYAML's
-    // schema) would otherwise reinterpret — timestamps, sexagesimals, bools, etc. — approximating
-    // yaml.safe_dump's quoting. YAML byte-parity with PyYAML is best-effort, not a hard target.
-    private static readonly ISerializer YamlSerializer =
-        new SerializerBuilder().WithQuotingNecessaryStrings(quoteYaml1_1Strings: true).Build();
-
-    /// <summary>Serializes a plain managed collection tree through the configured YAML serializer.</summary>
-    /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
-    /// <returns>The serialized YAML text.</returns>
-    private static string DumpYaml(object value) => YamlSerializer.Serialize(ToPlainForYaml(value));
-
-    // YamlDotNet serializes generic collections; convert the OrderedDictionary/list/tuple tree to
-    // Dictionary/List (keys sorted, approximating PyYAML's sort_keys=True default).
-    /// <summary>Converts ordered dictionaries and tuple wrappers to sorted-key dictionaries and lists for YAML serialization.</summary>
-    /// <param name="value">The scalar or composite value to parse, classify, or render.</param>
-    /// <returns>A plain managed value tree suitable for YAML serialization.</returns>
-    private static object? ToPlainForYaml(object? value)
-    {
-        switch (value)
-        {
-            case OrderedDictionary od:
-            {
-                var dict = new Dictionary<string, object?>();
-                foreach (DictionaryEntry e in od)
-                    dict[Convert.ToString(e.Key, CultureInfo.InvariantCulture)!] = ToPlainForYaml(e.Value);
-                return dict.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToDictionary(kv => kv.Key, kv => kv.Value);
-            }
-            case string s:
-                return s;
-            case PyTuple tup:
-                return tup.Select(ToPlainForYaml).ToList();
-            case IEnumerable seq:
-                return seq.Cast<object?>().Select(ToPlainForYaml).ToList();
-            default:
-                return value;
-        }
-    }
+    /// <summary>
+    ///     <c>yaml.safe_dump(value)</c>, byte for byte (<see cref="PyYamlSafeDump" />): floats keep a decimal point
+    ///     (<c>2.0</c>, <c>1.0e-07</c>), strings that YAML 1.1 would read as another type (the formatted datetimes,
+    ///     <c>'no'</c>) are quoted and others stay plain, keys are sorted, and long strings fold at 80 columns. The tree
+    ///     is passed as <c>_format_value</c> left it: tuples dump as sequences, as in PyYAML.
+    /// </summary>
+    /// <param name="value">The record or list of records to dump.</param>
+    /// <returns>The YAML text with PyYAML's trailing line break (the caller trims it, as Optuna strips it).</returns>
+    /// <exception cref="ArgumentException">A value of a type <c>safe_dump</c> cannot represent.</exception>
+    /// <exception cref="NumSharp.TypeError">A mapping mixes string and numeric keys, which Python's <c>sorted</c> refuses.</exception>
+    private static string DumpYaml(object value) => PyYamlSafeDump.Dump(value);
 }

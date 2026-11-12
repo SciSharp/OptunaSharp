@@ -27,7 +27,7 @@
     <PackageId>OptunaSharp.Cli</PackageId>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>optunasharp</ToolCommandName>
-    <Description>The OptunaSharp command-line tool — the port of the `optuna` CLI (optuna/cli.py) on System.CommandLine + YamlDotNet. Create/inspect studies and ask/tell trials against journal-file, SQLite (RDBStorage) and Redis storages from the shell, with byte-identical value/json/table output. Part of the SciSharp STACK.</Description>
+    <Description>The OptunaSharp command-line tool — the port of the `optuna` CLI (optuna/cli.py) on System.CommandLine. Create/inspect studies and ask/tell trials against journal-file, SQLite (RDBStorage) and Redis storages from the shell, with byte-identical value/json/table/yaml output. Part of the SciSharp STACK.</Description>
     <PackageTags>Optuna;OptunaSharp;CLI;Tool;dotnet-tool;HyperparameterOptimization;HPO;SciSharp</PackageTags>
 
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -49,10 +49,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- System.CommandLine: the argparse replacement (2.0.11 GA). YamlDotNet: the `-f yaml` output
-         (Python's yaml.safe_dump). -->
+    <!-- System.CommandLine: the argparse replacement (2.0.11 GA). The `-f yaml` output is PyYamlSafeDump.cs, a port of
+         PyYAML's safe_dump (YamlDotNet changed value types, QA-61). -->
     <PackageReference Include="System.CommandLine" Version="2.0.11" />
-    <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 
   <ItemGroup>

@@ -617,7 +617,11 @@ public static class CliProgram
             int? number = pr.GetValue(trialNumber);
             if (number is null)
                 throw new NumSharp.ValueError("`--trial-number` is required.");
-            double[]? objectiveValues = pr.GetValue(values);
+            // An omitted `--values` binds an empty array, not null, where Optuna's argparse option (nargs="+") defaults
+            // to None; Core's tell then saw values next to a PRUNED / FAIL state and refused the call, so `tell --state
+            // fail` exited 1 and left the trial RUNNING (QA-63). The option takes one or more arguments, so an empty
+            // array always means it was omitted, as `--directions` already treats it.
+            double[]? objectiveValues = pr.GetValue(values) is { Length: > 0 } given ? given : null;
 
             study.Tell(number.Value, objectiveValues, trialState, pr.GetValue(skipIfFinished));
             Log.Info($"Told trial {number.Value} with values {ReprValues(objectiveValues)} and state {StateRepr(trialState)}.");

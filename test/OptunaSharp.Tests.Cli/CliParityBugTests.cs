@@ -108,10 +108,10 @@ public class CliParityBugTests
     ///     The YAML format is documented as best-effort (PyYAML's exact bytes are not a target), but doubled carriage
     ///     returns are not a YAML difference: a file written with <c>&gt; out.yaml</c> shows a blank line after every
     ///     line in most editors, and tools that split on <c>\n</c> keep a stray <c>\r</c>. Linux (<c>\n</c> newlines)
-    ///     is unaffected, so this test only fails on Windows.
+    ///     is unaffected, so this test only failed on Windows. <b>Fixed 2026-11-12</b> by QA-61 of the 2026-11-10 run:
+    ///     <c>-f yaml</c> is now <c>PyYamlSafeDump</c>, which writes <c>\n</c> only, and the printer translates each once.
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void TrialsYaml_LinesEndOnce()
     {
         string url = FreshDbUrl();

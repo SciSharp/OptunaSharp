@@ -103,7 +103,8 @@ stderr; OptunaSharp copies that on purpose, for byte-for-byte CLI parity. Redire
 `-f value|json|table|yaml` selects a format. `study-names` defaults to `value`, listing commands to
 `table`, and `ask` to `json`. `--flatten` expands structured columns such as parameters, attributes,
 and multi-objective values. The differential tests compare `value`, `json`, and `table` output
-against Python Optuna. YAML is valid but not byte-identical to PyYAML; command help and argument
+against Python Optuna. YAML is byte-identical to PyYAML's `safe_dump` too (floats keep a decimal point, strings YAML 1.1
+would read as another type are quoted, keys are sorted); command help and argument
 validation come from System.CommandLine rather than Python's argparse.
 
 ## SQLite upgrades and cross-language use
