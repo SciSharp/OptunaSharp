@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using OptunaSharp.Internal;
 
 namespace OptunaSharp.Integration.LightGbm;
 
@@ -159,9 +160,14 @@ public class LightGBMPruningCallback
     /// <returns>The formatted list of validation metric records.</returns>
     private static string FormatEvaluationResultList(IReadOnlyList<LightGbmEvaluationResult> list)
     {
+        // Python's str(list of tuples): every element in repr, so scores read 100.0 and 1e-05 whatever the current
+        // culture (C#'s default formatting gave 100, 1E-05 and, under de-DE, 0,5), and a name holding a single quote is
+        // double-quoted as Python's repr switches quotes (QA-76). A cross-validation result prints the four fields this
+        // record carries; Python's has a fifth, the standard deviation, which LightGbmEvaluationResult does not hold.
         var parts = new List<string>(list.Count);
         foreach (var r in list)
-            parts.Add($"('{r.ValidName}', '{r.Metric}', {r.Score}, {(r.IsHigherBetter ? "True" : "False")})");
+            parts.Add($"({PythonRepr.Repr(r.ValidName)}, {PythonRepr.Repr(r.Metric)}, {PythonRepr.Repr(r.Score)}, " +
+                      $"{PythonRepr.Repr(r.IsHigherBetter)})");
         return "[" + string.Join(", ", parts) + "]";
     }
 }

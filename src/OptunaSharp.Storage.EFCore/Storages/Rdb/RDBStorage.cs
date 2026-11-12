@@ -408,17 +408,73 @@ public sealed class RDBStorage : BaseStorage, ICachedStorageBackend, IDisposable
     ///     change tracker is cleared before each attempt so a retry starts clean. With the default
     ///     (non-retrying) strategy this runs the body exactly once.
     /// </summary>
-    /// <param name="body">The operation executed in the current context or scope; its exceptions propagate to the caller.</param>
+    /// <param name="body">The operation executed in the current context or scope; its exceptions propagate to the caller, except database errors (below).</param>
     /// <returns>The callback's result after the transaction commits successfully.</returns>
     /// <typeparam name="T">The managed result returned by the transaction callback.</typeparam>
+    /// <exception cref="StorageInternalError">
+    ///     A database error other than an integrity violation (a value longer than its column, a missing table, a lost
+    ///     connection once any retries are spent), as Optuna's <c>_create_scoped_session</c> raises it, wrapping the
+    ///     provider's error.
+    /// </exception>
+    /// <remarks>
+    ///     <para>
+    ///         Port of <c>_create_scoped_session</c>'s error handling (QA-74): an integrity error (SQLSTATE class 23 on
+    ///         PostgreSQL, PyMySQL's IntegrityError numbers on MySQL) propagates unchanged, as Optuna re-raises
+    ///         <c>IntegrityError</c> for its callers (a duplicated study name becomes <see cref="DuplicatedStudyError" />);
+    ///         every other database error becomes <see cref="StorageInternalError" /> with Optuna's message. EF Core's
+    ///         <c>DbUpdateException</c> used to escape, so a <c>catch (StorageInternalError)</c> missed it: measured on
+    ///         MySQL 8.0 and PostgreSQL 16 with 600-character study names, parameter names and attribute keys (the columns
+    ///         hold 512) and a 70,000-character attribute value on MySQL.
+    ///     </para>
+    ///     <para>
+    ///         The translation sits outside the execution strategy, so <c>EnableRetryOnFailure()</c> still sees the
+    ///         provider's transient errors and retries them; only an error that ends the operation is translated.
+    ///     </para>
+    /// </remarks>
     private T Mutate<T>(Func<OptunaRdbContext, T> body)
     {
         using var ctx = NewContext();
-        return ctx.Database.CreateExecutionStrategy().Execute(() =>
+        try
         {
-            ctx.ChangeTracker.Clear();
-            return body(ctx);
-        });
+            return ctx.Database.CreateExecutionStrategy().Execute(() =>
+            {
+                ctx.ChangeTracker.Clear();
+                return body(ctx);
+            });
+        }
+        catch (Exception e) when (e is DbUpdateException or DbException && !IsIntegrityError(e))
+        {
+            throw new StorageInternalError(CommitErrorMessage, e);
+        }
+    }
+
+    /// <summary>
+    ///     The message of the <see cref="StorageInternalError" /> Optuna's <c>_create_scoped_session</c> raises for any
+    ///     database error other than an integrity error, verbatim, trailing space included.
+    /// </summary>
+    private const string CommitErrorMessage =
+        "An exception is raised during the commit. This typically happens due to invalid data in the commit, " +
+        "e.g. exceeding max length. ";
+
+    /// <summary>
+    ///     Whether a database error is what SQLAlchemy reports as <c>IntegrityError</c>, which Optuna's scoped session
+    ///     re-raises instead of wrapping: SQLSTATE class 23 on PostgreSQL (psycopg2's mapping), and on MySQL exactly the
+    ///     seven numbers PyMySQL maps to <c>IntegrityError</c> (1048 null in a NOT NULL column, 1062 duplicate entry, 1215
+    ///     to 1217 and 1451 / 1452 foreign keys); PyMySQL reports every other number, a check-constraint failure
+    ///     included, as <c>OperationalError</c>, which Optuna wraps.
+    /// </summary>
+    /// <param name="e">The error, possibly wrapping the provider's exception.</param>
+    /// <returns><c>true</c> for an integrity violation.</returns>
+    private static bool IsIntegrityError(Exception e)
+    {
+        for (Exception? inner = e; inner is not null; inner = inner.InnerException)
+        {
+            if (inner is PostgresException pg)
+                return pg.SqlState.StartsWith("23", StringComparison.Ordinal);
+            if (inner is MySqlException my)
+                return my.Number is 1048 or 1062 or 1215 or 1216 or 1217 or 1451 or 1452;
+        }
+        return false;
     }
 
     /// <summary>Runs a database mutation with the configured execution strategy and transaction ownership.</summary>

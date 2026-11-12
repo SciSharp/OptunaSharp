@@ -33,10 +33,11 @@ public class Run2EFCoreParityBugTests
     ///     <c>StorageInternalError</c> in Optuna and <c>DbUpdateException</c> in the port (9 of 9 cases; PostgreSQL's
     ///     <c>TEXT</c> takes the long value on both sides). SQLite enforces no length, so both accept everything there. No
     ///     storage of the port raises <c>StorageInternalError</c> at all: the type exists but nothing throws it.
+    ///     <b>Fixed 2026-11-12:</b> the EF Core storage's <c>Mutate</c> translates every non-integrity database error into
+    ///     Optuna's <c>StorageInternalError</c>, wrapping the provider's error, outside the execution strategy.
     /// </remarks>
     /// <param name="provider">The database server to run against.</param>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     [DataRow(RdbProvider.PostgreSql)]
     [DataRow(RdbProvider.MySql)]
     public void OverLongAttributeKey_RaisesStorageInternalErrorLikeOptuna(RdbProvider provider)

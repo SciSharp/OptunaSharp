@@ -20,18 +20,22 @@ namespace OptunaSharp.Tests.Samplers;
 public class TpeSplitCacheTests
 {
     /// <summary>
-    ///     Two-objective histories with completed, pruned, failed-constraint and running trials: the cache's split equals
-    ///     <see cref="TpeTrialSplit.SplitTrials" /> for every size of the preferred group, and splitting the same records
-    ///     again reuses it.
+    ///     One- and two-objective histories with completed, pruned, failed-constraint and running trials: the cache's
+    ///     split equals <see cref="TpeTrialSplit.SplitTrials" /> for every size of the preferred group, and splitting the
+    ///     same records again reuses it.
     /// </summary>
     /// <param name="seed">Seeds the history.</param>
+    /// <param name="objectives">The number of objectives of the history's study.</param>
     [TestMethod]
-    [DataRow(1)]
-    [DataRow(2)]
-    [DataRow(3)]
-    public void TheCachedSplit_IsSplitTrials_AndTheSameRecordsReuseIt(int seed)
+    [DataRow(1, 2)]
+    [DataRow(2, 2)]
+    [DataRow(3, 2)]
+    [DataRow(1, 1)]
+    [DataRow(2, 1)]
+    [DataRow(3, 1)]
+    public void TheCachedSplit_IsSplitTrials_AndTheSameRecordsReuseIt(int seed, int objectives)
     {
-        Study study = MultiObjectiveHistory(seed, out List<FrozenTrial> trials);
+        Study study = History(seed, objectives, out List<FrozenTrial> trials);
         var cache = new TpeSplitCache();
         int computed = 0;
         for (int nBelow = 0; nBelow <= trials.Count(t => t.State != TrialState.Running); nBelow++)
@@ -56,7 +60,7 @@ public class TpeSplitCacheTests
     [TestMethod]
     public void AnythingButTheSameRecords_SplitsAfresh()
     {
-        Study study = MultiObjectiveHistory(4, out List<FrozenTrial> trials);
+        Study study = History(4, 2, out List<FrozenTrial> trials);
         var cache = new TpeSplitCache();
         int nBelow = 3;
         cache.Split(study, trials, nBelow);
@@ -78,7 +82,7 @@ public class TpeSplitCacheTests
         cache.Split(study, reread, nBelow);
         cache.Computed.Should().Be(5, "the running trial's record changed");
 
-        Study other = MultiObjectiveHistory(4, out List<FrozenTrial> otherTrials);
+        Study other = History(4, 2, out List<FrozenTrial> otherTrials);
         cache.Split(other, otherTrials, nBelow);
         cache.Computed.Should().Be(6, "another study's records, even with the same values");
     }
@@ -87,7 +91,7 @@ public class TpeSplitCacheTests
     [TestMethod]
     public void TheReturnedLists_AreCopies()
     {
-        Study study = MultiObjectiveHistory(5, out List<FrozenTrial> trials);
+        Study study = History(5, 2, out List<FrozenTrial> trials);
         var cache = new TpeSplitCache();
         var (below, above) = cache.Split(study, trials, 4);
         int[] belowNumbers = below.Select(t => t.Number).ToArray();
@@ -105,7 +109,7 @@ public class TpeSplitCacheTests
     [TestMethod]
     public void NullArguments_AreRefused()
     {
-        Study study = MultiObjectiveHistory(6, out List<FrozenTrial> trials);
+        Study study = History(6, 2, out List<FrozenTrial> trials);
         var cache = new TpeSplitCache();
         Action noStudy = () => cache.Split(null!, trials, 1);
         Action noTrials = () => cache.Split(study, null!, 1);
@@ -174,6 +178,36 @@ public class TpeSplitCacheTests
         study.Tell(current, new[] { 0.5, 0.5 });
     }
 
+    /// <summary>
+    ///     A two-objective history with a pruned trial that reported a number does not split, as Optuna's TPE fails on it:
+    ///     the pruned-trial score reads <c>study.direction</c>, which raises for a multi-objective study (QA-79). The cache
+    ///     stores nothing then, so its previous entry is still reused.
+    /// </summary>
+    [TestMethod]
+    public void AMultiObjectivePrunedReport_RaisesLikeOptuna_AndIsNotCached()
+    {
+        Study study = History(7, 2, out List<FrozenTrial> trials);
+        var cache = new TpeSplitCache();
+        cache.Split(study, trials, 3);
+        cache.Computed.Should().Be(1);
+
+        // A finished trial's reports cannot change, so a new pruned trial carries the report.
+        int id = study.Storage.CreateNewTrial(study.StudyId);
+        study.Storage.SetTrialParam(id, "x", 0.5, new FloatDistribution(0, 1));
+        study.Storage.SetTrialIntermediateValue(id, 3, 0.25);
+        study.Storage.SetTrialStateValues(id, TrialState.Pruned);
+        List<FrozenTrial> reread = study.GetTrials(deepcopy: false,
+            states: new[] { TrialState.Complete, TrialState.Pruned, TrialState.Running });
+
+        Action split = () => cache.Split(study, reread, 3);
+        split.Should().ThrowExactly<NumSharp.RuntimeError>().WithMessage(
+            "A single direction cannot be retrieved from a multi-objective study. Consider using Study.directions to " +
+            "retrieve a list containing all directions.");
+        cache.Computed.Should().Be(1, "a split that throws is not stored");
+        cache.Split(study, trials, 3);
+        cache.Computed.Should().Be(1, "the previous records still reuse their split");
+    }
+
     /// <summary>A worker instance for <see cref="SamplerConcurrency.PerWorker" /> gets a split cache of its own.</summary>
     [TestMethod]
     public void AWorkerInstance_HasItsOwnSplitCache()
@@ -184,18 +218,26 @@ public class TpeSplitCacheTests
     }
 
     /// <summary>
-    ///     A two-objective study on an in-memory storage with 14 finished trials (completed, pruned with and without
-    ///     intermediate values, completed but infeasible) and 2 running ones, and the records TPE's constant-liar read
-    ///     returns for it.
+    ///     A one- or two-objective study on an in-memory storage with 14 finished trials (completed, pruned with and
+    ///     without intermediate values, completed but infeasible) and 2 running ones, and the records TPE's constant-liar
+    ///     read returns for it.
     /// </summary>
     /// <param name="seed">Seeds the values.</param>
+    /// <param name="objectives">1 (minimize) or 2 (minimize, maximize).</param>
     /// <param name="trials">The study's completed, pruned and running records, by trial number.</param>
     /// <returns>The study.</returns>
-    private static Study MultiObjectiveHistory(int seed, out List<FrozenTrial> trials)
+    /// <remarks>
+    ///     A two-objective history's pruned trials report NaN: it is the only report a multi-objective TPE split accepts,
+    ///     because a number makes Optuna read <c>study.direction</c>, which raises (QA-79), while NaN scores
+    ///     <c>(-step, inf)</c> before the direction is read. A one-objective history's reports are numbers.
+    /// </remarks>
+    private static Study History(int seed, int objectives, out List<FrozenTrial> trials)
     {
         var rng = new Random(seed);
         Study study = Optuna.CreateStudy(storage: new InMemoryStorage(),
-            directions: new[] { StudyDirection.Minimize, StudyDirection.Maximize });
+            directions: objectives == 1
+                ? new[] { StudyDirection.Minimize }
+                : new[] { StudyDirection.Minimize, StudyDirection.Maximize });
         var storage = study.Storage;
         for (int n = 0; n < 16; n++)
         {
@@ -206,15 +248,19 @@ public class TpeSplitCacheTests
             if (n % 5 == 4)
             {
                 if (n % 2 == 0)
-                    storage.SetTrialIntermediateValue(id, n, rng.NextDouble());
+                {
+                    double report = rng.NextDouble();  // drawn either way, so both histories share their other values
+                    storage.SetTrialIntermediateValue(id, n, objectives == 1 ? report : double.NaN);
+                }
                 storage.SetTrialStateValues(id, TrialState.Pruned);
                 continue;
             }
             if (n % 6 == 5)
                 storage.SetTrialSystemAttr(id, "constraints", new List<object?> { 0.5 + rng.NextDouble() });
             // Values on a small grid, so ranks and ties are plentiful.
+            double first = Math.Round(rng.NextDouble() * 4) / 4, second = Math.Round(rng.NextDouble() * 4) / 4;
             storage.SetTrialStateValues(id, TrialState.Complete,
-                new[] { Math.Round(rng.NextDouble() * 4) / 4, Math.Round(rng.NextDouble() * 4) / 4 });
+                objectives == 1 ? new[] { first } : new[] { first, second });
         }
         trials = study.GetTrials(deepcopy: false,
             states: new[] { TrialState.Complete, TrialState.Pruned, TrialState.Running });

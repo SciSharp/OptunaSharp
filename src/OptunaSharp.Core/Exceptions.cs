@@ -89,6 +89,15 @@ public class StorageInternalError : OptunaError
     /// <summary>Creates a StorageInternalError carrying the supplied failure details, if any.</summary>
     /// <param name="message">Error message explaining the failure.</param>
     public StorageInternalError(string message) : base(message) { }
+
+    /// <summary>
+    ///     Creates a StorageInternalError that wraps the database error behind it, as Optuna's
+    ///     <c>raise StorageInternalError(message) from e</c> chains the SQLAlchemy error: the message is Optuna's, the
+    ///     provider's detail stays reachable through <see cref="Exception.InnerException" />.
+    /// </summary>
+    /// <param name="message">Error message explaining the failure.</param>
+    /// <param name="innerException">The database error that caused it.</param>
+    public StorageInternalError(string message, Exception innerException) : base(message, innerException) { }
 }
 
 /// <summary>

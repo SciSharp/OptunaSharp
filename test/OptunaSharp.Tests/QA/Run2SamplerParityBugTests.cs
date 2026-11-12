@@ -253,9 +253,10 @@ public class Run2SamplerParityBugTests
     ///     PRUNED trials with intermediate values added, then <c>optimize(n_trials=12)</c> raises the RuntimeError
     ///     from the first trial's <c>suggest_float</c>; the port completes all 12 trials. The single-objective path is
     ///     unaffected (<c>study.direction</c> is defined there).
+    ///     <b>Fixed 2026-11-12:</b> <c>TpeTrialSplit.GetPrunedTrialScore</c> reads <c>study.Direction</c>, which raises on a
+    ///     multi-objective study, as Optuna's property does.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void MultiObjectiveTpe_PrunedTrialsWithIntermediateValues_RaisesLikeOptunasDirectionProperty()
     {
         var study = Optuna.CreateStudy(directions: new[] { StudyDirection.Minimize, StudyDirection.Minimize },

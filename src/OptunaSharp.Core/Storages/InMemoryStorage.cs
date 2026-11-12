@@ -88,8 +88,10 @@ public class InMemoryStorage : BaseStorage
 
             if (studyName is not null)
             {
+                // Python's bare `raise DuplicatedStudyError`: str(e) is empty, where .NET's parameterless constructor
+                // supplies "Exception of type ... was thrown." (QA-66). create_study replaces it with its own message.
                 if (_studyNameToId.ContainsKey(studyName))
-                    throw new DuplicatedStudyError();
+                    throw new DuplicatedStudyError(string.Empty);
             }
             else
             {
@@ -499,11 +501,13 @@ public class InMemoryStorage : BaseStorage
 
             // A compact finished trial (plan 13, item S12) stores exactly the internal value the conversion below would
             // rebuild through its own distribution, so it is returned as stored. A missing name falls through to the
-            // dictionary path's KeyNotFoundException.
+            // dictionary path's KeyError.
             if (trial.Params is CompactParams compact && compact.TryGetInternal(paramName, out double stored))
                 return stored;
 
-            var distribution = trial.Distributions[paramName];
+            // Python's `trial.distributions[param_name]`: KeyError(param_name), not KeyNotFoundException (QA-66).
+            if (!trial.Distributions.TryGetValue(paramName, out var distribution))
+                throw new KeyError(paramName);
             return distribution.ToInternalRepr(trial.Params[paramName]);
         }
     }

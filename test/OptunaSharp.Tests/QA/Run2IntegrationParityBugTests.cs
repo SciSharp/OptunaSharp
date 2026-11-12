@@ -24,9 +24,9 @@ public class Run2IntegrationParityBugTests
     ///     n_estimators=5, random_state=0), {"max_depth": IntDistribution(1, 4)}, n_trials=2, n_jobs=0,
     ///     random_state=0).fit(X, y)</c> completes two trials and reports <c>n_jobs == 1</c>, the same as
     ///     <c>n_jobs=None</c> and <c>n_jobs=1</c>; the port's <c>Fit()</c> throws.
+    ///     <b>Fixed 2026-11-12:</b> <c>nJobs: 0</c> maps to 1, optuna-integration's <c>n_jobs if n_jobs else 1</c>.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void OptunaSearchCV_NJobsZero_RunsSequentiallyLikeOptunaIntegration()
     {
         // Any regression data will do: the defect is in argument handling, before the first fold is fitted.

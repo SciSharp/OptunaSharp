@@ -226,6 +226,7 @@ public class GridSampler : BaseSampler
 
     /// <inheritdoc />
     /// <exception cref="NumSharp.RuntimeError">The grid is exhausted and Study.Stop is invoked outside Study.Optimize, as in manual ask-and-tell usage.</exception>
+    /// <exception cref="NumSharp.KeyError">One unvisited grid is left and the finished trial carries no <c>grid_id</c> (an enqueued trial), as in Optuna.</exception>
     public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
     {
         var targetGrids = GetUnvisitedGridIds(study);
@@ -236,8 +237,11 @@ public class GridSampler : BaseSampler
         }
         else if (targetGrids.Count == 1)
         {
-            int gridId = Convert.ToInt32(
-                study.Storage.GetTrialSystemAttrs(trial.TrialId)["grid_id"], CultureInfo.InvariantCulture);
+            // Python's `get_trial_system_attrs(...)["grid_id"]`: an enqueued trial carries no grid id, and Optuna raises
+            // KeyError('grid_id') here, not .NET's KeyNotFoundException (QA-66, found by the batched fuzz E61).
+            if (!study.Storage.GetTrialSystemAttrs(trial.TrialId).TryGetValue("grid_id", out object? stamped))
+                throw new KeyError("grid_id");
+            int gridId = Convert.ToInt32(stamped, CultureInfo.InvariantCulture);
             if (gridId == targetGrids[0])
                 study.Stop();
         }

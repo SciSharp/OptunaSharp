@@ -25,9 +25,9 @@ public class Run2LightGbmParityBugTests
     ///     <c>[('valid_0', 'l2', 100.0, False), ('valid_1', 'auc', 1e-05, True)]</c>. The validation and metric names
     ///     are always single-quoted too, where Python switches to double quotes for a name that contains a single quote,
     ///     and a cross-validation result (five-element tuples with the standard deviation) is printed with four elements.
+    ///     <b>Fixed 2026-11-12:</b> every element is formatted with Core's <c>PythonRepr.Repr</c>.
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void MissingMetric_ListsTheResultsInPythonRepr()
     {
         var trial = Optuna.CreateStudy().Ask();
@@ -48,9 +48,9 @@ public class Run2LightGbmParityBugTests
     /// <summary>
     ///     QA-76, the culture half: the interpolated score uses the current culture, so under a culture with a decimal
     ///     comma the message reads <c>0,5</c> where Python always prints <c>0.5</c>.
+    ///     <b>Fixed 2026-11-12:</b> <c>PythonRepr.Repr</c> is culture-invariant.
     /// </summary>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void MissingMetric_FormatsScoresWithoutTheCurrentCulture()
     {
         var previous = CultureInfo.CurrentCulture;
@@ -83,9 +83,9 @@ public class Run2LightGbmParityBugTests
     ///     bagging_fraction=1.0.</c> and <c>min_child_samples in param detected multiple identical aliases
     ///     {'min_data': 20, 'min_data_in_leaf': 'x'}, but we use min_child_samples=x.</c> The warning reaches the port's
     ///     log at WARNING level, which is where this test reads it.
+    ///     <b>Fixed 2026-11-12:</b> the dict is formatted in repr and the chosen value in <c>str</c>.
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void DuplicatedAliases_WarnWithPythonDictRepr()
     {
         var writer = new System.IO.StringWriter();
@@ -114,10 +114,10 @@ public class Run2LightGbmParityBugTests
     /// <summary>
     ///     QA-76, the metric type error: optuna-integration's <c>_handling_alias_metrics</c> names the offending type as
     ///     <c>{type(metric)}</c>, i.e. <c>&lt;class 'int'&gt;</c>; the port prints the CLR type name (<c>Int64</c>).
+    ///     <b>Fixed 2026-11-12:</b> the message names the Python type (<c>&lt;class 'int'&gt;</c>).
     /// </summary>
     /// <exception cref="AssertFailedException">The message does not match Optuna's.</exception>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void NonIterableMetric_NamesThePythonType()
     {
         Action handle = () => Alias.HandleAliasMetrics(

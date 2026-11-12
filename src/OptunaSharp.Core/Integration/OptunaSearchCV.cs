@@ -83,7 +83,8 @@ public class OptunaSearchCV
     ///     Time limit in seconds for the search. If <c>null</c>, the search runs without a time limit.
     /// </param>
     /// <param name="nJobs">
-    ///     Number of parallel jobs. <c>null</c> means <c>1</c>; <c>-1</c> means the CPU count.
+    ///     Number of parallel jobs. <c>null</c> and <c>0</c> mean <c>1</c> (optuna-integration's
+    ///     <c>n_jobs if n_jobs else 1</c>: 0 is falsy); <c>-1</c> means the CPU count.
     /// </param>
     /// <param name="randomState">
     ///     Seed for the pseudo-random number generator used to derive the default sampler's seed. If
@@ -127,7 +128,9 @@ public class OptunaSearchCV
         _paramDistributions = paramDistributions ?? throw new ArgumentNullException(nameof(paramDistributions));
         _nTrials = nTrials;
         _timeout = timeout;
-        _nJobs = nJobs ?? 1;
+        // optuna-integration stores `n_jobs if n_jobs else 1`, so 0 (falsy) runs sequentially like None; mapping only
+        // null let 0 reach Study.Optimize, which refuses it ("max_workers must be greater than 0", QA-81).
+        _nJobs = nJobs is null or 0 ? 1 : nJobs.Value;
         _randomState = randomState;
         _refit = refit;
         _returnTrainScore = returnTrainScore;

@@ -1002,8 +1002,9 @@ internal sealed partial class JournalStorageReplayResult
 
         if (_studies.Values.Any(s => s.StudyName == studyName))
         {
+            // Python's bare `raise DuplicatedStudyError`: an empty message, not .NET's default text (QA-66).
             if (IsIssuedByThisWorker(log))
-                throw new DuplicatedStudyError();
+                throw new DuplicatedStudyError(string.Empty);
             return;
         }
 

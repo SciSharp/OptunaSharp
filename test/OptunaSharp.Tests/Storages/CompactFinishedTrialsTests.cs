@@ -231,8 +231,11 @@ public class CompactFinishedTrialsTests
             foreach (string name in trial.Params.Keys)
                 BitConverter.DoubleToInt64Bits(compact.GetTrialParam(trial.TrialId, name))
                     .Should().Be(BitConverter.DoubleToInt64Bits(plain.GetTrialParam(trial.TrialId, name)), name);
-            Assert.ThrowsExactly<KeyNotFoundException>(() => plain.GetTrialParam(trial.TrialId, "missing"));
-            Assert.ThrowsExactly<KeyNotFoundException>(() => compact.GetTrialParam(trial.TrialId, "missing"));
+            // Both raise Optuna's KeyError(param_name), the compact record included (QA-66).
+            Assert.ThrowsExactly<NumSharp.KeyError>(() => plain.GetTrialParam(trial.TrialId, "missing"))
+                .Message.Should().Be("missing");
+            Assert.ThrowsExactly<NumSharp.KeyError>(() => compact.GetTrialParam(trial.TrialId, "missing"))
+                .Message.Should().Be("missing");
         }
     }
 

@@ -42,8 +42,16 @@ public static class OptunaSharpVersion
     /// </remarks>
     public static readonly string Version = ReadLoadedVersion();
 
-    /// <summary>The Optuna release this port tracks as its behavioral source of truth.</summary>
-    public const string OptunaCompatibilityTarget = "5.0";
+    /// <summary>
+    ///     The Optuna release this port tracks as its behavioral source of truth, written as Optuna's own
+    ///     <c>optuna.__version__</c> (<c>refs/optuna</c> is pinned at v5.0.0).
+    /// </summary>
+    /// <remarks>
+    ///     The SQLite and EF Core storages print it where Optuna prints <c>version.__version__</c>: "The runtime optuna
+    ///     version 5.0.0 is no longer compatible with the table schema ...". It read <c>"5.0"</c> until 2026-11-12, which
+    ///     made that message differ from Optuna's (QA-75 of the 2026-11-10 parity QA run).
+    /// </remarks>
+    public const string OptunaCompatibilityTarget = "5.0.0";
 
     /// <summary>
     ///     Resolves <see cref="Version" /> from the metadata of the assembly that defines this type,

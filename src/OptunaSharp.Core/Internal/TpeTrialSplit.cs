@@ -218,6 +218,10 @@ internal static class TpeTrialSplit
     /// <param name="trial">The trial whose recorded state and values are used.</param>
     /// <param name="study">The study supplying trial history, objective directions, and storage.</param>
     /// <returns>A lexicographic score prioritizing later pruning steps and then better intermediate values.</returns>
+    /// <exception cref="NumSharp.RuntimeError">
+    ///     The study is multi-objective and the trial's last intermediate value is not NaN: Optuna reads
+    ///     <c>study.direction</c> here, which raises for a multi-objective study, so its TPE trial fails (QA-79).
+    /// </exception>
     private static (double, double) GetPrunedTrialScore(FrozenTrial trial, Study study)
     {
         if (trial.IntermediateValuesForRead.Count > 0)
@@ -226,7 +230,10 @@ internal static class TpeTrialSplit
             double intermediateValue = trial.IntermediateValuesForRead[step];
             if (double.IsNaN(intermediateValue))
                 return (-step, double.PositiveInfinity);
-            if (study.Directions[0] == StudyDirection.Minimize)
+            // `study.direction`, not `directions[0]`: the property raises on a multi-objective study, as Optuna's does.
+            // Such a study reaches this only through added or foreign PRUNED trials with reports (report() refuses
+            // multi-objective studies on both sides).
+            if (study.Direction == StudyDirection.Minimize)
                 return (-step, intermediateValue);
             return (-step, -intermediateValue);
         }

@@ -106,9 +106,10 @@ public class Run2StorageParityBugTests
     ///     exist.</c> in the journal and SQLite, the journal's bare <c>KeyError: 999</c>, the journal still returning a
     ///     deleted study's trial). Users reach these only by calling the storage directly: <c>create_study</c> replaces
     ///     the empty <c>DuplicatedStudyError</c> with its own message, which the port copies. NIT.
+    ///     <b>Fixed 2026-11-12:</b> <c>GetTrialParam</c> raises <c>KeyError(paramName)</c> and the in-memory and journal
+    ///     storages raise <c>DuplicatedStudyError("")</c>; GridSampler's missing <c>grid_id</c> is a <c>KeyError</c> too.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void StorageLevelErrors_MissingParamAndDuplicatedStudy_MatchOptuna()
     {
         var storage = new InMemoryStorage();

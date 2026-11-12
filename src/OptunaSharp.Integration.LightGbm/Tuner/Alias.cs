@@ -72,10 +72,12 @@ internal static class Alias
                 }
             }
 
+            // optuna-integration's f-string: the dict in repr, the chosen value in str (`1.0`, a bare `x`), never the
+            // current culture (QA-76).
             if (duplicatedAlias.Count > 1)
                 OptunaWarnings.Warn(
                     $"{paramName} in param detected multiple identical aliases " +
-                    $"{FormatDict(duplicatedAlias)}, but we use {paramName}={lgbmParams[paramName]}.",
+                    $"{FormatDict(duplicatedAlias)}, but we use {paramName}={PythonRepr.Str(lgbmParams[paramName])}.",
                     WarningCategory.UserWarning);
         }
     }
@@ -110,12 +112,36 @@ internal static class Alias
 
         throw new ValueError(
             "The `metric` parameter is expected to be a string or an iterable object, but got " +
-            $"{metric?.GetType().Name ?? "None"}.");
+            $"{PythonTypeRepr(metric)}.");
     }
 
-    /// <summary>Formats ordered LightGBM parameters for validation diagnostics.</summary>
+    /// <summary>
+    ///     Python's <c>str(dict)</c> of ordered LightGBM parameters for validation diagnostics: keys and values in repr
+    ///     (<c>{'sub_row': 0.5, 'subsample': 1.0}</c>), independent of the current culture.
+    /// </summary>
     /// <param name="d">The ordered parameter mapping formatted for diagnostics.</param>
     /// <returns>The Python-style representation of the parameter mapping.</returns>
     private static string FormatDict(OrderedDict<string, object?> d)
-        => "{" + string.Join(", ", d.Select(kv => $"'{kv.Key}': {kv.Value}")) + "}";
+        => "{" + string.Join(", ", d.Select(kv => $"{PythonRepr.Repr(kv.Key)}: {PythonRepr.Repr(kv.Value)}")) + "}";
+
+    /// <summary>
+    ///     Python's <c>str(type(value))</c> for the values a LightGBM parameter can hold (<c>&lt;class 'int'&gt;</c>,
+    ///     <c>&lt;class 'float'&gt;</c>, <c>&lt;class 'NoneType'&gt;</c>), as optuna-integration's metric error prints it.
+    /// </summary>
+    /// <param name="value">The offending parameter value.</param>
+    /// <returns>The Python type's string form; other CLR types fall back to their own name.</returns>
+    private static string PythonTypeRepr(object? value)
+    {
+        string name = value switch
+        {
+            null => "NoneType",
+            bool => "bool",
+            sbyte or byte or short or ushort or int or uint or long or ulong or System.Numerics.BigInteger => "int",
+            float or double => "float",
+            string => "str",
+            IDictionary => "dict",
+            _ => value.GetType().Name,
+        };
+        return $"<class '{name}'>";
+    }
 }

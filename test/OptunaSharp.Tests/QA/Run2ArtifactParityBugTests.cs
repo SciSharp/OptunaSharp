@@ -18,9 +18,9 @@ public class Run2ArtifactParityBugTests
     ///     <c>File.Exists</c>, false for a directory, then opens the directory as a file and fails with
     ///     <c>UnauthorizedAccessException("Access to the path '…' is denied.")</c> on Windows. The port's file case
     ///     already raises <c>IOException("File already exists: …")</c>, its mapping of <c>FileExistsError</c>.
+    ///     <b>Fixed 2026-11-12:</b> the existence check covers directories too, as <c>os.path.exists</c> does.
     /// </summary>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void DownloadOntoAnExistingDirectory_RaisesFileExistsLikeOptuna()
     {
         string root = Path.Combine(Path.GetTempPath(), "optunasharp-qa78-" + Guid.NewGuid().ToString("N"));

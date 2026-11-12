@@ -274,7 +274,11 @@ public abstract class BaseStorage
     public virtual double GetTrialParam(int trialId, string paramName)
     {
         var trial = GetTrial(trialId);
-        return trial.Distributions[paramName].ToInternalRepr(trial.Params[paramName]);
+        // Python's `trial.distributions[param_name]` raises KeyError(param_name); the dictionary indexer's
+        // KeyNotFoundException escaped a `catch (KeyError)` written against this method's documented error (QA-66).
+        if (!trial.Distributions.TryGetValue(paramName, out var distribution))
+            throw new KeyError(paramName);
+        return distribution.ToInternalRepr(trial.Params[paramName]);
     }
 
     /// <summary>

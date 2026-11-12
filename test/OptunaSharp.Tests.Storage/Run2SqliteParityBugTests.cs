@@ -174,9 +174,10 @@ public class Run2SqliteParityBugTests
     ///     test_upgrade_assets</c>): the nine pre-3.2 databases give the same message on both sides except
     ///     <c>5.0.0</c> / <c>5.0</c>; with <c>skip_compatibility_check=True</c> both open them and report the same
     ///     current / head revisions and studies.
+    ///     <b>Fixed 2026-11-12:</b> <c>OptunaSharpVersion.OptunaCompatibilityTarget</c> is <c>"5.0.0"</c>, Optuna's
+    ///     <c>__version__</c>.
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void OldSchemaDatabase_CompatibilityErrorNamesOptunasFullVersion()
     {
         string asset = Path.Combine(RepoRoot(), "refs", "optuna", "tests", "storages_tests", "rdb_tests",
@@ -208,9 +209,10 @@ public class Run2SqliteParityBugTests
     ///     <c>sqlite3.OperationalError</c>). Code that wraps storage creation in <c>except StorageInternalError</c> to
     ///     detect an uninitialized database sees nothing from the port's constructor and an unrelated exception type
     ///     afterwards.
+    ///     <b>Fixed 2026-11-12:</b> under <c>skip_table_creation</c> the version-info step only reads <c>version_info</c>, and a
+    ///     database error there becomes <c>StorageInternalError</c> in the constructor, as Optuna's scoped session makes it.
     /// </remarks>
     [TestMethod]
-    [TestCategory("OpenBugs")]
     public void SkipTableCreation_OverAnEmptyDatabase_RaisesStorageInternalErrorLikeOptuna()
     {
         string path = Path.Combine(Path.GetTempPath(), $"optunasharp-rdb-qa74-{Guid.NewGuid():N}.db");

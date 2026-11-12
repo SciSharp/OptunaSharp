@@ -240,7 +240,7 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
         if (!options.SkipTableCreation)
             CreateSchema();
 
-        InitVersionInfo();
+        InitVersionInfo(options.SkipTableCreation);
         InitAlembic();
         if (!options.SkipCompatibilityCheck)
             CheckTableSchemaCompatibility();
@@ -404,23 +404,51 @@ public sealed partial class RDBStorage : BaseStorage, ICachedStorageBackend, IDi
     /// <param name="body">The trusted PRAGMA expression executed after the PRAGMA keyword.</param>
     private void ExecPragma(string body) => Exec("PRAGMA " + body, null);
 
-    // Port of `_VersionManager._init_version_info_model`. The version tables are created here (not only
-    // in CreateSchema) so the two version-tracking tables exist even under `skip_table_creation` — the
-    // mode the CLI's `storage upgrade` opens with — mirroring Python, where the ORM insert / alembic
-    // stamp materialize them regardless. Both are IF NOT EXISTS no-ops on the normal fresh-DB path.
+    // Port of `_VersionManager._init_version_info_model`, which Python runs inside
+    // `_create_scoped_session(scoped_session, ignore_integrity_error=True)`. Under `skip_table_creation` Python creates
+    // no table: on a database without Optuna's tables its read of version_info fails, and the scoped session turns that
+    // into StorageInternalError in the constructor, with or without skip_compatibility_check (QA-74, measured
+    // 2026-11-12; `optuna storage upgrade` on an empty file fails the same way). The port used to create the table here
+    // regardless, so it constructed the storage and failed later on its first read with "no such table: studies".
+    // Every one of Optuna's upgrade-test databases has version_info, so upgrades are unaffected.
     /// <summary>Creates the informational schema/library version record if it is absent.</summary>
-    private void InitVersionInfo()
+    /// <param name="skipTableCreation">Whether the storage was opened with <c>skip_table_creation</c>: the table is then only read, never created.</param>
+    /// <exception cref="StorageInternalError">A database error other than a constraint violation, such as no version_info table under <paramref name="skipTableCreation" />.</exception>
+    private void InitVersionInfo(bool skipTableCreation)
     {
-        Exec(RdbModels.VersionInfoTableDdl, null);
-        long count = ScalarLong("SELECT COUNT(*) FROM version_info", null);
-        if (count > 0)
-            return;
-        Exec(
-            "INSERT INTO version_info (version_info_id, schema_version, library_version) VALUES (1, $p0, $p1)",
-            null,
-            RdbModels.SchemaVersion,
-            RdbModels.LibraryVersion);
+        try
+        {
+            if (!skipTableCreation)
+                Exec(RdbModels.VersionInfoTableDdl, null);
+            long count = ScalarLong("SELECT COUNT(*) FROM version_info", null);
+            if (count > 0)
+                return;
+            Exec(
+                "INSERT INTO version_info (version_info_id, schema_version, library_version) VALUES (1, $p0, $p1)",
+                null,
+                RdbModels.SchemaVersion,
+                RdbModels.LibraryVersion);
+        }
+        catch (SqliteException e) when (e.SqliteErrorCode == SqliteConstraintError)
+        {
+            // ignore_integrity_error=True: another process inserted the row between the read and the insert.
+        }
+        catch (SqliteException e)
+        {
+            throw new StorageInternalError(CommitErrorMessage, e);
+        }
     }
+
+    /// <summary>SQLite's <c>SQLITE_CONSTRAINT</c> result code: the errors SQLAlchemy reports as <c>IntegrityError</c>.</summary>
+    private const int SqliteConstraintError = 19;
+
+    /// <summary>
+    ///     The message of the <see cref="StorageInternalError" /> Optuna's <c>_create_scoped_session</c> raises for any
+    ///     database error other than an integrity error, verbatim, trailing space included.
+    /// </summary>
+    private const string CommitErrorMessage =
+        "An exception is raised during the commit. This typically happens due to invalid data in the commit, " +
+        "e.g. exceeding max length. ";
 
     // Port of `_VersionManager._init_alembic`. On an empty `alembic_version`, Python stamps the head
     // revision when alembic is "supported" (a freshly-created DB, or one already at the current
