@@ -179,6 +179,13 @@ public class BoTorchIntegrationParityTests : OptunaInteropTestBase
     ///     <c>x</c> 3.1e-9; only <c>x</c> in [-5, 5] with <c>n</c> suggested first was identical. The divergence is
     ///     therefore configuration-dependent; neither the ranges nor the suggestion order alone cause it.
     /// </summary>
+    /// <remarks>
+    ///     Revalidated 2026-11-12: the divergence shows only in the first BoTorch study of a process. Run alone, this
+    ///     case fails with 3.4232472856388085e-8; run after another BoTorch study in the same test process (for example
+    ///     <see cref="MixedIntFloatMultiObjective_Qehvi_ByteExact" />), it is byte-exact. Native optuna-integration gives
+    ///     the same trials standalone and embedded, so the bridge's first study is what differs (botorch's one-time
+    ///     fused qLogEHVI extension attempt is the prime suspect). Run this repro on its own to see it fail.
+    /// </remarks>
     /// <exception cref="AssertInconclusiveException">Under CI, where this known-failing repro must not run.</exception>
     [TestMethod]
     [TestCategory("RequiresPython")]
@@ -210,6 +217,11 @@ public class BoTorchIntegrationParityTests : OptunaInteropTestBase
     ///     point altogether, consistent with QA-82's small numerical difference flipping which acquisition restart wins.
     ///     The class's own float-only qEHVI case (<c>a</c>, <c>b</c> over [-5, 5]) stays at 0.
     /// </summary>
+    /// <remarks>
+    ///     Revalidated 2026-11-12: like the int / float case, this reproduces only as the first BoTorch study of the test
+    ///     process (0.6619209926977506 when run alone; byte-exact after <see cref="Run2SmallIntFloatMultiObjective_Qehvi_ByteExact" />
+    ///     in the same process). Run it on its own to see it fail.
+    /// </remarks>
     /// <exception cref="AssertInconclusiveException">Under CI, where this known-failing repro must not run.</exception>
     [TestMethod]
     [TestCategory("RequiresPython")]
