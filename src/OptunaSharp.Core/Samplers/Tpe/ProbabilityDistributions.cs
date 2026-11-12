@@ -483,8 +483,9 @@ internal sealed class MixtureOfProductDistribution
     ///         another order changes no element.
     ///     </para>
     ///     <para>
-    ///         <see cref="AccumulateContinuous" /> then adds each candidate's sum over the dimensions to its row, every
-    ///         sum still <c>((0 + t0) + t1) + …</c> in dimension order (see there for how the vector path keeps the bits).
+    ///         <see cref="AddContinuousSums" /> then stores every per-dimension term as NumPy's
+    ///         <c>(n_samples, n_kernels, n_cont)</c> array and sums it over the dimensions with NumSharp's
+    ///         <c>np.sum(axis=-1)</c>, NumPy's pairwise order (QA-84, see there).
     ///     </para>
     /// </remarks>
     private void AddContinuousLogPdf(
@@ -540,7 +541,7 @@ internal sealed class MixtureOfProductDistribution
             }
             TruncNorm.LogGaussMass(aGrid, bGrid, logGaussMass);
 
-            AccumulateContinuous(
+            AddContinuousSums(
                 xCont, nSamples, nCont, muGrid, sigmaGrid, aGrid, bGrid, logGaussMass, logSigma, weightedLogPdf, nKernels);
         }
         finally
@@ -550,11 +551,10 @@ internal sealed class MixtureOfProductDistribution
     }
 
     /// <summary>
-    ///     Adds each candidate's continuous log density under each kernel to <paramref name="weightedLogPdf" />: the sum
-    ///     over the continuous dimensions of <c>(norm_logpdf((x - mu) / sigma) - log_gauss_mass) - log(sigma)</c>, with
-    ///     NaN where the kernel's standardized interval is empty (<c>a == b</c>) and <c>-inf</c> where <c>x</c> falls
-    ///     outside it, as <c>np.select([a == b, (x &lt; a) | (x &gt; b)], [nan, -inf], default=out)</c> in
-    ///     <c>_truncnorm.logpdf</c> followed by <c>.sum(axis=-1)</c>.
+    ///     Adds each candidate's continuous log density under each kernel to <paramref name="weightedLogPdf" />, as Optuna's
+    ///     <c>weighted_log_pdf += _truncnorm.logpdf(x_cont[:, None, :], a, b, loc=mu, scale=sigma).sum(axis=-1)</c>: every
+    ///     per-dimension term (<see cref="ContinuousLogPdfTerms" />) is stored as NumPy's C-contiguous
+    ///     <c>(n_samples, n_kernels, n_cont)</c> array, and NumSharp's <c>np.sum(axis=-1)</c> sums each row of terms.
     /// </summary>
     /// <param name="xCont">
     ///     The candidates' continuous coordinates, log-transformed already for the log kinds, one row of
@@ -579,40 +579,34 @@ internal sealed class MixtureOfProductDistribution
     ///     A grid, <paramref name="xCont" /> or <paramref name="weightedLogPdf" /> is shorter than the sizes imply; nothing
     ///     is read or written then.
     /// </exception>
+    /// <exception cref="OverflowException">
+    ///     n_samples × n_kernels × n_cont exceeds the largest array (NumPy would fail to allocate its term array too).
+    /// </exception>
     /// <remarks>
     ///     <para>
-    ///         Each element gets exactly the scalar loop's operations: the sum starts at +0.0, receives the dimensions'
-    ///         terms in dimension order, <c>((0 + t0) + t1) + …</c>, and is then added to the candidate's row
-    ///         (<c>row + sum</c>). In the vector path a lane holds one kernel, so lanes never mix; the kernels after the
-    ///         last full vector take the scalar path, the same kernels as before. The vector path computes every lane
-    ///         with the scalar path's operations in the scalar path's order: the same division by sigma (never a
-    ///         multiplication by its reciprocal), the same subtraction order, the NaN and <c>-inf</c> overrides applied
-    ///         last. Its only freedom is the sign of zero in <c>-(z * z)</c>, which the subtraction of the normal's log
-    ///         constant right after removes. .NET never contracts a multiply and an add into a fused multiply-add on its
-    ///         own.
+    ///         <b>Why NumSharp's sum (QA-84, owner's choice 2026-11-12).</b> NumPy sums a C-contiguous last axis pairwise:
+    ///         below eight terms left to right, from eight on eight accumulators combined
+    ///         <c>((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))</c> and then the rest, blocks over 128 split in two. The
+    ///         port used to add the terms left to right, which made its log densities differ from Optuna's in the last bit
+    ///         for 31–54% of (candidate, kernel) entries from eight continuous parameters on. NumSharp's
+    ///         <c>np.sum(axis=-1)</c> equals live NumPy 2.4.2 bit for bit at every width from 1 to 300 (measured 2026-11-12),
+    ///         so the sum is NumPy's by construction. Below eight continuous parameters the sum is the same as before.
     ///     </para>
     ///     <para>
-    ///         <b>Sums in registers, unchecked loads (plan 15).</b> The kernels are visited one vector-wide block at a
-    ///         time, and each candidate's sums for the block stay in a register across the dimensions; before, a buffer
-    ///         of n_kernels sums was cleared, read and written once per dimension and then added to the row, for every
-    ///         candidate. Only the order in which different elements are computed changed. The loads go through
-    ///         <see cref="System.Numerics.Vector.LoadUnsafe{T}(ref readonly T, nuint)" /> at one offset per (block, dimension),
-    ///         which is why mu and sigma come as grid rows: with a span slice and a jagged-array lookup per operand, the
-    ///         bounds checks were most of the loop's 60 instructions, and the unchecked loop runs 2.0 to 2.4 times
-    ///         faster (same-process A/B, 100 to 3,000 kernels, same bits). Every length is checked once, up front, so no
-    ///         load or store can leave its buffer. The halving in <c>-(z * z) / 2</c> is a multiplication by 0.5:
-    ///         dividing by two and multiplying by a half give the correctly rounded value of the same real number (and
-    ///         pass a NaN through alike), so the bits are equal, and the division by sigma that remains is the loop's
-    ///         slowest instruction.
+    ///         <b>Cost.</b> The terms are stored where they used to stay in registers: n_samples × n_kernels × n_cont
+    ///         doubles, 1.9 MB at 24 candidates, 1,000 kernels and 10 dimensions. Both buffers are rented, the term array and
+    ///         the <c>out=</c> target wrap them without a copy, and NumSharp's sum allocates about 2 KB per call. NumSharp's
+    ///         own costs on this shape (its sum runs at 0.56–0.99 of NumPy's speed, and the fresh-result form allocates
+    ///         managed memory in proportion to its output) are filed as OpenBugs in NumSharp's journey5.
     ///     </para>
     /// </remarks>
-    internal static void AccumulateContinuous(
+    internal static void AddContinuousSums(
         ReadOnlySpan<double> xCont, int nSamples, int nCont,
         ReadOnlySpan<double> muGrid, ReadOnlySpan<double> sigmaGrid,
         ReadOnlySpan<double> aGrid, ReadOnlySpan<double> bGrid, ReadOnlySpan<double> logGaussMass, ReadOnlySpan<double> logSigma,
         Span<double> weightedLogPdf, int nKernels)
     {
-        // The unchecked loads below rely on these sizes; checking them here keeps every access inside its buffer.
+        // Checked here as well as in ContinuousLogPdfTerms: nothing may be rented, computed or added for impossible sizes.
         long gridSize = (long)nCont * nKernels;
         if (nSamples < 0 || nCont < 0 || nKernels < 0
             || xCont.Length < (long)nSamples * nCont || weightedLogPdf.Length < (long)nSamples * nKernels
@@ -620,10 +614,90 @@ internal sealed class MixtureOfProductDistribution
             || bGrid.Length < gridSize || logGaussMass.Length < gridSize || logSigma.Length < gridSize)
             throw new ArgumentException("A continuous log-density buffer is shorter than its sizes imply.");
 
+        int nRows = checked(nSamples * nKernels);
+        if (nRows == 0)
+            return;   // no (candidate, kernel) entry to add to
+
+        int termCount = checked(nRows * nCont);
+        double[] terms = System.Buffers.ArrayPool<double>.Shared.Rent(Math.Max(termCount, 1));
+        double[] sums = System.Buffers.ArrayPool<double>.Shared.Rent(nRows);
+        try
+        {
+            ContinuousLogPdfTerms(
+                xCont, nSamples, nCont, muGrid, sigmaGrid, aGrid, bGrid, logGaussMass, logSigma, terms, nKernels);
+
+            // _truncnorm.logpdf(...).sum(axis=-1). Both arrays wrap the rented buffers' first elements without a copy (NumPy's
+            // ndarray(shape, buffer=...) reads a prefix of a larger buffer), and the sums land straight in the second. Disposed
+            // at once: an undisposed NDArray is left to the finalizer and promoted past gen 0 (plan 14).
+            using (var termArray = new NDArray(terms, new Shape(nSamples, nKernels, nCont)))
+            using (var sumArray = new NDArray(sums, new Shape(nSamples, nKernels)))
+                np.sum(termArray, axis: -1, @out: sumArray);
+
+            // weighted_log_pdf += ...: one IEEE addition per entry, as NumPy's elementwise add.
+            for (int i = 0; i < nRows; i++)
+                weightedLogPdf[i] += sums[i];
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<double>.Shared.Return(sums);
+            System.Buffers.ArrayPool<double>.Shared.Return(terms);
+        }
+    }
+
+    /// <summary>
+    ///     Writes every candidate's continuous log-density term under every kernel and dimension,
+    ///     <c>(norm_logpdf((x - mu) / sigma) - log_gauss_mass) - log(sigma)</c>, with NaN where the kernel's standardized
+    ///     interval is empty (<c>a == b</c>) and <c>-inf</c> where <c>x</c> falls outside it: the array
+    ///     <c>np.select([a == b, (x &lt; a) | (x &gt; b)], [nan, -inf], default=out)</c> of <c>_truncnorm.logpdf</c>, laid
+    ///     out C-contiguous as <c>(n_samples, n_kernels, n_cont)</c> (<c>[(s * n_kernels + k) * n_cont + c]</c>).
+    /// </summary>
+    /// <param name="xCont">The candidates' continuous coordinates, laid out as for <see cref="AddContinuousSums" />.</param>
+    /// <param name="nSamples">The number of candidates.</param>
+    /// <param name="nCont">The number of continuous dimensions.</param>
+    /// <param name="muGrid">The kernels' centers, one row of n_kernels per dimension.</param>
+    /// <param name="sigmaGrid">The kernels' standard deviations, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="aGrid">The kernels' standardized lower bounds, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="bGrid">The kernels' standardized upper bounds, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="logGaussMass">The log Gaussian mass between the bounds, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="logSigma">The kernels' <c>log(sigma)</c>, laid out as <paramref name="muGrid" />.</param>
+    /// <param name="terms">Receives the terms; at least n_samples × n_kernels × n_cont long.</param>
+    /// <param name="nKernels">The number of kernels.</param>
+    /// <exception cref="ArgumentException">A buffer is shorter than the sizes imply; nothing is written then.</exception>
+    /// <remarks>
+    ///     <para>
+    ///         Every term gets exactly the scalar path's operations in the same order: the same division by sigma (never a
+    ///         multiplication by its reciprocal), the same subtraction order, the NaN and <c>-inf</c> overrides applied last.
+    ///         The vector path's only freedom is the sign of zero in <c>-(z * z)</c>, which the subtraction of the normal's
+    ///         log constant right after removes; .NET never contracts a multiply and an add into a fused multiply-add on its
+    ///         own. A lane holds one kernel, so lanes never mix; the kernels after the last whole vector take the scalar path.
+    ///     </para>
+    ///     <para>
+    ///         The loads go through <see cref="System.Numerics.Vector.LoadUnsafe{T}(ref readonly T, nuint)" /> at one offset
+    ///         per (kernel block, dimension), which is why mu and sigma come as grid rows (plan 15: with span slices the bounds
+    ///         checks were most of the loop); every length is checked once, up front, so no access leaves its buffer. A
+    ///         kernel's terms are contiguous over the dimensions, so a vector's lanes are stored at a stride of n_cont. The
+    ///         halving in <c>-(z * z) / 2</c> is a multiplication by 0.5, the correctly rounded value of the same real number,
+    ///         so the bits are equal.
+    ///     </para>
+    /// </remarks>
+    internal static void ContinuousLogPdfTerms(
+        ReadOnlySpan<double> xCont, int nSamples, int nCont,
+        ReadOnlySpan<double> muGrid, ReadOnlySpan<double> sigmaGrid,
+        ReadOnlySpan<double> aGrid, ReadOnlySpan<double> bGrid, ReadOnlySpan<double> logGaussMass, ReadOnlySpan<double> logSigma,
+        Span<double> terms, int nKernels)
+    {
+        // The unchecked accesses below rely on these sizes; checking them here keeps every access inside its buffer.
+        long gridSize = (long)nCont * nKernels;
+        if (nSamples < 0 || nCont < 0 || nKernels < 0
+            || xCont.Length < (long)nSamples * nCont || terms.Length < (long)nSamples * nKernels * nCont
+            || muGrid.Length < gridSize || sigmaGrid.Length < gridSize || aGrid.Length < gridSize
+            || bGrid.Length < gridSize || logGaussMass.Length < gridSize || logSigma.Length < gridSize)
+            throw new ArgumentException("A continuous log-density buffer is shorter than its sizes imply.");
+
         if (System.Numerics.Vector.IsHardwareAccelerated && nKernels >= System.Numerics.Vector<double>.Count)
         {
-            // Vector path: whole vector-wide kernel blocks here, then the kernels after the last whole block on the
-            // scalar path, as before.
+            // Vector path: whole vector-wide kernel blocks here, then the kernels after the last whole block on the scalar
+            // path.
             int k = 0;
             int width = System.Numerics.Vector<double>.Count;
             var half = new System.Numerics.Vector<double>(0.5);
@@ -637,14 +711,14 @@ internal sealed class MixtureOfProductDistribution
             ref double b0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(bGrid);
             ref double logGaussMass0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(logGaussMass);
             ref double logSigma0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(logSigma);
-            ref double row0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(weightedLogPdf);
+            ref double t0 = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(terms);
             for (; k <= nKernels - width; k += width)
             {
                 for (int s = 0; s < nSamples; s++)
                 {
-                    // +0.0 in every lane, as the scalar loop's `double sum = 0.0`.
-                    var sum = System.Numerics.Vector<double>.Zero;
                     nuint xRow = (nuint)s * (nuint)nCont;
+                    // Candidate s's first term under this block's first kernel; lane j's kernel starts j * n_cont later.
+                    nuint tBase = ((nuint)s * (nuint)nKernels + (nuint)k) * (nuint)nCont;
                     // g walks this kernel block's column down the dimension rows: c * n_kernels + k.
                     nuint g = (nuint)k;
                     for (int c = 0; c < nCont; c++, g += (nuint)nKernels)
@@ -660,28 +734,27 @@ internal sealed class MixtureOfProductDistribution
                             System.Numerics.Vector.LessThan(xstd, aV) | System.Numerics.Vector.GreaterThan(xstd, bV),
                             negativeInfinity, val);
                         val = System.Numerics.Vector.ConditionalSelect(System.Numerics.Vector.Equals(aV, bV), nan, val);
-                        sum += val;
+                        for (int lane = 0; lane < width; lane++)
+                            System.Runtime.CompilerServices.Unsafe.Add(ref t0, tBase + (nuint)lane * (nuint)nCont + (nuint)c) = val[lane];
                     }
-                    nuint o = (nuint)s * (nuint)nKernels + (nuint)k;
-                    System.Numerics.Vector.StoreUnsafe(System.Numerics.Vector.LoadUnsafe(ref row0, o) + sum, ref row0, o);
                 }
             }
-            AccumulateContinuousScalar(
-                xCont, nSamples, nCont, muGrid, sigmaGrid, aGrid, bGrid, logGaussMass, logSigma, weightedLogPdf, nKernels, k);
+            ContinuousLogPdfTermsScalar(
+                xCont, nSamples, nCont, muGrid, sigmaGrid, aGrid, bGrid, logGaussMass, logSigma, terms, nKernels, k);
         }
         else
         {
             // Scalar path: no vector hardware, or fewer kernels than one vector holds.
-            AccumulateContinuousScalar(
-                xCont, nSamples, nCont, muGrid, sigmaGrid, aGrid, bGrid, logGaussMass, logSigma, weightedLogPdf, nKernels, 0);
+            ContinuousLogPdfTermsScalar(
+                xCont, nSamples, nCont, muGrid, sigmaGrid, aGrid, bGrid, logGaussMass, logSigma, terms, nKernels, 0);
         }
     }
 
     /// <summary>
-    ///     The scalar path of <see cref="AccumulateContinuous" /> for the kernels from <paramref name="firstKernel" /> on:
+    ///     The scalar path of <see cref="ContinuousLogPdfTerms" /> for the kernels from <paramref name="firstKernel" /> on:
     ///     every kernel when there is no vector path, and the kernels after the vector path's last whole block otherwise.
     /// </summary>
-    /// <param name="xCont">The candidates' continuous coordinates, laid out as for <see cref="AccumulateContinuous" />.</param>
+    /// <param name="xCont">The candidates' continuous coordinates, laid out as for <see cref="AddContinuousSums" />.</param>
     /// <param name="nSamples">The number of candidates.</param>
     /// <param name="nCont">The number of continuous dimensions.</param>
     /// <param name="muGrid">The kernels' centers, one row of n_kernels per dimension.</param>
@@ -690,26 +763,25 @@ internal sealed class MixtureOfProductDistribution
     /// <param name="bGrid">The kernels' standardized upper bounds, laid out as <paramref name="muGrid" />.</param>
     /// <param name="logGaussMass">The log Gaussian mass between the bounds, laid out as <paramref name="muGrid" />.</param>
     /// <param name="logSigma">The kernels' <c>log(sigma)</c>, laid out as <paramref name="muGrid" />.</param>
-    /// <param name="weightedLogPdf">(n_samples, n_kernels) row-major; each candidate's sum per kernel is added in place.</param>
+    /// <param name="terms">Receives the terms, laid out as for <see cref="ContinuousLogPdfTerms" />.</param>
     /// <param name="nKernels">The number of kernels.</param>
     /// <param name="firstKernel">The first kernel this path handles; the kernels before it are left alone.</param>
     /// <exception cref="IndexOutOfRangeException">A buffer is shorter than the sizes imply (the caller checks this first).</exception>
     /// <remarks>
-    ///     The reference arithmetic the vector path reproduces lane by lane: the sum starts at +0.0, receives the
-    ///     dimensions' terms in dimension order and is then added to the candidate's row. Every access is bounds-checked;
-    ///     it handles at most a vector's width less one kernel per call on vector hardware.
+    ///     The reference arithmetic the vector path reproduces lane by lane. Every access is bounds-checked; it handles at
+    ///     most a vector's width less one kernel per call on vector hardware.
     /// </remarks>
-    private static void AccumulateContinuousScalar(
+    private static void ContinuousLogPdfTermsScalar(
         ReadOnlySpan<double> xCont, int nSamples, int nCont,
         ReadOnlySpan<double> muGrid, ReadOnlySpan<double> sigmaGrid,
         ReadOnlySpan<double> aGrid, ReadOnlySpan<double> bGrid, ReadOnlySpan<double> logGaussMass, ReadOnlySpan<double> logSigma,
-        Span<double> weightedLogPdf, int nKernels, int firstKernel)
+        Span<double> terms, int nKernels, int firstKernel)
     {
         for (int k = firstKernel; k < nKernels; k++)
         {
             for (int s = 0; s < nSamples; s++)
             {
-                double sum = 0.0;
+                int tBase = (s * nKernels + k) * nCont;
                 for (int c = 0; c < nCont; c++)
                 {
                     int g = c * nKernels + k;
@@ -719,9 +791,8 @@ internal sealed class MixtureOfProductDistribution
                         val = double.NaN;
                     else if (xstd < aGrid[g] || xstd > bGrid[g])
                         val = double.NegativeInfinity;
-                    sum += val;
+                    terms[tBase + c] = val;
                 }
-                weightedLogPdf[s * nKernels + k] += sum;
             }
         }
     }

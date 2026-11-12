@@ -365,17 +365,20 @@ public class Run2SamplerParityBugTests
     ///     QA-84 (found 2026-11-11 by plan 15, after the run): Optuna sums a candidate's continuous log terms over the
     ///     dimensions with <c>_truncnorm.logpdf(...).sum(axis=-1)</c>, a reduction over a C-contiguous last axis, which
     ///     NumPy performs with its pairwise sum: from eight elements on, eight accumulators, then
-    ///     <c>((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))</c>, then the remainder. The port adds the terms left to
-    ///     right from +0.0, so with eight or more continuous parameters many sums differ in their last bits.
+    ///     <c>((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))</c>, then the remainder. The port added the terms left to
+    ///     right from +0.0, so with eight or more continuous parameters many sums differed in their last bits.
+    ///     <b>Fixed 2026-11-12</b> (owner's choice): the per-dimension terms are stored as NumPy's
+    ///     <c>(n_samples, n_kernels, n_cont)</c> array and summed by NumSharp's <c>np.sum(axis=-1)</c>
+    ///     (<c>MixtureOfProductDistribution.AddContinuousSums</c>).
     /// </summary>
     /// <remarks>
     ///     Measured with Optuna 5.0.0's own <c>_truncnorm.logpdf</c> on its own array layout and NumPy 2.4.2: the
     ///     pairwise model below matches NumPy in all 7,200 (candidate, kernel) entries for 8, 10 and 16 dimensions, and a
-    ///     left-to-right sum differs in 31–54% of them. The test isolates the order: both sides sum the port's own
-    ///     per-dimension terms (computed as <c>AccumulateContinuous</c> computes them), so only the summation can differ.
+    ///     left-to-right sum differed in 31–54% of them; NumSharp's <c>np.sum(axis=-1)</c> matches live NumPy at every
+    ///     width from 1 to 300. The test isolates the order: both sides sum the port's own per-dimension terms, so only the
+    ///     summation can differ.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void Tpe_ContinuousLogPdf_SumsTheDimensionsPairwiseLikeNumPy()
     {
         var rng = new System.Random(84);
@@ -400,7 +403,7 @@ public class Run2SamplerParityBugTests
             xCont[i] = rng.NextDouble() * 20 - 10;
 
         var actual = new double[nSamples * nKernels];
-        OptunaSharp.Samplers.Tpe.MixtureOfProductDistribution.AccumulateContinuous(
+        OptunaSharp.Samplers.Tpe.MixtureOfProductDistribution.AddContinuousSums(
             xCont, nSamples, nCont, mu, sigma, a, b, logGaussMass, logSigma, actual, nKernels);
 
         int differing = 0;

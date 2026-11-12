@@ -131,20 +131,20 @@ public class TpeDiscreteKernelTests
         toSorted.Distinct().Count().Should().Be(count, "different groups stay different");
     }
 
-    // ------------------------------------------------------------------ the continuous accumulation
+    // ------------------------------------------------------------------ the continuous terms and their sums
 
     /// <summary>
-    ///     <see cref="MixtureOfProductDistribution.AccumulateContinuous" />, on its vector branch (whole kernel blocks plus
-    ///     the leftover kernels) and on its scalar branch (fewer kernels than a vector holds), against the per-candidate
-    ///     scalar accumulation it replaced: every kernel count from one to three vectors and three more, one to ten
-    ///     dimensions, candidates outside some kernels' intervals (<c>-inf</c> terms), empty intervals (NaN terms) and rows
-    ///     that already hold values. Same bits, NaNs where there were NaNs.
+    ///     <see cref="MixtureOfProductDistribution.ContinuousLogPdfTerms" />, on its vector branch (whole kernel blocks plus
+    ///     the leftover kernels) and on its scalar branch (fewer kernels than a vector holds), against the term formula
+    ///     written out: every kernel count from one to three vectors and three more, one to ten dimensions, candidates
+    ///     outside some kernels' intervals (<c>-inf</c> terms) and empty intervals (NaN terms). Same bits, NaNs where the
+    ///     formula gives NaN, every term in its <c>(n_samples, n_kernels, n_cont)</c> slot.
     /// </summary>
     /// <param name="seed">Seeds the random grids.</param>
     [TestMethod]
     [DataRow(1)]
     [DataRow(2)]
-    public void AccumulateContinuous_BothBranches_MatchTheReplacedScalarLoopToTheBit(int seed)
+    public void ContinuousLogPdfTerms_BothBranches_MatchTheTermFormulaToTheBit(int seed)
     {
         var rng = new Random(seed);
         int width = System.Numerics.Vector<double>.Count;
@@ -153,77 +153,269 @@ public class TpeDiscreteKernelTests
             for (int nKernels = 1; nKernels <= 3 * width + 3; nKernels++)
             {
                 const int nSamples = 7;
-                int gridSize = nCont * nKernels;
-                var mu = new double[gridSize];
-                var sigma = new double[gridSize];
-                var a = new double[gridSize];
-                var b = new double[gridSize];
-                var logSigma = new double[gridSize];
-                for (int g = 0; g < gridSize; g++)
-                {
-                    mu[g] = rng.NextDouble() * 4 - 2;
-                    sigma[g] = 0.05 + rng.NextDouble();
-                    double low = -3.0, high = rng.Next(12) == 0 ? -3.0 : 3.0;  // one interval in twelve is empty.
-                    a[g] = (low - mu[g]) / sigma[g];
-                    b[g] = (high - mu[g]) / sigma[g];
-                    logSigma[g] = Math.Log(sigma[g]);
-                }
-                double[] logGaussMass = TruncNorm.LogGaussMass(a, b);
-                var xCont = new double[nSamples * nCont];
-                for (int i = 0; i < xCont.Length; i++)
-                    xCont[i] = rng.NextDouble() * 8 - 4;  // some candidates fall outside [-3, 3].
+                var grids = RandomContinuousGrids(rng, nSamples, nCont, nKernels);
+                var actual = new double[nSamples * nKernels * nCont];
+                MixtureOfProductDistribution.ContinuousLogPdfTerms(
+                    grids.XCont, nSamples, nCont, grids.Mu, grids.Sigma, grids.A, grids.B, grids.LogGaussMass, grids.LogSigma,
+                    actual, nKernels);
+                double[] expected = ReferenceTerms(grids, nSamples, nCont, nKernels);
+                AssertSameBitsOrNaN(actual, expected, $"{nKernels} kernels, {nCont} dims");
+            }
+        }
+    }
+
+    /// <summary>
+    ///     QA-84 (owner's choice 2026-11-12): <see cref="MixtureOfProductDistribution.AddContinuousSums" /> adds to each row
+    ///     NumPy's sum of its terms over the last axis, <c>0.0 + pairwise_sum(row)</c>, which is also what NumSharp's
+    ///     <c>np.sum(axis=-1)</c> gives on the same terms, at widths on both sides of NumPy's eight-element switch and past
+    ///     its 128-element block. Below eight dimensions that is the left-to-right sum the port used before, so nothing
+    ///     changes there.
+    /// </summary>
+    /// <param name="seed">Seeds the random grids.</param>
+    [TestMethod]
+    [DataRow(1)]
+    [DataRow(2)]
+    public void AddContinuousSums_AreNumPysPairwiseSumsOfTheTerms(int seed)
+    {
+        var rng = new Random(seed);
+        int width = System.Numerics.Vector<double>.Count;
+        foreach (int nCont in new[] { 1, 7, 8, 9, 10, 17, 40, 129 })
+        {
+            foreach (int nKernels in new[] { 1, width, 3 * width + 3, 40 })
+            {
+                const int nSamples = 5;
+                var grids = RandomContinuousGrids(rng, nSamples, nCont, nKernels);
                 var start = new double[nSamples * nKernels];
                 for (int i = 0; i < start.Length; i++)
                     start[i] = rng.NextDouble() * 10 - 5;
 
                 var actual = (double[])start.Clone();
-                MixtureOfProductDistribution.AccumulateContinuous(
-                    xCont, nSamples, nCont, mu, sigma, a, b, logGaussMass, logSigma, actual, nKernels);
-                double[] expected = ReferenceAccumulate(xCont, nSamples, nCont, mu, sigma, a, b, logGaussMass, logSigma, start, nKernels);
+                MixtureOfProductDistribution.AddContinuousSums(
+                    grids.XCont, nSamples, nCont, grids.Mu, grids.Sigma, grids.A, grids.B, grids.LogGaussMass, grids.LogSigma,
+                    actual, nKernels);
 
+                double[] terms = ReferenceTerms(grids, nSamples, nCont, nKernels);
+                var expected = new double[start.Length];
                 for (int i = 0; i < expected.Length; i++)
+                    expected[i] = start[i] + (0.0 + NumPyPairwiseSum(terms.AsSpan(i * nCont, nCont)));
+                string where = $"{nKernels} kernels, {nCont} dims";
+                AssertSameBitsOrNaN(actual, expected, where);
+
+                // The same sums straight from NumSharp, the reference the implementation calls (it equals live NumPy 2.4.2
+                // bit for bit at widths 1-300, measured 2026-11-12).
+                double[] viaNumSharp;
+                using (var termArray = new NumSharp.NDArray(terms, new NumSharp.Shape(nSamples, nKernels, nCont)))
+                using (var sums = NumSharp.np.sum(termArray, axis: -1))
+                    viaNumSharp = sums.ToArray<double>();
+                for (int i = 0; i < viaNumSharp.Length; i++)
+                    viaNumSharp[i] = start[i] + viaNumSharp[i];
+                AssertSameBitsOrNaN(actual, viaNumSharp, where + ", NumSharp");
+
+                if (nCont < 8)
                 {
-                    if (double.IsNaN(expected[i]))
-                        double.IsNaN(actual[i]).Should().BeTrue($"element {i} was NaN before ({nKernels} kernels, {nCont} dims)");
-                    else
-                        BitConverter.DoubleToInt64Bits(actual[i]).Should().Be(BitConverter.DoubleToInt64Bits(expected[i]),
-                            $"element {i}: {actual[i]:R} vs {expected[i]:R} ({nKernels} kernels, {nCont} dims)");
+                    double[] leftToRight = ReferenceAccumulate(
+                        grids.XCont, nSamples, nCont, grids.Mu, grids.Sigma, grids.A, grids.B, grids.LogGaussMass,
+                        grids.LogSigma, start, nKernels);
+                    AssertSameBitsOrNaN(actual, leftToRight, where + ", below eight dims the order is unchanged");
                 }
             }
         }
     }
 
     /// <summary>
-    ///     The vector branch reads and writes without bounds checks, so the method checks every length first: a grid one
-    ///     element short, or a row buffer too short, is refused before anything is touched.
+    ///     From eight dimensions on the pairwise order really is another order: over many random rows at 8, 10 and 16
+    ///     dimensions, some finite sums differ from the left-to-right ones the port used before QA-84.
     /// </summary>
     [TestMethod]
-    public void AccumulateContinuous_ShortBuffers_AreRefusedUpFront()
+    public void AddContinuousSums_FromEightDimensions_DifferFromTheLeftToRightSum()
+    {
+        var rng = new Random(84);
+        foreach (int nCont in new[] { 8, 10, 16 })
+        {
+            const int nSamples = 24, nKernels = 60;
+            var grids = RandomContinuousGrids(rng, nSamples, nCont, nKernels, emptyIntervals: false, outsideCandidates: false);
+            var start = new double[nSamples * nKernels];
+            var actual = (double[])start.Clone();
+            MixtureOfProductDistribution.AddContinuousSums(
+                grids.XCont, nSamples, nCont, grids.Mu, grids.Sigma, grids.A, grids.B, grids.LogGaussMass, grids.LogSigma,
+                actual, nKernels);
+            double[] leftToRight = ReferenceAccumulate(
+                grids.XCont, nSamples, nCont, grids.Mu, grids.Sigma, grids.A, grids.B, grids.LogGaussMass, grids.LogSigma,
+                start, nKernels);
+            int differing = 0;
+            for (int i = 0; i < actual.Length; i++)
+            {
+                if (BitConverter.DoubleToInt64Bits(actual[i]) != BitConverter.DoubleToInt64Bits(leftToRight[i]))
+                    differing++;
+            }
+            differing.Should().BeGreaterThan(0, $"{nCont} dims: the pairwise and left-to-right sums differ somewhere");
+        }
+    }
+
+    /// <summary>
+    ///     The term computation's vector branch reads and writes without bounds checks, so both methods check every length
+    ///     first: a grid one element short, a row or term buffer too short, or a short coordinate buffer is refused before
+    ///     anything is touched.
+    /// </summary>
+    [TestMethod]
+    public void ContinuousMethods_ShortBuffers_AreRefusedUpFront()
     {
         const int nSamples = 3, nCont = 2, nKernels = 9;
         var grid = new double[nCont * nKernels];
         var shortGrid = new double[nCont * nKernels - 1];
         var xCont = new double[nSamples * nCont];
         var rows = new double[nSamples * nKernels];
+        var terms = new double[nSamples * nKernels * nCont];
 
-        Action shortSigma = () => MixtureOfProductDistribution.AccumulateContinuous(
+        Action shortSigma = () => MixtureOfProductDistribution.AddContinuousSums(
             xCont, nSamples, nCont, grid, shortGrid, grid, grid, grid, grid, rows, nKernels);
         shortSigma.Should().Throw<ArgumentException>();
 
-        Action shortRows = () => MixtureOfProductDistribution.AccumulateContinuous(
+        Action shortRows = () => MixtureOfProductDistribution.AddContinuousSums(
             xCont, nSamples, nCont, grid, grid, grid, grid, grid, grid, new double[nSamples * nKernels - 1], nKernels);
         shortRows.Should().Throw<ArgumentException>();
 
-        Action shortX = () => MixtureOfProductDistribution.AccumulateContinuous(
+        Action shortX = () => MixtureOfProductDistribution.AddContinuousSums(
             new double[nSamples * nCont - 1], nSamples, nCont, grid, grid, grid, grid, grid, grid, rows, nKernels);
         shortX.Should().Throw<ArgumentException>();
+
+        Action shortTerms = () => MixtureOfProductDistribution.ContinuousLogPdfTerms(
+            xCont, nSamples, nCont, grid, grid, grid, grid, grid, grid, new double[terms.Length - 1], nKernels);
+        shortTerms.Should().Throw<ArgumentException>();
+
+        Action shortTermGrid = () => MixtureOfProductDistribution.ContinuousLogPdfTerms(
+            xCont, nSamples, nCont, grid, grid, shortGrid, grid, grid, grid, terms, nKernels);
+        shortTermGrid.Should().Throw<ArgumentException>();
+    }
+
+    /// <summary>Random continuous grids and candidates for the term and sum tests.</summary>
+    /// <param name="rng">The random source.</param>
+    /// <param name="nSamples">The number of candidates.</param>
+    /// <param name="nCont">The number of dimensions.</param>
+    /// <param name="nKernels">The number of kernels.</param>
+    /// <param name="emptyIntervals">Whether about one interval in twelve is empty (NaN terms).</param>
+    /// <param name="outsideCandidates">Whether some candidates fall outside the intervals (<c>-inf</c> terms).</param>
+    /// <returns>The grids, one row of n_kernels per dimension, and the candidates, one row of n_cont each.</returns>
+    private static ContinuousGrids RandomContinuousGrids(
+        Random rng, int nSamples, int nCont, int nKernels, bool emptyIntervals = true, bool outsideCandidates = true)
+    {
+        int gridSize = nCont * nKernels;
+        var grids = new ContinuousGrids(
+            new double[nSamples * nCont], new double[gridSize], new double[gridSize], new double[gridSize],
+            new double[gridSize], new double[gridSize], new double[gridSize]);
+        for (int g = 0; g < gridSize; g++)
+        {
+            grids.Mu[g] = rng.NextDouble() * 4 - 2;
+            grids.Sigma[g] = 0.05 + rng.NextDouble();
+            double low = -3.0, high = emptyIntervals && rng.Next(12) == 0 ? -3.0 : 3.0;
+            grids.A[g] = (low - grids.Mu[g]) / grids.Sigma[g];
+            grids.B[g] = (high - grids.Mu[g]) / grids.Sigma[g];
+            grids.LogSigma[g] = Math.Log(grids.Sigma[g]);
+        }
+        TruncNorm.LogGaussMass(grids.A, grids.B).CopyTo(grids.LogGaussMass, 0);
+        for (int i = 0; i < grids.XCont.Length; i++)
+            grids.XCont[i] = outsideCandidates ? rng.NextDouble() * 8 - 4 : rng.NextDouble() * 4 - 2;
+        return grids;
+    }
+
+    /// <summary>The inputs of the continuous term computation.</summary>
+    /// <param name="XCont">The candidates' coordinates, one row of n_cont per candidate.</param>
+    /// <param name="Mu">The kernels' centers, one row of n_kernels per dimension.</param>
+    /// <param name="Sigma">The kernels' widths, laid out as <paramref name="Mu" />.</param>
+    /// <param name="A">The standardized lower bounds, laid out as <paramref name="Mu" />.</param>
+    /// <param name="B">The standardized upper bounds, laid out as <paramref name="Mu" />.</param>
+    /// <param name="LogGaussMass">The log masses between the bounds, laid out as <paramref name="Mu" />.</param>
+    /// <param name="LogSigma">The kernels' log widths, laid out as <paramref name="Mu" />.</param>
+    private sealed record ContinuousGrids(
+        double[] XCont, double[] Mu, double[] Sigma, double[] A, double[] B, double[] LogGaussMass, double[] LogSigma);
+
+    /// <summary>
+    ///     The terms written out, one per (candidate, kernel, dimension): <c>_truncnorm.logpdf</c>'s formula with its NaN and
+    ///     <c>-inf</c> selections, laid out as NumPy's <c>(n_samples, n_kernels, n_cont)</c> array.
+    /// </summary>
+    /// <param name="grids">The inputs.</param>
+    /// <param name="nSamples">The number of candidates.</param>
+    /// <param name="nCont">The number of dimensions.</param>
+    /// <param name="nKernels">The number of kernels.</param>
+    /// <returns>The terms.</returns>
+    private static double[] ReferenceTerms(ContinuousGrids grids, int nSamples, int nCont, int nKernels)
+    {
+        var terms = new double[nSamples * nKernels * nCont];
+        for (int s = 0; s < nSamples; s++)
+        {
+            for (int k = 0; k < nKernels; k++)
+            {
+                for (int c = 0; c < nCont; c++)
+                {
+                    int g = c * nKernels + k;
+                    double xstd = (grids.XCont[s * nCont + c] - grids.Mu[g]) / grids.Sigma[g];
+                    double val = TruncNorm.NormLogPdf(xstd) - grids.LogGaussMass[g] - grids.LogSigma[g];
+                    if (grids.A[g] == grids.B[g])
+                        val = double.NaN;
+                    else if (xstd < grids.A[g] || xstd > grids.B[g])
+                        val = double.NegativeInfinity;
+                    terms[(s * nKernels + k) * nCont + c] = val;
+                }
+            }
+        }
+        return terms;
+    }
+
+    /// <summary>NumPy's <c>pairwise_sum</c> (<c>loops_utils.h.src</c>, <c>PW_BLOCKSIZE</c> 128) over a contiguous run.</summary>
+    /// <param name="a">The run.</param>
+    /// <returns>Its sum in NumPy's order: left to right below eight, eight accumulators up to 128, halves above.</returns>
+    private static double NumPyPairwiseSum(ReadOnlySpan<double> a)
+    {
+        int n = a.Length;
+        if (n < 8)
+        {
+            double res = 0.0;
+            for (int i = 0; i < n; i++)
+                res += a[i];
+            return res;
+        }
+        if (n <= 128)
+        {
+            double r0 = a[0], r1 = a[1], r2 = a[2], r3 = a[3], r4 = a[4], r5 = a[5], r6 = a[6], r7 = a[7];
+            int i = 8;
+            for (; i < n - (n % 8); i += 8)
+            {
+                r0 += a[i]; r1 += a[i + 1]; r2 += a[i + 2]; r3 += a[i + 3];
+                r4 += a[i + 4]; r5 += a[i + 5]; r6 += a[i + 6]; r7 += a[i + 7];
+            }
+            double res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7));
+            for (; i < n; i++)
+                res += a[i];
+            return res;
+        }
+        int n2 = n / 2;
+        n2 -= n2 % 8;
+        return NumPyPairwiseSum(a[..n2]) + NumPyPairwiseSum(a[n2..]);
+    }
+
+    /// <summary>Asserts two arrays are equal bit for bit, a NaN matching any NaN.</summary>
+    /// <param name="actual">The computed values.</param>
+    /// <param name="expected">The reference values.</param>
+    /// <param name="where">Names the case in a failure.</param>
+    private static void AssertSameBitsOrNaN(double[] actual, double[] expected, string where)
+    {
+        actual.Length.Should().BeGreaterThanOrEqualTo(expected.Length, where);
+        for (int i = 0; i < expected.Length; i++)
+        {
+            if (double.IsNaN(expected[i]))
+                double.IsNaN(actual[i]).Should().BeTrue($"element {i} is NaN in the reference ({where})");
+            else
+                BitConverter.DoubleToInt64Bits(actual[i]).Should().Be(BitConverter.DoubleToInt64Bits(expected[i]),
+                    $"element {i}: {actual[i]:R} vs {expected[i]:R} ({where})");
+        }
     }
 
     // ------------------------------------------------------------------ references: the replaced code
 
     /// <summary>
-    ///     The accumulation as it was computed before plan 15: per candidate, a buffer of one sum per kernel starts at
-    ///     +0.0, receives each dimension's term in dimension order, and is then added to the candidate's row.
+    ///     The accumulation as it was computed before QA-84's fix: per candidate, a buffer of one sum per kernel starts at
+    ///     +0.0, receives each dimension's term in dimension order (left to right), and is then added to the candidate's
+    ///     row. Below eight dimensions NumPy's pairwise sum is this order too.
     /// </summary>
     /// <param name="xCont">The candidates' coordinates, one row of <paramref name="nCont" /> per candidate.</param>
     /// <param name="nSamples">The number of candidates.</param>
