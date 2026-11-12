@@ -12,6 +12,16 @@
     <PublishAot>false</PublishAot>
     <IsTrimmable>false</IsTrimmable>
 
+    <!-- JIT posture: tiered compilation stays ON, TieredPGO is switched OFF, an override of the repo-wide default in
+         ../../Directory.Build.props written into the tool's runtimeconfig.json. Every `optunasharp` command is a fresh,
+         short process (the shell ask/tell loop launches two per trial), so PGO's instrumented tier (one more JIT of each
+         hot method, plus the probes' overhead while it runs) never pays back before the process exits; tier-1 code only
+         loses PGO-guided layout and guarded devirtualization, and no result changes. Measured 2026-11-12, net10.0
+         Release, i9-13900K running other work at 60-100 % load: `ask` + `tell` on a SQLite study driven by TPE, medians
+         of 10 interleaved cycles, 1,794 ms per cycle with PGO and 1,578 ms without; a five-trial TPE process, medians
+         of 15 interleaved runs, CPU 406 -> 375 ms and time in the JIT 337 -> 319 ms. -->
+    <TieredPGO>false</TieredPGO>
+
     <!-- Ships as a .NET global tool: `dotnet tool install -g OptunaSharp.Cli` exposes `optunasharp`
          (NOT `optuna` — that name belongs to the Python package; this is the drop-in .NET port). -->
     <PackageId>OptunaSharp.Cli</PackageId>

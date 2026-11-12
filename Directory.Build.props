@@ -116,4 +116,32 @@
     <MicrosoftExtensionsDIImplementationVersion Condition="'$(MicrosoftExtensionsDIImplementationVersion)' == ''">$(MicrosoftExtensionsDIVersion)</MicrosoftExtensionsDIImplementationVersion>
   </PropertyGroup>
 
+  <!-- ====================================================================================
+       JIT posture: TieredCompilation + TieredPGO, ON for the whole repository, as NumSharp's own
+       Directory.Build.props sets them.
+
+       WHAT IT SETS. Both properties become runtimeconfig.json options
+       (`System.Runtime.TieredCompilation` / `System.Runtime.TieredPGO`) in every project here that
+       PRODUCES a runtimeconfig: the test hosts, the `optunasharp` CLI, the benchmarks, and the file-based
+       `dotnet run` apps under the repository root such as examples/ (Directory.Build.props is an implicit
+       import for those). A hot method then goes from quick tier-0 code through an instrumented tier to
+       PGO-guided tier-1 code, the most optimized code the JIT produces.
+
+       SCOPE / REAL EFFECT. Both values are the .NET 8+ defaults, so this pins the intent across SDKs and
+       environments rather than changing measured behaviour. On the src/ class LIBRARIES (OptunaSharp and
+       every satellite package) it is INERT: a library emits no runtimeconfig, and the consuming
+       application's own runtimeconfig governs the whole process. An application that wants a shorter
+       start-up sets `PublishReadyToRun` (and, for a short-lived process, `TieredPGO=false`) in ITS OWN
+       project; docs/website-src/docs/performance.md ("Start-up time") has the measurements.
+
+       OVERRIDES. A project overrides in its own body (imported AFTER this file, so it wins), and the
+       `== ''` guards also let a command-line `-p:` / global property win. The CLI turns TieredPGO off:
+       each `optunasharp` command is a fresh, short process, where PGO's instrumented tier never pays back
+       before the process exits (measurements in src/OptunaSharp.Cli/OptunaSharp.Cli.csproj).
+       ==================================================================================== -->
+  <PropertyGroup>
+    <TieredCompilation Condition="'$(TieredCompilation)' == ''">true</TieredCompilation>
+    <TieredPGO Condition="'$(TieredPGO)' == ''">true</TieredPGO>
+  </PropertyGroup>
+
 </Project>

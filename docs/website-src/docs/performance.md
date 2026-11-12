@@ -67,6 +67,30 @@ at about 30 % load. Times include the .NET JIT warming up:
 A second study in the same process, past the JIT, gains more: random search 7 times, QMC 2.2 times, NSGA-II 2 times,
 TPE 1.6 times. CMA-ES is unchanged within the noise.
 
+## Start-up time
+
+OptunaSharp ships IL, so a process compiles each method with the .NET JIT the first time it calls it. In a short
+process that is most of the work: a program that runs five TPE trials spends about 340 ms of its 400 ms of CPU in the
+JIT. Two settings in the project of the application that uses OptunaSharp shorten that, and neither changes a result:
+
+| Setting in your application's project | What it does | A five-trial TPE process |
+|---|---|---|
+| `<PublishReadyToRun>true</PublishReadyToRun>`, then `dotnet publish -r <runtime identifier>` | Compiles the application and its libraries, OptunaSharp and NumSharp included, ahead of time | Time in the JIT 337 → 108 ms, the five trials 265 → 163 ms, CPU 406 → 281 ms |
+| `<TieredPGO>false</TieredPGO>` | Skips the profile-guided recompilation of hot methods, which a short process never pays back | Time in the JIT 337 → 319 ms, CPU 406 → 375 ms |
+
+36 seeded studies, across every sampler family, hash identically (every trial's parameters and values, by their
+bits) whether the program is published ReadyToRun or as IL. A long study gains little from either setting: the JIT's
+work is done once.
+
+The `optunasharp` command-line tool starts one short process per command, so it ships with `TieredPGO` off. An `ask`
+and a `tell` (two processes) on a SQLite study driven by TPE took 1.79 s with PGO and 1.58 s without, and 1.44 s
+published ReadyToRun; the tool package itself is IL, because a .NET tool package serves every platform.
+`<InvariantGlobalization>true</InvariantGlobalization>` saved another 10 % of a cycle by not loading ICU, but it makes
+every culture invariant, which changes how an application formats and parses text, so the tool does not set it.
+
+Measured on the i9-13900K above with .NET 10, medians of 15 interleaved runs (the command-line tool: 10 cycles), on a
+machine running other work at 60–100 % load.
+
 ## Switches that change results
 
 | Switch | What it does | Seeded runs still match Python? | Can Python workers share the storage? |
