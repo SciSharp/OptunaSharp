@@ -4,7 +4,9 @@
 > steps and one regression fix (`fb18c44`..`17a3448`), every seeded result unchanged; QA-84 recorded (`96abe26`);
 > a Windows race in the journal file lock found (§6). Results in §7. The owner's decisions of 2026-11-12 on the two
 > open items (the lock race fixed `07af6a7`, QA-84 fixed through NumSharp `cb512df`, NumSharp's two costs pinned as
-> OpenBugs on its journey5 `e9c38c2f`) are in §8; that work is on the local branch `journey1`.
+> OpenBugs on its journey5 `e9c38c2f`) are in §8; that work is on the local branch `journey1`. **Closed 2026-11-12**
+> (owner: "document the remaining and stop"): QA-84's cost stays until NumSharp fixes its pins; the remaining work is
+> listed in §9.
 > This file is its central record: the rules, the baseline survey, the backlog, the progress log and the results.
 
 ## 1. The request
@@ -444,3 +446,47 @@ reset `main` to `origin/main`; nothing pushed).
   - Calibration traps: a flat-sum reference moved with the process (NumSharp's flat sum is 4–5 µs in the test host,
     7.1–7.5 µs in a console probe); timed one route after the other, a hybrid CPU's slow stretch let the first version
     pass with the bug present (alternating batches fixed it); the `out=` pin is Release-only (Debug 1.05–1.90).
+- **QA-84's cost: "Keep; wait for NumSharp" (second round, same day).** Offered: a bit-identical in-register sum below
+  eight continuous dimensions (NumPy's own order there is left to right from `-0.0`, and the reduction's identity add
+  makes it equal to the old sum; `cb512df`'s tests already assert that), a full port of NumPy's order, or keeping it.
+  Kept: TPE keeps calling `np.sum(axis: -1, out:)` for every call, so Optuna's default independent TPE, which sums ONE
+  continuous dimension per call through NumSharp's `out=` path, stays 27–66% slower until NumSharp fixes the two pins.
+  Even fixed, a NumSharp call keeps a fixed per-call cost and the stored terms, so the shortcut stays the way to
+  recover all of it (§9, item 1).
+- **Next performance work: "document the remaining and stop".** No further steps; §9 lists what is left.
+
+## 9. Remaining work (documented at the owner's request, 2026-11-12)
+
+Nothing below is scheduled. Each item names its measured cost and the rule a change must keep; every one is a
+performance change that must leave seeded results bit-identical (the 36-study hash probe and the GP-family probe,
+plus the area's live-Optuna suite), unless it says otherwise.
+
+1. **QA-84's cost in TPE** (§8). Today: `tpe` 1,000 trials 1.20–1.34 s against 0.75–0.81 s before `cb512df`,
+   `tpe-mixed` +27–41%, `motpe` +39%, allocation +6–25 MB. Owner decision: wait for NumSharp (its journey5 pins
+   `SumOverShortRows_CostsAFewLongRowSums` and `SumIntoOut_CostsAboutAFreshSum`; after a fix, bump NumSharp and
+   re-measure). The full recovery is the in-register sum below eight continuous dimensions, provably bit-identical
+   there.
+2. **The study core's per-suggest cost** (§4 item 10). Random search spends 19.5 KB per trial: about 40% is the
+   in-memory storage's copy-on-write of a running trial's parameter and distribution dictionaries on each suggest,
+   about 20% closures and delegates. Every sampler pays it. Rule: copy-on-write is plan 13 S4's design for concurrent
+   readers; changing it needs its own correctness argument and the concurrency suite.
+3. **BruteForce: cache finished trials' paths across rebuilds** (§4 item 6). Path building is 28% of its time; 4,320
+   trials take 8.7 s and 5,446 MB (1.29 MB per trial). Rule: the per-rebuild categorical cache (`catCache`, the first
+   trial seen per name after filtering) must be reproduced exactly.
+4. **NSGA-II precompute** (§4 item 2): each trial's values and constraints once, parameters only for the selected
+   parents, the joint search space updated in place (the sampler costs about 30 µs per trial; 5,000 trials 0.56 s,
+   33 KB per trial).
+5. **MOEA/D's `SystemAttrs` scans** (§4 item 12): two scans of every completed trial per ask (the offspring count and
+   the new offspring); an incremental count makes them O(new trials). 2,000 trials: 0.44 s, 48.6 KB per trial.
+6. **TPE's estimator arrays** (§4 item 11): about 66% of a TPE trial's allocation (258 KB per trial at the end of the
+   pass) is the Parzen estimators' per-kernel `double[]`; pooling them means reworking who owns and returns them.
+7. **The multi-objective split** (§4 item 8): `lvals` through nested LINQ (the LINQ part is provably bit-identical
+   to replace) and `UniqueRows` with an unstable delegate sort (its representative among equal rows, ±0, reaches the
+   hypervolume arithmetic, so changing it is not provably bit-identical).
+8. **CMA-ES: keep the optimizer between tells** (§4 item 3) instead of restoring it from the stored state after each
+   tell (5,000 trials 0.80 s, 45.7 KB per trial). Rule: the stored state must stay the pickle cmaes 0.13.1 reads, and a
+   cached optimizer must be dropped when another worker tells.
+9. **An unidentified source of NumSharp `UInt32` blocks** that the GP run leaves to the finalizer (§4 item 5): not the
+   entropy-seeded `RandomState()` (measured); find it with the `GCAllocationTick` sampler (§6).
+10. **TPE scoring through ordered arrays** instead of name-keyed dictionaries (§4 item 1): not attempted; the kernels
+    were the larger costs.
