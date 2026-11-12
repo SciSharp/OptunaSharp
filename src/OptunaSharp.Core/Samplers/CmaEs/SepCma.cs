@@ -48,7 +48,9 @@ internal class SepCma : ICmaOptimizer
     private double[]? _d;
     private double[] _c;  // diagonal covariance (1-D)
 
-    private readonly double[,]? _bounds;
+    // Not readonly: FromState sets it after the constructor, so the constructor's "invalid bounds" check never tests the
+    // placeholder mean against a stored box (as in Cma).
+    private double[,]? _bounds;
     private readonly int _nMaxResampling;
     private int _g;
     private NumPyRandom _rng;
@@ -76,7 +78,8 @@ internal class SepCma : ICmaOptimizer
     ///     Whether the Python caller would pass <paramref name="sigma" /> as a <c>numpy.float64</c>; it only decides
     ///     the type of the pickled <c>_tolx</c> (and of the untold <c>_sigma</c>). See <see cref="Cma" />.
     /// </param>
-    /// <exception cref="System.ArgumentException">The scale is nonpositive, mean dimension is below two or exceeds the supported magnitude, or population size is nonpositive.</exception>
+    /// <exception cref="System.ArgumentException">The scale is nonpositive, mean dimension is below two or exceeds the supported magnitude, population size is nonpositive, a learning rate fails cmaes' assertions, or the bounds are malformed or exclude the mean ("invalid bounds").</exception>
+    /// <exception cref="System.DivideByZeroException">The population size is 1, so <c>mu</c> is 0 and cmaes' <c>1 / sum(weights**2)</c> divides the int 0 (Python's <c>ZeroDivisionError</c>).</exception>
     internal SepCma(
         double[] mean,
         double sigma,
@@ -109,6 +112,10 @@ internal class SepCma : ICmaOptimizer
         double wpSum = SeqSum(weightsPrime);
         var weights = new double[mu];
         for (int i = 0; i < mu; i++) weights[i] = weightsPrime[i] / wpSum;
+        // popsize 1 gives mu = 0: the builtin `sum` of an empty array is the int 0, so `1 / sum(weights**2)` is a Python
+        // int division and raises ZeroDivisionError, which fails Optuna's first separable CMA-ES trial (QA-80). A double
+        // division here would give +inf and sample on. DivideByZeroException is this port's ZeroDivisionError.
+        if (mu == 0) throw new DivideByZeroException("division by zero");
         double sumWSq = 0;
         foreach (double w in weights) sumWSq += w * w;  // sum(weights**2), sequential
         double muEff = 1 / sumWSq;
@@ -124,7 +131,10 @@ internal class SepCma : ICmaOptimizer
 
         double cSigma = (muEff + 2) / (nDim + muEff + 3);
         double dSigma = 1 + 2 * Math.Max(0, Math.Sqrt((muEff - 1) / (nDim + 1)) - 1) + cSigma;
+        // cmaes' assertions, negated so that NaN fails them as in Python (QA-80).
+        if (!(cSigma < 1)) throw new ArgumentException("invalid learning rate for cumulation for the step-size control");
         double cc = 4.0 / (nDim + 4);
+        if (!(cc <= 1)) throw new ArgumentException("invalid learning rate for cumulation for the rank-one update");
 
         _nDim = nDim;
         _popsize = popsize;
@@ -148,6 +158,9 @@ internal class SepCma : ICmaOptimizer
         _d = null;
         _c = Enumerable.Repeat(1.0, nDim).ToArray();  // np.ones(n_dim)
 
+        // cmaes' `assert bounds is None or _is_valid_bounds(bounds, mean), "invalid bounds"` (QA-80): an x0 or a
+        // warm-start mean outside the search space fails Optuna's first CMA-ES trial.
+        if (!IsValidBounds(bounds, mean)) throw new ArgumentException("invalid bounds");
         _bounds = bounds;
         _nMaxResampling = nMaxResampling;
         _g = 0;
@@ -214,8 +227,11 @@ internal class SepCma : ICmaOptimizer
     internal static SepCma FromState(SepCmaState s)
     {
         // The JSON never recorded Python types; the sampler's default sigma0 (np.min) is numpy (see Cma.FromState).
-        var cma = new SepCma(new double[s.NDim], s.Sigma0, FromJagged(s.Bounds), s.NMaxResampling,
+        // The zero mean is a placeholder overwritten below, so the stored box goes in after the constructor, untested
+        // against it, as an unpickled cmaes optimizer runs none of the constructor's assertions (see Cma.FromState).
+        var cma = new SepCma(new double[s.NDim], s.Sigma0, bounds: null, s.NMaxResampling,
             seed: null, populationSize: s.Popsize, sigmaIsNumpyScalar: true);
+        cma._bounds = FromJagged(s.Bounds);
         cma._g = s.G;
         cma._mean = (double[])s.Mean.Clone();
         cma._sigma = s.Sigma;
@@ -398,6 +414,7 @@ internal class SepCma : ICmaOptimizer
     /// <summary>Updates the optimizer using evaluated candidates from one coherent generation.</summary>
     /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
     /// <exception cref="System.ArgumentException">The solution count differs from population size or a coordinate exceeds the supported magnitude.</exception>
+    /// <exception cref="NumSharp.ValueError">The vectors have different lengths, or a length NumPy cannot broadcast against the mean (<see cref="Cma.CheckTellShapes" />); the optimizer is left unchanged.</exception>
     public void Tell(List<(double[] X, double Value)> solutions)
     {
         if (solutions.Count != _popsize)
@@ -407,6 +424,8 @@ internal class SepCma : ICmaOptimizer
                 if (!(Math.Abs(v) < MeanMax))
                     throw new ArgumentException(
                         $"Abs of all param values must be less than {MeanMax} to avoid overflow errors");
+        // SepCMA.tell builds x_k as CMA.tell does, so NumPy's shape errors apply alike; checked before any state changes.
+        solutions = Cma.CheckTellShapes(solutions, _nDim);
 
         _g += 1;
         var sorted = solutions.OrderBy(s => s.Value).ToList();
@@ -515,6 +534,25 @@ internal class SepCma : ICmaOptimizer
     /// <param name="a">First numerical array operand.</param>
     /// <returns>The left-to-right sum of the entries.</returns>
     private static double SeqSum(double[] a) { double s = 0; foreach (double v in a) s += v; return s; }
+
+    /// <summary>
+    ///     cmaes' <c>_is_valid_bounds(bounds, mean)</c> (shared by CMA and SepCMA): no bounds, or one <c>[low, high]</c>
+    ///     row per coordinate with every coordinate of the mean inside; NaN fails, as Python's comparisons do.
+    /// </summary>
+    /// <param name="bounds">The optional box, one row per coordinate and two columns (low, high).</param>
+    /// <param name="mean">The mean the box must contain.</param>
+    /// <returns><c>true</c> when cmaes' assertion would hold.</returns>
+    private static bool IsValidBounds(double[,]? bounds, double[] mean)
+    {
+        if (bounds is null)
+            return true;
+        if (bounds.GetLength(0) != mean.Length || bounds.GetLength(1) != 2)
+            return false;
+        for (int i = 0; i < mean.Length; i++)
+            if (!(bounds[i, 0] <= mean[i] && mean[i] <= bounds[i, 1]))
+                return false;
+        return true;
+    }
     /// <summary>Computes the scalar second power used by adaptation equations.</summary>
     /// <param name="x">Scalar operand used in the comparison or numerical transformation.</param>
     /// <returns>The product of the scalar with itself.</returns>

@@ -155,43 +155,47 @@ public class Run2SamplerParityBugTests
     ///     programs, all with margin), then by a log-stream comparison with a merely conditional parameter: any
     ///     parameter that only some trials suggest makes Optuna's CMA-ES-with-margin raise at the end of the first
     ///     generation, which makes this the common path, not an exotic one.
+    ///     <para>
+    ///         <b>Fixed 2026-11-12</b> (owner's decision to raise as Optuna does): <c>Cma.CheckTellShapes</c> raises
+    ///         NumPy's <c>ValueError</c> before the optimizer changes. Every case below was re-measured that day (Optuna
+    ///         5.0.0, cmaes 0.13.1, the same ask / tell loop): population 2 / 3 / 4 fails at trial 3 / 4 / 5, with the
+    ///         inhomogeneous-shape message except for population 2 with the range change, where the first generation
+    ///         holds only the two long vectors and the update of the one-dimensional mean fails instead.
+    ///     </para>
     /// </remarks>
+    /// <param name="popsize">The CMA-ES population size.</param>
+    /// <param name="conditional">
+    ///     <c>y</c> suggested on even trials only (a conditional parameter) instead of <c>y</c>'s range changing on
+    ///     trial 2.
+    /// </param>
+    /// <param name="message">Optuna's error message, NumPy's.</param>
     [TestMethod]
-    [OpenBugs]
-    public void CmaWithMargin_SearchSpaceShrinksInFirstGeneration_RaisesLikeOptuna()
+    [DataRow(2, false, "non-broadcastable output operand with shape (1,) doesn't match the broadcast shape (2,)")]
+    [DataRow(2, true, "setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (2,) + inhomogeneous part.")]
+    [DataRow(3, false, "setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (3,) + inhomogeneous part.")]
+    [DataRow(3, true, "setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (3,) + inhomogeneous part.")]
+    [DataRow(4, false, "setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (4,) + inhomogeneous part.")]
+    [DataRow(4, true, "setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (4,) + inhomogeneous part.")]
+    public void CmaWithMargin_SearchSpaceShrinksInFirstGeneration_RaisesLikeOptuna(int popsize, bool conditional, string message)
     {
-        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(withMargin: true, seed: 0, popsize: 3));
+        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(withMargin: true, seed: 0, popsize: popsize));
         System.Action run = () =>
         {
-            for (int i = 0; i < 12; i++)
+            for (int i = 0; i < (conditional ? 20 : 12); i++)
             {
                 var trial = study.Ask();
                 long x = trial.SuggestInt("x", 0, 10);
-                // The range changes once, so `y` leaves the intersection search space from trial 2 on.
-                double y = trial.SuggestFloat("y", 0.0, i == 2 ? 1.5 : 1.0);
+                // Either the range changes once, so `y` leaves the intersection search space from trial 2 on, or `y`
+                // exists on even trials only, so the intersection drops it once trial 1 completes.
+                double y = conditional
+                    ? i % 2 == 0 ? trial.SuggestFloat("y", 0.0, 1.0) : 0.0
+                    : trial.SuggestFloat("y", 0.0, i == 2 ? 1.5 : 1.0);
                 study.Tell(trial, x + y);
             }
         };
-        run.Should().Throw<NumSharp.ValueError>()
-            .WithMessage("setting an array element with a sequence.*inhomogeneous shape*");
-        study.Trials.Should().HaveCount(5, "Optuna fails on the fifth ask (trial 4)");
 
-        // The same happens with a conditional parameter, no range change needed: `y` exists on even trials only, so the
-        // intersection search space drops it once trial 1 completes. Optuna raises at trial 4 for seeds 0, 1 and 2.
-        var conditional = Optuna.CreateStudy(sampler: new CmaEsSampler(withMargin: true, seed: 0, popsize: 3));
-        System.Action runConditional = () =>
-        {
-            for (int i = 0; i < 20; i++)
-            {
-                var trial = conditional.Ask();
-                long x = trial.SuggestInt("x", 0, 10);
-                double y = i % 2 == 0 ? trial.SuggestFloat("y", 0.0, 1.0) : 0.0;
-                conditional.Tell(trial, x + y);
-            }
-        };
-        runConditional.Should().Throw<NumSharp.ValueError>()
-            .WithMessage("setting an array element with a sequence.*inhomogeneous shape*");
-        conditional.Trials.Should().HaveCount(5);
+        run.Should().Throw<NumSharp.ValueError>().Which.Message.Should().Be(message);
+        study.Trials.Should().HaveCount(popsize + 2, "Optuna fails on the ask of trial popsize + 1, which stays running");
     }
 
     /// <summary>
@@ -292,23 +296,30 @@ public class Run2SamplerParityBugTests
     ///     <c>lr_adapt=True</c>; <c>x0={"x": 10.0}</c> (on the bound) runs identically on both sides. The port completes
     ///     all five trials. The Warm-Starting fuzz (E51) hit it in 3 of 150 programs through <c>source_trials</c>
     ///     ranges. The expected exception type follows the port's own mapping of this assertion in <c>CmaWm</c>.
+    ///     <b>Fixed 2026-11-12:</b> <c>Cma</c> and <c>SepCma</c> assert the bounds in their constructors, as cmaes does.
     /// </remarks>
+    /// <param name="separable"><c>use_separable_cma=True</c>.</param>
+    /// <param name="lrAdapt"><c>lr_adapt=True</c>.</param>
+    /// <param name="withMargin"><c>with_margin=True</c>.</param>
     [TestMethod]
-    [OpenBugs]
-    public void CmaEs_InitialMeanOutsideTheBounds_FailsLikeCmaesInvalidBoundsAssertion()
+    [DataRow(false, false, false)]
+    [DataRow(true, false, false)]
+    [DataRow(false, true, false)]
+    [DataRow(false, false, true)]
+    public void CmaEs_InitialMeanOutsideTheBounds_FailsLikeCmaesInvalidBoundsAssertion(
+        bool separable, bool lrAdapt, bool withMargin)
     {
-        foreach (bool separable in new[] { false, true })
-        {
-            var study = Optuna.CreateStudy(sampler: new CmaEsSampler(
-                x0: new System.Collections.Generic.Dictionary<string, object?> { ["x"] = 12.0, ["y"] = 0.5 },
-                seed: 0, useSeparableCma: separable));
+        // Optuna 5.0.0 / cmaes 0.13.1, all four variants re-measured 2026-11-12: AssertionError('invalid bounds'),
+        // states COMPLETE, FAIL.
+        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(
+            x0: new System.Collections.Generic.Dictionary<string, object?> { ["x"] = 12.0, ["y"] = 0.5 },
+            seed: 0, useSeparableCma: separable, lrAdapt: lrAdapt, withMargin: withMargin));
 
-            System.Action optimize = () => study.Optimize(t => t.SuggestFloat("x", 0, 10) + t.SuggestFloat("y", 0, 1),
-                nTrials: 5);
+        System.Action optimize = () => study.Optimize(t => t.SuggestFloat("x", 0, 10) + t.SuggestFloat("y", 0, 1),
+            nTrials: 5);
 
-            optimize.Should().Throw<System.ArgumentException>().WithMessage("invalid bounds", $"separable: {separable}");
-            System.Linq.Enumerable.Select(study.Trials, t => t.State).Should().Equal(TrialState.Complete, TrialState.Fail);
-        }
+        optimize.Should().Throw<System.ArgumentException>().Which.Message.Should().Be("invalid bounds");
+        System.Linq.Enumerable.Select(study.Trials, t => t.State).Should().Equal(TrialState.Complete, TrialState.Fail);
     }
 
     /// <summary>
@@ -325,17 +336,31 @@ public class Run2SamplerParityBugTests
     ///     rank-one update</c>, the same with <c>with_margin=True</c> and <c>lr_adapt=True</c>
     ///     (<c>use_separable_cma=True</c> raises <c>ZeroDivisionError</c>); the port gives COMPLETE, COMPLETE, FAIL in
     ///     all four. <c>popsize=2</c> is identical on both sides. The expected type follows the port's mapping of
-    ///     cmaes assertions (<c>ArgumentException</c>, as for "invalid bounds" in <c>CmaWm</c>).
+    ///     cmaes assertions (<c>ArgumentException</c>, as for "invalid bounds" in <c>CmaWm</c>). <b>Fixed
+    ///     2026-11-12:</b> <c>Cma</c> asserts its four learning rates as cmaes does, and <c>SepCma</c> raises
+    ///     <c>DivideByZeroException("division by zero")</c> where cmaes divides the int 0.
     /// </remarks>
+    /// <param name="variant"><c>plain</c>, <c>margin</c> (<c>with_margin=True</c>), <c>lr</c> (<c>lr_adapt=True</c>) or <c>separable</c>.</param>
     [TestMethod]
-    [OpenBugs]
-    public void CmaEs_PopulationOfOne_FailsLikeCmaesLearningRateAssertion()
+    [DataRow("plain")]
+    [DataRow("margin")]
+    [DataRow("lr")]
+    [DataRow("separable")]
+    public void CmaEs_PopulationOfOne_FailsLikeCmaesLearningRateAssertion(string variant)
     {
-        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 0, popsize: 1));
+        // Optuna 5.0.0 / cmaes 0.13.1, re-measured 2026-11-12: AssertionError('invalid learning rate for the rank-one
+        // update') for plain, with_margin and lr_adapt; ZeroDivisionError('division by zero') for use_separable_cma (its
+        // builtin sum of an empty weight array is the int 0); states COMPLETE, FAIL in every case.
+        var study = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 0, popsize: 1,
+            withMargin: variant == "margin", lrAdapt: variant == "lr", useSeparableCma: variant == "separable"));
 
         System.Action optimize = () => study.Optimize(t => t.SuggestFloat("x", 0, 10) + t.SuggestInt("y", 0, 5), nTrials: 8);
 
-        optimize.Should().Throw<System.ArgumentException>().WithMessage("invalid learning rate for the rank-one update");
+        if (variant == "separable")
+            optimize.Should().Throw<System.DivideByZeroException>().Which.Message.Should().Be("division by zero");
+        else
+            optimize.Should().Throw<System.ArgumentException>().Which.Message.Should()
+                .Be("invalid learning rate for the rank-one update");
         System.Linq.Enumerable.Select(study.Trials, t => t.State).Should().Equal(TrialState.Complete, TrialState.Fail);
     }
 
@@ -351,9 +376,10 @@ public class Run2SamplerParityBugTests
     ///     <c>optimize(n_trials=4)</c>: COMPLETE, FAIL and <c>AssertionError</c>; the port: COMPLETE, FAIL and the
     ///     <c>KeyNotFoundException</c>. An <c>x0</c> with an extra parameter is accepted and identical on both sides. The
     ///     expected type follows the port's mapping of Python assertions (<c>ArgumentException</c>, as in <c>CmaWm</c>).
+    ///     <b>Fixed 2026-11-12:</b> the transform checks every parameter with Optuna's message (it was a
+    ///     <c>Debug.Assert</c>, gone from Release builds).
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void CmaEs_X0MissingAParameter_FailsWithOptunasTransformAssertion()
     {
         var study = Optuna.CreateStudy(sampler: new CmaEsSampler(

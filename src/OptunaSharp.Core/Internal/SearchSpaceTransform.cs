@@ -91,6 +91,7 @@ internal sealed class SearchSpaceTransform
     ///     values in a NumSharp array, which waits for the finalizer when it is not disposed (plan 14).
     /// </remarks>
     /// <exception cref="NumSharp.TypeError">A numerical parameter value is not a real number.</exception>
+    /// <exception cref="ArgumentException">A parameter of the search space is missing from <paramref name="parameters" /> (Optuna's assertion message).</exception>
     public NDArray Transform(IReadOnlyDictionary<string, object?> parameters)
         => np.array(TransformValues(parameters));
 
@@ -101,6 +102,11 @@ internal sealed class SearchSpaceTransform
     /// <param name="parameters">A parameter configuration holding every parameter of the search space.</param>
     /// <returns>A new array of the transformed parameters, one entry per encoded column (one-hot columns for categoricals).</returns>
     /// <exception cref="NumSharp.TypeError">A numerical parameter value is not a real number.</exception>
+    /// <exception cref="ArgumentException">
+    ///     A parameter of the search space is missing from <paramref name="parameters" />: "Parameter configuration must
+    ///     contain all distributions.", Optuna's assertion message (its <c>AssertionError</c> maps to this type here, as
+    ///     cmaes' assertions do). CMA-ES with an <c>x0</c> that lacks a parameter reaches it (QA-83).
+    /// </exception>
     internal double[] TransformValues(IReadOnlyDictionary<string, object?> parameters)
     {
         int n = _rawBounds.GetLength(0);
@@ -109,9 +115,10 @@ internal sealed class SearchSpaceTransform
         int boundIdx = 0;
         foreach (var (name, distribution) in _searchSpace)
         {
-            System.Diagnostics.Debug.Assert(
-                parameters.ContainsKey(name), "Parameter configuration must contain all distributions.");
-            var param = parameters[name];
+            // Optuna's `assert name in params, ...` as a real check: Debug.Assert vanished from Release builds, so a missing
+            // parameter escaped as KeyNotFoundException, which names the key but not the cause (QA-83).
+            if (!parameters.TryGetValue(name, out var param))
+                throw new ArgumentException("Parameter configuration must contain all distributions.");
 
             if (distribution is CategoricalDistribution categorical)
             {

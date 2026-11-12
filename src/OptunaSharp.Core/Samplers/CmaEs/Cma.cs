@@ -100,7 +100,7 @@ internal class Cma : ICmaOptimizer
     ///     <c>sigma0 = np.min(...)</c> is numpy; a user <c>sigma0</c>, a warm start's <c>math.pow</c> and the
     ///     <c>_EPS</c> fallback are floats.
     /// </param>
-    /// <exception cref="System.ArgumentException">The scale is nonpositive, the mean is empty or exceeds the supported magnitude, population size is nonpositive, or covariance shape differs from the decision dimension.</exception>
+    /// <exception cref="System.ArgumentException">The scale is nonpositive, the mean is empty or exceeds the supported magnitude, population size is nonpositive, a learning rate fails cmaes' assertions (a population of one makes them NaN), covariance shape differs from the decision dimension, or the bounds are malformed or exclude the mean ("invalid bounds").</exception>
     internal Cma(
         double[] mean,
         double sigma,
@@ -140,6 +140,12 @@ internal class Cma : ICmaOptimizer
         double cmu = Math.Min(
             1 - c1 - 1e-8,  // 1e-8 is for large popsize.
             alphaCov * (muEff - 2 + 1 / muEff) / (Square(nDim + 2) + alphaCov * muEff / 2));
+        // cmaes asserts its learning rates here (QA-80). Written as negated comparisons so that a NaN rate fails them,
+        // as Python's `assert c1 <= 1 - cmu` does: popsize 1 makes mu = 0 and mu_eff = 0/0, so Optuna's first CMA-ES
+        // trial fails with this message instead of sampling with NaN rates. AssertionError maps to ArgumentException,
+        // as for every other cmaes assertion in this port.
+        if (!(c1 <= 1 - cmu)) throw new ArgumentException("invalid learning rate for the rank-one update");
+        if (!(cmu <= 1 - c1)) throw new ArgumentException("invalid learning rate for the rank-μ update");
 
         double minAlpha = Math.Min(
             Math.Min(
@@ -164,9 +170,11 @@ internal class Cma : ICmaOptimizer
         // learning rate for the cumulation for the step-size control (eq.55)
         double cSigma = (muEff + 2) / (nDim + muEff + 5);
         double dSigma = 1 + 2 * Math.Max(0, Math.Sqrt((muEff - 1) / (nDim + 1)) - 1) + cSigma;
+        if (!(cSigma < 1)) throw new ArgumentException("invalid learning rate for cumulation for the step-size control");
 
         // learning rate for cumulation for the rank-one update (eq.56)
         double cc = (4 + muEff / nDim) / (nDim + 4 + 2 * muEff / nDim);
+        if (!(cc <= 1)) throw new ArgumentException("invalid learning rate for cumulation for the rank-one update");
 
         _nDim = nDim;
         _popsize = popsize;
@@ -201,6 +209,10 @@ internal class Cma : ICmaOptimizer
         _d = null;
         _b = null;
 
+        // cmaes' `assert bounds is None or _is_valid_bounds(bounds, mean), "invalid bounds"` (QA-80): an x0, or a
+        // warm-start mean from source_trials, outside the search space fails Optuna's first CMA-ES trial instead of
+        // sampling around an out-of-bounds mean.
+        if (!IsValidBounds(bounds, mean)) throw new ArgumentException("invalid bounds");
         _bounds = bounds;
         _nMaxResampling = nMaxResampling;
         _g = 0;
@@ -318,8 +330,12 @@ internal class Cma : ICmaOptimizer
     {
         // The JSON never recorded Python types. The sampler's default sigma0 (np.min) is numpy, and the types only
         // shape the pickle this optimizer is stored as next, never a value.
-        var cma = new Cma(new double[s.NDim], s.Sigma0, FromJagged(s.Bounds), s.NMaxResampling,
+        // The zero mean is a placeholder RestoreEvolvingState overwrites, so the stored box goes in after the
+        // constructor: its "invalid bounds" assertion must not test the placeholder (a box need not contain the origin),
+        // and Python restores by unpickling, which runs none of the constructor's assertions.
+        var cma = new Cma(new double[s.NDim], s.Sigma0, bounds: null, s.NMaxResampling,
             seed: null, populationSize: s.Popsize, cov: null, lrAdapt: s.LrAdapt, sigmaIsNumpyScalar: true);
+        cma._bounds = FromJagged(s.Bounds);
         cma.RestoreEvolvingState(s);
         return cma;
     }
@@ -598,6 +614,7 @@ internal class Cma : ICmaOptimizer
     /// <summary>Tell evaluation values.</summary>
     /// <param name="solutions">Evaluated proposal vectors and minimization-oriented values for one coherent generation.</param>
     /// <exception cref="System.ArgumentException">The solution count differs from population size or a coordinate exceeds the supported magnitude.</exception>
+    /// <exception cref="ValueError">The vectors have different lengths, or a length NumPy cannot broadcast against the mean (<see cref="CheckTellShapes" />, QA-60); the optimizer is left unchanged.</exception>
     public void Tell(List<(double[] X, double Value)> solutions)
     {
         if (solutions.Count != _popsize)
@@ -607,6 +624,8 @@ internal class Cma : ICmaOptimizer
                 if (!(Math.Abs(v) < MeanMax))
                     throw new ArgumentException(
                         $"Abs of all param values must be less than {MeanMax} to avoid overflow errors");
+        // NumPy's shape errors before any state changes (a cached optimizer must stay as it was restored).
+        solutions = CheckTellShapes(solutions, _nDim);
 
         _g += 1;
         // Python's list.sort is stable; OrderBy is a stable sort.
@@ -843,6 +862,87 @@ internal class Cma : ICmaOptimizer
     }
 
     // ---- small numpy-shaped helpers -----------------------------------------------------------
+
+    /// <summary>
+    ///     cmaes' <c>_is_valid_bounds(bounds, mean)</c>: no bounds, or one <c>[low, high]</c> row per coordinate with
+    ///     every coordinate of the mean inside its row. A NaN coordinate or bound fails, as Python's comparisons do.
+    /// </summary>
+    /// <param name="bounds">The optional box, one row per coordinate and two columns (low, high).</param>
+    /// <param name="mean">The mean the box must contain.</param>
+    /// <returns><c>true</c> when cmaes' assertion would hold.</returns>
+    private static bool IsValidBounds(double[,]? bounds, double[] mean)
+    {
+        if (bounds is null)
+            return true;
+        if (bounds.GetLength(0) != mean.Length || bounds.GetLength(1) != 2)
+            return false;
+        for (int i = 0; i < mean.Length; i++)
+            if (!(bounds[i, 0] <= mean[i] && mean[i] <= bounds[i, 1]))
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    ///     What <c>x_k = np.array([s[0] for s in solutions])</c> and the broadcasts after it in cmaes' <c>tell</c> make
+    ///     of the told vectors, checked before the optimizer changes anything: NumPy's error where NumPy raises, the
+    ///     vectors as NumPy would use them otherwise.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Optuna's CMA-ES with margin tells the raw <c>x_for_tell</c> vectors its trials stored. When the search
+    ///         space loses a dimension before the first generation is told (a conditional parameter, or a range that
+    ///         changes), a new optimizer starts at generation 0 and that generation mixes long and short vectors (QA-60).
+    ///         NumPy then refuses the ragged list (the inhomogeneous-shape error), or, when every vector is long, fails
+    ///         a broadcast: against a one-dimensional mean at <c>self._mean += ...</c> (non-broadcastable output
+    ///         operand), otherwise at <c>x_k - self._mean</c>. Optuna's trial fails with that <c>ValueError</c>; the port
+    ///         used to read the first <c>n_dim</c> entries of each vector and carry on with coordinates that belonged to
+    ///         other parameters.
+    ///     </para>
+    ///     <para>
+    ///         cmaes raises after it has advanced the generation and the function history; Optuna discards that
+    ///         object, but this port may cache a restored optimizer, so the check runs first and leaves it unchanged.
+    ///         One-element vectors told to a larger optimizer broadcast in NumPy without an error (each row repeats its
+    ///         value across the dimensions), and are expanded the same way here; Optuna's intersection search space only
+    ///         shrinks, so that case is not reached through the sampler.
+    ///     </para>
+    /// </remarks>
+    /// <param name="solutions">The told vectors and values, as handed to <c>Tell</c>.</param>
+    /// <param name="nDim">The optimizer's dimension, the length of its mean.</param>
+    /// <returns><paramref name="solutions" /> itself, or a copy with one-element vectors broadcast to <paramref name="nDim" />.</returns>
+    /// <exception cref="ValueError">The vectors have different lengths, or a common length NumPy cannot broadcast against the mean (NumPy's messages).</exception>
+    internal static List<(double[] X, double Value)> CheckTellShapes(List<(double[] X, double Value)> solutions, int nDim)
+    {
+        int length = solutions[0].X.Length;
+        foreach (var s in solutions)
+            if (s.X.Length != length)
+                throw new ValueError(
+                    "setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 " +
+                    $"dimensions. The detected shape was ({solutions.Count},) + inhomogeneous part.");
+
+        if (length == nDim)
+            return solutions;
+        if (length == 1)
+        {
+            // NumPy broadcasts a (popsize, 1) array against the (n_dim,) mean: every coordinate takes the one value.
+            var expanded = new List<(double[] X, double Value)>(solutions.Count);
+            foreach (var s in solutions)
+            {
+                var x = new double[nDim];
+                Array.Fill(x, s.X[0]);
+                expanded.Add((x, s.Value));
+            }
+            return expanded;
+        }
+
+        // A one-dimensional mean broadcasts against any length in `x_k - self._mean`; the in-place update
+        // `self._mean += ...` then cannot write the (length,) step into the (1,) mean.
+        if (nDim == 1)
+            throw new ValueError(
+                $"non-broadcastable output operand with shape (1,) doesn't match the broadcast shape ({length},)");
+        // NumPy's message for `x_k - self._mean`, trailing space included.
+        throw new ValueError(
+            $"operands could not be broadcast together with shapes ({solutions.Count},{length}) ({nDim},) ");
+    }
 
     /// <summary>Accumulates a vector using the NumPy-compatible pairwise reduction order.</summary>
     /// <param name="a">First numerical array operand.</param>
