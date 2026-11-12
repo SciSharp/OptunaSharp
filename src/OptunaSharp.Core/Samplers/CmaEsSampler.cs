@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using NumSharp;
 using OptunaSharp.Collections;
@@ -207,6 +208,74 @@ public class CmaEsSampler : BaseSampler
         if (useSeparableCma && withMargin)
             throw new ValueError(
                 "Currently, we do not support `use_separable_cma=True` and `with_margin=True`.");
+    }
+
+    /// <summary>
+    ///     OptunaSharp 1.0.0's constructor signature, kept only so that assemblies compiled against 1.0.0 still find it
+    ///     at run time. It is the public constructor with <c>reuseToldOptimizer: false</c>, Optuna's path, so a 1.0.0
+    ///     caller gets exactly the sampler it got before. New code never needs it.
+    /// </summary>
+    /// <param name="x0">
+    ///     Initial parameter values for CMA-ES (external representation); <c>null</c> for the mean of the low and high of
+    ///     each distribution. <b>Deprecated in v4.9.0.</b>
+    /// </param>
+    /// <param name="sigma0">
+    ///     Initial standard deviation of CMA-ES; <c>null</c> for <c>min_range / 6</c>. <b>Deprecated in v4.9.0.</b>
+    /// </param>
+    /// <param name="nStartupTrials">Independent sampling is used until this many trials finish.</param>
+    /// <param name="independentSampler">
+    ///     Sampler for parameters outside the relative search space; <c>null</c> for a <see cref="RandomSampler" />.
+    /// </param>
+    /// <param name="warnIndependentSampling">Emit a warning when a parameter is sampled independently.</param>
+    /// <param name="seed">Random seed for CMA-ES; <c>null</c> for OS entropy.</param>
+    /// <param name="considerPrunedTrials">If <c>true</c>, PRUNED trials are considered for sampling (experimental).</param>
+    /// <param name="restartStrategy"><b>Deprecated in v4.4.0</b>: any value warns and falls back to <c>null</c>.</param>
+    /// <param name="popsize">Population size of CMA-ES; <c>null</c> for cmaes' default.</param>
+    /// <param name="incPopsize"><b>Deprecated in v4.4.0</b>: any value but <c>-1</c> warns and is not used.</param>
+    /// <param name="useSeparableCma">Constrain the covariance matrix to be diagonal (experimental).</param>
+    /// <param name="withMargin">Use CMA-ES with margin for discrete distributions (experimental).</param>
+    /// <param name="lrAdapt">Use CMA-ES with learning-rate adaptation (experimental).</param>
+    /// <param name="sourceTrials">Warm Starting CMA-ES source trials (experimental); <c>null</c> for none.</param>
+    /// <remarks>
+    ///     <para>
+    ///         OptunaSharp 1.1.0 appended the optional <c>reuseToldOptimizer</c> parameter to the public constructor. Source
+    ///         code compiles against it unchanged, but the change gave that constructor a new metadata signature, and a call
+    ///         compiled against 1.0.0 names the old one: without this overload such a call throws
+    ///         <see cref="MissingMethodException" /> when it runs against 1.1.0 (for example, a library built on 1.0.0 that
+    ///         an application uses together with OptunaSharp 1.1.0).
+    ///     </para>
+    ///     <para>
+    ///         It declares no default values on purpose. With defaults, every call that leaves out an argument
+    ///         (<c>new CmaEsSampler()</c>, <c>new CmaEsSampler(seed: 42)</c>) would match both constructors equally well
+    ///         and fail to compile as ambiguous (CS0121). Without them, such calls bind to the public constructor, and only
+    ///         a call passing all fourteen arguments binds here, with the same result. It is hidden from IntelliSense, and
+    ///         the CLI's reflection factory, which tries the widest public constructor first, never reaches it.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="NumSharp.ValueError">
+    ///     Source-trial initialization, explicit initial parameters, separable adaptation, margin correction, or
+    ///     learning-rate adaptation are combined incompatibly (the public constructor's checks).
+    /// </exception>
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public CmaEsSampler(
+        IReadOnlyDictionary<string, object?>? x0,
+        double? sigma0,
+        int nStartupTrials,
+        BaseSampler? independentSampler,
+        bool warnIndependentSampling,
+        int? seed,
+        bool considerPrunedTrials,
+        string? restartStrategy,
+        int? popsize,
+        int incPopsize,
+        bool useSeparableCma,
+        bool withMargin,
+        bool lrAdapt,
+        List<FrozenTrial>? sourceTrials)
+        : this(x0, sigma0, nStartupTrials, independentSampler, warnIndependentSampling, seed, considerPrunedTrials,
+            restartStrategy, popsize, incPopsize, useSeparableCma, withMargin, lrAdapt, sourceTrials,
+            reuseToldOptimizer: false)
+    {
     }
 
     /// <summary>

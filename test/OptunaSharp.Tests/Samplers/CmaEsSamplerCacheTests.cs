@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using AwesomeAssertions;
@@ -192,6 +193,37 @@ public class CmaEsSamplerCacheTests
             .Should().Equal(first.Trials.Select(t => (t.Params["x0"], t.Params["x3"], t.Value)));
         int tellers = first.Trials.Count(HoldsState);
         byDefault.RestoreCount.Should().Be(HoldsState(first.Trials[^1]) ? tellers - 1 : tellers);
+    }
+
+    /// <summary>
+    ///     OptunaSharp 1.0.0's 14-parameter constructor still exists with its exact metadata signature, so an assembly
+    ///     compiled against 1.0.0 binds to it at run time instead of failing with <see cref="MissingMethodException" />,
+    ///     and it is Optuna's path: invoked as such a compiled call invokes it (by that signature, every argument
+    ///     explicit, 1.0.0's defaults included), it produces the same trials as <c>reuseToldOptimizer: false</c>.
+    /// </summary>
+    [TestMethod]
+    public void TheVersion1_0_0Constructor_StillBinds_AndIsOptunasPath()
+    {
+        // The parameter types of 1.0.0's public constructor, in order: what a 1.0.0-compiled call site names.
+        Type[] signature =
+        [
+            typeof(IReadOnlyDictionary<string, object?>), typeof(double?), typeof(int), typeof(BaseSampler),
+            typeof(bool), typeof(int?), typeof(bool), typeof(string), typeof(int?), typeof(int), typeof(bool),
+            typeof(bool), typeof(bool), typeof(List<FrozenTrial>),
+        ];
+        var constructor = typeof(CmaEsSampler).GetConstructor(signature);
+        constructor.Should().NotBeNull("assemblies compiled against OptunaSharp 1.0.0 call this exact signature");
+
+        // A compiled call passes every argument, the defaults it left out included (x0, sigma0, nStartupTrials 1, ...).
+        var legacy = (CmaEsSampler)constructor!.Invoke(
+            [null, null, 1, null, true, 21, false, null, 6, -1, false, false, false, null]);
+        var first = Optuna.CreateStudy(sampler: legacy);
+        first.Optimize(Sphere(4, 0.4), nTrials: 120);
+        var second = Optuna.CreateStudy(sampler: new CmaEsSampler(seed: 21, popsize: 6, reuseToldOptimizer: false));
+        second.Optimize(Sphere(4, 0.4), nTrials: 120);
+
+        second.Trials.Select(t => (t.Params["x0"], t.Params["x3"], t.Value))
+            .Should().Equal(first.Trials.Select(t => (t.Params["x0"], t.Params["x3"], t.Value)));
     }
 
     /// <summary>
