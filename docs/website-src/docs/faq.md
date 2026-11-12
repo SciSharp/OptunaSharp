@@ -771,6 +771,29 @@ Here OptunaSharp treats `a` and `A` as distinct, MySQL does not. Workarounds:
 3. **Change MySQL's collation** to be case-sensitive at the database, table, or column level — see the
    [MySQL documentation](https://dev.mysql.com/doc/refman/9.3/en/charset-syntax.html).
 
+## Can I publish with NativeAOT, or run OptunaSharp from a file-based app?
+
+Not with NativeAOT: OptunaSharp needs dynamic code, because NumSharp compiles its kernels at run time. Anywhere
+`RuntimeFeature.IsDynamicCodeSupported` is false, the first trial fails with
+`PlatformNotSupportedException: Dynamic code generation is not supported on this platform.`
+
+A .NET 10 file-based app (`dotnet run app.cs`) works, but it turns NativeAOT on by default, so turn it off next to the
+package directive:
+
+```csharp
+#:package OptunaSharp@*
+#:property PublishAot=false
+
+using OptunaSharp;
+
+var study = Optuna.CreateStudy();
+study.Optimize(trial => Math.Pow(trial.SuggestFloat("x", -10, 10) - 2, 2), nTrials: 20);
+Console.WriteLine(study.BestValue);
+```
+
+A regular project (`dotnet new console` plus `dotnet add package OptunaSharp`) needs nothing extra: it does not
+publish with NativeAOT unless asked to.
+
 ## Notable divergences from Optuna
 
 | Topic | Optuna (Python) | OptunaSharp |

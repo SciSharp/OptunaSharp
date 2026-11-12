@@ -24,7 +24,7 @@
 <p align="center">
   OptunaSharp is <a href="https://scisharp.github.io/OptunaSharp/docs/key-features/parallelization.html"><strong>thread-safe and truly parallel.</strong></a><br>
   <a href="https://scisharp.github.io/OptunaSharp/docs/key-features/parallelization.html#multi-thread-optimization"><code>nJobs</code></a> runs trials on all your cores at once, with no GIL in the way, and workers on <br><a href="https://scisharp.github.io/OptunaSharp/docs/key-features/parallelization.html#multi-node-optimization">many machines</a> share one study, <a href="https://scisharp.github.io/OptunaSharp/docs/storage.html#concurrency-workers-studies-and-languages-on-one-journal">Python Optuna workers included</a>.<br>
- OptunaSharp supports parallelism powered by:<br> single-threaded, <a href="https://scisharp.github.io/OptunaSharp/docs/key-features/parallelization.html#which-threads-run-the-trials">reused dedicated threads and ThreadPool</a> async-await.
+ OptunaSharp supports parallelism powered by:<br> single-threaded, <a href="https://scisharp.github.io/OptunaSharp/docs/key-features/parallelization.html#which-threads-run-the-trials">reused dedicated threads or the .NET ThreadPool</a>.
 </p>
 
 <p align="center">

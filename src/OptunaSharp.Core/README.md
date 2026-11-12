@@ -9,7 +9,10 @@ hyperparameter optimization framework, built on [NumSharp](https://github.com/Sc
 dotnet add package OptunaSharp
 ```
 
-The package targets **.NET 8** and **.NET 10**.
+The package targets **.NET 8** and **.NET 10**. It needs dynamic code: NumSharp compiles its kernels at run time, so
+OptunaSharp does not run under NativeAOT. A .NET 10 file-based app turns NativeAOT on by default, so declare
+`#:property PublishAot=false` next to `#:package OptunaSharp@*`; without it the first trial fails with
+`PlatformNotSupportedException: Dynamic code generation is not supported on this platform.`
 
 ## Quick start
 

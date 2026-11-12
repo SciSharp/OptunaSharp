@@ -8,6 +8,18 @@ dotnet add package OptunaSharp
 
 OptunaSharp multi-targets **.NET 8** and **.NET 10** and depends on **NumSharp**.
 
+**OptunaSharp needs dynamic code.** NumSharp compiles its kernels at run time, so OptunaSharp does not run under
+NativeAOT, or anywhere `RuntimeFeature.IsDynamicCodeSupported` is false. A .NET 10 file-based app (`dotnet run app.cs`)
+turns NativeAOT on by default, so add `PublishAot=false` next to the package directive:
+
+```csharp
+#:package OptunaSharp@*
+#:property PublishAot=false
+```
+
+Without it, the first trial fails with `PlatformNotSupportedException: Dynamic code generation is not supported on this
+platform.`
+
 ## Your first study
 
 ```csharp
