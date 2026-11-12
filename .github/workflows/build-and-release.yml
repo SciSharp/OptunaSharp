@@ -60,6 +60,12 @@ jobs:
   #               at the end of ubuntu's main leg, which made that leg the run's critical path: 24 min
   #               (7.3 min of interop tests, then 13.1 min of Slow) against 15-17 for every other leg
   #               (dispatch 42399672195). As its own leg it runs beside them, for one more ~3.5 min setup.
+  #   cli         JSON array of legs for `cli-binaries`, one per portable `optunasharp` binary:
+  #               {rid, os, host, container, container_prepare}. Every RID on a v* tag and on a manual
+  #               dispatch, because that is what a release ships; linux-x64 and win-x64 otherwise, so the
+  #               publish path is still exercised on every push and pull request. The other six legs
+  #               (macOS, arm64, musl) follow the same reasoning as the macOS test leg below: they run
+  #               where their binaries ship, and a dispatch rehearses them before a tag.
   #
   # Policy (why each tier):
   #   * v* tag / manual dispatch -> all 3 OSes + both TFMs. Release confidence and the only place the
@@ -79,6 +85,7 @@ jobs:
       oses: ${{ steps.scope.outputs.oses }}
       tfms_space: ${{ steps.scope.outputs.tfms_space }}
       interop: ${{ steps.scope.outputs.interop }}
+      cli: ${{ steps.scope.outputs.cli }}
     steps:
       - id: scope
         shell: bash
@@ -103,6 +110,44 @@ jobs:
           INTEROP=$(jq -c --argjson slow "$RUN_SLOW" \
             '[.[] | {os: ., part: "main"}] + (if $slow then [{os: "ubuntu-24.04", part: "slow"}] else [] end)' <<< "$OSES")
           echo "interop=$INTEROP" >> "$GITHUB_OUTPUT"
+          # The portable CLI binaries, one leg per RID NumSharp.Interop.OpenBLAS ships a native library for.
+          #   os                 a runner of the binary's own OS and architecture, so it can be RUN there.
+          #   host               run the smoke test on the runner itself. False for musl: the runner is glibc.
+          #   container          also run it in this bare image (no .NET, no build tools), "" for none.
+          #                      almalinux:9 has glibc 2.34, the lowest version the bundled SQLite library
+          #                      loads on (it binds symbols versioned GLIBC_2.34; on RHEL 8's 2.28 every
+          #                      sqlite:/// storage fails), so this run guards that floor too.
+          #   container_prepare  what that image needs first. The glibc images get nothing installed and
+          #                      run without ICU (the documented switch for minimal images); Alpine gets
+          #                      the three packages .NET needs there. The runners themselves cover ICU on glibc.
+          #   every_run          build this leg on pushes and pull requests too (dropped from the output).
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            CLI_ALL=true
+          else
+            CLI_ALL=false
+          fi
+          CLI=$(jq -c --argjson all "$CLI_ALL" 'map(select($all or .every_run) | del(.every_run))' <<'JSON'
+          [
+            {"rid": "linux-x64",        "os": "ubuntu-24.04",     "host": true,  "every_run": true,
+             "container": "almalinux:9", "container_prepare": "export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1"},
+            {"rid": "linux-arm64",      "os": "ubuntu-24.04-arm", "host": true,  "every_run": false,
+             "container": "almalinux:9", "container_prepare": "export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1"},
+            {"rid": "linux-musl-x64",   "os": "ubuntu-24.04",     "host": false, "every_run": false,
+             "container": "alpine:3.22", "container_prepare": "apk add --no-cache libstdc++ libgcc icu-libs"},
+            {"rid": "linux-musl-arm64", "os": "ubuntu-24.04-arm", "host": false, "every_run": false,
+             "container": "alpine:3.22", "container_prepare": "apk add --no-cache libstdc++ libgcc icu-libs"},
+            {"rid": "osx-arm64",        "os": "macos-26",         "host": true,  "every_run": false,
+             "container": "", "container_prepare": ""},
+            {"rid": "osx-x64",          "os": "macos-26-intel",   "host": true,  "every_run": false,
+             "container": "", "container_prepare": ""},
+            {"rid": "win-x64",          "os": "windows-2025",     "host": true,  "every_run": true,
+             "container": "", "container_prepare": ""},
+            {"rid": "win-arm64",        "os": "windows-11-arm",   "host": true,  "every_run": false,
+             "container": "", "container_prepare": ""}
+          ]
+          JSON
+          )
+          echo "cli=$CLI" >> "$GITHUB_OUTPUT"
           echo "Resolved CI scope:"; cat "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------------------------
@@ -725,12 +770,95 @@ jobs:
         retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 5 }}
 
   # ---------------------------------------------------------------------------------------------
+  # The PORTABLE `optunasharp` binaries: one self-contained, single-file executable per platform, which
+  # needs no .NET installation. A user extracts it into a folder on PATH. The release attaches them
+  # beside the packages; before this job it shipped the CLI only as a `dotnet tool` package, which needs
+  # the .NET SDK to install.
+  #
+  # Like `package`, this runs on every trigger, so the publish path cannot rot between releases; `setup`
+  # decides the legs (all eight RIDs on a tag or a dispatch, linux-x64 and win-x64 otherwise). It waits
+  # for `package` only to take the version from it: packages and binaries of one run carry one version.
+  #
+  # Each leg, on a runner of the binary's own OS and architecture:
+  #   1. publish_cli.sh publishes the binary, requires the output to be ONE file whose header names the
+  #      requested RID, and packs it as optunasharp-<rid>.zip (Windows) or .tar.gz;
+  #   2. smoke_cli.sh extracts that archive and runs the binary with no .NET in reach: the version it
+  #      reports, then a study in SQLite driven by CMA-ES (which needs the bundled OpenBLAS), each
+  #      command a new process. On the runner itself, and for Linux also inside a bare container.
+  # A binary is uploaded only after it ran.
+  #
+  # No NuGet cache here: six of the eight legs run on tags and dispatches only, and a tag's run cannot
+  # read a cache that another tag's run saved, so a release would start cold anyway, while each entry
+  # would hold a full runtime pack against the repository's cache quota.
+  # ---------------------------------------------------------------------------------------------
+  cli-binaries:
+    needs: [setup, package]
+    name: cli-binary (${{ matrix.rid }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.setup.outputs.cli) }}
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    env:
+      VERSION: ${{ needs.package.outputs.version }}
+
+    steps:
+    - uses: actions/checkout@v7
+
+    # The binary targets net10.0 only, and the 10.0 SDK brings the runtime pack of the requested RID.
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Publish the portable binary
+      shell: bash
+      run: bash .github/scripts/publish_cli.sh artifacts/cli "$VERSION" "${{ matrix.rid }}"
+
+    # The glob names the one archive of this leg, whichever its extension is. Two matches would hand
+    # the script three arguments, which it refuses.
+    - name: Smoke test on the runner
+      if: matrix.host
+      shell: bash
+      run: bash .github/scripts/smoke_cli.sh artifacts/cli/optunasharp-${{ matrix.rid }}.* "$VERSION"
+
+    # The runner has .NET, ICU and a current glibc. The image has none of that beyond what
+    # container_prepare installs, so this is the run that shows what the binary needs from a machine.
+    # `sh`, not bash: Alpine has no bash, and the script is POSIX sh for that reason.
+    - name: Smoke test in a bare container
+      if: matrix.container != ''
+      shell: bash
+      run: |
+        docker run --rm \
+          -v "$PWD/.github/scripts:/scripts:ro" \
+          -v "$PWD/artifacts/cli:/cli:ro" \
+          "${{ matrix.container }}" \
+          sh -c "${{ matrix.container_prepare }} && sh /scripts/smoke_cli.sh /cli/optunasharp-${{ matrix.rid }}.tar.gz '$VERSION'"
+
+    # Only one of the two paths exists for a given RID. The archive is already compressed, so the
+    # artifact is stored as it is.
+    - name: Upload the binary
+      uses: actions/upload-artifact@v7
+      with:
+        name: cli-binary-${{ matrix.rid }}
+        path: |
+          artifacts/cli/optunasharp-${{ matrix.rid }}.zip
+          artifacts/cli/optunasharp-${{ matrix.rid }}.tar.gz
+        if-no-files-found: error
+        compression-level: 0
+        # As the packages: a release's binaries stay downloadable from its run for a quarter.
+        retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 5 }}
+
+  # ---------------------------------------------------------------------------------------------
   # Release pipeline — only on a v* tag on the repository's default branch (`main` on
   # SciSharp/OptunaSharp), and only after every test suite and the package gate passed for the tagged
-  # commit.
+  # commit and every portable CLI binary was built and ran on its own platform.
   # ---------------------------------------------------------------------------------------------
   validate-release:
-    needs: [test, satellite-tests, interop-test, package]
+    needs: [test, satellite-tests, interop-test, package, cli-binaries]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     outputs:
@@ -778,10 +906,12 @@ jobs:
         fi
 
   create-release:
-    needs: [validate-release, package]
+    # `setup` is here for its list of CLI legs, which the gate below checks the downloaded binaries against.
+    needs: [setup, validate-release, package]
     if: needs.validate-release.outputs.is_valid == 'true'
     runs-on: ubuntu-24.04
-    # The only job that writes: it creates the GitHub Release and attaches the packages to it.
+    # The only job that writes: it creates the GitHub Release and attaches the packages and the
+    # portable CLI binaries to it.
     permissions:
       contents: write
 
@@ -792,11 +922,49 @@ jobs:
         name: nuget-packages
         path: artifacts
 
+    # One artifact per RID (cli-binary-<rid>), each holding one archive; merged, they land beside the packages.
+    - name: Download the portable CLI binaries
+      uses: actions/download-artifact@v8
+      with:
+        pattern: cli-binary-*
+        merge-multiple: true
+        path: artifacts
+
+    # Every leg `setup` listed must have delivered its archive. The legs themselves were required to
+    # succeed (validate-release needs cli-binaries), so this guards the hand-over between the jobs: a
+    # download pattern that matches nothing is not an error, and the release would then ship without
+    # binaries and still be green.
+    - name: Check that every portable CLI binary arrived
+      shell: bash
+      env:
+        CLI_LEGS: ${{ needs.setup.outputs.cli }}
+      run: |
+        missing=""
+        count=0
+        for rid in $(jq -r '.[].rid' <<< "$CLI_LEGS"); do
+          count=$((count + 1))
+          case "$rid" in
+            win-*) archive="optunasharp-$rid.zip" ;;
+            *)     archive="optunasharp-$rid.tar.gz" ;;
+          esac
+          if [ -s "artifacts/$archive" ]; then
+            echo "found $archive ($(stat -c%s "artifacts/$archive") bytes)"
+          else
+            missing="$missing $archive"
+          fi
+        done
+        if [ "$count" -eq 0 ]; then
+          echo "::error::setup listed no CLI legs, so there is nothing to release as a portable binary."; exit 1
+        fi
+        if [ -n "$missing" ]; then
+          echo "::error::the release is missing portable CLI binaries:$missing"; exit 1
+        fi
+
     - name: Generate checksums
       shell: bash
       run: |
         cd artifacts
-        for f in *.nupkg; do
+        for f in *.nupkg optunasharp-*.zip optunasharp-*.tar.gz; do
           sha256sum "$f" | cut -d' ' -f1 > "${f}.sha256"
           echo "${f}: $(cat ${f}.sha256)"
         done
@@ -812,11 +980,13 @@ jobs:
         fi
 
     # The package table is generated from the packages actually built, so it lists every package the
-    # release ships and nothing it does not.
+    # release ships and nothing it does not. The portable-binary table is generated the same way, from
+    # the archives that arrived; its links name this release's own assets.
     - name: Compose release notes
       shell: bash
       run: |
         VERSION="${{ needs.validate-release.outputs.version }}"
+        REPOSITORY_URL="${{ github.server_url }}/${{ github.repository }}"
         {
           echo "## OptunaSharp v${VERSION}"
           echo ""
@@ -833,6 +1003,33 @@ jobs:
             ID=$(basename "$f" ".${VERSION}.nupkg")
             echo "| ${ID} | [![NuGet](https://img.shields.io/nuget/v/${ID}.svg)](https://www.nuget.org/packages/${ID}/${VERSION}) |"
           done
+          echo ""
+          echo "### Portable \`optunasharp\` command-line tool"
+          echo ""
+          echo "One self-contained executable per platform; no .NET installation is needed. Extract the archive into a folder on your \`PATH\` and run \`optunasharp\`. [Install commands and requirements](${REPOSITORY_URL}/blob/v${VERSION}/src/OptunaSharp.Cli/README.md#portable-binary)."
+          echo ""
+          echo "| Platform | Download |"
+          echo "|----------|----------|"
+          # Sorted by name across both extensions, which groups the table by operating system. The asset's
+          # name gets a variable of its own, apart from any NAME the step may use for the release title.
+          printf '%s\n' artifacts/optunasharp-*.zip artifacts/optunasharp-*.tar.gz | sort | while read -r f; do
+            ASSET=$(basename "$f")
+            RID=${ASSET#optunasharp-}
+            RID=${RID%.zip}
+            RID=${RID%.tar.gz}
+            case "$RID" in
+              linux-x64)        PLATFORM="Linux x64" ;;
+              linux-arm64)      PLATFORM="Linux arm64" ;;
+              linux-musl-x64)   PLATFORM="Linux x64, musl (Alpine)" ;;
+              linux-musl-arm64) PLATFORM="Linux arm64, musl (Alpine)" ;;
+              osx-arm64)        PLATFORM="macOS arm64 (Apple silicon)" ;;
+              osx-x64)          PLATFORM="macOS x64 (Intel)" ;;
+              win-x64)          PLATFORM="Windows x64" ;;
+              win-arm64)        PLATFORM="Windows arm64" ;;
+              *)                PLATFORM="$RID" ;;
+            esac
+            echo "| ${PLATFORM} | [${ASSET}](${REPOSITORY_URL}/releases/download/v${VERSION}/${ASSET}) |"
+          done
         } > RELEASE_BODY.md
         cat RELEASE_BODY.md
 
@@ -841,6 +1038,8 @@ jobs:
       with:
         files: |
           artifacts/*.nupkg
+          artifacts/optunasharp-*.zip
+          artifacts/optunasharp-*.tar.gz
           artifacts/*.sha256
         draft: false
         prerelease: ${{ steps.prerelease.outputs.IS_PRERELEASE }}
