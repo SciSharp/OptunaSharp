@@ -7,6 +7,9 @@
 [Dd]ebugPublic/
 [Rr]elease/
 [Rr]eleases/
+# ...except the committed release notes (docs/releases/RELEASE_<version>.md), which the create-release job publishes as
+# the GitHub Release: the build-output rule above would otherwise hide them, as NumSharp's .gitignore also re-includes.
+!docs/releases/
 [Pp]ublish/
 x64/
 x86/

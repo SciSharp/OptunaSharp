@@ -1,0 +1,98 @@
+# OptunaSharp 1.1.0 - Performance & Parity Release
+
+1.1.0 is the same Optuna 5.0.0, faster and closer. Three performance passes made every sampler family cheaper in time and memory while its seeded trials stayed bit for bit what they were: random search and CMA-ES run about 7x faster than 1.0.0 and allocate a sixth of the memory.
+A second eight-hour parity QA run against Optuna 5.0.0 found 28 more differences; 23 are fixed and the rest documented. The arithmetic Optuna leaves to NumPy now runs through NumSharp, so hypervolume, NSGA-III at eight and more objectives and the GP's grids match Optuna bit for bit.
+
+### 🧭 Overview
+- **Faster than 1.0.0 on the same seeds** - random search `x6.2->x7.1`, CMA-ES `x6.2->x7.0` (100,000 trials 988 s -> 27.5 s), QMC `x4.0->x5.0` (scrambled Sobol `x11.6->x20.4`), NSGA-II `x2.4->x3.4`, TPE `x1.6->x3.0`, multi-objective TPE `x1.7->x2.5`, GP `x1.6->x1.8`, with 3.9x to 21x less memory allocated; random, QMC, NSGA-II, CMA-ES and GP give 1.0.0's trials bit for bit.
+- **Parity QA run 2 against Optuna 5.0.0** - 28 findings (QA-56 ... QA-83): 23 fixed on the owner's decisions, 3 kept as documented divergences, 2 deferred; the performance and NumSharp passes added QA-84 ... QA-89, of which QA-84, 86, 87 and 88 are fixed.
+  - OptunaHub bridges - a persistent shadow study: 12 registry samplers (PSO, MO-CMA, SPEA-II, AutoSampler, ...) and 6 pruners (successive halving, Hyperband, ...) give native Optuna's trials, bit for bit.
+  - Optuna's exception types and messages in the storages, the CLI, CMA-ES and the LightGBM integration; CPython's own `list.sort` and set order where Optuna's results depend on them.
+- **NumPy's arithmetic through NumSharp** - Optuna's `np.dot`, reductions, NaN-aware `argmax` / `max`, `floor_divide`, `isclose` and `clip` now compute as NumPy does: hypervolume, HSSP and UNDX are bit-exact, NSGA-III matches from eight objectives on, and the GP's grids and rounding are NumPy's.
+- **New opt-ins** - compact finished trials (100,000 CMA-ES trials retain 257 MB instead of 1,287 MB), batch attribute writes, and CMA-ES's `reuseToldOptimizer`.
+- **Binary-compatible with 1.0.0** - ApiCompat against the nuget.org 1.0.0 packages finds no removed or changed API in any of the 20 packages; the behavior changes (Optuna's exception types, seeded TPE results moving toward Optuna's) are listed under Breaking Changes.
+- **43 parity fixes, 18 measured speedups and 11 behavior changes** - every line traced to the 45 commits it cites, of the release's 130; 2,307 unit tests on net8.0 and net10.0, 727 live-Optuna interop tests.
+
+## Detailed Breakdown
+<details>
+  <summary>Show All</summary>
+
+### 📊 Dashboards & Docs
+- **[Performance and Compatibility](https://scisharp.github.io/OptunaSharp/docs/performance.html)** - new guide: what is fast and why seeded results stay the same, the before/after tables of the three passes, start-up time (ReadyToRun, TieredPGO), the switches that change results, compact finished trials, batch attribute writes and thread safety.
+- **[OptunaHub](https://scisharp.github.io/OptunaSharp/integrations/python/optunahub.html)** - "Compatibility and state" rewritten for the persistent shadow study, with the samplers and pruners measured against native runs and the limits that remain.
+- **Method pages** - [MOEA/D](https://scisharp.github.io/OptunaSharp/docs/methods/moea-d.html), [differential evolution](https://scisharp.github.io/OptunaSharp/docs/methods/differential-evolution.html), [PSO](https://scisharp.github.io/OptunaSharp/docs/methods/pso.html) and [TuRBO](https://scisharp.github.io/OptunaSharp/docs/methods/turbo.html) name their OptunaHub counterparts and map their parameters to them.
+- **[Parity QA journal, 2026-11-10](https://github.com/SciSharp/OptunaSharp/blob/main/docs/qa/PARITY_QA_2026-11-10.md)** - the second QA run: every finding with its repro test and fix, the 65 directions worked, the clean areas and the techniques.
+- **[Six real-world examples](https://github.com/SciSharp/OptunaSharp/tree/main/examples)** - container loading stopped at a provable bound, a journal shared by three processes under Hyperband, a churn scorecard ended by the Terminator, pricing with C# and Python workers over the gRPC proxy, building energy through `OptunaSearchCV`, concrete mix design with `GPSampler` and constraints.
+
+### ✨ New APIs & Modules
+- `InMemoryStorage(compactFinishedTrials: true)` - opt-in compact records for finished trials: the same trials bit for bit, a fraction of the memory (100,000 CMA-ES trials over 40 floats retain 257 MB instead of 1,287 MB, 100,000 NSGA-II trials 88 MB instead of 671 MB) - `f0d62a0`.
+- Batch attribute writes - several attributes in one lock or one transaction, the same result as the single-key loop, and a rejected batch writes nothing - `53a7a0f`.
+  - `SetTrialUserAttrs`, `SetTrialSystemAttrs`, `SetStudyUserAttrs`, `SetStudySystemAttrs` - on `BaseStorage`, virtual, so a third-party storage gets the loop unchanged.
+  - `Trial.SetUserAttrs`, `Study.SetUserAttrs` - the trial and study forms.
+  - `SetUserAttr(IReadOnlyDictionary)`, `SetTrialSystemAttr(int, IReadOnlyDictionary)` and the rest - Optuna-named overloads of each.
+  - The journal storage writes a batch as single-key records Python Optuna replays; SQLite and EF Core write it in one transaction.
+- `CmaEsSampler(reuseToldOptimizer: true)` - opt-in: the optimizer that told a generation keeps answering, about 15 % faster on a 40-D study, but seeded runs stop matching Python Optuna from about the third generation; off by default, and 1.0.0's constructor signature is kept for binary compatibility - `99e9e73` (+ `4d4151e`).
+- `StorageInternalError(message, innerException)` - the `raise ... from e` form the EF Core and SQLite storages now raise - `3009c4a`.
+
+### ⚡ Performance
+*Ratios are 1.0.0 ÷ 1.1.0 time - higher is better (`x2` = twice 1.0.0's speed); `xLOW->xHIGH` spans the cold run (JIT included) and the warm one. Measured 2026-11-12 with the published 1.0.0 package against the 1.1.0 candidate: Release, 40 floats unless stated, seed 0, best of two alternating rounds on a shared i9-13900K. Every line keeps seeded results bit for bit unless it says otherwise.*
+- `x6.2->x7.1` - `RandomSampler`, 10,000 trials: NumSharp draws no longer reach the finalizer, which had turned almost every gen-0 collection into a gen-1; 3.6 GB -> 0.67 GB allocated - `adda96c` (+ `9d94a6a`).
+- `x6.2->x7.0` - `CmaEsSampler`, 10,000 trials: the stored optimizer restored once per generation and the history folded incrementally (Optuna rescans every trial on every ask); 10.9 GB -> 1.7 GB; at 100,000 trials 988 s -> 27.5 s (`x35.9`) - `99e9e73` (+ `cc1e4f3`).
+- `x4.0->x5.0` - `QMCSampler`, 10,000 trials: the sample-id key computed once per search space; 3.7 GB -> 0.49 GB - `a279254`.
+- `x11.6->x20.4` - scrambled Sobol (`QMCSampler(scramble: true)`), 4,000 trials over 10 floats: the engine built once and each point computed directly (every trial regenerated all earlier points); 1.26 GB -> 60 MB - `5440021`.
+- `x2.4->x3.4` - `NSGAIISampler`, 10,000 two-objective trials: a running trial nobody reads is written in place, and the draws are disposed; 2.9 GB -> 0.72 GB - `f8df1a5` (+ `adda96c`).
+- `x2.5->x3.0` - `TPESampler`, 1,000 trials: a fused scoring kernel, exact O(n) kernel widths, a cache of finished observations, one split per trial; 4.4 GB -> 0.84 GB; includes the cost of the QA-84 parity fix, and the trials move toward Optuna's (see Breaking Changes) - `4464e8a`, `db4e46c`, `14b4698`, `2189a12`, `ca6723d`, `5019c5d`, `8b0fb61`.
+  - `x1.6->x2.4` - over 10 floats, QA-84's costliest case (that fix alone made it 27-66 % slower than the code before it); 1.3 GB -> 0.26 GB.
+  - `x1.7->x2.5` - multi-objective, 300 trials; 2.4 GB -> 0.34 GB.
+- `x1.6->x1.8` - `GPSampler`, 150 trials over 10 floats: triangular solves swept over every right-hand side, fused Cholesky solves, the fit's scratch reused; 5.9 GB -> 1.5 GB, gen-2 collections about 4.5x fewer - `cebb1c9` (+ `9533366`).
+- Measured in the passes, against each pass's own baseline (same trials):
+  - `x1.4` - `BruteForceSampler`, a 4,320-point grid: one path buffer per tree rebuild, candidate lists cached per exact progression; 13,965 MB -> 5,446 MB - `c78c0ab`.
+  - `x1.08` - TuRBO, 120 trials: the GP fit's solves and scratch from `GPSampler`; 1,857 MB -> 1,215 MB - `9533366`.
+  - SMS-EMOA and MOEA/D allocate 42-43 % less over 2,000 trials (population members found by binary search, not dictionaries rebuilt per ask) - `66f83d4`, `8c52e7c`.
+  - SNES, xNES and OpenAI-ES allocate 57-69 % less (attribute keys built once, stored states parsed once per generation) - `882a043`, `adc76c2`.
+  - DE, PSO, LM-CMA and VkD-CMA allocate 28-37 % less (stored states parsed once per generation, history lists sized up front) - `9edc1d4`, `af20df1`, `4367338`.
+- `x1.35` - SQLite storage, a study with a stale running trial: the refresh is two indexed halves joined by `UNION ALL` instead of an `OR` scan (8,000 trials 13.0 s -> 9.6 s) - `2dc35cf`.
+- `x1.4->x1.5` - SQLite and EF Core, loading a study: each distribution text parsed once per load (10,000 trials 2.1 s -> 1.4-1.5 s, 1.22 GB -> 479 MB) - `9043b43`.
+- Journal file backend - sparse line offsets: a 4.3-million-line journal keeps 0.1 MB of offsets instead of 160 MB - `45fadd1`.
+- `x1.14` - `optunasharp` CLI: TieredPGO off for its short processes, an `ask` + `tell` cycle 1,794 ms -> 1,578 ms - `27269b1`.
+
+### 🎯 Parity & Fixes
+- `NSGAIIISampler` - a front whose niche distances are NaN (infinite objective values) is sorted by a port of CPython 3.12's `list.sort`, so the elite population is Optuna's (5 of 8 long fuzz runs had left Optuna's trajectory) - `16a7f9e` (QA-56).
+- `NSGAIISampler`, `NSGAIIISampler` - a batch asked on one thread before it is told, Optuna's batch-optimization pattern, gets Optuna's children: the duplicate guard redraws only against children another thread holds - `3809bae` (QA-57).
+- `GridSampler` - unvisited grids come in CPython's set-iteration order when the study's numbering is shifted (added or enqueued trials, a resumed study), and an empty value list fails with NumPy's `choice` message - `16a7f9e`, `8a7e19e` (QA-68, QA-55).
+- `CmaEsSampler` - fails where Optuna and cmaes fail: `with_margin` over a conditional or changing search space (NumPy's tell shape errors; it sampled on with coordinates of other parameters), an initial mean outside the bounds and `popsize=1` (cmaes' assertions), an `x0` missing a parameter - `1e8aba6` (QA-60, QA-80, QA-83).
+- `OptunaHubSampler`, `OptunaHubPruner` - one persistent shadow study per OptunaSharp study, mirroring every trial and forwarding `before_trial` / `after_trial`: PSO leaves its random phase, MO-CMA no longer fails with `KeyError: 'mocma:g'`, and successive halving and Hyperband prune 36 and 31 of 40 trials as natively (0 before) - `ed754e4` (QA-72, QA-73).
+- SQLite storage - the cached refresh falls back like Optuna's past SQLite's variable limit (a study with 33,000 running trials below a finished one could not be read), and attributes come back in key order as Optuna's index scans return them, on MySQL too - `16a7f9e` (QA-59, QA-71).
+- In-memory and journal storages - studies list in creation order after deletions, as Python's dicts keep them - `16a7f9e` (QA-67).
+- Optuna's error types and messages - a missing parameter's `KeyError` and the empty `DuplicatedStudyError` (QA-66), `StorageInternalError` from database errors (QA-74), `5.0.0` in the schema-compatibility error (QA-75), LightGBM messages in Python's repr under any culture (QA-76), `DownloadArtifact` onto a directory (QA-78), multi-objective TPE's `study.direction` error (QA-79), and `OptunaSearchCV(nJobs: 0)` runs one job (QA-81) - `3009c4a`.
+- `optunasharp` CLI - `-f yaml` is PyYAML's `safe_dump` byte for byte (763-case oracle: floats stay floats, datetimes stay strings, and Windows line ends are no longer doubled), `tell --state fail|pruned` without `--values` finishes the trial, structured `--sampler-kwargs` (`GridSampler`'s `search_space`, `CmaEsSampler`'s `x0`, `NSGAIIISampler`'s `reference_points`) construct the sampler - `d510728` (QA-61, QA-63, QA-64, QA-36); `--log-file` stays empty, as Optuna's does - `3809bae` (QA-65).
+- `TPESampler` - the continuous log density sums its dimensions in NumPy's pairwise order; with 8 or more continuous parameters sampled jointly, 31-54 % of the log densities had differed in the last bit - `465f91c` (QA-84).
+- `TPESampler`, `CmaEsSampler(withMargin: true)` - `expm1` is NumSharp's model of the UCRT routine NumPy calls, so the truncated normal's quantiles come closer to Optuna's (bit-identical 44 % -> 59 %) - `0e18eba`.
+- Hypervolume, HSSP and UNDX - Optuna's 1-D `@`, `np.dot` and `np.linalg.norm` go through NumSharp's OpenBLAS `ddot` / `dgemv`: 37 of 240 volumes and 3 of 240 HSSP selections had differed by an ulp, now none - `c600736`.
+- NumPy's reduction order - the terminator's cross-validation variance (QA-22), multi-objective `GPSampler` standardization, the percentile pruner's zero signs, the EDF grid (QA-54), AGE-MOEA-2's row norms and JANUS's component mean go through NumSharp's `np.var`, `np.mean`, `np.std`, `np.nanpercentile`, `np.linspace` and `np.linalg.norm` - `156ce8a`.
+- `NSGAIIISampler` - from eight objectives on, the reference-point association uses NumPy's pairwise row norms (8- and 10-objective runs had left Optuna's trajectory at trials 80 and 100) - `128761d` (QA-86).
+- `GPSampler` - stepped grids are NumPy's `arange` (the top point of 0.1 to 1.0 by 0.3 was 0.9999999999999998), grid rounding is NumPy's `floor_divide`, and an overflowed LogEI threshold propagates NaN as NumPy's `max` does - `8a7e19e` (QA-49, QA-87, QA-53).
+- NumPy's NaN and tie rules - `argmax` / `max` ports in TPE, GP, HSSP and the terminators, `enqueue_trial(skip_if_exists)` comparing infinities like `np.isclose`, stepped floats clipping to a `-0.0` bound like `np.clip`, TPE's `weights` errors printing arrays like NumPy, and the Plotly rank colorbar's quantiles - `8a7e19e` (QA-29, QA-50, QA-30, QA-48, QA-88).
+- Journal file lock (Windows) - a lock file deleted in place (delete pending) is waited out for at most 1 s instead of failing with `UnauthorizedAccessException` - `4ae4a1f`.
+
+### 🧰 Testing & Tooling
+- A second eight-hour parity QA run against Optuna 5.0.0 - 65 directions, tens of thousands of random programs over every bit-exact sampler and storage, mixed Python and C# fleets; each of its 28 findings got a repro test - `4b65852`.
+- New committed oracles, replayed with no Python - CPython 3.12's `list.sort` and set order (624 cases), PyYAML's `safe_dump` (763), NumPy's scalar `log1p` / `expm1` / `logaddexp` (527, win-amd64) - `16a7f9e`, `d510728`, `0e18eba`.
+- `OptunaHubNativeParityTests` - each registry sampler and pruner run natively and through the bridge in one interpreter, every trial compared - `ed754e4`.
+- Every performance change gated byte for byte - a 36-study hash probe over every sampler family after each step, unit pins against the replaced code, and new live-Optuna gates (random search through `repr`, QMC 40-parameter full state, a 250 x 40 journal replay, SQLite's cached refresh, hypervolume and HSSP over 240 fronts, NSGA-III at 8 and 10 objectives) - `adda96c`, `a279254`, `45fadd1`, `2dc35cf`, `c600736`, `128761d`.
+- Binary compatibility checked with ApiCompat against the nuget.org 1.0.0 packages; the one break it found, `CmaEsSampler`'s constructor, is restored - `4d4151e`.
+
+### 💥 Breaking Changes
+- `BaseStorage.GetTrialParam` (and the in-memory, journal, cached and gRPC-proxy storages) raises `NumSharp.KeyError` for a parameter the trial lacks (was `KeyNotFoundException`, which `KeyError` does not derive from): catch `KeyError` - `3009c4a`.
+- The EF Core storage raises `StorageInternalError` wrapping the provider's exception for a database error other than an integrity error (was `DbUpdateException`); the SQLite storage with `skipTableCreation` over a database without Optuna's tables raises it from the constructor (was a `SqliteException` on the first read) - `3009c4a`.
+- `DownloadArtifact` onto an existing directory raises `IOException` ("File already exists") before downloading (was `UnauthorizedAccessException`) - `3009c4a`.
+- Multi-objective `TPESampler` over PRUNED trials that carry numeric reports raises Optuna's `RuntimeError` (it sampled on) - `3009c4a`.
+- `CmaEsSampler` raises where cmaes asserts or NumPy fails (`ArgumentException`, `ValueError`, `DivideByZeroException` for separable CMA-ES with `popsize=1`) instead of sampling on, and an `x0` missing a parameter raises `ArgumentException` (was `KeyNotFoundException`) - `1e8aba6`.
+- Seeded results move toward Optuna's, so a run that reproduced a 1.0.0 run bit for bit changes: `TPESampler` (through `expm1`; with 8 or more jointly sampled continuous parameters also through QA-84), CMA-ES with margin, NSGA-III with infinite objective values or 8 or more objectives, `GridSampler` with shifted numbering, multi-objective `GPSampler` and stepped GP grids, and NSGA-II / NSGA-III batches asked on one thread. Random, QMC, NSGA-II, plain CMA-ES and single-objective `GPSampler` over floats give 1.0.0's trials bit for bit - `0e18eba`, `465f91c`, `16a7f9e`, `128761d`, `156ce8a`, `8a7e19e`, `3809bae`.
+- Orders follow Optuna's - studies list in creation order after deletions (in-memory and journal storages), and the SQLite and MySQL storages read attributes in key order, so `get_all_artifact_meta` on SQLite lists artifacts by id - `16a7f9e`.
+- `optunasharp` CLI - `-f yaml` writes PyYAML's output (floats keep their decimal point, datetimes and some keys are quoted differently; the YamlDotNet dependency is gone), `--log-file` creates the file and writes nothing (redirect stderr to keep a log), and `tell` without `--values` passes no values - `d510728`, `3809bae`.
+- `OptunaSharpVersion.OptunaCompatibilityTarget` is `"5.0.0"` (was `"5.0"`) - `3009c4a`.
+- The OptunaHub bridges write the attributes a hub sampler or pruner sets (`mocma:g`, `completed_rung_N`, PSO's swarm) to the OptunaSharp trial and study, as a native run stores them - `ed754e4`.
+- The Windows journal lock reports a lock path that stays denied (an unwritable directory, a directory at the lock path) after 1 s instead of at once - `4ae4a1f`.
+
+</details>
