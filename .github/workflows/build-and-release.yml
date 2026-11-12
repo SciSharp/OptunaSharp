@@ -786,6 +786,11 @@ jobs:
       contents: write
 
     steps:
+    # Only the release notes are read from the tagged commit, so only docs/releases is checked out.
+    - uses: actions/checkout@v7
+      with:
+        sparse-checkout: docs/releases
+
     - name: Download NuGet Packages
       uses: actions/download-artifact@v8
       with:
@@ -811,15 +816,41 @@ jobs:
           echo "IS_PRERELEASE=false" >> "$GITHUB_OUTPUT"
         fi
 
-    # The package table is generated from the packages actually built, so it lists every package the
-    # release ships and nothing it does not.
+    # The release notes are a committed file, docs/releases/RELEASE_<version>.md, written in NumSharp's house style
+    # (the same file and the same sections NumSharp's releases use). Its H1, "# OptunaSharp <version> - <title>",
+    # names the GitHub Release; everything after it opens the body, and the install lines and the package table close
+    # it, the layout of the published 1.0.0 release. Without the file the body is the install header alone, named
+    # "OptunaSharp v<version>", and GitHub's generated notes are added. The package table is generated from the
+    # packages actually built, so it lists every package the release ships and nothing it does not.
     - name: Compose release notes
+      id: notes
       shell: bash
       run: |
         VERSION="${{ needs.validate-release.outputs.version }}"
+        NOTES_FILE="docs/releases/RELEASE_${VERSION}.md"
+        if [ -f "$NOTES_FILE" ]; then
+          NAME=$(head -n 1 "$NOTES_FILE" | sed -n 's/^# \{1,\}//p')
+          # A missing H1, or one naming another version (notes copied from the last release and not renamed), would
+          # publish the wrong title next to these packages: refuse before anything is created.
+          case "$NAME" in
+            "OptunaSharp ${VERSION}"|"OptunaSharp ${VERSION} "*) ;;
+            *) echo "::error::$NOTES_FILE must start with '# OptunaSharp ${VERSION}' (optionally '- <title>'); its first line is: $(head -n 1 "$NOTES_FILE")"; exit 1 ;;
+          esac
+          HAS_NOTES=true
+        else
+          NAME="OptunaSharp v${VERSION}"
+          HAS_NOTES=false
+        fi
         {
-          echo "## OptunaSharp v${VERSION}"
-          echo ""
+          if [ "$HAS_NOTES" = true ]; then
+            tail -n +2 "$NOTES_FILE"
+            echo ""
+            echo "---"
+            echo ""
+          else
+            echo "## OptunaSharp v${VERSION}"
+            echo ""
+          fi
           echo "### Install via NuGet"
           echo ""
           echo '```'
@@ -834,17 +865,28 @@ jobs:
             echo "| ${ID} | [![NuGet](https://img.shields.io/nuget/v/${ID}.svg)](https://www.nuget.org/packages/${ID}/${VERSION}) |"
           done
         } > RELEASE_BODY.md
+        # A heredoc-style output, so a title holding characters a key=value line would misread passes through whole.
+        {
+          echo "NAME<<RELEASE_NAME_EOF"
+          echo "$NAME"
+          echo "RELEASE_NAME_EOF"
+          echo "HAS_NOTES=$HAS_NOTES"
+        } >> "$GITHUB_OUTPUT"
+        echo "Release name: $NAME (notes file present: $HAS_NOTES)"
         cat RELEASE_BODY.md
 
     - name: Create Release
       uses: softprops/action-gh-release@v3
       with:
+        name: ${{ steps.notes.outputs.NAME }}
         files: |
           artifacts/*.nupkg
           artifacts/*.sha256
         draft: false
         prerelease: ${{ steps.prerelease.outputs.IS_PRERELEASE }}
-        generate_release_notes: true
+        # GitHub's generated notes are only the compare link when nothing merges through pull requests, so they are
+        # added only when the release has no notes file of its own.
+        generate_release_notes: ${{ steps.notes.outputs.HAS_NOTES != 'true' }}
         body_path: RELEASE_BODY.md
 
   publish-nuget:
