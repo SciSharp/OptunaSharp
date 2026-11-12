@@ -2,7 +2,9 @@
 
 > **Status: DONE.** A four-hour working session, 2026-11-11 05:44 → 09:44 JST, on `main` after `b7ae717`: seventeen
 > steps and one regression fix (`fb18c44`..`17a3448`), every seeded result unchanged; QA-84 recorded (`96abe26`);
-> a Windows race in the journal file lock found (§6). Results in §7.
+> a Windows race in the journal file lock found (§6). Results in §7. The owner's decisions of 2026-11-12 on the two
+> open items (the lock race fixed `07af6a7`, QA-84 fixed through NumSharp `cb512df`, NumSharp's two costs pinned as
+> OpenBugs on its journey5 `e9c38c2f`) are in §8; that work is on the local branch `journey1`.
 > This file is its central record: the rules, the baseline survey, the backlog, the progress log and the results.
 
 ## 1. The request
@@ -319,7 +321,7 @@ New, found by this pass and left open:
   and NumPy 2.4.2: the pairwise model matches NumPy in 7,200 of 7,200 (candidate, kernel) entries for 8, 10 and 16
   dimensions, the left-to-right sum differs in 31–54% of them. A ULP-level difference in the log densities of studies
   with eight or more continuous parameters, the class of the documented `erf` divergence; fixing it changes results, so
-  it is recorded with an `[OpenBugs]` repro rather than changed here (`96abe26`).
+  it is recorded with an `[OpenBugs]` repro rather than changed here (`96abe26`). Fixed 2026-11-12 (`cb512df`, §8).
 - **An allocation sampler beats the CPU profiler for finding memory sinks.** An `EventListener` on
   `Microsoft-Windows-DotNETRuntime` with the GC keyword at Verbose receives `GCAllocationTick` (one per ~100 KB, naming
   the type of the object that crossed the threshold); counted per type over a run, the shares are proportional to the
@@ -345,7 +347,7 @@ New, found by this pass and left open:
   open) fails with ACCESS_DENIED, which .NET raises as `UnauthorizedAccessException`, so the waiter fails instead of
   retrying. It is a faithful port: Optuna's `os.open(O_CREAT | O_EXCL)` raises `PermissionError` in the same window
   and catches only `FileExistsError`. Treating ACCESS_DENIED on an existing-or-deleting lock file as contention would
-  depart from Optuna to fix a Windows race; recorded for the owner.
+  depart from Optuna to fix a Windows race; recorded for the owner. Decided and fixed 2026-11-12 (`07af6a7`, §8).
 
 ## 7. Results
 
@@ -405,3 +407,40 @@ documentation warnings as errors 0 errors. Hash probe 36/36 and GP-family probe 
 Live-Optuna suites of the touched areas at their steps: TPE / PED-ANOVA / truncnorm 35, GP family 70, BruteForce 13,
 QMC 20, ES / JANUS / VkD-CMA reference parity 39 + 6 skipped without the JANUS reference checkout, TPE /
 multi-objective 74 + 1 skipped (step K), Grid and BruteForce 24 (step P).
+
+## 8. Follow-ups: the owner's decisions (2026-11-12)
+
+Asked through design pages after the pass; the work lives on the local branch `journey1` (the owner's plan: work there,
+reset `main` to `origin/main`; nothing pushed).
+
+- **Journal-lock race: "Test fix + bounded retry" (`07af6a7`).** The owner first asked what holds the file and whether
+  anything but a retry would do. Measured: nothing holds it. A lock path deleted IN PLACE stays "delete pending" while
+  the deleting handle lives, and an exclusive create of a pending name is ACCESS_DENIED; releases never do that (C# and
+  Python Optuna rename the lock away, then unlink it), the flaky test did (`File.Delete` of its stale lock). Two threads
+  taking one lock 40,000 times each: in-place delete 5,070 denials idle and 14,277 under load, rename-then-delete 0
+  and 0. Fix: the test removes its stale lock by rename-then-delete, and on Windows `JournalFileOpenLock.Acquire` waits
+  out ACCESS_DENIED like contention while the denials run unbroken for at most 1 s
+  (`JournalFileLockProtocol.MaxDeniedStreakMilliseconds`), then rethrows; off Windows unchanged. A documented departure
+  from Optuna's error path (its waiters raise `PermissionError` there); new tests `Lock_DeletedInPlace_IsWaitedOutOnWindows`
+  (`[Misaligned]`) and `Lock_PersistentlyDenied_IsReportedAfterTheBound`. Journal unit tests 98/98.
+- **QA-84: "Call NumSharp directly" (`cb512df`).** The owner asked whether NumSharp would do instead of porting
+  NumPy's order: it does. NumSharp's `np.sum(axis=-1)` equals NumPy 2.4.2 at every row length 1–300 (the recursive
+  split past 128 included), but its pairwise kernel is private, so the TPE kernel now stores every term in NumPy's
+  `(n_samples, n_kernels, n_cont)` layout (rented) and calls `np.sum(terms, axis: -1, @out: sums)` on the wrapped
+  buffers. Seeded results: the 36-study hash probe and the survey's TPE studies unchanged (none samples eight or more
+  continuous dimensions jointly). Cost, 1,000 trials: `tpe` 0.75–0.81 → 1.20–1.34 s (+60–66%), `tpe-mixed` +27–41%,
+  `motpe` +39% (one dimension per call), `tpe-int` unchanged; allocation +6–25 MB. Not built, the owner's call: below
+  eight continuous dimensions NumPy's order IS left to right, so a bit-identical in-register path could skip NumSharp
+  there (MOTPE's whole +39%).
+- **NumSharp OpenBugs for that cost ("create OpenBugs at journey5 … for the slowness or memory overallocation",
+  NumSharp `e9c38c2f`, `test/NumSharp.Tests/OpenBugs.Consumers.OptunaSharp.cs`).** Memory: nothing to pin; the call
+  allocates a constant 1.7–1.9 KB managed per call (the earlier "output-proportional garbage" was a cold-JIT
+  measurement). Two speed pins, same-process ratios with their batches alternating:
+  - `SumOverShortRows_CostsAFewLongRowSums`: 2,400 rows of 10 against the same values as 24 rows of 1,000, limit 5.0;
+    NumSharp 6.1–7.4, NumPy 3.3–3.5. NumSharp pays 17.6 ns per output row (NumPy 7.9) through `ForEach`'s one
+    inner-loop call per row, though its elements are cheaper (0.04 against 0.25 ns).
+  - `SumIntoOut_CostsAboutAFreshSum`: `out=` against the fresh call at `[24, 3000, 1]`, limit 1.25; NumSharp
+    1.84–2.19, NumPy 1.02–1.04: `ReduceIntoOut` computes a fresh result and copies it into `out`.
+  - Calibration traps: a flat-sum reference moved with the process (NumSharp's flat sum is 4–5 µs in the test host,
+    7.1–7.5 µs in a console probe); timed one route after the other, a hybrid CPU's slow stretch let the first version
+    pass with the bug present (alternating batches fixed it); the `out=` pin is Release-only (Debug 1.05–1.90).
