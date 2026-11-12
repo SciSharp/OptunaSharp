@@ -1,9 +1,9 @@
 # Plan 15 — third performance pass: speed and memory gaps (2026-11-11)
 
-> **Status: DONE.** A four-hour working session, 2026-11-11 05:44 → 09:44 JST, on `main` after `b7ae717`: seventeen
-> steps and one regression fix (`fb18c44`..`17a3448`), every seeded result unchanged; QA-84 recorded (`96abe26`);
+> **Status: DONE.** A four-hour working session, 2026-11-11 05:44 → 09:44 JST, on `main` after `4b65852`: seventeen
+> steps and one regression fix (`5440021`..`cc1e4f3`), every seeded result unchanged; QA-84 recorded (`9346647`);
 > a Windows race in the journal file lock found (§6). Results in §7. The owner's decisions of 2026-11-12 on the two
-> open items (the lock race fixed `07af6a7`, QA-84 fixed through NumSharp `cb512df`, NumSharp's two costs pinned as
+> open items (the lock race fixed `4ae4a1f`, QA-84 fixed through NumSharp `465f91c`, NumSharp's two costs pinned as
 > OpenBugs on its journey5 `e9c38c2f`) are in §8; that work is on the local branch `journey1`. **Closed 2026-11-12**
 > (owner: "document the remaining and stop"): QA-84's cost stays until NumSharp fixes its pins; the remaining work is
 > listed in §9.
@@ -31,7 +31,7 @@ Owner, 2026-11-11: "Now lets do 4 hours of performance impact and gaps, striving
 Probe `survey` (session scratchpad `4852dc9e`, `survey/Program.cs`): one workload per sampler family on
 `InMemoryStorage`, 10 float parameters in [-10, 10] (GP: 6), seed 0, sampler defaults, objective `sum((x - 1)^2)`
 or `sum(x^2)` and `sum((x - 2)^2)` for two objectives; BruteForce exhausts a 4,320-point mixed grid. Built in Release
-against `b7ae717`, power throttling opted out; the warm repetition (a second study in the same process). "Second
+against `4b65852`, power throttling opted out; the warm repetition (a second study in the same process). "Second
 half's share" is the share of the time spent on the second half of the trials: about 0.5 when a trial costs the same
 throughout, above that when its cost grows with the history (0.75 for a cost proportional to the history).
 
@@ -127,7 +127,7 @@ New, found by this pass and left open:
   24 × n_kernels grid cells. The sampled profiler could not say where the continuous branch spent its time: a call-free
   loop's time is charged to the next safe point (memset and GC-poll frames with no GC running), so the parts were timed
   on their own and the JIT's code read instead.
-- 06:38 — **step B, TPE log density** (`397e60f`). (1) The stepped branch moved to `AddDiscreteLogPdf`: the dedups hash
+- 06:38 — **step B, TPE log density** (`2189a12`). (1) The stepped branch moved to `AddDiscreteLogPdf`: the dedups hash
   (`UniqueInverse`, first-occurrence order, NumPy's `==` grouping: ±0 together, every NaN alone) and every buffer is
   rented. Same values: the unique set and its size are unchanged, the log mass is elementwise and picks its `erf` path
   from the central count alone, and a group's members differ at most in the sign of a zero, which no log mass sees.
@@ -171,7 +171,7 @@ New, found by this pass and left open:
   float, mixed, deterministic, constrained, two objectives; TuRBO; SAASBO-MAP; REMBO) 8/8 identical; hash probe 36/36;
   unit CI filter 2,193/2,193 on net10.0 and net8.0; live GP / terminator / TuRBO / SAASBO / REMBO / LinAlg parity
   70/70. Not found: the source of the NumSharp `UInt32` blocks the GP run left to the finalizer (not `SeedSequence`,
-  which keeps a managed pool, nor `randint`, which defaults to int64). Committed `8588074`.
+  which keeps a managed pool, nor `randint`, which defaults to int64). Committed `cebb1c9`.
 - 07:07 — **step D, the forked regressor.** `Samplers/ModelBased/Gp/GPRegressor.cs` (TuRBO's fit, and the fork's
   posterior) takes step C's changes line for line: the fit's `FitScratch` (released when `FitInner` ends, and by
   `TurboGpFit` after its own L-BFGS-B), `CholeskySolve` for `C⁻¹`, `V` and `SolveCholesky`, the in-place transposed
@@ -179,7 +179,7 @@ New, found by this pass and left open:
   120 trials and REMBO at 60 (base → tree): all 8 hashes identical; TuRBO 4.64 → 4.28 s, 1,857 → 1,215 MB; REMBO
   unchanged (its embedded GP does not go through this fit); the GPSampler rows show step C (e.g. 26 trials 52 → 24 MB,
   two objectives 197 → 121 MB). Gates: GP-family, LinAlg and terminator unit tests 266/266 (net10.0); live parity
-  70/70. Committed `874c64b`.
+  70/70. Committed `9533366`.
 - 07:16 — **step E, BruteForce tree rebuilds.** Profile (12.4 s): `PopulateTree` 76% — paths 3.5 s, `AddPath` 3.8 s
   of which `EnumerateCandidates` 1.2 s (Python-faithful decimal arithmetic: a float repr, a decimal parse and a
   correctly rounded conversion per candidate, for every newly expanded node, about a thousand per rebuild). (1) One path
@@ -191,7 +191,7 @@ New, found by this pass and left open:
   (the cache equals a fresh enumeration by bits and returns the same list again; -0.0 / 0.0 and int / float are
   separate keys; the stepless progression throws twice and caches nothing), BruteForce unit tests 26/26; live
   BruteForce parity 13/13; hash probe 36/36. Left for later: caching each finished trial's path across rebuilds (the
-  path of a finished trial never changes; 28% of the time). Committed `6418e0b`.
+  path of a finished trial never changes; 28% of the time). Committed `c78c0ab`.
 - 07:25 — **step F, TPE's trial split.** A split bench (`sbench`) on studies of 1,000 and 3,000 completed trials with
   many ties: 175–190 µs and 155 KB per split at 1,000 trials, 705–735 µs and 476 KB at 3,000 — about 15% of a TPE
   trial. (1) `GetInfeasibleTrialScore` returns the empty loop's 0.0 for a trial that records no constraint
@@ -206,7 +206,7 @@ New, found by this pass and left open:
   `motpe` 400 trials time unchanged, 440 → 405 KB per trial. Gates: new `TpeTrialSplitSortTests` (the split against
   the LINQ code written out, shuffled histories with ties, both zeros, both infinities and NaN, both directions, every
   seventh group size; constraints in both formats still score infeasible); TPE, constraint and split unit tests
-  117/117; hash probe 36/36. Committed `59b69dd`.
+  117/117; hash probe 36/36. Committed `ca6723d`.
 - 07:29 — **step G, Parzen estimator construction.** Each numerical parameter computed its centers (logs, for the log
   kinds) and widths into arrays of their own and then copied both into arrays one longer for the prior kernel. The
   centers are now written straight into the prior-extended array and the widths computed into its slots:
@@ -215,7 +215,7 @@ New, found by this pass and left open:
   as thin wrappers for `TpeBinnedSigmasTests`. Kernel bench: estimator build K=1,000 259–275 → 181 KB, K=3,000
   775–822 → 540 KB; output hash unchanged. Survey, all of plan 15 against the base: `tpe` 1,000 trials
   0.92 → 0.78 s, 358 → 261 KB per trial; `tpe-mixed` 1.32 → 1.05 s, 544 → 258 KB per trial; same hashes. Gates:
-  TPE, Parzen and PED-ANOVA unit tests 122/122; kernel-bench hash; hash probe 36/36. Committed `eaed03a`. Unit CI
+  TPE, Parzen and PED-ANOVA unit tests 122/122; kernel-bench hash; hash probe 36/36. Committed `5019c5d`. Unit CI
   filter through step G: 2,199/2,199 (1 skipped) on net10.0 and net8.0; documentation gate (`check_documentation.cs`,
   5,840 declarations) 0 issues; Core built with the documentation warnings as errors, both TFMs: 0 errors.
 - 07:36 — **step H, the evolution-strategy samplers' attribute keys.** SNES, xNES and OpenAI-ES spent most of their
@@ -227,13 +227,13 @@ New, found by this pass and left open:
   folded trial: none of those allocate per scan. Survey (machine loaded by other sessions, base and tree back to
   back): SNES 3,000 trials 1.06 → 0.89 s, 173 → 59 KB per trial; xNES 2,000 0.90 → 0.86 s, 148 → 73 KB; OpenAI-ES
   3,000 1.08 → 0.89 s, 188 → 61 KB; same hashes. Gates: ES, parallel-read and nJobs sampler tests 248/248; hash
-  probe 36/36 (SNES, xNES and OpenAI-ES studies included). Committed `7be356d`.
+  probe 36/36 (SNES, xNES and OpenAI-ES studies included). Committed `882a043`.
 - 07:39 — **step I, the other samplers' history lists.** DE, PSO, LM-CMA, VkD-CMA, JANUS and JANUS-DE collect their
   completed trials into a list grown from empty on every ask; it is now sized for the history (the same contents in
   the same order). Survey, back to back, same hashes: DE 115 → 91 KB per trial, PSO 143 → 120, LM-CMA 119 → 95,
   VkD-CMA 73 → 60, JANUS 112 → 98; wall times within the loaded machine's noise. DE's remaining per-trial cost is
   deserializing its JSON optimizer state on every ask (backlog). Gates: their unit tests 103/103; hash probe 36/36.
-  Committed `a1fbe9a`.
+  Committed `4367338`.
 - 07:45 — **A regression in step F, found and fixed.** Re-measuring the split bench for a planned step J (the
   multi-objective `lvals` as plain loops) showed the **two-objective split 10–20% slower than the base** — step F's
   own measurements had shown it too, and I had put it down to noise. Cause: the multi-objective path builds both sides
@@ -245,12 +245,12 @@ New, found by this pass and left open:
   3,000 trials than the LINQ it replaced, for a reason not found (the property it reads is a plain field). Lesson:
   re-run a step's A/B in both orders before calling a difference noise. Gates: split, TPE and multi-objective unit
   tests 134/134; hash probe 36/36.
-- 08:00 — checkpoint: §7 written for `d521e16` (`bd2b9f4`); work continues. A new probe, an **in-process allocation
+- 08:00 — checkpoint: §7 written for `d7aa9d9` (`998bc21`); work continues. A new probe, an **in-process allocation
   sampler** (the runtime's `GCAllocationTick` events counted by type through an `EventListener`, `ALLOC_TICKS=1`,
   scratch `common/AllocTicks.cs`), showed where each workload's bytes go. Two sinks shared by several samplers: copies of
   the whole history (`FrozenTrial[]`: DE 40 %, MOEA/D 13 %, SMS-EMOA 13 %, TPE 12 %) and dictionaries over every
   completed trial rebuilt per ask (`Dictionary<int, FrozenTrial>`: SMS-EMOA 37 %, MOEA/D 38 %, plus their buckets).
-- 08:12 — **step K, TPE's history reads** (`439c26c`). TPE read the filtered history twice per trial in multivariate
+- 08:12 — **step K, TPE's history reads** (`8b0fb61`). TPE read the filtered history twice per trial in multivariate
   mode and twice per *parameter* in independent mode (MOTPE's default), a fresh copy each time, and copied both split
   groups per parameter. `Study.GetTrialsCachedReadOnly(states)` shares one filtered list per trial snapshot and state set
   (memo keyed by the snapshot's identity and a state bit mask; `CachedAllTrials` became a property whose setter drops
@@ -261,7 +261,7 @@ New, found by this pass and left open:
   the gain is the sharing. Gates: new `StudyTrialFilterTests` (13 state sets incl. values outside the enum, the memo's
   sharing and invalidation, `SplitShared` = `Split`); unit tests 526/526; hash probe 36/36; live TPE / multi-objective
   parity 74 passed, 1 skipped.
-- 08:24 — **step L, steady-state population lookups** (`eca033a`). `Internal/TrialsByNumber`: a binary search over the
+- 08:24 — **step L, steady-state population lookups** (`66f83d4`). `Internal/TrialsByNumber`: a binary search over the
   number-ordered history (one allocation-free order check per ask; a list out of order gets the replaced dictionary
   itself, later record winning). SMS-EMOA and MOEA/D keep their populations as trial numbers instead of storage ids (the
   same records within a study; a recreated study is discarded first by the anchor check), and MOEA/D's new-offspring
@@ -273,32 +273,32 @@ New, found by this pass and left open:
   (ReadyToRun). The final form keeps LINQ's `Where().ToList()` and walks a span in methods marked
   `AggressiveOptimization`. Probably also the reason step J measured slower. Gates: new `TrialsByNumberTests`; unit tests
   660/660 and 35/35 (recreated studies); hash probe 36/36.
-- 08:29 — **step M, DE's optimizer state** (`8c1a1f7`, backlog 7). DE parsed its stored JSON population on every ask;
+- 08:29 — **step M, DE's optimizer state** (`9edc1d4`, backlog 7). DE parsed its stored JSON population on every ask;
   the text changes once per generation. A one-entry cache keyed by the whole text, safe because `De.FromState` copies
   every array out of the state. DE 267 → 241 MB (base 335); time within noise (the parse was cheap). Measured and
   dropped on the way: the optimizers' OS-entropy `np.random.RandomState()` before the reseed that precedes every draw
   costs ~13 µs against 6–13 µs seeded, both ~6.2 KB, same stream after the reseed (scratch `rsbench`): ~2 % of a DE ask.
   Gates: hash probe 36/36; DE / JANUS-DE / nJobs / reuse tests 179/179.
-- 08:33 — **step N, the same cache for LM-CMA, PSO and VkD-CMA** (`dbe86e5`), each `FromState` checked for aliasing.
+- 08:33 — **step N, the same cache for LM-CMA, PSO and VkD-CMA** (`af20df1`), each `FromState` checked for aliasing.
   PSO 351 → 280 MB, LM-CMA 279 → 220, VkD-CMA 117 → 103 (base 419 / 348 / 143). Gates: hash probe 36/36; their tests
   254/254.
-- 08:36 — **step O, the same cache for SNES, xNES and OpenAI-ES** (`e889d56`). SNES 174 → 167 MB, xNES 143 → 125,
+- 08:36 — **step O, the same cache for SNES, xNES and OpenAI-ES** (`adc76c2`). SNES 174 → 167 MB, xNES 143 → 125,
   OpenAI-ES 178 → 169 (small states; step H was the large cut). Gates: hash probe 36/36; their tests 222/222;
   documentation gate (5,855 declarations) 0 issues, Core's strict documentation build 0 errors.
-- 08:41 — **step P, draws that left arrays to the finalizer** (`bbefda2`). 21 per-ask or per-parameter sites still
+- 08:41 — **step P, draws that left arrays to the finalizer** (`9d94a6a`). 21 per-ask or per-parameter sites still
   cast a NumSharp draw (`(int)rng.randint(…)`, `(double)rng.rand()`), each dropping a finalizable `NDArray`; they read
   through plan 14's `NumPyDraws` now (`RandInt` is the same call with the array disposed, `Rand` is pinned to `rand()`
   by `NumPyDrawsTests`): DE and `De`, LM-CMA, MOEA/D and its offspring, BruteForce, Grid, GPSampler, CMA-ES, the ES
   base class and both GP search spaces. Left: NSGA-III-CPT, SAASBO, `OptunaSearchCV` (not hot). Gates: hash probe
   36/36; GP-family probe 8/8; their unit tests 460/460; live Grid and BruteForce parity 24/24.
-- 08:48 — **step Q, the state filter compiled optimized** (`cd33077`). The final survey read SMS-EMOA and MOEA/D
+- 08:48 — **step Q, the state filter compiled optimized** (`8c52e7c`). The final survey read SMS-EMOA and MOEA/D
   slower at the second repetition (0.37 → 0.50 s and 0.37 → 0.45 s, machine loaded). Four repetitions per process,
   alternating: the tree is ahead from the cold run on (SMS-EMOA cold + second 1.20 / 1.16 → 1.04 / 1.01 s, all four
   1.76 / 1.69 → 1.55 / 1.52 s; MOEA/D cold + second 1.19 → 0.94 s); only the second repetition is about 10 % behind
   while the tree's code tiers up. `Study.FilterByState` (step K) now indexes a span and carries
   `AggressiveOptimization`, which took SMS-EMOA's cold run from 0.56–0.58 to 0.53–0.54 s; the second repetition's gap
   stayed, so it comes from tiering elsewhere. Gates: hash probe 36/36; 630/630 unit tests.
-- 08:55 — **step R, Gaussian draws disposed** (`17a3448`), the other half of step P: `NumPyDraws.Randn` is the same
+- 08:55 — **step R, Gaussian draws disposed** (`cc1e4f3`), the other half of step P: `NumPyDraws.Randn` is the same
   `rng.randn(n)` call with its array disposed, now used by CMA-ES and SepCMA (every sampled point), VkD-CMA, the ES
   noise matrix, JANUS, SAASBO's NUTS, REMBO and TuRBO / TuRBO-m (10 sites; JANUS-MOO draws through a NumSharp
   `Generator` and stays as it was). Measured on CMA-ES 5,000 trials: no visible change in bytes, collections (12/3/0)
@@ -323,7 +323,7 @@ New, found by this pass and left open:
   and NumPy 2.4.2: the pairwise model matches NumPy in 7,200 of 7,200 (candidate, kernel) entries for 8, 10 and 16
   dimensions, the left-to-right sum differs in 31–54% of them. A ULP-level difference in the log densities of studies
   with eight or more continuous parameters, the class of the documented `erf` divergence; fixing it changes results, so
-  it is recorded with an `[OpenBugs]` repro rather than changed here (`96abe26`). Fixed 2026-11-12 (`cb512df`, §8).
+  it is recorded with an `[OpenBugs]` repro rather than changed here (`9346647`). Fixed 2026-11-12 (`465f91c`, §8).
 - **An allocation sampler beats the CPU profiler for finding memory sinks.** An `EventListener` on
   `Microsoft-Windows-DotNETRuntime` with the GC keyword at Verbose receives `GCAllocationTick` (one per ~100 KB, naming
   the type of the object that crossed the threshold); counted per type over a run, the shares are proportional to the
@@ -342,21 +342,21 @@ New, found by this pass and left open:
   this pass, both on a machine loaded by other test processes, failed
   `JournalConcurrencyTests.Lock_WithoutAGracePeriod_WaitsForALeftBehindLockUntilItIsRemoved` with
   `UnauthorizedAccessException: Access to the path '…\optunasharp-journal-cc-….log.lock' is denied` (once at
-  `d521e16`, once at `cd33077`); the test alone, its class three times in a row (21/21 each) and the other runs pass.
+  `d7aa9d9`, once at `8c52e7c`); the test alone, its class three times in a row (21/21 each) and the other runs pass.
   Nothing in this pass touches the journal. Cause: `JournalFileOpenLock.Acquire` creates the lock file with
   `FileMode.CreateNew` and treats only an "already exists" `IOException` as contention; on Windows, creating a file
   whose deletion is pending (the holder deleted it while another handle, e.g. a waiter's `GetLastWriteTimeUtc`, is still
   open) fails with ACCESS_DENIED, which .NET raises as `UnauthorizedAccessException`, so the waiter fails instead of
   retrying. It is a faithful port: Optuna's `os.open(O_CREAT | O_EXCL)` raises `PermissionError` in the same window
   and catches only `FileExistsError`. Treating ACCESS_DENIED on an existing-or-deleting lock file as contention would
-  depart from Optuna to fix a Windows race; recorded for the owner. Decided and fixed 2026-11-12 (`07af6a7`, §8).
+  depart from Optuna to fix a Windows race; recorded for the owner. Decided and fixed 2026-11-12 (`4ae4a1f`, §8).
 
 ## 7. Results
 
-Final survey, every workload, base `b7ae717` → tree `cd33077` (all of plan 15 but step R), back to back per workload,
+Final survey, every workload, base `4b65852` → tree `8c52e7c` (all of plan 15 but step R), back to back per workload,
 warm repetition (the second study in the process), the same probe and settings as §3. The machine was shared with
 other sessions and, for this run, with the full unit suites, so allocations and collections are the dependable columns;
-times are compared pairwise. Every study hash is the same. Step R (`17a3448`, Gaussian draws disposed) was measured on
+times are compared pairwise. Every study hash is the same. Step R (`cc1e4f3`, Gaussian draws disposed) was measured on
 its own: no visible change in CMA-ES's bytes, collections or time, same hashes.
 
 | Workload | Trials | Warm time | Allocated | Per trial | gen-0/1/2 | GC pauses | Hash |
@@ -390,7 +390,7 @@ its own: no visible change in CMA-ES's bytes, collections or time, same hashes.
 - `sms-emoa` and `moead` read slower here because the column times the second repetition, the one in which the tree's
   code is still tiering up (step Q). Over four repetitions per process the tree is ahead from the cold run on:
   SMS-EMOA all four 1.76 / 1.69 → 1.55 / 1.52 s, MOEA/D cold + second 1.19 → 0.94 s.
-- `motpe`: at `d521e16` its time moved within noise (six runs per side in both orders: base best 0.517 s, tree best
+- `motpe`: at `d7aa9d9` its time moved within noise (six runs per side in both orders: base best 0.517 s, tree best
   0.474 s); step K then cut its allocation 386.6 → 353.3 KB per trial.
 - Larger runs measured during the steps: `gp` 150 trials 15.6 → 13.2 s, 5,509 → 1,408 MB, gen-2 collections
   795 → 143 (step C); TuRBO 120 trials 4.64 → 4.28 s, 1,857 → 1,215 MB (step D); the TPE split at 3,000 trials
@@ -401,11 +401,11 @@ its own: no visible change in CMA-ES's bytes, collections or time, same hashes.
   GA samplers were already 30–45 KB per trial after plans 13 and 14); their rows move within noise, allocations
   included (the base itself measured 158–161 MB for `nsga2` across this pass's surveys).
 
-Gates over the final tree `17a3448`: unit CI filter 2,209 passed, 1 skipped, 0 failed on net10.0 and on net8.0.
-Earlier snapshots: `dbe86e5` and `bbefda2` 2,209 passed, 1 skipped, 0 failed on both TFMs; `cd33077` net10.0 2,208
+Gates over the final tree `cc1e4f3`: unit CI filter 2,209 passed, 1 skipped, 0 failed on net10.0 and on net8.0.
+Earlier snapshots: `af20df1` and `9d94a6a` 2,209 passed, 1 skipped, 0 failed on both TFMs; `8c52e7c` net10.0 2,208
 passed, 1 skipped, 1 failed (the §6 journal-lock flake, under three concurrent test and survey processes), net8.0
 2,209 passed, 1 skipped, 0 failed. Documentation gate (5,855 declarations) 0 issues and Core built with the
-documentation warnings as errors 0 errors. Hash probe 36/36 and GP-family probe 8/8 identical to the `b7ae717` snapshot after every step.
+documentation warnings as errors 0 errors. Hash probe 36/36 and GP-family probe 8/8 identical to the `4b65852` snapshot after every step.
 Live-Optuna suites of the touched areas at their steps: TPE / PED-ANOVA / truncnorm 35, GP family 70, BruteForce 13,
 QMC 20, ES / JANUS / VkD-CMA reference parity 39 + 6 skipped without the JANUS reference checkout, TPE /
 multi-objective 74 + 1 skipped (step K), Grid and BruteForce 24 (step P).
@@ -415,7 +415,7 @@ multi-objective 74 + 1 skipped (step K), Grid and BruteForce 24 (step P).
 Asked through design pages after the pass; the work lives on the local branch `journey1` (the owner's plan: work there,
 reset `main` to `origin/main`; nothing pushed).
 
-- **Journal-lock race: "Test fix + bounded retry" (`07af6a7`).** The owner first asked what holds the file and whether
+- **Journal-lock race: "Test fix + bounded retry" (`4ae4a1f`).** The owner first asked what holds the file and whether
   anything but a retry would do. Measured: nothing holds it. A lock path deleted IN PLACE stays "delete pending" while
   the deleting handle lives, and an exclusive create of a pending name is ACCESS_DENIED; releases never do that (C# and
   Python Optuna rename the lock away, then unlink it), the flaky test did (`File.Delete` of its stale lock). Two threads
@@ -425,7 +425,7 @@ reset `main` to `origin/main`; nothing pushed).
   (`JournalFileLockProtocol.MaxDeniedStreakMilliseconds`), then rethrows; off Windows unchanged. A documented departure
   from Optuna's error path (its waiters raise `PermissionError` there); new tests `Lock_DeletedInPlace_IsWaitedOutOnWindows`
   (`[Misaligned]`) and `Lock_PersistentlyDenied_IsReportedAfterTheBound`. Journal unit tests 98/98.
-- **QA-84: "Call NumSharp directly" (`cb512df`).** The owner asked whether NumSharp would do instead of porting
+- **QA-84: "Call NumSharp directly" (`465f91c`).** The owner asked whether NumSharp would do instead of porting
   NumPy's order: it does. NumSharp's `np.sum(axis=-1)` equals NumPy 2.4.2 at every row length 1–300 (the recursive
   split past 128 included), but its pairwise kernel is private, so the TPE kernel now stores every term in NumPy's
   `(n_samples, n_kernels, n_cont)` layout (rented) and calls `np.sum(terms, axis: -1, @out: sums)` on the wrapped
@@ -448,7 +448,7 @@ reset `main` to `origin/main`; nothing pushed).
     pass with the bug present (alternating batches fixed it); the `out=` pin is Release-only (Debug 1.05–1.90).
 - **QA-84's cost: "Keep; wait for NumSharp" (second round, same day).** Offered: a bit-identical in-register sum below
   eight continuous dimensions (NumPy's own order there is left to right from `-0.0`, and the reduction's identity add
-  makes it equal to the old sum; `cb512df`'s tests already assert that), a full port of NumPy's order, or keeping it.
+  makes it equal to the old sum; `465f91c`'s tests already assert that), a full port of NumPy's order, or keeping it.
   Kept: TPE keeps calling `np.sum(axis: -1, out:)` for every call, so Optuna's default independent TPE, which sums ONE
   continuous dimension per call through NumSharp's `out=` path, stays 27–66% slower until NumSharp fixes the two pins.
   Even fixed, a NumSharp call keeps a fixed per-call cost and the stored terms, so the shortcut stays the way to
@@ -461,7 +461,7 @@ Nothing below is scheduled. Each item names its measured cost and the rule a cha
 performance change that must leave seeded results bit-identical (the 36-study hash probe and the GP-family probe,
 plus the area's live-Optuna suite), unless it says otherwise.
 
-1. **QA-84's cost in TPE** (§8). Today: `tpe` 1,000 trials 1.20–1.34 s against 0.75–0.81 s before `cb512df`,
+1. **QA-84's cost in TPE** (§8). Today: `tpe` 1,000 trials 1.20–1.34 s against 0.75–0.81 s before `465f91c`,
    `tpe-mixed` +27–41%, `motpe` +39%, allocation +6–25 MB. Owner decision: wait for NumSharp (its journey5 pins
    `SumOverShortRows_CostsAFewLongRowSums` and `SumIntoOut_CostsAboutAFreshSum`; after a fix, bump NumSharp and
    re-measure). The full recovery is the in-register sum below eight continuous dimensions, provably bit-identical

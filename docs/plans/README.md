@@ -59,8 +59,8 @@ through an options class at four levels. Phase 2, done only after Phase 1, close
 [`docs/THREADING.md`](../THREADING.md) §12: OS seed width, the terminator lock, Redis round trips and
 `DedicatedThreads`, cancellation, `PymooSampler` on any thread, and ML.NET search under `nJobs`.
 
-**Performance workstream (13).** Designed with the owner on 2026-11-08; built 2026-11-09 (`8f8ce3e`, `605806c`,
-`dce5885`, `656ab94`) except two items left for the owner. Rustuna, the Optuna team's Rust port, ran its announcement's
+**Performance workstream (13).** Designed with the owner on 2026-11-08; built 2026-11-09 (`99e9e73`, `f8df1a5`,
+`4464e8a`, `9043b43`) except two items left for the owner. Rustuna, the Optuna team's Rust port, ran its announcement's
 workloads 3-60x faster than OptunaSharp. Plan 13 adopts each of its techniques that keeps every result identical as
 the only implementation: seeded studies hash identically before and after, and CMA-ES at 100,000 trials went from
 988 s to 27.5 s, TPE at 1,000 trials from 10.5 s to 5.0 s, NSGA-II at 100,000 from 73 s to 22 s (§10 of the plan).

@@ -1,7 +1,7 @@
 # Plan 14 — Rustuna, second pass: compatible speedups, each gated byte for byte
 
-> **Status: BUILT (2026-11-09).** Six steps on `main`: A `cfe78ec`, B `3050d81`, C `fe68085`, D `7537079`,
-> E `39fdd4b`, F `82b8a0b`. None of them changes a seeded trial or a stored byte, so none is a switch. §4 lists the
+> **Status: BUILT (2026-11-09).** Six steps on `main`: A `adda96c`, B `db4e46c`, C `a279254`, D `45fadd1`,
+> E `2dc35cf`, F `14b4698`. None of them changes a seeded trial or a stored byte, so none is a switch. §4 lists the
 > byte-for-byte gates of every affected area, §5 the final before/after proof. §8 is the concurrency review that
 > followed: no threading defect, new concurrency tests, and a fix to the TPE cache for studies recreated under a
 > reused id. The comparison behind the plan: catalog note `optunasharp/notes/rustuna-comparison-2026-11-08.md`,
@@ -13,7 +13,7 @@
 
 After plan 13 the owner asked (2026-11-09): "Keep comparing, what other rustuna optimizations with backwards
 compatability have been achieved and we can use it aswell". The answer was a second read of Rustuna's `main`
-(`d0ec7db`, 2026-11-04) against OptunaSharp at `b3baef9` (plan 13 with S8 and S12), with new profiles of the plan 13
+(`d0ec7db`, 2026-11-04) against OptunaSharp at `f4eca0c` (plan 13 with S8 and S12), with new profiles of the plan 13
 workloads. Then:
 
 > 1. Each affected area must have byte-for-byte parity test coverage
@@ -29,7 +29,7 @@ result, so nothing here is opt-in. "Byte for byte" is checked three ways:
 - **Across whole studies.** A hash probe (scratchpad `p14/hashprobe`, session `5417a82e`) runs 36 seeded studies over
   every sampler family the changes reach, directly or through `RandomSampler` and `SearchSpaceTransform`, and hashes
   every trial's number, state, parameter names and value bits, and objective-value bits. It was built against the
-  `b3baef9` snapshot and against each step; every hash stayed equal.
+  `f4eca0c` snapshot and against each step; every hash stayed equal.
 - **Against live Optuna 5.0** (pythonnet, Python 3.12.12, the vendored `refs/optuna`), where OptunaSharp's parity with
   it is bit-exact: random search, NSGA-II, NSGA-III, CMA-ES, QMC, and the journal and SQLite storages. TPE's live
   parity stays what it was before this plan: the same trajectory, with values compared within the documented `erf`
@@ -37,19 +37,19 @@ result, so nothing here is opt-in. "Byte for byte" is checked three ways:
 
 ## 2. Inventory and verdicts
 
-"Where it showed" is the state at `b3baef9`. Profile shares are from stopwatch-instrumented scratch copies where
+"Where it showed" is the state at `f4eca0c`. Profile shares are from stopwatch-instrumented scratch copies where
 marked; `dotnet-trace`'s sampled thread time misplaces whole seconds (§6).
 
 | ID | Change | From | Where it showed | Verdict |
 |---|---|---|---|---|
-| A | Random draws and search-space transforms without NumSharp arrays on per-parameter paths | Found while comparing; Rust has no finalizers | GC pauses: 47 % of a 40-parameter random search, 41 % of NSGA-II; random 10k gen-0/1 collections 154/153 | Built, `cfe78ec` |
-| B1 | TPE kernel widths in O(n), exact | Rustuna's `binned_sigmas`, made exact by verifying each bin | The width argsort: 24 % of TPE 1k (stopwatch) | Built, `3050d81` |
-| B2 | Finished trials' internal values cached across asks | Rustuna `ddd9c56`, `e7a22d7`, `a51e6db` | History conversion: 14 % of TPE 1k (stopwatch) | Built, `3050d81` |
-| B3 | No `exp` call where its result is exactly +0.0 | OptunaSharp's own, from measured `Math.Exp` costs | The log-sum-exp of the candidate scoring | Built, `3050d81` |
-| C | QMC's sample-id key computed once per search space | OptunaSharp's own, from an allocation trace | Most of QMC's 1.58 GB allocated per 10k trials | Built, `fe68085` |
-| D | The journal file backend keeps sparse line offsets | Rustuna `82b13d8` | One dictionary entry per log line: 160 MB for a 4.3M-line journal | Built, `7537079` |
-| E | SQLite's cached refresh as `UNION ALL` | Rustuna `d46ace5` | The OR form scans `ix_trials_study_id`: 2.6 ms against 64 µs per refresh at 20k trials | Built, `39fdd4b` |
-| F | A categorical weight's log taken once per (kernel, choice) | Rustuna `198e484` cuts the same logs, with other numerics | One `log` per candidate and kernel | Built, `82b8a0b` |
+| A | Random draws and search-space transforms without NumSharp arrays on per-parameter paths | Found while comparing; Rust has no finalizers | GC pauses: 47 % of a 40-parameter random search, 41 % of NSGA-II; random 10k gen-0/1 collections 154/153 | Built, `adda96c` |
+| B1 | TPE kernel widths in O(n), exact | Rustuna's `binned_sigmas`, made exact by verifying each bin | The width argsort: 24 % of TPE 1k (stopwatch) | Built, `db4e46c` |
+| B2 | Finished trials' internal values cached across asks | Rustuna `ddd9c56`, `e7a22d7`, `a51e6db` | History conversion: 14 % of TPE 1k (stopwatch) | Built, `db4e46c` |
+| B3 | No `exp` call where its result is exactly +0.0 | OptunaSharp's own, from measured `Math.Exp` costs | The log-sum-exp of the candidate scoring | Built, `db4e46c` |
+| C | QMC's sample-id key computed once per search space | OptunaSharp's own, from an allocation trace | Most of QMC's 1.58 GB allocated per 10k trials | Built, `a279254` |
+| D | The journal file backend keeps sparse line offsets | Rustuna `82b13d8` | One dictionary entry per log line: 160 MB for a 4.3M-line journal | Built, `45fadd1` |
+| E | SQLite's cached refresh as `UNION ALL` | Rustuna `d46ace5` | The OR form scans `ix_trials_study_id`: 2.6 ms against 64 µs per refresh at 20k trials | Built, `2dc35cf` |
+| F | A categorical weight's log taken once per (kernel, choice) | Rustuna `198e484` cuts the same logs, with other numerics | One `log` per candidate and kernel | Built, `14b4698` |
 | — | Rustuna's binned sigmas as written, its categorical numerics, `log_diff_cdf` (`a4d0bc3`) | Rustuna | | Not taken: different bits |
 | — | A `(study_id, number)` index (part of `d46ace5`) | Rustuna | | Not taken: changes Optuna's schema |
 | — | `UNION ALL` in the EF Core storage | | PostgreSQL and MySQL combine ORed index ranges | Not changed |
@@ -60,7 +60,7 @@ marked; `dotnet-trace`'s sampled thread time misplaces whole seconds (§6).
 
 ## 3. What each step does
 
-**A — NumSharp temporaries (`cfe78ec`).** Every NumSharp `NDArray` has a finalizer. An array nobody disposes
+**A — NumSharp temporaries (`adda96c`).** Every NumSharp `NDArray` has a finalizer. An array nobody disposes
 survives its first collection on the finalization queue and is promoted, so the sampler paths that built small arrays
 per suggestion turned almost every gen-0 collection into a gen-1. The new `Internal/NumPyDraws` reads the generator's
 bit generator directly (`BitGenerator.NextDouble` under its lock, what NumSharp's own scalar and fill paths do):
@@ -72,7 +72,7 @@ arrays per suggestion; the NSGA-II family (child generation, crossover, every cr
 CMA-ES, QMC and TPE's candidate sampling use the helpers. Every draw is the same call on the same generator in the
 same order.
 
-**B — TPE (`3050d81`).** (1) `ParzenEstimator.BinnedRawSigmas`: a width is the larger distance to the two sorted
+**B — TPE (`db4e46c`).** (1) `ParzenEstimator.BinnedRawSigmas`: a width is the larger distance to the two sorted
 neighbours, clipped up to `minsigma`, so binning the centres at width `minsigma` decides most widths without a sort.
 Rustuna trusts its binning and can differ in the last bits; this version proves its answer: bin assignment is
 monotone, so bins are contiguous runs of the sorted order; a bin's extremes are taken at the stable sort's positions;
@@ -82,23 +82,23 @@ lacks the name; running trials (constant liar) are never cached; another study o
 starts over. (3) The log-sum-exp stores 0.0 below `ExpIsZeroBelow` (-746) instead of calling `Math.Exp`, which returns
 exactly +0.0 below about -745.1332 on every runtime and platform CI uses; the zero still enters the pairwise sum.
 
-**C — QMC (`fe68085`).** The sample-id attribute is `"qmc:" + sha256(json.dumps(qmc_vars))`, rebuilt per trial from
+**C — QMC (`a279254`).** The sample-id attribute is `"qmc:" + sha256(json.dumps(qmc_vars))`, rebuilt per trial from
 every distribution's repr. `QmcIdKey` keeps it for the last search space and reuses it while the next call passes the
 very same distribution objects in the same order. Reference identity decides, because two categoricals can be equal
 by Python's rules (`True == 1`) and still print differently.
 
-**D — Journal file backend (`7537079`).** Instead of one offset per log line (Python's `_log_number_offset`), the
+**D — Journal file backend (`45fadd1`).** Instead of one offset per log line (Python's `_log_number_offset`), the
 backend keeps the furthest line start any read established and one checkpoint every 4,096 lines. A sync still seeks
 straight to the next unread line; an earlier start seeks to the nearest checkpoint and skips forward, as Python skips
 lines when it reads from byte 0. A line's successor is recorded only after the line decodes.
 
-**E — SQLite refresh (`39fdd4b`).** `CachedStorage` asks for `trial_id > watermark` plus the unfinished trials at or
+**E — SQLite refresh (`2dc35cf`).** `CachedStorage` asks for `trial_id > watermark` plus the unfinished trials at or
 below it. Optuna's `... AND (trial_id > ? OR trial_id IN (...))` makes SQLite walk the study's whole index; the two
 halves joined by `UNION ALL`, each answered through the primary key, return the same rows, and the final
 `ORDER BY trial_id` the same order. Only studies with a running trial below the last finished one take this query
 (parallel workers, or a crashed worker's trial, which then costs on every refresh).
 
-**F — TPE categorical (`82b8a0b`).** A categorical dimension added `log(weights[k, x])` per candidate and kernel. The
+**F — TPE categorical (`14b4698`).** A categorical dimension added `log(weights[k, x])` per candidate and kernel. The
 log of a (kernel, choice) column is now taken the first time a candidate draws that choice and reused. `Math.Log` is
 deterministic and the terms enter the same buffer elements in the same order, so every sum keeps its bits.
 
@@ -122,7 +122,7 @@ deterministic and the terms enter the same buffer elements in the same order, so
 ## 5. Final before/after proof
 
 `scratchpad/p14/final-proof.sh` (session `5417a82e`): the plan 13 proof program (`proof/Program.cs`) built twice in
-Release, against the `b3baef9` snapshot (before: plan 13 with S8 and S12) and against `82b8a0b` (after). 40 float
+Release, against the `f4eca0c` snapshot (before: plan 13 with S8 and S12) and against `14b4698` (after). 40 float
 parameters in [-10, 10], seed 0, sampler defaults, `InMemoryStorage`; objective `sum((x - 1)^2)`, or `sum(x^2)` and
 `sum((x - 2)^2)` for two objectives. i9-13900K, Windows 11, .NET 10, power throttling opted out, OpenBLAS at its
 default thread count. Each workload ran before, after, before, after, back to back, 2026-11-09 14:23-14:27, with other
@@ -159,7 +159,7 @@ behind; part of that gap is the compatibility OptunaSharp keeps (TPE scores cand
 pickles its state into the storage every generation so Python workers can share the study).
 
 The README's sampler table (benchmark 14's C# probes, three fresh processes per configuration, built against
-`b3baef9` and `82b8a0b`, interleaved, 2026-11-09 14:29-14:31, load 16-57 %), medians:
+`f4eca0c` and `14b4698`, interleaved, 2026-11-09 14:29-14:31, load 16-57 %), medians:
 
 | Probe | Before | After |
 |---|---|---|

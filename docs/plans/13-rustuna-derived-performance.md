@@ -1,8 +1,8 @@
 # Plan 13 — Rustuna-derived performance: compatible speedups first, opt-in paths where results would change
 
-> **Status: BUILT (2026-11-09).** Phases 1-4 are on `main`: `8f8ce3e` (S1-S3, D1),
-> `605806c` (S4, S7), `dce5885` (S3, S5, S6), `656ab94` (S10, S9 as measured). The owner then decided the three open
-> items (2026-11-09): S8 built (`74893f7`), S12 built as an opt-in (`17716c7`, `InMemoryStorage(compactFinishedTrials: true)`,
+> **Status: BUILT (2026-11-09).** Phases 1-4 are on `main`: `99e9e73` (S1-S3, D1),
+> `f8df1a5` (S4, S7), `4464e8a` (S3, S5, S6), `9043b43` (S10, S9 as measured). The owner then decided the three open
+> items (2026-11-09): S8 built (`53a7a0f`), S12 built as an opt-in (`f0d62a0`, `InMemoryStorage(compactFinishedTrials: true)`,
 > §10.2), D2 not built (exact kernel only). S11 was measured and changes nothing. §10 records what was built, how it
 > was gated, and the before/after measurements. Background, benchmarks and the full Rustuna read-through: catalog note
 > `optunasharp/notes/rustuna-comparison-2026-11-08.md`.
@@ -355,22 +355,22 @@ protocol is what lets Python workers share OptunaSharp's studies.
 Every item below keeps OptunaSharp's results to the bit unless it says otherwise. The gates, each run per phase:
 the unit suite's CI filter on net8.0 and net10.0; the live-Python interop suite on net10.0 with the engine required;
 the documentation gate; a before/after hash of seeded studies (every trial's parameters and values by bits) built from
-the `de495f8` snapshot and the working tree; and, for the concurrency-sensitive items, `ConcurrencyGun` cases.
+the `5e5ba53` snapshot and the working tree; and, for the concurrency-sensitive items, `ConcurrencyGun` cases.
 
 | Item | Commit | What was built | Measured |
 |---|---|---|---|
-| S1, S2 | `8f8ce3e` | `CmaTrialHistory` folds finished trials once; the optimizer restored from a state is cached by its holder trial and dropped after each tell | CMA-ES 40-D 100k trials: see the proof table |
-| S3 | `8f8ce3e`, `dce5885` | `Study.GetTrialsForSampler` (zero-copy view in memory, Optuna's read elsewhere) for the intersection space and CMA-ES; TPE's constant-liar read skips the current trial without reading it; QMC stops at the first finished trial instead of sorting; the group-decomposed space filters while scanning | QMC 3,000 trials 2.23 → 1.23 s |
-| D1 | `8f8ce3e` | `CmaEsSampler(..., reuseToldOptimizer: false)`, opt-in | ~15 % on 40-D; results differ from generation 3 (§2.4) |
-| S4 | `605806c` | `InMemoryStorage` writes a running trial in place while no reader holds it (`FrozenTrial.StorageExclusive`, `HandOut`, `WritableTrialUnlocked`); the view reads unfinished records under the lock | 40,000 MOTPE suggestions: 71.5 ms of `SetTrialParam` in total |
-| S7 | `605806c` | Bitwise-identical float/int distributions and parameter names shared per study | CMA-ES 100k peak working set ~2.5 GB → 1.44 GB (with S4) |
-| S5 | `dce5885` | `TpeSplitCache`: the last split reused for the very same records | MOTPE 1,000: one split per trial instead of 40 |
-| S6 | `dce5885` | Fused continuous log-pdf (per-pair precomputation, `Vector<double>` lanes per kernel, scalar order kept), pooled grids and matrix, span `LogGaussMass`/`Ndtr`/`Erf.ComputeArray`, `StableArgsort`, presized `GetInternalRepr` | TPE 1,000: 10.08 → 3.93 s steady; MOTPE 1,000: 41.07 → 15.77 s |
-| S10 | `656ab94` | `CachedStorage` keeps its cache in number order (`ByNumber`, placeholders for unsynced numbers); `GetAllTrials` stops sorting and `GetTrialsPrefixView` wraps the cache | O(n log n) → O(n) per read, O(1) view |
-| S9 | `656ab94` | Measured first: attribute JSON is 3-4 % of a 10k-trial SQLite cold load, so lazy decoding was not built. Parsing each `distribution_json` row was ~40 %: both RDB storages now parse each distinct text once per load (`JournalDistributionCache`) | Cold load 2.1 → 1.4-1.5 s, 1.22 GB → 479 MB |
+| S1, S2 | `99e9e73` | `CmaTrialHistory` folds finished trials once; the optimizer restored from a state is cached by its holder trial and dropped after each tell | CMA-ES 40-D 100k trials: see the proof table |
+| S3 | `99e9e73`, `4464e8a` | `Study.GetTrialsForSampler` (zero-copy view in memory, Optuna's read elsewhere) for the intersection space and CMA-ES; TPE's constant-liar read skips the current trial without reading it; QMC stops at the first finished trial instead of sorting; the group-decomposed space filters while scanning | QMC 3,000 trials 2.23 → 1.23 s |
+| D1 | `99e9e73` | `CmaEsSampler(..., reuseToldOptimizer: false)`, opt-in | ~15 % on 40-D; results differ from generation 3 (§2.4) |
+| S4 | `f8df1a5` | `InMemoryStorage` writes a running trial in place while no reader holds it (`FrozenTrial.StorageExclusive`, `HandOut`, `WritableTrialUnlocked`); the view reads unfinished records under the lock | 40,000 MOTPE suggestions: 71.5 ms of `SetTrialParam` in total |
+| S7 | `f8df1a5` | Bitwise-identical float/int distributions and parameter names shared per study | CMA-ES 100k peak working set ~2.5 GB → 1.44 GB (with S4) |
+| S5 | `4464e8a` | `TpeSplitCache`: the last split reused for the very same records | MOTPE 1,000: one split per trial instead of 40 |
+| S6 | `4464e8a` | Fused continuous log-pdf (per-pair precomputation, `Vector<double>` lanes per kernel, scalar order kept), pooled grids and matrix, span `LogGaussMass`/`Ndtr`/`Erf.ComputeArray`, `StableArgsort`, presized `GetInternalRepr` | TPE 1,000: 10.08 → 3.93 s steady; MOTPE 1,000: 41.07 → 15.77 s |
+| S10 | `9043b43` | `CachedStorage` keeps its cache in number order (`ByNumber`, placeholders for unsynced numbers); `GetAllTrials` stops sorting and `GetTrialsPrefixView` wraps the cache | O(n log n) → O(n) per read, O(1) view |
+| S9 | `9043b43` | Measured first: attribute JSON is 3-4 % of a 10k-trial SQLite cold load, so lazy decoding was not built. Parsing each `distribution_json` row was ~40 %: both RDB storages now parse each distinct text once per load (`JournalDistributionCache`) | Cold load 2.1 → 1.4-1.5 s, 1.22 GB → 479 MB |
 | S11 | none | Measured: at 10-D and 40-D CMA-ES and 6-D GP the OpenBLAS thread count changes no result, but at 100-D every count gives a different (deterministic) result, as NumPy's does. Pinning one thread at `nJobs: 1` would break parity with Python's default-thread NumPy, so the automatic policy stays (pin only when `nJobs > 1`). One thread was 12 % faster at 40-D and 24-35 % at 100-D: available through `TrialExecutorOptions.BlasThreads = 1`, at the cost of parity | — |
-| S8 | `74893f7` | Owner 2026-11-09: "Build it", "Also have optuna's api overload". `SetTrialUserAttrs`/`SetTrialSystemAttrs`/`SetStudyUserAttrs`/`SetStudySystemAttrs` (virtual, default = one call per entry) plus Optuna-named overloads taking a dictionary; `Trial`/`Study.SetUserAttrs` and `SetUserAttr(dict)`. Overrides write in one step: one lock in memory, one transaction in SQLite and EF Core, one appended batch of single-key records in a journal (Python's replay asserts one key per record), with a drain so a rejected own record cannot poison the next call. Same result as the loop; a finished or unknown trial gets nothing written. Live Python reads a C#-written batch | — |
-| S12 | `17716c7` | Owner 2026-11-09: "Build it", opt-in if behavior changes. Built as `InMemoryStorage(compactFinishedTrials: true)`: results unchanged (every proof pair hash-identical, live-Optuna parity on it), but finished trials' read-only accessors return views and values are rebuilt per read, hence the switch. §10.2 | CMA-ES 100k: retained 1,287 → 257 MB, peak 1,846 → 458 MB |
+| S8 | `53a7a0f` | Owner 2026-11-09: "Build it", "Also have optuna's api overload". `SetTrialUserAttrs`/`SetTrialSystemAttrs`/`SetStudyUserAttrs`/`SetStudySystemAttrs` (virtual, default = one call per entry) plus Optuna-named overloads taking a dictionary; `Trial`/`Study.SetUserAttrs` and `SetUserAttr(dict)`. Overrides write in one step: one lock in memory, one transaction in SQLite and EF Core, one appended batch of single-key records in a journal (Python's replay asserts one key per record), with a drain so a rejected own record cannot poison the next call. Same result as the loop; a finished or unknown trial gets nothing written. Live Python reads a C#-written batch | — |
+| S12 | `f0d62a0` | Owner 2026-11-09: "Build it", opt-in if behavior changes. Built as `InMemoryStorage(compactFinishedTrials: true)`: results unchanged (every proof pair hash-identical, live-Optuna parity on it), but finished trials' read-only accessors return views and values are rebuilt per read, hence the switch. §10.2 | CMA-ES 100k: retained 1,287 → 257 MB, peak 1,846 → 458 MB |
 | D2 | not built | Owner 2026-11-09: "Keep exact only". TPE scores in NumPy's order with the S6 exact kernel; no fast-numerics path | — |
 
 **Findings along the way.**
@@ -382,12 +382,12 @@ the `de495f8` snapshot and the working tree; and, for the concurrency-sensitive 
   `PollGC` in single-threaded runs: the sampler's thread suspensions surface there. A stopwatch around
   `SetTrialParam` measured 1.8 µs per call where the profile implied 66 µs.
 - `OptunaHubBridgeParityTests.BenchmarkBridge_ToyProblem_ExposesSpaceAndOptimizes` asserted a bound on an unseeded TPE
-  study and failed in a few percent of runs; it is seeded now (`dce5885`).
+  study and failed in a few percent of runs; it is seeded now (`4464e8a`).
 
 ### 10.1 Before/after proof
 
-Gate C. `scratchpad/proof/Program.cs` (session `5417a82e`) built twice in Release: against the `de495f8` snapshot
-(before) and against `656ab94` (after). 40 float parameters in [-10, 10], seed 0, sampler defaults; objective
+Gate C. `scratchpad/proof/Program.cs` (session `5417a82e`) built twice in Release: against the `5e5ba53` snapshot
+(before) and against `9043b43` (after). 40 float parameters in [-10, 10], seed 0, sampler defaults; objective
 `sum((x - 1)^2)`, or `sum(x^2)` and `sum((x - 2)^2)` for two objectives. i9-13900K, Windows 11, .NET 10, power throttling
 opted out, OpenBLAS at its default thread count. Each workload ran before then after, back to back, 2026-11-09
 00:39-01:03, while other sessions loaded the machine to 30-90 % CPU, so both columns are slower than §2.1's quieter
@@ -411,10 +411,10 @@ Against Rustuna 0.2.1 (§2.1, quieter machine): TPE 1k 1.36 s, MOTPE 1k 6.30 s, 
 NSGA-II 10k 0.82 s and 100k 19.4 s. The §7 targets were "about half" for NSGA-II and MOTPE and 2.6 / 26 s for CMA-ES:
 met or beaten except CMA-ES 10k's first rep, which carries the JIT (2.64 s steady).
 
-The README's sampler table (benchmark 14's C# probes, rebuilt against `656ab94`, three fresh processes each) moved
+The README's sampler table (benchmark 14's C# probes, rebuilt against `9043b43`, three fresh processes each) moved
 where the change is beyond the busy machine's noise: random over 1,000 parameters 13.5 → 3.2 s (now faster than
 Python's 8.4 s), CMA-ES 200-D 2.8 → 1.2 s, CMA-ES 6-D 1.75 → 0.91 s, QMC 0.64 → 0.39 s, random 6-D 1.34 → 0.98 s,
-TPE 100-D 2.4 → 2.1 s. GP was rerun interleaved against a `de495f8` build: the same within noise.
+TPE 100-D 2.4 → 2.1 s. GP was rerun interleaved against a `5e5ba53` build: the same within noise.
 
 ### 10.2 S12: compact finished trials (opt-in)
 

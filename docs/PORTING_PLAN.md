@@ -193,7 +193,7 @@ BLAS/LAPACK drift from scipy's by ULPs — the documented GP boundary). The plot
   precedent): scale-type/bounds/steps construction, `NormalizeOneParam`/`UnnormalizeOneParam`/
   `RoundOneNormalizedParam` (affine + log/exp + floor-to-grid), `GetChoicesOfDiscreteParams`,
   `GetNormalizedParams`, `GetUnnormalizedParam`. **Bit-exact vs Optuna** (pure numpy — no erf/LAPACK;
-  `log`/`exp`/`floor` match Python bit-for-bit; **corrected 2026-11-11, `4c224e9`:** the stepped grids'
+  `log`/`exp`/`floor` match Python bit-for-bit; **corrected 2026-11-11, `8a7e19e`:** the stepped grids'
   `np.arange` fill (QA-49) and the rounding's `//` (QA-87) were not NumPy's until they moved onto NumSharp's
   `np.arange` and `NDDivision.FloorDivDouble`): scale-types/steps/indices, all discrete choice grids,
   and the one-param transforms over a 60-config sweep (`Should().Be(0.0)`), plus the boxed int/log-float/
@@ -498,7 +498,7 @@ moment OptunaSharp.Core loads. Keep it.
   placeholder with the full `TPESampler`: univariate (independent) AND non-group multivariate paths,
   so a default `TPESampler()` optimizes single-objective studies end-to-end. Completed the numeric
   kernel — `Internal/TruncNorm.cs` sampling half (`_ndtri_exp` Newton iter, `ppf`, vectorized
-  `_log_ndtr`, `_norm_logpdf`), new `MathUtil.Expm1` (Kahan `(u-1)x/log(u)`; **corrected 2026-11-11, `f490837`:** not bit-exact, 62-84% equal to NumPy where TPE calls it, now NumSharp's UCRT model) + `LogAddExp`
+  `_log_ndtr`, `_norm_logpdf`), new `MathUtil.Expm1` (Kahan `(u-1)x/log(u)`; **corrected 2026-11-11, `0e18eba`:** not bit-exact, 62-84% equal to NumPy where TPE calls it, now NumSharp's UCRT model) + `LogAddExp`
   (`npy_logaddexp`), `Samplers/Tpe/ProbabilityDistributions.cs` (all four numerical batched kinds,
   `_MixtureOfProductDistribution.sample` incl. the bit-exact `rng.choice(p=)`/`rand`/`uniform` draw
   order, and the continuous branch of `log_pdf`), new `Samplers/Tpe/ParzenEstimator.cs`
@@ -559,7 +559,7 @@ moment OptunaSharp.Core loads. Keep it.
   `MultiObjective.UniqueRowsFirstIndex`). Wired the HSSP tie-break into
   `TpeTrialSplit.SplitCompleteTrialsMultiObjective` (`_get_reference_point` + `SolveHssp`), **removing
   the `NotImplementedException`** — multi-objective TPE splitting and PED-ANOVA with `target=null` now
-  run end-to-end. **Numeric:** NumPy `@`/`np.dot` as a sequential dot (**superseded 2026-11-11, `7d79029`:** the 2-D/3-D products now go through NumSharp's `np.dot` on NumPy's OpenBLAS, bit-identical to Optuna on 240 live fronts, and the HSSP tie note below is resolved), `.prod` sequential;
+  run end-to-end. **Numeric:** NumPy `@`/`np.dot` as a sequential dot (**superseded 2026-11-11, `c600736`:** the 2-D/3-D products now go through NumSharp's `np.dot` on NumPy's OpenBLAS, bit-identical to Optuna on 240 live fronts, and the HSSP tie note below is resolved), `.prod` sequential;
   `compute_hypervolume` bit-exact-to-tolerance vs Optuna over 120 mixed 2–6D cases (max rel err 2e-16);
   end-to-end 2-/3-objective MO TPE trajectories match live Optuna in RNG lock-step to the erf tolerance
   (max abs diff 5.7e-14); MO PED-ANOVA `target=null` matches (exact selection path, erf-tolerance
@@ -681,7 +681,7 @@ moment OptunaSharp.Core loads. Keep it.
   **Parity (verified vs live Optuna 5.0.0.dev):** a **400-config offline differential** — 5 crossovers ×
   {2,3,4} objectives × 25 seeds + 25 constrained (set_constraint), ~10k trials — matched **byte-for-byte
   with zero divergence** (full study state: every trial's params/values, per-trial generation, parent-cache
-  trial-id lists). (**Extended 2026-11-11, `a9c7cee`:** from eight objectives on NumPy's pairwise row norms in the
+  trial-id lists). (**Extended 2026-11-11, `128761d`:** from eight objectives on NumPy's pairwise row norms in the
   association differ from the left-to-right sums the port used, which the 2-4-objective differential could not see
   (QA-86); the norms, argmin and min now run through NumSharp, pinned by the live
   `ManyObjectives_FullState_IsBitIdentical` at 8 and 10 objectives.) 15 unit tests (hardcoded seed=42 SO
@@ -997,7 +997,7 @@ moment OptunaSharp.Core loads. Keep it.
 - **`Internal/Hypervolume.cs`** — **new in 2.10 core**. `_hypervolume/wfg.py: compute_hypervolume`
   (2-D/3-D/N-D WFG) + `hssp.py: _solve_hssp` (2-D + n-D greedy). Consumed by the TPE MO split; the
   remaining `box_decomposition.py` (`get_non_dominated_box_bounds`) is deferred to **3.2** with its GP
-  consumer. Carried the 2.10 `[Misaligned]` HSSP ≥3-obj zero-contribution tie note, resolved 2026-11-11 (`7d79029`) by taking Optuna's BLAS products through NumSharp.
+  consumer. Carried the 2.10 `[Misaligned]` HSSP ≥3-obj zero-contribution tie note, resolved 2026-11-11 (`c600736`) by taking Optuna's BLAS products through NumSharp.
 - **`Samplers/TPESampler.cs`** — **the complete sampler**: numeric kernel + univariate + non-group
   multivariate (2.8), the group-decomposed multivariate `group=true` path (2.9), the MO split via
   `Internal/Hypervolume.cs` (2.10), and — verified in **2.11** — multivariate multi-objective (MOTPE)
@@ -1079,7 +1079,7 @@ moment OptunaSharp.Core loads. Keep it.
   2.7 **erf/ucrt** ~1-3 ULP tolerance on the truncnorm density, which also bounds 2.8 TPE; the
   2.8 **argsort tie order** in `compute_sigmas` (stable vs NumPy's unreproducible x86-simd-sort —
   diverges only on repeated numerical observations in a multivariate study; continuous/categorical
-  studies are exact); and the 2.10 **HSSP ≥3-objective zero-contribution tie** on `Internal/Hypervolume.cs` (**resolved 2026-11-11, `7d79029`**: the products now run through NumSharp's `np.dot`, so the residuals are Optuna's)
+  studies are exact); and the 2.10 **HSSP ≥3-objective zero-contribution tie** on `Internal/Hypervolume.cs` (**resolved 2026-11-11, `c600736`**: the products now run through NumSharp's `np.dot`, so the residuals are Optuna's)
   (the sequential dot cancels a dominated point's marginal HV to exactly 0 where Optuna's BLAS `np.dot`
   leaves a sub-ULP residual, so `np.argmax` can pick a different but hypervolume-equivalent point — 2-obj
   HSSP is dot-free and exact; does not surface in realistic MO TPE); and the 2.13 **UNDX QR column
