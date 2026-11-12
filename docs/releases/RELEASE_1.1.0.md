@@ -11,7 +11,7 @@ A second eight-hour parity QA run against Optuna 5.0.0 found 28 more differences
 - **NumPy's arithmetic through NumSharp** - Optuna's `np.dot`, reductions, NaN-aware `argmax` / `max`, `floor_divide`, `isclose` and `clip` now compute as NumPy does: hypervolume, HSSP and UNDX are bit-exact, NSGA-III matches from eight objectives on, and the GP's grids and rounding are NumPy's.
 - **New opt-ins** - compact finished trials (100,000 CMA-ES trials retain 257 MB instead of 1,287 MB), batch attribute writes, and CMA-ES's `reuseToldOptimizer`.
 - **Binary-compatible with 1.0.0** - ApiCompat against the nuget.org 1.0.0 packages finds no removed or changed API in any of the 20 packages; the behavior changes (Optuna's exception types, seeded TPE results moving toward Optuna's) are listed under Breaking Changes.
-- **43 parity fixes, 18 measured speedups and 11 behavior changes** - every line traced to the 45 commits it cites, of the release's 130; 2,307 unit tests on net8.0 and net10.0, 727 live-Optuna interop tests.
+- **43 parity fixes, 18 measured speedups and 11 behavior changes** - every line traced to the 45 commits it cites, of the release's 132; 2,307 unit tests on net8.0 and net10.0, 727 live-Optuna interop tests.
 
 ## Detailed Breakdown
 <details>
@@ -21,6 +21,7 @@ A second eight-hour parity QA run against Optuna 5.0.0 found 28 more differences
 - **[Performance and Compatibility](https://scisharp.github.io/OptunaSharp/docs/performance.html)** - new guide: what is fast and why seeded results stay the same, the before/after tables of the three passes, start-up time (ReadyToRun, TieredPGO), the switches that change results, compact finished trials, batch attribute writes and thread safety.
 - **[OptunaHub](https://scisharp.github.io/OptunaSharp/integrations/python/optunahub.html)** - "Compatibility and state" rewritten for the persistent shadow study, with the samplers and pruners measured against native runs and the limits that remain.
 - **Method pages** - [MOEA/D](https://scisharp.github.io/OptunaSharp/docs/methods/moea-d.html), [differential evolution](https://scisharp.github.io/OptunaSharp/docs/methods/differential-evolution.html), [PSO](https://scisharp.github.io/OptunaSharp/docs/methods/pso.html) and [TuRBO](https://scisharp.github.io/OptunaSharp/docs/methods/turbo.html) name their OptunaHub counterparts and map their parameters to them.
+- **[Getting Started](https://scisharp.github.io/OptunaSharp/docs/getting-started.html)**, the **[FAQ](https://scisharp.github.io/OptunaSharp/docs/faq.html)** and the package README - OptunaSharp needs dynamic code: it does not run under NativeAOT, and a .NET 10 file-based app needs `#:property PublishAot=false`, with the error it fails with otherwise.
 - **[Parity QA journal, 2026-11-10](https://github.com/SciSharp/OptunaSharp/blob/main/docs/qa/PARITY_QA_2026-11-10.md)** - the second QA run: every finding with its repro test and fix, the 65 directions worked, the clean areas and the techniques.
 - **[Six real-world examples](https://github.com/SciSharp/OptunaSharp/tree/main/examples)** - container loading stopped at a provable bound, a journal shared by three processes under Hyperband, a churn scorecard ended by the Terminator, pricing with C# and Python workers over the gRPC proxy, building energy through `OptunaSearchCV`, concrete mix design with `GPSampler` and constraints.
 
