@@ -5,6 +5,7 @@ using OptunaSharp;
 using OptunaSharp.Collections;
 using OptunaSharp.Distributions;
 using OptunaSharp.Samplers;
+using OptunaSharp.Storages;
 
 namespace OptunaSharp.Interop.PythonNet;
 
@@ -14,29 +15,33 @@ namespace OptunaSharp.Interop.PythonNet;
 ///     <see cref="BaseSampler" />, so an OptunaSharp <see cref="Study" /> can be driven by any of the
 ///     ~85 samplers on https://hub.optuna.org/ — without porting them.
 ///
-///     <para><b>How it works (the shadow study).</b> A Python sampler reads a real
-///     <c>optuna.Study</c> + <c>FrozenTrial</c>. On each ask, this bridge rebuilds an in-memory Python
-///     study mirroring the OptunaSharp study's finished trials (via <c>optuna.trial.create_trial</c> +
-///     <c>study.add_trial</c>), opens a running trial on it, and delegates
-///     <c>infer_relative_search_space</c> / <c>sample_relative</c> / <c>sample_independent</c> to the
-///     Python sampler against that mirror. The suggestions it returns are the real Optuna sampler's
-///     output, marshaled back to CLR values.</para>
+///     <para><b>How it works (the shadow study).</b> A Python sampler reads a real <c>optuna.Study</c> and
+///     <c>FrozenTrial</c>s. For each OptunaSharp study it meets, this bridge keeps one in-memory Python study in
+///     lockstep with it (<see cref="OptunaHubShadow" />): every trial with its state, values, parameters, user and
+///     system attributes and intermediate values, and the study's attributes. It forwards all five sampler hooks with
+///     the trial objects native Optuna passes: <c>before_trial</c> and <c>infer_relative_search_space</c> /
+///     <c>sample_relative</c> with the trial's cached record, <c>sample_independent</c> with the latest-trial copy,
+///     and <c>after_trial</c> with the stored record, before the trial is finished. The attributes the Python sampler
+///     writes (a generation counter, a swarm, constraints) are written to the OptunaSharp trial or study as well, so
+///     the C# storage holds what a native run stores. The suggestions are the Python sampler's own output, marshaled
+///     back to CLR values.</para>
 ///
-///     <para><b>Scope of the first cut.</b> Designed for single-worker <c>Study.Optimize</c>
-///     (<c>nJobs=1</c>): the mirror is rebuilt per trial from finished trials, so trial numbers align.
-///     Parallel trials (concurrent RUNNING trials) are not mirrored. Reproducibility follows the Python
-///     sampler's own RNG (seed it via the constructor kwargs).</para>
+///     <para><b>Limits.</b> The Python sampler's internal state lives in its Python object, not in OptunaSharp's
+///     storage, so a restarted process does not resume it. Attribute values with no JSON shape (NumPy arrays,
+///     arbitrary objects) stay in the shadow only. A study filtered for <c>HyperbandPruner</c>'s brackets is mirrored
+///     whole. Calls are serialized on the Python thread; trials of parallel workers are mirrored with the state the
+///     storage holds when a call starts, as a native sampler reads them. Reproducibility follows the Python sampler's
+///     own RNG (seed it through the constructor kwargs).</para>
 /// </summary>
 public sealed class OptunaHubSampler : BaseSampler, IDisposable
 {
     private readonly string _name;
     private PyObject? _sampler;
 
-    // Per-trial shadow cache (guarded by _gate). Rebuilt when the C# trial number changes.
+    // The shadow of each study this sampler drives, by (storage, study id). Guarded by _gate; every use runs on the
+    // Python thread under the GIL.
     private readonly object _gate = new();
-    private int _cachedNumber = -1;
-    private PyObject? _cachedStudy;
-    private PyObject? _cachedFrozen;
+    private readonly Dictionary<StudyKey, OptunaHubShadow> _shadows = new();
 
     /// <summary>Takes ownership of the Python algorithm instance and records its diagnostic name.</summary>
     /// <param name="name">The package and class name displayed in diagnostics.</param>
@@ -50,7 +55,36 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
     /// <inheritdoc />
     public override string ToString() => _name;
 
+    /// <summary>The Python sampler, borrowed.</summary>
+    /// <exception cref="ObjectDisposedException">The wrapper has been disposed.</exception>
     private PyObject Sampler => _sampler ?? throw new ObjectDisposedException(nameof(OptunaHubSampler));
+
+    /// <inheritdoc />
+    /// <remarks>
+    ///     Optuna's <c>Study.ask</c> and <c>Trial.__init__</c>: the study's per-thread trial cache is cleared, the trial's
+    ///     cached record is taken, then <c>before_trial</c> runs with it.
+    /// </remarks>
+    /// <exception cref="System.ObjectDisposedException">The algorithm wrapper has already been disposed.</exception>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python algorithm or shadow-study operation fails.</exception>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.PythonInteropException">The interpreter or a required Python module cannot be initialized.</exception>
+    public override void BeforeTrial(Study study, FrozenTrial trial)
+        => PythonRuntime.Run(() =>
+        {
+            lock (_gate)
+            {
+                OptunaHubShadow shadow = SyncedShadow(study);
+                OptunaHubShadow.Mirror mirror = shadow.MirrorOf(trial);
+                shadow.BeginTrial();
+                PyObject cached = shadow.CachedTrial(mirror, refresh: true);
+                if (!Sampler.HasAttr("before_trial"))
+                    return;
+                shadow.Call(study, trial, mirror, () =>
+                {
+                    Python.optuna.samplers.BaseSampler.before_trial(Sampler, shadow.Study, cached);
+                    return 0;
+                });
+            }
+        });
 
     /// <inheritdoc />
     /// <exception cref="System.ObjectDisposedException">The algorithm wrapper has already been disposed.</exception>
@@ -59,12 +93,21 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
     public override OrderedDict<string, BaseDistribution> InferRelativeSearchSpace(Study study, FrozenTrial trial)
         => PythonRuntime.Run(() =>
         {
-            var (pystudy, pyfrozen) = EnsureShadow(study, trial);
-            if (!Sampler.HasAttr("infer_relative_search_space"))
-                return new OrderedDict<string, BaseDistribution>();
+            lock (_gate)
+            {
+                OptunaHubShadow shadow = SyncedShadow(study);
+                OptunaHubShadow.Mirror mirror = shadow.MirrorOf(trial);
+                PyObject cached = shadow.CachedTrial(mirror);
+                if (!Sampler.HasAttr("infer_relative_search_space"))
+                    return new OrderedDict<string, BaseDistribution>();
 
-            using PyObject result = Python.optuna.samplers.BaseSampler.infer_relative_search_space(Sampler, pystudy, pyfrozen);
-            return ToClrDistributionDict(result);
+                return shadow.Call(study, trial, mirror, () =>
+                {
+                    using PyObject result =
+                        Python.optuna.samplers.BaseSampler.infer_relative_search_space(Sampler, shadow.Study, cached);
+                    return ToClrDistributionDict(result);
+                });
+            }
         });
 
     /// <inheritdoc />
@@ -75,16 +118,32 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
         Study study, FrozenTrial trial, OrderedDict<string, BaseDistribution> searchSpace)
         => PythonRuntime.Run(() =>
         {
-            var (pystudy, pyfrozen) = EnsureShadow(study, trial);
-            using var pySearchSpace = new PyDict();
-            foreach (var (name, dist) in searchSpace)
-                pySearchSpace[name] = PyConvert.ToPy(dist);
+            lock (_gate)
+            {
+                OptunaHubShadow shadow = SyncedShadow(study);
+                OptunaHubShadow.Mirror mirror = shadow.MirrorOf(trial);
+                PyObject cached = shadow.CachedTrial(mirror);
+                using var pySearchSpace = new PyDict();
+                foreach (var (name, dist) in searchSpace)
+                {
+                    using PyObject pyDist = PyConvert.ToPy(dist);
+                    pySearchSpace[name] = pyDist;
+                }
 
-            using PyObject result = Python.optuna.samplers.BaseSampler.sample_relative(Sampler, pystudy, pyfrozen, pySearchSpace);
-            return ToClrValueDict(result);
+                return shadow.Call(study, trial, mirror, () =>
+                {
+                    using PyObject result =
+                        Python.optuna.samplers.BaseSampler.sample_relative(Sampler, shadow.Study, cached, pySearchSpace);
+                    return ToClrValueDict(result);
+                });
+            }
         });
 
     /// <inheritdoc />
+    /// <remarks>
+    ///     Optuna's <c>Trial._suggest</c> passes <c>_get_latest_trial()</c>: the cached record's shallow copy whose system
+    ///     attributes are read from the storage.
+    /// </remarks>
     /// <exception cref="System.ObjectDisposedException">The algorithm wrapper has already been disposed.</exception>
     /// <exception cref="global::Python.Runtime.PythonException">The Python algorithm or shadow-study operation fails.</exception>
     /// <exception cref="OptunaSharp.Interop.PythonNet.PythonInteropException">The interpreter or a required Python module cannot be initialized.</exception>
@@ -92,11 +151,56 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
         Study study, FrozenTrial trial, string paramName, BaseDistribution paramDistribution)
         => PythonRuntime.Run(() =>
         {
-            var (pystudy, pyfrozen) = EnsureShadow(study, trial);
-            using var name = paramName.ToPython();
-            using var dist = PyConvert.ToPy(paramDistribution);
-            using PyObject result = Python.optuna.samplers.BaseSampler.sample_independent(Sampler, pystudy, pyfrozen, name, dist);
-            return PyConvert.ToClr(result);
+            lock (_gate)
+            {
+                OptunaHubShadow shadow = SyncedShadow(study);
+                OptunaHubShadow.Mirror mirror = shadow.MirrorOf(trial);
+                using PyObject latest = shadow.LatestTrial(mirror);
+                using var name = paramName.ToPython();
+                using PyObject dist = PyConvert.ToPy(paramDistribution);
+
+                return shadow.Call(study, trial, mirror, () =>
+                {
+                    using PyObject result =
+                        Python.optuna.samplers.BaseSampler.sample_independent(Sampler, shadow.Study, latest, name, dist);
+                    return PyConvert.ToClr(result);
+                });
+            }
+        });
+
+    /// <inheritdoc />
+    /// <remarks>
+    ///     Optuna's <c>_tell_with_warning</c>: <c>after_trial</c> receives the stored record, and the trial's state and
+    ///     values are written in a <c>finally</c>, so the shadow trial finishes even when the Python sampler raises.
+    /// </remarks>
+    /// <exception cref="System.ObjectDisposedException">The algorithm wrapper has already been disposed.</exception>
+    /// <exception cref="global::Python.Runtime.PythonException">The Python algorithm or shadow-study operation fails.</exception>
+    /// <exception cref="OptunaSharp.Interop.PythonNet.PythonInteropException">The interpreter or a required Python module cannot be initialized.</exception>
+    public override void AfterTrial(Study study, FrozenTrial trial, TrialState state, IReadOnlyList<double>? values)
+        => PythonRuntime.Run(() =>
+        {
+            lock (_gate)
+            {
+                OptunaHubShadow shadow = SyncedShadow(study);
+                OptunaHubShadow.Mirror mirror = shadow.MirrorOf(trial);
+                try
+                {
+                    if (!Sampler.HasAttr("after_trial"))
+                        return;
+                    using PyObject stored = shadow.StoredTrial(mirror);
+                    using PyObject pyState = Python.optuna.trial.TrialState(state);
+                    using PyObject pyValues = OptunaHubShadow.ToPyValues(values);
+                    shadow.Call(study, trial, mirror, () =>
+                    {
+                        Python.optuna.samplers.BaseSampler.after_trial(Sampler, shadow.Study, stored, pyState, pyValues);
+                        return 0;
+                    });
+                }
+                finally
+                {
+                    shadow.Finish(mirror, state, values);
+                }
+            }
         });
 
     /// <inheritdoc />
@@ -113,61 +217,24 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
 
     // ---- shadow study ---------------------------------------------------------------------------
 
-    /// <summary>Ensure the Python shadow study + running frozen trial mirror the C# state for this trial. Under the GIL.</summary>
-    /// <param name="study">The study whose trial history is mirrored, or its borrowed Python shadow-study handle.</param>
-    /// <param name="trial">The trial being mirrored, sampled, or checked for optimizer compatibility.</param>
-    /// <returns>Borrowed cached study and frozen-trial handles; the cache retains ownership and callers must not dispose them.</returns>
-    private (PyObject study, PyObject frozen) EnsureShadow(Study study, FrozenTrial trial)
+    /// <summary>
+    ///     The shadow of <paramref name="study" />, created on first use and synchronized with it now. Under the GIL and
+    ///     <see cref="_gate" />.
+    /// </summary>
+    /// <param name="study">The OptunaSharp study being sampled.</param>
+    /// <returns>The synchronized shadow, owned by this sampler.</returns>
+    /// <exception cref="global::Python.Runtime.PythonException">Creating or synchronizing the shadow fails.</exception>
+    /// <exception cref="OptunaHubInteropException">The study's trial numbers are not contiguous.</exception>
+    private OptunaHubShadow SyncedShadow(Study study)
     {
-        lock (_gate)
+        var key = new StudyKey(study.Storage, study.StudyId);
+        if (!_shadows.TryGetValue(key, out OptunaHubShadow? shadow))
         {
-            if (_cachedNumber == trial.Number && _cachedStudy is not null && _cachedFrozen is not null)
-                return (_cachedStudy, _cachedFrozen);
-
-            DisposeShadowNoLock();
-
-            var pystudy = BuildStudy(study, trial.Number);
-            var pyfrozen = OpenRunningTrial(pystudy, trial.Number);
-
-            _cachedStudy = pystudy;
-            _cachedFrozen = pyfrozen;
-            _cachedNumber = trial.Number;
-            return (pystudy, pyfrozen);
+            shadow = OptunaHubShadow.Create(study);
+            _shadows[key] = shadow;
         }
-    }
-
-    /// <summary>Builds an in-memory Python study containing earlier finished trials for sampler or pruner replay.</summary>
-    /// <param name="study">The study whose trial history is mirrored, or its borrowed Python shadow-study handle.</param>
-    /// <param name="currentNumber">The current trial number; only earlier finished trials are included in the shadow study.</param>
-    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
-    private static PyObject BuildStudy(Study study, int currentNumber)
-    {
-        OptunaHubRuntime.EnsureQuiet(); // re-assert right before create_study (Optuna re-configures logging lazily)
-        PyObject pystudy = Python.optuna.create_study(study.Directions);
-
-        foreach (var ft in study.GetTrials(deepcopy: false, states: null))
-        {
-            if (ft.Number >= currentNumber || !ft.State.IsFinished())
-                continue;
-            using var pyTrial = Python.optuna.trial.create_trial(ft.State, ft.Values, ft.Params, ft.Distributions);
-            Python.optuna.Study.add_trial(pystudy, pyTrial);
-        }
-
-        return pystudy;
-    }
-
-    /// <summary>Adds a running trial to the Python shadow study and returns its frozen snapshot.</summary>
-    /// <param name="pystudy">The borrowed Python shadow study that receives a new running trial.</param>
-    /// <param name="number">The managed trial number associated with the shadow; the returned Python ask number controls indexing.</param>
-    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
-    private static PyObject OpenRunningTrial(PyObject pystudy, int number)
-    {
-        // ask() adds a RUNNING trial (no params sampled without fixed distributions); fetch its frozen form.
-        using PyObject running = Python.optuna.Study.ask(pystudy);
-        int askedNumber = Python.optuna.Trial.number_t(running);
-        using PyObject trials = Python.optuna.Study.get_trials(pystudy, deepcopy: false);
-        // Index by the asked number so it lines up even if numbering diverged.
-        return trials[new PyInt(askedNumber)];
+        shadow.Sync(study);
+        return shadow;
     }
 
     // ---- result conversion ----------------------------------------------------------------------
@@ -208,17 +275,7 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
         return result;
     }
 
-    /// <summary>Releases the cached Python study and frozen-trial references while the caller holds the GIL and cache lock.</summary>
-    private void DisposeShadowNoLock()
-    {
-        _cachedFrozen?.Dispose();
-        _cachedStudy?.Dispose();
-        _cachedFrozen = null;
-        _cachedStudy = null;
-        _cachedNumber = -1;
-    }
-
-    /// <summary>Releases owned Python references while holding the GIL.</summary>
+    /// <summary>Releases owned Python references (the sampler and every shadow study) while holding the GIL.</summary>
     public void Dispose()
     {
         var sampler = _sampler;
@@ -226,8 +283,17 @@ public sealed class OptunaHubSampler : BaseSampler, IDisposable
         PythonRuntime.Run(() =>
         {
             lock (_gate)
-                DisposeShadowNoLock();
+            {
+                foreach (OptunaHubShadow shadow in _shadows.Values)
+                    shadow.Dispose();
+                _shadows.Clear();
+            }
             sampler?.Dispose();
         });
     }
+
+    /// <summary>A study's identity across <see cref="Study" /> objects: its storage instance and id.</summary>
+    /// <param name="Storage">The storage instance, compared by reference.</param>
+    /// <param name="StudyId">The study's id in that storage.</param>
+    private readonly record struct StudyKey(BaseStorage Storage, int StudyId);
 }

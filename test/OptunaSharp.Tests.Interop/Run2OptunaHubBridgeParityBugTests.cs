@@ -11,16 +11,15 @@ using Python.Runtime;
 namespace OptunaSharp.Tests.Interop;
 
 /// <summary>
-///     Open parity bugs in the OptunaHub sampler bridge (<see cref="OptunaHubSampler" />) found by the 2026-11-10 parity
-///     QA run (<c>docs/qa/PARITY_QA_2026-11-10.md</c>, QA-72). Each test fails today and passes once fixed, at which
-///     point its <c>OpenBugs</c> category (and the CI guard below) should be removed. QA-73 is the same defect in
-///     <see cref="OptunaHubPruner" />.
+///     Parity bugs in the OptunaHub sampler bridge (<see cref="OptunaHubSampler" />) found by the 2026-11-10 parity QA
+///     run (<c>docs/qa/PARITY_QA_2026-11-10.md</c>, QA-72), and the same defect in <see cref="OptunaHubPruner" />
+///     (QA-73). Fixed on 2026-11-12 by the persistent shadow study (<c>OptunaHubShadow</c>); each test compares the
+///     bridge with the values native Python produces.
 /// </summary>
 /// <remarks>
-///     The interop CI job filters only <c>TestCategory!=Slow</c>, not <c>OpenBugs</c>, so these tests report
-///     Inconclusive when the <c>CI</c> environment variable is <c>true</c> (GitHub Actions sets it) instead of turning
-///     the job red; run them locally to reproduce. They need Python with Optuna and OptunaHub and the pinned
-///     <c>refs/optunahub-registry</c> submodule, and self-skip without them like the other live tests.
+///     They need Python with Optuna and OptunaHub and the pinned <c>refs/optunahub-registry</c> submodule, and
+///     self-skip without them like the other live tests. While they were open bugs a CI guard reported them
+///     Inconclusive (the interop job filters only <c>TestCategory!=Slow</c>); it is gone with the fix.
 /// </remarks>
 [TestClass]
 public class Run2OptunaHubBridgeParityBugTests
@@ -37,10 +36,11 @@ public class Run2OptunaHubBridgeParityBugTests
     ///     <c>PSOSampler(seed=0)</c> on this objective serves its first swarm candidate at trial 11
     ///     (<c>x = 0.5201450987386327, y = 1.0528363508210972, n = 3</c>), reproducibly; through the bridge trial 11 is
     ///     another random draw, and all trials from 11 on differ. The other half of the gap is QA-72's second test.
+    ///     <b>Fixed 2026-11-12:</b> the bridge keeps a persistent shadow study (<c>OptunaHubShadow</c>) and forwards
+    ///     <c>before_trial</c> / <c>after_trial</c>; trial 11 is the native swarm candidate, bit for bit.
     /// </remarks>
     [TestMethod]
     [TestCategory("RequiresPython")]
-    [TestCategory("OpenBugs")]
     public void PsoThroughBridge_BuildsItsSwarmInAfterTrialLikeNativePython()
     {
         using var module = LoadHubModuleOrInconclusive("samplers/pso");
@@ -72,10 +72,11 @@ public class Run2OptunaHubBridgeParityBugTests
     ///     <c>differential_evolution</c>, <c>restart_cmaes</c>, <c>levy_flight_sampler</c>, <c>nelder_mead</c>,
     ///     <c>tpe_union_multivariate</c>, <c>random_search</c>. In the registry 26 samplers implement <c>after_trial</c>
     ///     and 25 read or write system attributes.
+    ///     <b>Fixed 2026-11-12:</b> the shadow keeps every trial's system attributes, and those the sampler writes
+    ///     (<c>mocma:g</c>) are written to the OptunaSharp trials too; the 30 trials complete.
     /// </remarks>
     [TestMethod]
     [TestCategory("RequiresPython")]
-    [TestCategory("OpenBugs")]
     public void MoCmaThroughBridge_KeepsTheSystemAttributesItWrites()
     {
         using var module = LoadHubModuleOrInconclusive("samplers/mocma");
@@ -103,10 +104,11 @@ public class Run2OptunaHubBridgeParityBugTests
     ///     <c>RandomSampler(seed: 0)</c> drawing the same <c>x</c> values, none is. <c>pruners/hyperband</c> (also
     ///     Optuna's, built on successive halving) prunes 31 natively and none through the bridge; <c>median</c>,
     ///     <c>percentile</c>, <c>wilcoxon</c> and <c>threshold</c>, which keep no state, agree trial for trial.
+    ///     <b>Fixed 2026-11-12:</b> the pruner's persistent shadow keeps the <c>completed_rung_N</c> records; 36
+    ///     trials are pruned, trial 3 after step 1, as natively.
     /// </remarks>
     [TestMethod]
     [TestCategory("RequiresPython")]
-    [TestCategory("OpenBugs")]
     public void SuccessiveHalvingThroughBridge_PrunesLikeNativePython()
     {
         using var module = LoadHubModuleOrInconclusive("pruners/successive_halving");
@@ -158,16 +160,13 @@ public class Run2OptunaHubBridgeParityBugTests
     }
 
     /// <summary>
-    ///     Skips on CI (see the class remarks), then loads <paramref name="package" /> from the pinned registry, or reports
-    ///     Inconclusive when Python, OptunaHub or the submodule is missing.
+    ///     Loads <paramref name="package" /> from the pinned registry, or reports Inconclusive when Python, OptunaHub or
+    ///     the submodule is missing.
     /// </summary>
     /// <param name="package">The registry package, e.g. <c>samplers/pso</c>.</param>
     /// <returns>The loaded module; the caller disposes it.</returns>
     private static OptunaHubModule LoadHubModuleOrInconclusive(string package)
     {
-        // The interop CI job does not filter OpenBugs; keep it green until the bug is fixed.
-        if (string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase))
-            Assert.Inconclusive("Open bug QA-72; run locally (the interop CI job does not filter OpenBugs).");
         PythonSession.EnsureOrInconclusive();
         try
         {

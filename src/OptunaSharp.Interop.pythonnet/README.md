@@ -49,10 +49,13 @@ study.Optimize(t => {
 }, nTrials: 50);
 ```
 
-The real Python sampler decides each suggestion; the bridge keeps a Python **shadow study** in sync
-with the OptunaSharp study's finished trials and delegates
-`infer_relative_search_space` / `sample_relative` / `sample_independent` to it. Designed for
-single-worker `Study.Optimize` (`nJobs = 1`).
+The real Python sampler decides each suggestion. The bridge keeps a persistent Python **shadow study**
+in lockstep with the OptunaSharp study: every trial with its state, values, parameters, attributes and
+intermediate values. It forwards `before_trial`, `infer_relative_search_space`, `sample_relative`,
+`sample_independent` and `after_trial` with the trial objects Optuna passes, and writes the attributes
+the sampler sets back to the OptunaSharp trial. The pruner bridge does the same for `prune`. Registry
+samplers and pruners give the same trials as when run natively
+(`test/OptunaSharp.Tests.Interop/OptunaHubNativeParityTests.cs`).
 
 ## Loading
 

@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using Python.Runtime;
 using OptunaSharp;
 using OptunaSharp.Pruners;
+using OptunaSharp.Storages;
 
 namespace OptunaSharp.Interop.PythonNet;
 
@@ -10,16 +12,24 @@ namespace OptunaSharp.Interop.PythonNet;
 ///     OptunaSharp <see cref="BasePruner" />, so an OptunaSharp study's <c>report</c> /
 ///     <c>should_prune</c> loop can be driven by any pruner on https://hub.optuna.org/.
 ///
-///     <para>Like the sampler bridge, each <see cref="Prune" /> rebuilds a Python <b>shadow study</b>
-///     mirroring the OptunaSharp study's finished trials (with their intermediate values) and opens a
-///     running trial carrying the current trial's reported intermediate values, then delegates
-///     <c>prune(study, trial)</c> to the real Python pruner. Optuna pruning is single-objective; this
-///     targets single-worker <c>Study.Optimize</c> (<c>nJobs=1</c>).</para>
+///     <para>Like the sampler bridge, the pruner keeps one persistent Python <b>shadow study</b> per OptunaSharp study
+///     (<see cref="OptunaHubShadow" />), mirrored trial for trial before every decision: states, values, parameters,
+///     user and system attributes and every intermediate value, the current trial's included. <see cref="Prune" />
+///     calls <c>prune(study, trial)</c> with the trial object native <c>Trial.should_prune</c> passes (the
+///     latest-trial copy), and the attributes the pruner writes reach the OptunaSharp trial too: successive halving
+///     and Hyperband record each rung a trial completes (<c>completed_rung_N</c>) and compare it with the other
+///     trials' records, which a shadow rebuilt per call used to lose, so they never pruned (QA-73). Optuna pruning is
+///     single-objective; calls are serialized on the Python thread.</para>
 /// </summary>
 public sealed class OptunaHubPruner : BasePruner, IDisposable
 {
     private readonly string _name;
     private PyObject? _pruner;
+
+    // The shadow of each study this pruner decides for, by (storage, study id). Guarded by _gate; every use runs on the
+    // Python thread under the GIL.
+    private readonly object _gate = new();
+    private readonly Dictionary<StudyKey, OptunaHubShadow> _shadows = new();
 
     /// <summary>Takes ownership of the Python algorithm instance and records its diagnostic name.</summary>
     /// <param name="name">The package and class name displayed in diagnostics.</param>
@@ -33,6 +43,8 @@ public sealed class OptunaHubPruner : BasePruner, IDisposable
     /// <inheritdoc />
     public override string ToString() => _name;
 
+    /// <summary>The Python pruner, borrowed.</summary>
+    /// <exception cref="ObjectDisposedException">The wrapper has been disposed.</exception>
     private PyObject Pruner => _pruner ?? throw new ObjectDisposedException(nameof(OptunaHubPruner));
 
     /// <inheritdoc />
@@ -41,59 +53,48 @@ public sealed class OptunaHubPruner : BasePruner, IDisposable
     /// <exception cref="OptunaSharp.Interop.PythonNet.PythonInteropException">The interpreter or a required Python module cannot be initialized.</exception>
     public override bool Prune(Study study, FrozenTrial trial) => PythonRuntime.Run(() =>
     {
-        using PyObject pystudy = BuildStudy(study, trial.Number);
-        using PyObject frozen = OpenRunningTrial(pystudy, trial);
-        using PyObject result = Python.optuna.pruners.BasePruner.prune(Pruner, pystudy, frozen);
-        // IsTrue() (Python truthiness) not As<bool>(): a pruner may return a numpy bool_ from its
-        // comparison, which As<bool>() rejects with "cannot convert object to target type".
-        return result.IsTrue();
+        lock (_gate)
+        {
+            var key = new StudyKey(study.Storage, study.StudyId);
+            if (!_shadows.TryGetValue(key, out OptunaHubShadow? shadow))
+            {
+                shadow = OptunaHubShadow.Create(study);
+                _shadows[key] = shadow;
+            }
+            shadow.Sync(study);
+            OptunaHubShadow.Mirror mirror = shadow.MirrorOf(trial);
+
+            // Trial.should_prune: `self.study.pruner.prune(self.study, self._get_latest_trial())`.
+            using PyObject latest = shadow.LatestTrial(mirror);
+            return shadow.Call(study, trial, mirror, () =>
+            {
+                using PyObject result = Python.optuna.pruners.BasePruner.prune(Pruner, shadow.Study, latest);
+                // IsTrue() (Python truthiness) not As<bool>(): a pruner may return a numpy bool_ from its
+                // comparison, which As<bool>() rejects with "cannot convert object to target type".
+                return result.IsTrue();
+            });
+        }
     });
 
-    // ---- shadow study (finished trials + their intermediate values) ------------------------------
-
-    /// <summary>Builds an in-memory Python study containing earlier finished trials for sampler or pruner replay.</summary>
-    /// <param name="study">The study whose trial history is mirrored, or its borrowed Python shadow-study handle.</param>
-    /// <param name="currentNumber">The current trial number; only earlier finished trials are included in the shadow study.</param>
-    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
-    private static PyObject BuildStudy(Study study, int currentNumber)
-    {
-        OptunaHubRuntime.EnsureQuiet();
-        // Optuna pruning is single-objective — mirror the shadow study on the first direction.
-        StudyDirection dir = study.Directions.Count > 0 ? study.Directions[0] : StudyDirection.Minimize;
-        PyObject pystudy = Python.optuna.create_study(new[] { dir });
-
-        foreach (var ft in study.GetTrials(deepcopy: false, states: null))
-        {
-            if (ft.Number >= currentNumber || !ft.State.IsFinished())
-                continue;
-            using var pyTrial = Python.optuna.trial.create_trial(
-                ft.State, ft.Values, ft.Params, ft.Distributions, ft.IntermediateValues);
-            Python.optuna.Study.add_trial(pystudy, pyTrial);
-        }
-        return pystudy;
-    }
-
-    // Open a running trial and replay this trial's reported intermediate values onto it — that is what
-    // the pruner reads (trial.intermediate_values / last_step) to decide.
-    /// <summary>Adds a running trial to the Python shadow study and returns its frozen snapshot.</summary>
-    /// <param name="pystudy">The borrowed Python shadow study that receives a new running trial.</param>
-    /// <param name="trial">The trial being mirrored, sampled, or checked for optimizer compatibility.</param>
-    /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
-    private static PyObject OpenRunningTrial(PyObject pystudy, FrozenTrial trial)
-    {
-        using PyObject running = Python.optuna.Study.ask(pystudy);
-        foreach (var (step, value) in trial.IntermediateValues)
-            Python.optuna.Trial.report(running, value, step);
-        int number = Python.optuna.Trial.number_t(running);
-        using PyObject trials = Python.optuna.Study.get_trials(pystudy, deepcopy: false);
-        return trials[new PyInt(number)];
-    }
-
-    /// <summary>Releases owned Python references while holding the GIL.</summary>
+    /// <summary>Releases owned Python references (the pruner and every shadow study) while holding the GIL.</summary>
     public void Dispose()
     {
         var pruner = _pruner;
         _pruner = null;
-        PythonRuntime.Run(() => pruner?.Dispose());
+        PythonRuntime.Run(() =>
+        {
+            lock (_gate)
+            {
+                foreach (OptunaHubShadow shadow in _shadows.Values)
+                    shadow.Dispose();
+                _shadows.Clear();
+            }
+            pruner?.Dispose();
+        });
     }
+
+    /// <summary>A study's identity across <see cref="Study" /> objects: its storage instance and id.</summary>
+    /// <param name="Storage">The storage instance, compared by reference.</param>
+    /// <param name="StudyId">The study's id in that storage.</param>
+    private readonly record struct StudyKey(BaseStorage Storage, int StudyId);
 }

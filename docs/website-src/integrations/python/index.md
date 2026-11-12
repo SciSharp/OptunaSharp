@@ -19,9 +19,10 @@ Start with the [runtime setup](pythonnet.md), then follow the integration's inst
 ## Choose a bridge
 
 Use **OptunaHub** to load a contributor package, run a benchmark with an OptunaSharp sampler, or try a
-Python sampler or pruner through its supported Optuna protocol. Its shadow-study adapter has a narrower
-state contract than a Python study: read the [compatibility limits](optunahub.md#compatibility-and-state)
-before choosing a registry method.
+Python sampler or pruner through its supported Optuna protocol. Its shadow study mirrors the C# study
+trial for trial, and the tested registry methods give the same trials as when run natively. A method's
+internal Python state is not persisted, so read the
+[compatibility limits](optunahub.md#compatibility-and-state) before choosing a registry method.
 
 Use **BoTorch** for acquisition functions implemented by the actual PyTorch/GPyTorch stack, including
 multi-objective and constrained Bayesian optimization. Use **pycma** when reproducing the Python

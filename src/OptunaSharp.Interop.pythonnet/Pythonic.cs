@@ -31,14 +31,24 @@ internal static class Python
     /// <summary><c>import optuna</c> — the fixed optuna calls the bridge makes, reached as <c>Python.optuna.*</c>.</summary>
     internal static class optuna
     {
-        /// <summary><c>optuna.create_study(directions=[...])</c> — the in-memory shadow study.</summary>
+        /// <summary><c>optuna.create_study(directions=[...], study_name=...)</c> — the in-memory shadow study.</summary>
         /// <param name="directions">One direction per objective, in objective-index order.</param>
+        /// <param name="studyName">
+        ///     The study name, or null for Optuna's generated one. The shadow carries the OptunaSharp study's name: some
+        ///     hub objects derive state from it (<c>HyperbandPruner</c> assigns brackets by
+        ///     <c>crc32(f"{study.study_name}_{trial.number}")</c>).
+        /// </param>
         /// <returns>A new owned Python reference; dispose it while holding the GIL. Input handles remain owned by their callers.</returns>
         /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
-        internal static PyObject create_study(IReadOnlyList<StudyDirection> directions)
+        internal static PyObject create_study(IReadOnlyList<StudyDirection> directions, string? studyName = null)
         {
             using var createStudy = OptunaHubRuntime.Optuna.GetAttr("create_study");
             using var kwargs = new PyDict();
+            if (studyName is not null)
+            {
+                using var name = studyName.ToPython();
+                kwargs["study_name"] = name;
+            }
             var items = new PyObject[directions.Count];
             for (int i = 0; i < items.Length; i++)
                 items[i] = (directions[i] == StudyDirection.Maximize ? "maximize" : "minimize").ToPython();
@@ -318,6 +328,30 @@ internal static class Python
                     return sampleIndependent.Invoke(new[] { study, trial, name, dist });
                 }
 
+                /// <summary><c>sampler.before_trial(study, trial)</c>.</summary>
+                /// <param name="sampler">The Python sampler handle owned by the wrapper, or borrowed by a low-level invocation.</param>
+                /// <param name="study">The borrowed Python shadow-study handle; use it only while holding the GIL.</param>
+                /// <param name="trial">The borrowed trial record (the trial's cached record, as <c>Trial.__init__</c> passes it).</param>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
+                internal static void before_trial(PyObject sampler, PyObject study, PyObject trial)
+                {
+                    using var beforeTrial = sampler.GetAttr("before_trial");
+                    using var _ = beforeTrial.Invoke(study, trial);
+                }
+
+                /// <summary><c>sampler.after_trial(study, trial, state, values)</c>.</summary>
+                /// <param name="sampler">The Python sampler handle owned by the wrapper, or borrowed by a low-level invocation.</param>
+                /// <param name="study">The borrowed Python shadow-study handle; use it only while holding the GIL.</param>
+                /// <param name="trial">The borrowed trial record (the stored record, as <c>_tell_with_warning</c> passes it).</param>
+                /// <param name="state">The borrowed <c>optuna.trial.TrialState</c> the trial finishes with.</param>
+                /// <param name="values">The borrowed objective-value list, or <c>None</c>.</param>
+                /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
+                internal static void after_trial(PyObject sampler, PyObject study, PyObject trial, PyObject state, PyObject values)
+                {
+                    using var afterTrial = sampler.GetAttr("after_trial");
+                    using var _ = afterTrial.Invoke(new[] { study, trial, state, values });
+                }
+
                 /// <summary><c>sampler.reseed_rng()</c>.</summary>
                 /// <param name="sampler">The Python sampler handle owned by the wrapper, or borrowed by a low-level invocation.</param>
                 /// <exception cref="global::Python.Runtime.PythonException">The Python attribute lookup, constructor, or operation fails.</exception>
@@ -349,6 +383,296 @@ internal static class Python
                 }
             }
         }
+    }
+
+    /// <summary>
+    ///     The OptunaHub bridges' shadow-study helpers (<see cref="OptunaHubShadow" />): a small Python module defined once
+    ///     in the embedded interpreter, whose functions make the storage-level writes a native Optuna trial makes, reached
+    ///     as <c>Python.optunasharp_shadow.*</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Python source rather than a chain of C-API calls, so each helper reads as the Optuna code it mirrors
+    ///     (<c>Trial._suggest</c>, <c>Trial.report</c>, <c>Trial.set_user_attr</c>, <c>Trial._get_latest_trial</c>,
+    ///     <c>_tell_with_warning</c>'s state write) and diffs against it. The module is built on first use and kept for
+    ///     the process, like <see cref="PythonRuntime.Import" />'s cache.
+    /// </remarks>
+    internal static class optunasharp_shadow
+    {
+        /// <summary>The module's source.</summary>
+        private const string Source = """
+            import copy
+
+            import optuna
+            from optuna.trial._trial import _LazyTrialSystemAttrs
+
+
+            def add_trial(study, state, values, params, distributions, user_attrs, system_attrs, intermediate_values):
+                # One OptunaSharp trial, in any state, as the shadow's next trial; returns its trial id.
+                template = optuna.trial.create_trial(
+                    state=state, values=values, params=params, distributions=distributions, user_attrs=user_attrs,
+                    system_attrs=system_attrs, intermediate_values=intermediate_values)
+                return study._storage.create_new_trial(study._study_id, template_trial=template)
+
+
+            def begin_trial(study):
+                # Study.ask: "Sync storage once every trial." Samplers read the history through
+                # study._get_trials(use_cache=True), which keeps the first read until this reset.
+                study._thread_local.cached_all_trials = None
+
+
+            def get_trial(study, trial_id):
+                return study._storage.get_trial(trial_id)
+
+
+            def latest(study, cached):
+                # Trial._get_latest_trial
+                trial = copy.copy(cached)
+                trial.system_attrs = _LazyTrialSystemAttrs(cached._trial_id, study._storage)
+                return trial
+
+
+            def set_param(study, cached, trial_id, name, value, distribution):
+                # Trial._suggest, after the value is chosen
+                study._storage.set_trial_param(trial_id, name, distribution.to_internal_repr(value), distribution)
+                if cached is not None:
+                    cached.distributions[name] = distribution
+                    cached.params[name] = value
+
+
+            def report(study, cached, trial_id, step, value):
+                # Trial.report
+                study._storage.set_trial_intermediate_value(trial_id, step, value)
+                if cached is not None:
+                    cached.intermediate_values[step] = value
+
+
+            def set_user_attr(study, cached, trial_id, key, value):
+                # Trial.set_user_attr
+                study._storage.set_trial_user_attr(trial_id, key, value)
+                if cached is not None:
+                    cached.user_attrs[key] = value
+
+
+            def set_system_attr(study, trial_id, key, value):
+                study._storage.set_trial_system_attr(trial_id, key, value)
+
+
+            def set_study_user_attr(study, key, value):
+                study._storage.set_study_user_attr(study._study_id, key, value)
+
+
+            def set_study_system_attr(study, key, value):
+                study._storage.set_study_system_attr(study._study_id, key, value)
+
+
+            def set_state(study, trial_id, state, values):
+                study._storage.set_trial_state_values(trial_id, state, values)
+
+
+            def attrs(study, trial_id):
+                # Shallow copies of the four dictionaries a hub object may write to.
+                storage = study._storage
+                return (
+                    dict(storage.get_study_user_attrs(study._study_id)),
+                    dict(storage.get_study_system_attrs(study._study_id)),
+                    dict(storage.get_trial_user_attrs(trial_id)),
+                    dict(storage.get_trial_system_attrs(trial_id)),
+                )
+
+
+            def changed(before, after):
+                # By identity: a storage write stores the new value object, and identity works for values without a
+                # usable `==` (a NumPy array's is element-wise).
+                return {key: value for key, value in after.items() if key not in before or before[key] is not value}
+            """;
+
+        /// <summary>The module, built from <see cref="Source" /> on first use; process-scoped, never disposed.</summary>
+        private static PyModule? _module;
+
+        /// <summary>The module, building it on first use.</summary>
+        /// <exception cref="global::Python.Runtime.PythonException">The source fails to run (Optuna missing or changed).</exception>
+        private static PyModule Module => _module ??= PyModule.FromString("optunasharp_shadow", Source);
+
+        /// <summary>Calls one of the module's functions and returns its result, owned by the caller.</summary>
+        /// <param name="function">The function's name.</param>
+        /// <param name="args">The borrowed arguments.</param>
+        /// <returns>A new owned reference; dispose it under the GIL.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The function raises.</exception>
+        private static PyObject Call(string function, params PyObject[] args)
+        {
+            using PyObject fn = Module.GetAttr(function);
+            return fn.Invoke(args);
+        }
+
+        /// <summary>Calls one of the module's functions for its effect only.</summary>
+        /// <param name="function">The function's name.</param>
+        /// <param name="args">The borrowed arguments.</param>
+        /// <exception cref="global::Python.Runtime.PythonException">The function raises.</exception>
+        private static void Do(string function, params PyObject[] args)
+        {
+            using PyObject _ = Call(function, args);
+        }
+
+        /// <summary>A borrowed reference, or <c>None</c> for null, for an optional argument.</summary>
+        /// <param name="value">The borrowed reference, or null.</param>
+        /// <param name="none">Receives the owned <c>None</c> to dispose, when <paramref name="value" /> is null.</param>
+        /// <returns>The argument to pass.</returns>
+        private static PyObject OrNone(PyObject? value, out PyObject? none)
+        {
+            none = value is null ? ((object?)null).ToPython() : null;
+            return value ?? none!;
+        }
+
+        /// <summary><c>add_trial(study, state, values, params, distributions, user_attrs, system_attrs, intermediate_values)</c>.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="state">The borrowed <c>TrialState</c>.</param>
+        /// <param name="values">The borrowed value list, or <c>None</c>.</param>
+        /// <param name="parameters">The borrowed parameter dict (external values).</param>
+        /// <param name="distributions">The borrowed distribution dict.</param>
+        /// <param name="userAttrs">The borrowed user-attribute dict.</param>
+        /// <param name="systemAttrs">The borrowed system-attribute dict.</param>
+        /// <param name="intermediateValues">The borrowed step-to-value dict.</param>
+        /// <returns>The new trial's shadow trial id.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">Optuna rejects the trial (<c>create_trial</c>'s validation) or the write fails.</exception>
+        internal static int add_trial(PyObject study, PyObject state, PyObject values, PyObject parameters,
+            PyObject distributions, PyObject userAttrs, PyObject systemAttrs, PyObject intermediateValues)
+        {
+            using PyObject id = Call("add_trial",
+                study, state, values, parameters, distributions, userAttrs, systemAttrs, intermediateValues);
+            return id.As<int>();
+        }
+
+        /// <summary>
+        ///     <c>begin_trial(study)</c>: clears the study's per-thread trial cache, as <c>Study.ask</c> does for every trial,
+        ///     so a sampler reading <c>study._get_trials(use_cache=True)</c> (CMA-ES, TPE, the GA samplers, QMC, GP) sees
+        ///     the history as of this trial rather than as of its first read.
+        /// </summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <exception cref="global::Python.Runtime.PythonException">The study has no per-thread cache (an incompatible Optuna).</exception>
+        internal static void begin_trial(PyObject study) => Do("begin_trial", study);
+
+        /// <summary><c>get_trial(study, trial_id)</c>: the storage's record of the trial.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="trialId">The shadow trial id.</param>
+        /// <returns>A new owned reference; dispose it under the GIL.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The read fails.</exception>
+        internal static PyObject get_trial(PyObject study, int trialId)
+        {
+            using var id = new PyInt(trialId);
+            return Call("get_trial", study, id);
+        }
+
+        /// <summary><c>latest(study, cached)</c>: <c>Trial._get_latest_trial()</c> of a trial's cached record.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="cached">The borrowed cached record.</param>
+        /// <returns>A new owned reference; dispose it under the GIL.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The copy fails.</exception>
+        internal static PyObject latest(PyObject study, PyObject cached) => Call("latest", study, cached);
+
+        /// <summary><c>set_param(study, cached, trial_id, name, value, distribution)</c>.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="cached">The borrowed cached record to update in place, or null.</param>
+        /// <param name="trialId">The shadow trial id.</param>
+        /// <param name="name">The borrowed parameter name.</param>
+        /// <param name="value">The borrowed external value.</param>
+        /// <param name="distribution">The borrowed distribution.</param>
+        /// <exception cref="global::Python.Runtime.PythonException">The write fails.</exception>
+        internal static void set_param(PyObject study, PyObject? cached, int trialId, PyObject name, PyObject value,
+            PyObject distribution)
+        {
+            using var id = new PyInt(trialId);
+            PyObject c = OrNone(cached, out PyObject? none);
+            using (none)
+                Do("set_param", study, c, id, name, value, distribution);
+        }
+
+        /// <summary><c>report(study, cached, trial_id, step, value)</c>.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="cached">The borrowed cached record to update in place, or null.</param>
+        /// <param name="trialId">The shadow trial id.</param>
+        /// <param name="step">The borrowed step.</param>
+        /// <param name="value">The borrowed value.</param>
+        /// <exception cref="global::Python.Runtime.PythonException">The write fails.</exception>
+        internal static void report(PyObject study, PyObject? cached, int trialId, PyObject step, PyObject value)
+        {
+            using var id = new PyInt(trialId);
+            PyObject c = OrNone(cached, out PyObject? none);
+            using (none)
+                Do("report", study, c, id, step, value);
+        }
+
+        /// <summary><c>set_user_attr(study, cached, trial_id, key, value)</c>.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="cached">The borrowed cached record to update in place, or null.</param>
+        /// <param name="trialId">The shadow trial id.</param>
+        /// <param name="key">The borrowed key.</param>
+        /// <param name="value">The borrowed value.</param>
+        /// <exception cref="global::Python.Runtime.PythonException">The write fails.</exception>
+        internal static void set_user_attr(PyObject study, PyObject? cached, int trialId, PyObject key, PyObject value)
+        {
+            using var id = new PyInt(trialId);
+            PyObject c = OrNone(cached, out PyObject? none);
+            using (none)
+                Do("set_user_attr", study, c, id, key, value);
+        }
+
+        /// <summary><c>set_system_attr(study, trial_id, key, value)</c>.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="trialId">The shadow trial id.</param>
+        /// <param name="key">The borrowed key.</param>
+        /// <param name="value">The borrowed value.</param>
+        /// <exception cref="global::Python.Runtime.PythonException">The write fails.</exception>
+        internal static void set_system_attr(PyObject study, int trialId, PyObject key, PyObject value)
+        {
+            using var id = new PyInt(trialId);
+            Do("set_system_attr", study, id, key, value);
+        }
+
+        /// <summary><c>set_study_user_attr(study, key, value)</c>.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="key">The borrowed key.</param>
+        /// <param name="value">The borrowed value.</param>
+        /// <exception cref="global::Python.Runtime.PythonException">The write fails.</exception>
+        internal static void set_study_user_attr(PyObject study, PyObject key, PyObject value)
+            => Do("set_study_user_attr", study, key, value);
+
+        /// <summary><c>set_study_system_attr(study, key, value)</c>.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="key">The borrowed key.</param>
+        /// <param name="value">The borrowed value.</param>
+        /// <exception cref="global::Python.Runtime.PythonException">The write fails.</exception>
+        internal static void set_study_system_attr(PyObject study, PyObject key, PyObject value)
+            => Do("set_study_system_attr", study, key, value);
+
+        /// <summary><c>set_state(study, trial_id, state, values)</c>.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="trialId">The shadow trial id.</param>
+        /// <param name="state">The borrowed <c>TrialState</c>.</param>
+        /// <param name="values">The borrowed value list, or <c>None</c>.</param>
+        /// <exception cref="global::Python.Runtime.PythonException">The write fails (a finished trial cannot change).</exception>
+        internal static void set_state(PyObject study, int trialId, PyObject state, PyObject values)
+        {
+            using var id = new PyInt(trialId);
+            Do("set_state", study, id, state, values);
+        }
+
+        /// <summary><c>attrs(study, trial_id)</c>: copies of the study's and the trial's user and system attributes.</summary>
+        /// <param name="study">The borrowed shadow study.</param>
+        /// <param name="trialId">The shadow trial id.</param>
+        /// <returns>A new owned 4-tuple (study user, study system, trial user, trial system); dispose it under the GIL.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The reads fail.</exception>
+        internal static PyObject attrs(PyObject study, int trialId)
+        {
+            using var id = new PyInt(trialId);
+            return Call("attrs", study, id);
+        }
+
+        /// <summary><c>changed(before, after)</c>: the keys <paramref name="after" /> gained or replaced.</summary>
+        /// <param name="before">The borrowed dict before a call.</param>
+        /// <param name="after">The borrowed dict after it.</param>
+        /// <returns>A new owned dict; dispose it under the GIL.</returns>
+        /// <exception cref="global::Python.Runtime.PythonException">The comparison fails.</exception>
+        internal static PyObject changed(PyObject before, PyObject after) => Call("changed", before, after);
     }
 
     /// <summary><c>import optunahub</c> — the fixed optunahub calls, reached as <c>Python.optunahub.*</c>.</summary>

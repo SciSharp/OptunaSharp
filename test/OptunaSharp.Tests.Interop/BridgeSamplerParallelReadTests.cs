@@ -36,8 +36,9 @@ namespace OptunaSharp.Tests.Interop;
 ///         running trials whose parameters are stored), threaded 0-1/0. pymoo NSGA-II and AGE-MOEA-2 lockstep 42/0
 ///         (one offspring per round), threaded 0-2 collisions and 7-8 history repeats: under real threads the bridge
 ///         re-hands offspring a told trial already evaluated, which one trial at a time never happens. OptunaHub
-///         <c>random_search</c> and <c>pso</c> 0/0 in both, the hub's <c>differential_evolution</c> 49/0 in both (it
-///         ignores running trials). BoTorch 0/0 in both, with and without <c>considerRunningTrials</c>.
+///         <c>random_search</c> and <c>pso</c> 0/0 in both, the hub's <c>differential_evolution</c> 0/4 in both since the
+///         persistent shadow study of 2026-11-12, as native Optuna (QA-72; 49/0 before, see the test). BoTorch 0/0 in
+///         both, with and without <c>considerRunningTrials</c>.
 ///     </para>
 ///     <para>
 ///         Self-skips (Inconclusive) without the engine or the bridge's Python package, like the other RequiresPython
@@ -165,19 +166,27 @@ public class BridgeSamplerParallelReadTests : OptunaInteropTestBase
 
     /// <summary>
     ///     The OptunaHub bridge adds no repeat of its own: a hub sampler that draws every point afresh
-    ///     (<c>random_search</c>) or queues distinct candidates (<c>pso</c>) repeats nothing in either volley, and one
-    ///     that ignores running trials (<c>differential_evolution</c>) hands every trial of a round one point in both,
-    ///     49 collisions, because each read sees the same told trials.
+    ///     (<c>random_search</c>) or queues distinct candidates (<c>pso</c>) repeats nothing in either volley, and
+    ///     <c>differential_evolution</c>, which picks each trial's individual by <c>trial.number % population_size</c>,
+    ///     repeats what native Optuna repeats: no collision, as the shadow study mirrors every trial, running ones
+    ///     included, under its own number, and 4 history repeats in round 7, where 4 trials receive points earlier trials
+    ///     already evaluated. Native Optuna does the same under the same lockstep: all 64 points identical, bit for bit
+    ///     (measured 2026-11-12). The threaded volley gives the same counts, as the bridge serializes every call on the
+    ///     Python thread (three runs). Before the persistent shadow (QA-72) each read's shadow trial was numbered after
+    ///     the finished trials only and its history cache never refreshed: 49 collisions and no history repeat, artifacts
+    ///     of the bridge.
     /// </summary>
     /// <param name="package">The registry package under <c>refs/optunahub-registry/package</c>.</param>
     /// <param name="className">The sampler class the package exports.</param>
     /// <param name="collisions">The collisions pinned for both volleys.</param>
+    /// <param name="historyRepeats">The history repeats pinned for both volleys.</param>
     [TestMethod]
     [TestCategory("RequiresPython")]
-    [DataRow("samplers/random_search", "RandomSampler", 0)]
-    [DataRow("samplers/pso", "PSOSampler", 0)]
-    [DataRow("samplers/differential_evolution", "DESampler", 49)]
-    public void OptunaHub_BothVolleys_RepeatWhatTheHubSamplerRepeats(string package, string className, int collisions)
+    [DataRow("samplers/random_search", "RandomSampler", 0, 0)]
+    [DataRow("samplers/pso", "PSOSampler", 0, 0)]
+    [DataRow("samplers/differential_evolution", "DESampler", 0, 4)]
+    public void OptunaHub_BothVolleys_RepeatWhatTheHubSamplerRepeats(
+        string package, string className, int collisions, int historyRepeats)
     {
         RequireOptunaHubOrInconclusive();
         string registry = Path.Combine(RepoRoot(), "refs", "optunahub-registry", "package");
@@ -196,9 +205,9 @@ public class BridgeSamplerParallelReadTests : OptunaInteropTestBase
             threadedSampler, false, ParallelReads.Space.Continuous, Rounds);
 
         lockstep.Collisions.Should().Be(collisions, "lockstep: {0}", lockstep);
-        lockstep.HistoryRepeats.Should().Be(0, "lockstep: {0}", lockstep);
+        lockstep.HistoryRepeats.Should().Be(historyRepeats, "lockstep: {0}", lockstep);
         threaded.Collisions.Should().Be(collisions, "threaded: {0}", threaded);
-        threaded.HistoryRepeats.Should().Be(0, "threaded: {0}", threaded);
+        threaded.HistoryRepeats.Should().Be(historyRepeats, "threaded: {0}", threaded);
     }
 
     /// <summary>

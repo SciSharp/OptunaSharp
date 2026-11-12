@@ -128,32 +128,43 @@ study.Optimize(trial =>
 }, nTrials: 30, nJobs: 1);
 ```
 
-The pruner rebuilds a Python study for each decision, including finished trials' intermediate values
-and the current trial's reports. Pruning is single-objective.
+The pruner keeps its own shadow study, described below, so a stateful pruner sees what it wrote earlier:
+successive halving and Hyperband record each rung a trial completes and compare it with the other
+trials' records, and they prune as in Python. Pruning is single-objective.
 
 ## Compatibility and state
 
-The sampler maintains a **shadow study** for the current trial. On the next trial it rebuilds that
-in-memory Python study from prior finished trials, opens a running trial, and delegates
-`infer_relative_search_space`, `sample_relative` and `sample_independent`. `ReseedRng` delegates to
-Python `reseed_rng` when present. The Python sampler instance survives across these rebuilt studies.
+The sampler and the pruner each keep a **shadow study**: one in-memory Python study per OptunaSharp
+study, kept in lockstep with it and handed to the Python object. Before every call the bridge mirrors
+each OptunaSharp trial, in number order and in whatever state it is: its values, parameters,
+distributions, user and system attributes and intermediate values, then the study's attributes. The
+sampler forwards all five hooks, `before_trial`, `infer_relative_search_space`, `sample_relative`,
+`sample_independent` and `after_trial`, with the trial objects Optuna itself passes. It clears the
+shadow study's per-trial history cache as `Study.ask` does, so CMA-ES, TPE and the GA samplers read the
+history as of the current trial. The shadow study carries the OptunaSharp study's name. Attributes the
+Python object writes, such as a generation counter, a swarm, constraints or a pruning rung, are written
+to the OptunaSharp trial or study as well. `ReseedRng` delegates to Python `reseed_rng` when present.
 
-This is an intentionally limited adapter:
+Measured against the same objects run natively: PSO, MO-CMA, the NSGA-II variants
+(`nsgaii_with_initial_trials`, `speaii`), the implicit natural gradient, differential evolution,
+restart CMA-ES, Lévy flight, Nelder-Mead, `tpe_union_multivariate`, random search and the Optuna team's
+`AutoSampler`, and the successive-halving, Hyperband, median, percentile, Wilcoxon and threshold pruners,
+give the same trials bit for bit
+([OptunaHubNativeParityTests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/OptunaHubNativeParityTests.cs)).
 
-- Use one wrapper per study and `nJobs: 1`. Concurrent running trials are not mirrored.
-- The sampler mirror copies finished states, objective values, parameters and distributions. It does
-  not copy study/trial user attributes, system attributes, constraints or intermediate values.
-- It does not forward Python sampler `before_trial` or `after_trial` hooks. Python mutations to the
-  shadow study are not written back to C# storage.
-- The pruner includes intermediate values, but likewise does not synchronize arbitrary metadata or
-  Python storage writes.
-- The Python sampler's internal state is not checkpointed by OptunaSharp storage. Persisting C# trials
-  alone does not establish an identical restarted trajectory for every registry sampler.
+Remaining limits:
 
-Consequently, loading a module successfully is not evidence that every method in the registry is
-compatible. Algorithms that depend on hooks, persistent storage attributes, concurrent trials or other
-unmirrored state need additional adaptation and validation. The bridge is not a shared-database
-connection between Python Optuna and OptunaSharp.
+- The Python object's internal state lives in Python, not in OptunaSharp's storage. Persisting the C#
+  trials alone does not resume every registry sampler identically after a restart.
+- Attribute values with no JSON shape, such as NumPy arrays or arbitrary objects, stay in the shadow
+  study and are not written to the C# storage.
+- Calls are serialized on the Python thread. Trials of parallel workers are mirrored with the state the
+  storage holds when a call starts, as a native sampler reads them, but each Python call sees one shared
+  history cache where native Optuna keeps one per thread.
+- A study that the C# `HyperbandPruner` filters into brackets is mirrored whole.
+
+The bridge is not a shared-database connection between Python Optuna and OptunaSharp: the shadow study
+lives in the process and mirrors one OptunaSharp study.
 
 ## Lifetime and validation
 
@@ -164,11 +175,15 @@ escape the callback.
 
 The existing [bridge tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/OptunaHubBridgeParityTests.cs)
 exercise a local mixed-distribution toy benchmark, the registry's `RandomSampler`, and a median pruner
-that actually prunes trials. These are behavioral integration checks, not a registry-wide parity
-guarantee. They report inconclusive when Python, required packages or the pinned registry checkout
-are missing.
+that actually prunes trials. The
+[native-parity tests](https://github.com/SciSharp/OptunaSharp/blob/main/test/OptunaSharp.Tests.Interop/OptunaHubNativeParityTests.cs)
+run 12 registry samplers and 6 pruners natively and through the bridge, and compare every trial. The
+registry holds more methods than they cover, so validate a method outside that list before relying on
+it. The tests report inconclusive when Python, a required package or the pinned registry checkout is
+missing.
 
 Source: [module factories](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/OptunaHubModule.cs),
 [sampler](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/OptunaHubSampler.cs),
 [pruner](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/OptunaHubPruner.cs),
+[shadow study](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/OptunaHubShadow.cs),
 [problem](https://github.com/SciSharp/OptunaSharp/blob/main/src/OptunaSharp.Interop.pythonnet/OptunaHubProblem.cs).
