@@ -240,10 +240,144 @@ public class JournalConcurrencyTests
         var acquire = Task.Run(() => lockObj.Acquire());
         ((IAsyncResult)acquire).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(1.5)).Should().BeFalse("no grace period means no forced release");
 
-        File.Delete(_path + ".lock");
+        // Removed the way a release removes a lock, renamed away and then deleted, so the lock path is free at once.
+        // Deleting it in place leaves the name "delete pending" for a moment on Windows, and the waiter's create used to
+        // land in that window now and then (2 of about 8 full runs on a loaded machine); that case has its own test,
+        // Lock_DeletedInPlace_IsWaitedOutOnWindows.
+        string removed = _path + ".lock." + Guid.NewGuid().ToString("N") + ".removed";
+        File.Move(_path + ".lock", removed);
+        File.Delete(removed);
         ((IAsyncResult)acquire).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(10)).Should().BeTrue();
         acquire.Result.Should().BeTrue();
         lockObj.Release();
+    }
+
+    /// <summary>
+    ///     A lock path held "delete pending" (deleted in place, its deleting handle still open: the window an in-place
+    ///     delete opens on Windows) is waited out. While the name is pending a plain exclusive create is denied, the
+    ///     waiter keeps waiting instead of failing, and it takes the lock once the name is gone. Optuna's waiter raises
+    ///     <c>PermissionError</c> in that window, hence <c>[Misaligned]</c> (owner's choice, 2026-11-12).
+    /// </summary>
+    /// <exception cref="System.ComponentModel.Win32Exception">The test cannot put the lock path in the delete-pending state.</exception>
+    [TestMethod]
+    [WindowsOnly]
+    [Misaligned]
+    public void Lock_DeletedInPlace_IsWaitedOutOnWindows()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("The delete-pending state is Windows'.");
+            return;
+        }
+
+        string lockPath = _path + ".lock";
+        File.WriteAllText(lockPath, "");
+        var lockObj = new JournalFileOpenLock(_path, gracePeriod: null);
+        Task<bool> acquire;
+        using (DeletePending.Hold(lockPath))
+        {
+            // The window is real: an exclusive create is denied while the name is pending (else this test proves nothing).
+            Action create = () => new FileStream(lockPath, FileMode.CreateNew, FileAccess.Write, FileShare.None).Dispose();
+            create.Should().Throw<UnauthorizedAccessException>();
+
+            acquire = Task.Run(() => lockObj.Acquire());
+            // A waiter that failed on the denial would have completed (faulted) by now.
+            ((IAsyncResult)acquire).AsyncWaitHandle.WaitOne(TimeSpan.FromMilliseconds(300)).Should()
+                .BeFalse("the waiter waits out a pending name instead of failing");
+        }
+
+        ((IAsyncResult)acquire).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(10)).Should().BeTrue();
+        acquire.Result.Should().BeTrue();
+        lockObj.Release();
+    }
+
+    /// <summary>
+    ///     A denial that does not pass (a directory standing at the lock path denies every create) is still reported, as
+    ///     the <see cref="UnauthorizedAccessException" /> it is, once the run of denials outlasts
+    ///     <see cref="JournalFileLockProtocol.MaxDeniedStreakMilliseconds" />: the wait for a pending name is bounded.
+    /// </summary>
+    /// <exception cref="UnauthorizedAccessException">Never escapes: the assertion expects it.</exception>
+    [TestMethod]
+    [WindowsOnly]
+    public void Lock_PersistentlyDenied_IsReportedAfterTheBound()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("The waited-out denial is Windows-only; elsewhere a denial is reported at once.");
+            return;
+        }
+
+        string lockPath = _path + ".lock";
+        Directory.CreateDirectory(lockPath);
+        try
+        {
+            var lockObj = new JournalFileOpenLock(_path, gracePeriod: null);
+            var watch = Stopwatch.StartNew();
+            Action acquire = () => lockObj.Acquire();
+            acquire.Should().Throw<UnauthorizedAccessException>();
+            watch.Elapsed.Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(JournalFileLockProtocol.MaxDeniedStreakMilliseconds));
+            watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            Directory.Delete(lockPath);
+        }
+    }
+
+    /// <summary>Holds a file "delete pending" on Windows: the classic delete disposition, set on a handle kept open.</summary>
+    /// <remarks>
+    ///     <c>File.Delete</c> cannot do this on current Windows: it deletes with POSIX semantics, so the name is gone as soon
+    ///     as the call returns, and the window it opens lasts only while <c>DeleteFile</c> holds its own handle (measured
+    ///     2026-11-12). The classic disposition keeps the name until the handle that set it is closed.
+    /// </remarks>
+    private static class DeletePending
+    {
+        private const uint DeleteAccess = 0x00010000;
+        private const uint ShareReadWriteDelete = 0x7;
+        private const uint OpenExisting = 3;
+        private const int FileDispositionInfo = 4;
+
+        /// <summary>Marks <paramref name="path" /> for deletion and keeps its name pending until the returned handle is disposed.</summary>
+        /// <param name="path">An existing file.</param>
+        /// <returns>The handle that holds the pending deletion; disposing it removes the name.</returns>
+        /// <exception cref="System.ComponentModel.Win32Exception">The file cannot be opened for deletion, or the disposition cannot be set.</exception>
+        internal static Microsoft.Win32.SafeHandles.SafeFileHandle Hold(string path)
+        {
+            var handle = CreateFileW(path, DeleteAccess, ShareReadWriteDelete, IntPtr.Zero, OpenExisting, 0, IntPtr.Zero);
+            if (handle.IsInvalid)
+                throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+            byte deleteFile = 1;
+            if (!SetFileInformationByHandle(handle, FileDispositionInfo, ref deleteFile, 1))
+            {
+                int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                handle.Dispose();
+                throw new System.ComponentModel.Win32Exception(error);
+            }
+            return handle;
+        }
+
+        /// <summary>Win32 <c>CreateFileW</c>, here to open a file with DELETE access.</summary>
+        /// <param name="name">The file path.</param>
+        /// <param name="access">The requested access rights.</param>
+        /// <param name="share">The share mode.</param>
+        /// <param name="security">Security attributes; none.</param>
+        /// <param name="disposition">The creation disposition.</param>
+        /// <param name="flags">Flags and attributes; none.</param>
+        /// <param name="template">A template file; none.</param>
+        /// <returns>The handle; invalid on failure (see the last Win32 error).</returns>
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(
+            string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+
+        /// <summary>Win32 <c>SetFileInformationByHandle</c>, here with the one-byte <c>FILE_DISPOSITION_INFO</c>.</summary>
+        /// <param name="handle">A handle opened with DELETE access.</param>
+        /// <param name="infoClass">The information class (<c>FileDispositionInfo</c>).</param>
+        /// <param name="info">The structure: one byte, nonzero to delete.</param>
+        /// <param name="size">The structure's size in bytes.</param>
+        /// <returns>True on success (see the last Win32 error otherwise).</returns>
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetFileInformationByHandle(
+            Microsoft.Win32.SafeHandles.SafeFileHandle handle, int infoClass, ref byte info, uint size);
     }
 
     /// <summary>

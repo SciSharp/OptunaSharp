@@ -526,7 +526,16 @@ public class JournalFileOpenLock : BaseJournalFileLock
     /// <summary>Acquire a lock in a blocking way by creating a lock file.</summary>
     /// <returns>True after acquiring exclusive ownership.</returns>
     /// <exception cref="System.IO.IOException">Lock creation fails for a reason other than an existing lock.</exception>
-    /// <exception cref="System.UnauthorizedAccessException">Lock-file or symbolic-link creation is denied.</exception>
+    /// <exception cref="System.UnauthorizedAccessException">
+    ///     Lock-file creation is denied: off Windows on the first denial, as in Optuna; on Windows once denials have
+    ///     run unbroken for longer than <see cref="JournalFileLockProtocol.MaxDeniedStreakMilliseconds" /> (a lock file
+    ///     being deleted in place is waited out, not reported).
+    /// </exception>
+    /// <remarks>
+    ///     Waits out a lock path that is "delete pending" on Windows (see
+    ///     <see cref="JournalFileLockProtocol.MaxDeniedStreakMilliseconds" />): a stale lock someone deletes by hand while
+    ///     this waits no longer kills the waiter. This departs from Optuna, whose waiter raises <c>PermissionError</c> there.
+    /// </remarks>
     public override bool Acquire()
     {
         double sleepSecs = 0.001;
@@ -534,6 +543,8 @@ public class JournalFileOpenLock : BaseJournalFileLock
         long lastUpdateTimestamp = Environment.TickCount64;
         long lastWarningTimestamp = Environment.TickCount64;
         DateTime? mtime = null;
+        // When the current unbroken run of access-denied failures began, or -1 when the last attempt was not denied.
+        long deniedSince = -1;
         while (true)
         {
             try
@@ -542,8 +553,27 @@ public class JournalFileOpenLock : BaseJournalFileLock
                 new FileStream(_lockFile, FileMode.CreateNew, FileAccess.Write, FileShare.None).Dispose();
                 return true;
             }
+            catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+            {
+                // ERROR_ACCESS_DENIED from the exclusive create: the lock path is "delete pending" (deleted in place, its
+                // deleting handle not yet closed), or the path cannot be created at all. The first passes within
+                // milliseconds, so the waiter waits as for a held lock; a run longer than the bound is the second, and is
+                // reported as before. Releases never cause it (they rename the lock away), so Optuna's protocol, which
+                // fails here, is unchanged for every lock a worker takes and releases.
+                long now = Environment.TickCount64;
+                if (deniedSince < 0)
+                    deniedSince = now;
+                else if (now - deniedSince > JournalFileLockProtocol.MaxDeniedStreakMilliseconds)
+                    throw;
+
+                Thread.Sleep(TimeSpan.FromSeconds(sleepSecs));
+                sleepSecs = Math.Min(sleepSecs * 2, JournalFileLockProtocol.MaxRetrySleepSeconds);
+            }
             catch (IOException e) when (JournalFileLockProtocol.IsAlreadyExists(e))
             {
+                // The path exists normally again, so any run of denials is over.
+                deniedSince = -1;
+
                 // EEXIST from the exclusive create itself means another holder; see JournalFileSymlinkLock.Acquire
                 // for why the path is not re-checked. Other failures are not caught and propagate, as in Python.
                 if ((Environment.TickCount64 - lastWarningTimestamp) / 1000.0 > warningInterval)
@@ -642,6 +672,13 @@ public class JournalFileOpenLock : BaseJournalFileLock
 ///         throws for any other failure. Contention therefore never causes a switch, and a switch is permanent
 ///         for this instance. If the open-file protocol cannot create its file either (a missing directory, a
 ///         denied path), its exception propagates, so a journal that cannot be locked at all still fails loudly.
+///     </para>
+///     <para>
+///         <b>A lock deleted in place.</b> On Windows, a lock path someone deletes by hand is "delete pending" for a
+///         moment, and creating the symbolic link there is denied. That counts as a symbolic-link failure, so this
+///         instance switches to the open-file protocol, which waits such a window out
+///         (<see cref="JournalFileLockProtocol.MaxDeniedStreakMilliseconds" />). Both protocols use the one lock path,
+///         so exclusion holds across the switch. Releases never cause it: they rename the lock away first.
 ///     </para>
 ///     <para>
 ///         <b>Footgun fixed in 2026-10.</b> Both protocols used to decide "contention or real error" by
@@ -772,6 +809,32 @@ internal static class JournalFileLockProtocol
     ///     second per waiter (one existence check and one create), negligible next to an append's <c>fsync</c>.
     /// </remarks>
     internal const double MaxRetrySleepSeconds = 0.016;
+
+    /// <summary>
+    ///     Longest unbroken run of access-denied failures, in milliseconds, that <see cref="JournalFileOpenLock.Acquire" />
+    ///     waits out on Windows before it treats the denial as a real permission problem and rethrows.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Why a denial can be transient.</b> On Windows, creating a file whose name is "delete pending" fails with
+    ///         ERROR_ACCESS_DENIED (.NET's <see cref="UnauthorizedAccessException" />). A lock path becomes delete pending
+    ///         only when something deletes it in place: <c>DeleteFile</c> marks the file and the name stays until the
+    ///         deleting handle closes (until every handle closes where POSIX delete semantics are unavailable). Releases
+    ///         never do that: C# and Python release by renaming the lock away first. A person or tool deleting a stale
+    ///         lock by hand does, and so did a journal test (measured 2026-11-12: 5,070 denials in 40,000 contended
+    ///         acquisitions with in-place deletes on an idle machine, 14,277 under full CPU load, 0 with rename-then-delete).
+    ///     </para>
+    ///     <para>
+    ///         <b>Why bounded.</b> A directory the process may not write into, or a directory standing at the lock path,
+    ///         denies every attempt for good; after this long the denial is rethrown, so such a journal still fails, one
+    ///         second later than before. Off Windows a denial is always rethrown at once.
+    ///     </para>
+    ///     <para>
+    ///         <b>Departure from Optuna.</b> Optuna's <c>os.open(O_CREAT | O_EXCL)</c> raises <c>PermissionError</c> in the
+    ///         same window and catches only <c>FileExistsError</c>, so a Python waiter fails where this one waits.
+    ///     </para>
+    /// </remarks>
+    internal const long MaxDeniedStreakMilliseconds = 1000;
 
     /// <summary>True when a lock-acquire failure means the lock path already exists, so the caller should wait.</summary>
     /// <param name="e">The exception the exclusive create or the symbolic-link creation threw.</param>
