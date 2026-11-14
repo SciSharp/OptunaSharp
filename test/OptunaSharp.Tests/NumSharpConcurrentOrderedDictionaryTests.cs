@@ -3,20 +3,21 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using AwesomeAssertions;
-using OptunaSharp.Collections;
-using Clone = OptunaSharp.Collections.Concurrent;
+using NumSharp.Collections;
 
 namespace OptunaSharp.Tests;
 
 /// <summary>
-///     Pins the contract of <see cref="ConcurrentOrderedDict{TKey,TValue}" /> — the thread-safe, two-path
-///     (key + insertion-order index) collection built on the vendored concurrent dictionary. These tests are the
+///     Pins the contract OptunaSharp expects of NumSharp's <see cref="ConcurrentOrderedDictionary{TKey,TValue}" /> — the
+///     thread-safe, two-path (key + insertion-order index) collection OptunaSharp vendored as <c>ConcurrentOrderedDictionary</c>
+///     (over a vendored copy of dotnet's concurrent dictionary) until NumSharp 0.81.0 shipped it publicly; the copies are
+///     gone, these tests stayed, pointed at NumSharp's type, as the owner's TODO asked. These tests are the
 ///     guard rails for the load-bearing invariants: that the two paths observe one value, that enumeration is
 ///     value-order like a list, that keys stay unique, that removal preserves order and re-indexes, and that
 ///     concurrent use neither corrupts nor throws.
 /// </summary>
 [TestClass]
-public class ConcurrentOrderedDictTests
+public class NumSharpConcurrentOrderedDictionaryTests
 {
     /// <summary>A 16-byte value type that is not written atomically, so value replacement takes the clone-and-publish path.</summary>
     private struct Pair16
@@ -32,7 +33,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void TwoPaths_KeyAndIndex_SeeSameValues()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.Add("x", 1);
         d.Add("y", 2);
 
@@ -46,7 +47,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void Enumeration_ToArray_Values_AreValuesInInsertionOrder()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.Add("a", 10);
         d.Add("b", 20);
         d.Add("c", 30);
@@ -62,7 +63,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void Dedup_TryAddReturnsFalse_AddThrows()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.TryAdd("k", 1).Should().BeTrue();
         d.TryAdd("k", 2).Should().BeFalse();
         d.Count.Should().Be(1);
@@ -82,7 +83,7 @@ public class ConcurrentOrderedDictTests
             new KeyValuePair<string, int>("b", 2),
             new KeyValuePair<string, int>("a", 9),
         };
-        var d = new ConcurrentOrderedDict<string, int>(src);
+        var d = new ConcurrentOrderedDictionary<string, int>(src);
 
         d.Keys.Should().Equal("a", "b");
         d["a"].Should().Be(9);
@@ -93,7 +94,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void KeySet_UpdatesInPlace_KeepsPosition_OnBothPaths()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.Add("x", 1);
         d.Add("y", 2);
 
@@ -108,7 +109,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void IndexSet_ReplacesValue_KeepsKey_OnBothPaths()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.Add("x", 1);
         d.Add("y", 2);
 
@@ -123,7 +124,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void IndexOf_TryGetIndex_GetKeyAt()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.Add("a", 1);
         d.Add("b", 2);
         d.Add("c", 3);
@@ -141,7 +142,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void Remove_ByKey_ShiftsAndReindexes()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.Add("a", 1);
         d.Add("b", 2);
         d.Add("c", 3);
@@ -160,7 +161,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void RemoveAt_ShiftsAndReindexes()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.Add("a", 1);
         d.Add("b", 2);
         d.Add("c", 3);
@@ -177,7 +178,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void IntKey_BracketIsIndex_MethodsForKey()
     {
-        var d = new ConcurrentOrderedDict<int, string>();
+        var d = new ConcurrentOrderedDictionary<int, string>();
         d.Add(5, "five");
         d.Add(9, "nine");
 
@@ -195,7 +196,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void GetOrAdd_AddOrUpdate_TryUpdate()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
 
         d.GetOrAdd("a", 1).Should().Be(1);
         d.GetOrAdd("a", 99).Should().Be(1);
@@ -215,7 +216,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void Clear_Count_IsEmpty()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.IsEmpty.Should().BeTrue();
         d.Add("a", 1);
         d.Add("b", 2);
@@ -234,7 +235,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void CustomComparer_IsHonored()
     {
-        var d = new ConcurrentOrderedDict<string, int>(StringComparer.OrdinalIgnoreCase);
+        var d = new ConcurrentOrderedDictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         d.Add("Key", 1);
 
         d.ContainsKey("KEY").Should().BeTrue();
@@ -249,7 +250,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void NullKey_Throws()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         ((Action)(() => d.Add(null!, 1))).Should().Throw<ArgumentNullException>();
         ((Action)(() => d.TryAdd(null!, 1))).Should().Throw<ArgumentNullException>();
         ((Action)(() => _ = d[null!])).Should().Throw<ArgumentNullException>();
@@ -261,7 +262,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void IndexOutOfRange_Throws()
     {
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.Add("a", 1);
 
         ((Action)(() => _ = d[1])).Should().Throw<ArgumentOutOfRangeException>();
@@ -279,7 +280,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void NonAtomicValueType_ReplacementWorks()
     {
-        var d = new ConcurrentOrderedDict<string, Pair16>();
+        var d = new ConcurrentOrderedDictionary<string, Pair16>();
         d.Add("a", new Pair16 { A = 1, B = 2 });
         d.Add("b", new Pair16 { A = 3, B = 4 });
 
@@ -298,7 +299,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void Enumerator_IsSnapshot()
     {
-        var d = new ConcurrentOrderedDict<int, int>();
+        var d = new ConcurrentOrderedDictionary<int, int>();
         for (int i = 0; i < 3; i++)
         {
             d.Add(i, i);
@@ -323,7 +324,7 @@ public class ConcurrentOrderedDictTests
     public void Concurrent_Adds_AllPresent_And_Bijection()
     {
         const int n = 50_000;
-        var d = new ConcurrentOrderedDict<int, int>();
+        var d = new ConcurrentOrderedDictionary<int, int>();
 
         Parallel.For(0, n, i => d.TryAdd(i, i * 2).Should().BeTrue());
 
@@ -344,7 +345,7 @@ public class ConcurrentOrderedDictTests
     [TestMethod]
     public void Concurrent_ReadDuringWrite_NoThrow()
     {
-        var d = new ConcurrentOrderedDict<int, int>();
+        var d = new ConcurrentOrderedDictionary<int, int>();
         for (int i = 0; i < 1_000; i++)
         {
             d.Add(i, i);
@@ -387,7 +388,7 @@ public class ConcurrentOrderedDictTests
     {
         const int workers = 64;
         const int perWorker = 2_000;
-        var d = new ConcurrentOrderedDict<string, int>();
+        var d = new ConcurrentOrderedDictionary<string, int>();
         d.Add("k", 0);
 
         Parallel.For(0, workers, _ =>
@@ -407,7 +408,7 @@ public class ConcurrentOrderedDictTests
     public void Concurrent_GetOrAdd_Factory_SingleWinner()
     {
         const int workers = 64;
-        var d = new ConcurrentOrderedDict<int, string>();
+        var d = new ConcurrentOrderedDictionary<int, string>();
         var results = new string[workers];
 
         Parallel.For(0, workers, w => results[w] = d.GetOrAdd(42, _ => "v" + Guid.NewGuid()));
@@ -422,7 +423,7 @@ public class ConcurrentOrderedDictTests
     public void Concurrent_AddOrUpdate_DistinctKeys_AllAdded()
     {
         const int n = 20_000;
-        var d = new ConcurrentOrderedDict<int, int>();
+        var d = new ConcurrentOrderedDictionary<int, int>();
 
         Parallel.For(0, n, i => d.AddOrUpdate(i, i, (_, v) => v + 1000));
 
@@ -431,54 +432,6 @@ public class ConcurrentOrderedDictTests
         {
             d.TryGetValue(i, out var v).Should().BeTrue();
             v.Should().Be(i); // each key was absent -> the add branch ran, so the update factory never applied
-        }
-    }
-}
-
-/// <summary>
-///     A focused smoke suite for the vendored <see cref="Clone.ConcurrentDictionary{TKey,TValue}" /> clone itself,
-///     independent of the ordered wrapper, so a regression in the faithful port is caught directly rather than only
-///     through its consumer.
-/// </summary>
-[TestClass]
-public class VendoredConcurrentDictionaryTests
-{
-    /// <summary>The core key API (add/dedup/get/update/remove) behaves like the framework dictionary.</summary>
-    [TestMethod]
-    public void CoreKeyApi_Works()
-    {
-        var cd = new Clone.ConcurrentDictionary<string, int>();
-        cd.TryAdd("a", 1).Should().BeTrue();
-        cd.TryAdd("a", 2).Should().BeFalse();
-        cd["b"] = 2;
-        cd["a"] = 10;
-        cd["a"].Should().Be(10);
-        cd.Count.Should().Be(2);
-        cd.ContainsKey("b").Should().BeTrue();
-
-        cd.GetOrAdd("c", 3).Should().Be(3);
-        cd.GetOrAdd("c", 99).Should().Be(3);
-        cd.AddOrUpdate("a", 0, (_, v) => v + 5).Should().Be(15);
-
-        cd.TryRemove("b", out var bv).Should().BeTrue();
-        bv.Should().Be(2);
-        cd.ContainsKey("b").Should().BeFalse();
-    }
-
-    /// <summary>The striped-lock write path stays correct under heavy parallel insertion (values survive resizes).</summary>
-    [TestMethod]
-    public void ConcurrentAdds_SurviveResizes()
-    {
-        const int n = 100_000;
-        var cd = new Clone.ConcurrentDictionary<int, int>();
-
-        Parallel.For(0, n, i => cd[i] = i * i);
-
-        cd.Count.Should().Be(n);
-        for (int i = 0; i < n; i++)
-        {
-            cd.TryGetValue(i, out var v).Should().BeTrue();
-            v.Should().Be(i * i);
         }
     }
 }

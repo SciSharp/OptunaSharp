@@ -504,9 +504,11 @@ terms:
   (§7.1), and the Redis backends' disposed flags.
 - The heartbeat thread's stop signal, a `ManualResetEventSlim`.
 
-The internal concurrent collections in `OptunaSharp.Collections` (a vendored `ConcurrentDictionary` and
-`ConcurrentOrderedDict`) are not used by the library yet; `ConcurrentOrderedDictTests` pins their
-contract.
+The library uses no concurrent ordered map. OptunaSharp vendored one (`ConcurrentOrderedDict`, over a copy of
+dotnet's `ConcurrentDictionary`) until NumSharp 0.81.0 shipped it publicly as
+`NumSharp.Collections.ConcurrentOrderedDictionary`; the copies are gone, and
+`NumSharpConcurrentOrderedDictionaryTests` pins the contract OptunaSharp expects of NumSharp's type, for when a
+concurrent insertion-ordered map is needed.
 
 ### 5.2 Lock order
 
@@ -1292,7 +1294,7 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `OsEntropySeedTests` | numpy's OS-entropy seeding: the constructor's key, position 623 and draws, and a reseed's kept position and dropped Gaussian, against numpy 2.4.2 output for injected entropy; no repeated draw in 300,000 reseeds |
 | `TerminatorTests` | `TerminatorCallback` at `nJobs: 8` runs its terminator one call at a time |
 | `ProgressBarTests` | the bar counts every `nJobs` trial once, in order |
-| `ConcurrentOrderedDictTests` | the contract of the internal concurrent collection (§5.1) |
+| `NumSharpConcurrentOrderedDictionaryTests` | the contract OptunaSharp expects of NumSharp's `ConcurrentOrderedDictionary` (§5.1) |
 | `ConcurrencyGunTests` | the harness below: shooters are dedicated threads, halted at the gate and released into the shot together; the callbacks run while every shooter is halted; failures are reported by round and thread. It catches a lost update in an unguarded read-modify-write, with a control that must show nothing, and pins that NumSharp's generator (0.80.0 and later) never tears when drawn without the sampler monitor (§6.3). A lock-order deadlock is reported as a hang, and its shooters are freed |
 | `TrialConcurrencyCoverageTests` | one trial driven by every shooter at once (§6.2, §6.4, §6.5): one report of a step stored, and the trial's view agrees with the storage; one name sampled once; distinct names each sampled once with distinct draws; several tells (through the `Trial` and through its number) store one result, refuse the rest, and run `AfterTrial` once; `skipIfFinished` tells all return the stored result; pruning decisions made on each trial's own values, one at a time |
 | `StudyConcurrencyCoverageTests` | one study used by every shooter at once (§6.1, §7.1), in memory, through one journal storage, and through one journal storage per thread: asks get distinct trials numbered without a gap; an enqueued trial goes to exactly one asker; a waiting trial claimed through the storage has one winner; `CreateStudy(loadIfExists: true)` creates the study once |
