@@ -22,8 +22,8 @@ namespace OptunaSharp.Tests.Samplers;
 ///     <para>The cases that pass through <c>np.linalg.solve</c> are host-pinned to x64 and report
 ///     Inconclusive elsewhere: normalization, survival scores, <c>_do</c> and the full driver. That solve is
 ///     the extreme-point hyperplane in <see cref="AgeMoeaSurvival" />. The committed oracle was generated
-///     on OpenBLAS's x64 Haswell kernels, which CI selects with <c>OPENBLAS_CORETYPE=Haswell</c> (except on AMD
-///     CPUs with AVX-512, where those cases report Inconclusive: see <c>RequireBitExactLinalgHost</c>), and arm64
+///     on OpenBLAS's x64 Haswell kernels, which CI selects with <c>OPENBLAS_CORETYPE=Haswell</c> (except on Windows
+///     on AMD CPUs with AVX-512, where those cases report Inconclusive: see <c>RequireBitExactLinalgHost</c>), and arm64
 ///     OpenBLAS kernels land 1–2 ULP away; the macOS arm64 runner showed it on Normalize and Do. This is
 ///     the same host-pin model as the sklearn, SHAP and interop parity suites. The pure-RNG operators
 ///     (sampling, SBX, PM, tournament, mating) and the manifold geometry still run, and must hold
@@ -40,8 +40,8 @@ public class AgeMoea2OperatorParityTests
     ///     Haswell kernels, the ones that produced the oracle.
     /// </summary>
     /// <remarks>
-    ///     The kernel check matters on x64 too: CI pins <c>OPENBLAS_CORETYPE=Haswell</c> except on AMD CPUs with
-    ///     AVX-512, where OpenBLAS 0.3.34's forced Haswell kernels fault (<c>.github/scripts/openblas_coretype.sh</c>),
+    ///     The kernel check matters on x64 too: CI pins <c>OPENBLAS_CORETYPE=Haswell</c> except on Windows on AMD CPUs
+    ///     with AVX-512, where OpenBLAS 0.3.34's forced Haswell kernels fault (<c>.github/scripts/openblas_coretype.sh</c>),
     ///     and OpenBLAS's own choice there (Zen 4/5, 2026-11-14) put Normalize and Do a last bit away. The same holds for
     ///     a local run on any CPU whose default kernels are not Haswell.
     /// </remarks>

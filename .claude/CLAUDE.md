@@ -366,13 +366,14 @@ Rules every workflow follows:
   the test sequence (`Sequence_*.xml`), and a mini dump when the runtime sees the crash, in the
   `test-results-windows-2025` artifact.
 - **The OpenBLAS kernel pin** — every x64 test step sources `.github/scripts/openblas_coretype.sh`, which exports
-  `OPENBLAS_CORETYPE=Haswell` (the kernels the committed linalg oracles were captured on) EXCEPT on AMD CPUs
-  with AVX-512 (Zen 4/5, e.g. the EPYC 9V74 / 9V45 runners): there NumSharp 0.81.0's OpenBLAS 0.3.34.106.0 running
-  forced Haswell kernels faults with an access violation in JANUS-DE's quadratic chart (found 2026-11-14 by the
-  `ci/win-crash-diag` runs; OpenBLAS's own kernel choice and 0.3.31 both pass), so OpenBLAS chooses and the
-  Haswell-captured oracles (AGE-MOEA-2's linalg cases, the CMA-ES state oracle, the xNES digest) report
-  Inconclusive through an `OpenBlasEngine.CoreName == "Haswell"` guard. A new oracle captured on Haswell kernels
-  needs the same guard.
+  `OPENBLAS_CORETYPE=Haswell` (the kernels the committed linalg oracles were captured on) EXCEPT on Windows on AMD
+  CPUs with AVX-512 (Zen 4/5, e.g. the EPYC 9V74 / 9V45 runners): there the Windows build of NumSharp 0.81.0's
+  OpenBLAS 0.3.34.106.0 running forced Haswell kernels faults with an access violation in JANUS-DE's quadratic chart
+  (found 2026-11-14 by the `ci/win-crash-diag` runs; OpenBLAS's own kernel choice and 0.3.31 both pass), so OpenBLAS
+  chooses and the Haswell-captured oracles (AGE-MOEA-2's linalg cases, the CMA-ES state oracle, the xNES digest)
+  report Inconclusive through an `OpenBlasEngine.CoreName == "Haswell"` guard. Linux keeps the pin on every CPU:
+  forced Haswell passes on Linux Zen 4, and unpinned it breaks the live `LongRun_40D_FullState_IsBitIdentical`
+  gate. A new oracle captured on Haswell kernels needs the same guard.
 - **`satellite-tests`** — ubuntu + windows on every trigger, never macOS: the arm64 runner has no ML.NET
   LightGBM native and cannot host the Linux service containers. It runs every other `test/OptunaSharp.Tests.*` suite (Storage,
   Artifacts, Cli, Hosting, Importance.*, Integration.*, Benchmark.VolleyEval); Interop and

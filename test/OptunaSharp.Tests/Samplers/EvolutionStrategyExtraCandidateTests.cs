@@ -115,7 +115,7 @@ public class EvolutionStrategyExtraCandidateTests
     ///     can differ in the last bit on another OS or CPU, so elsewhere the case is inconclusive rather than red.
     ///     <para>
     ///         The xNES digest also needs OpenBLAS's Haswell kernels, the ones it was recorded on. CI pins them except on
-    ///         AMD CPUs with AVX-512, where OpenBLAS 0.3.34's forced Haswell kernels fault
+    ///         Windows on AMD CPUs with AVX-512, where OpenBLAS 0.3.34's forced Haswell kernels fault
     ///         (<c>.github/scripts/openblas_coretype.sh</c>), and OpenBLAS's own kernels there (Zen 4/5, 2026-11-14)
     ///         changed the xNES digest; the OpenAI-ES and SNES digests, which never reach OpenBLAS, held.
     ///     </para>

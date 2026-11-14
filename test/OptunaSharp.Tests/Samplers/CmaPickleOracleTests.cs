@@ -333,7 +333,7 @@ public class CmaPickleOracleTests
     ///     storage of the state is checked live by the interop suite on every host where it is bit-exact.
     ///     <para>
     ///         The oracle was captured on OpenBLAS's Haswell kernels, so x64 alone is not enough: CI pins
-    ///         <c>OPENBLAS_CORETYPE=Haswell</c> except on AMD CPUs with AVX-512, where OpenBLAS 0.3.34's forced
+    ///         <c>OPENBLAS_CORETYPE=Haswell</c> except on Windows on AMD CPUs with AVX-512, where OpenBLAS 0.3.34's forced
     ///         Haswell kernels fault (<c>.github/scripts/openblas_coretype.sh</c>), and with OpenBLAS's own kernels
     ///         there (Zen 4/5, 2026-11-14) <c>cma</c>, <c>cma_lr_adapt</c> and <c>cma_30d</c> stored states a last bit
     ///         away. Every variant is skipped on other kernels, the separable ones included: the states hold whatever
