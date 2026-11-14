@@ -22,7 +22,8 @@ namespace OptunaSharp.Tests.Samplers;
 ///     <para>The cases that pass through <c>np.linalg.solve</c> are host-pinned to x64 and report
 ///     Inconclusive elsewhere: normalization, survival scores, <c>_do</c> and the full driver. That solve is
 ///     the extreme-point hyperplane in <see cref="AgeMoeaSurvival" />. The committed oracle was generated
-///     on OpenBLAS's x64 Haswell kernels, which CI selects with <c>OPENBLAS_CORETYPE=Haswell</c>, and arm64
+///     on OpenBLAS's x64 Haswell kernels, which CI selects with <c>OPENBLAS_CORETYPE=Haswell</c> (except on AMD
+///     CPUs with AVX-512, where those cases report Inconclusive: see <c>RequireBitExactLinalgHost</c>), and arm64
 ///     OpenBLAS kernels land 1–2 ULP away; the macOS arm64 runner showed it on Normalize and Do. This is
 ///     the same host-pin model as the sklearn, SHAP and interop parity suites. The pure-RNG operators
 ///     (sampling, SBX, PM, tournament, mating) and the manifold geometry still run, and must hold
@@ -35,10 +36,16 @@ public class AgeMoea2OperatorParityTests
 
     /// <summary>
     ///     Skips (Inconclusive) a case whose oracle depends on the LAPACK solve in
-    ///     <see cref="AgeMoeaSurvival" />'s normalization, unless the process runs on x64, the
-    ///     architecture whose OpenBLAS kernels produced the oracle.
+    ///     <see cref="AgeMoeaSurvival" />'s normalization, unless the process runs on x64 AND OpenBLAS runs its
+    ///     Haswell kernels, the ones that produced the oracle.
     /// </summary>
-    /// <exception cref="AssertInconclusiveException">The process is not x64.</exception>
+    /// <remarks>
+    ///     The kernel check matters on x64 too: CI pins <c>OPENBLAS_CORETYPE=Haswell</c> except on AMD CPUs with
+    ///     AVX-512, where OpenBLAS 0.3.34's forced Haswell kernels fault (<c>.github/scripts/openblas_coretype.sh</c>),
+    ///     and OpenBLAS's own choice there (Zen 4/5, 2026-11-14) put Normalize and Do a last bit away. The same holds for
+    ///     a local run on any CPU whose default kernels are not Haswell.
+    /// </remarks>
+    /// <exception cref="AssertInconclusiveException">The process is not x64, or OpenBLAS is not running its Haswell kernels.</exception>
     private static void RequireBitExactLinalgHost()
     {
         if (RuntimeInformation.ProcessArchitecture != Architecture.X64)
@@ -46,6 +53,13 @@ public class AgeMoea2OperatorParityTests
                 "AGE-MOEA-2 normalization solves the extreme-point hyperplane with np.linalg.solve (OpenBLAS); " +
                 "the committed oracle was captured on x64 Haswell kernels, which " +
                 $"ProcessArchitecture={RuntimeInformation.ProcessArchitecture} does not reproduce bit-for-bit.");
+        // OpenBlasEngine.CoreName is OpenBLAS's openblas_get_corename(); null only when no OpenBLAS is loaded, which
+        // OptunaSharp's module initializer rules out, and then the case cannot be bit-exact either.
+        if (NumSharp.Interop.OpenBLAS.OpenBlasEngine.CoreName is not "Haswell")
+            Assert.Inconclusive(
+                "AGE-MOEA-2 normalization's oracle was captured on OpenBLAS's Haswell kernels; this process runs " +
+                $"'{NumSharp.Interop.OpenBLAS.OpenBlasEngine.CoreName}' (OPENBLAS_CORETYPE=" +
+                $"{Environment.GetEnvironmentVariable("OPENBLAS_CORETYPE") ?? "unset"}), whose last bits differ.");
     }
 
     [ClassInitialize]

@@ -331,9 +331,17 @@ public class CmaPickleOracleTests
     ///     </list>
     ///     The same pinning rule as <c>AgeMoea2OperatorParityTests</c> and the NES digest tests. Cross-language
     ///     storage of the state is checked live by the interop suite on every host where it is bit-exact.
+    ///     <para>
+    ///         The oracle was captured on OpenBLAS's Haswell kernels, so x64 alone is not enough: CI pins
+    ///         <c>OPENBLAS_CORETYPE=Haswell</c> except on AMD CPUs with AVX-512, where OpenBLAS 0.3.34's forced
+    ///         Haswell kernels fault (<c>.github/scripts/openblas_coretype.sh</c>), and with OpenBLAS's own kernels
+    ///         there (Zen 4/5, 2026-11-14) <c>cma</c>, <c>cma_lr_adapt</c> and <c>cma_30d</c> stored states a last bit
+    ///         away. Every variant is skipped on other kernels, the separable ones included: the states hold whatever
+    ///         BLAS product the run made.
+    ///     </para>
     /// </remarks>
     /// <param name="variant">The oracle variant about to run.</param>
-    /// <exception cref="AssertInconclusiveException">The host cannot reproduce this variant's oracle bit for bit.</exception>
+    /// <exception cref="AssertInconclusiveException">The host cannot reproduce this variant's oracle bit for bit: not x64, not Windows for <c>cma_30d</c>, or OpenBLAS not on its Haswell kernels.</exception>
     private static void RequireOracleHost(string variant)
     {
         if (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture != System.Runtime.InteropServices.Architecture.X64)
@@ -342,6 +350,12 @@ public class CmaPickleOracleTests
         if (variant == "cma_30d" && !OperatingSystem.IsWindows())
             Assert.Inconclusive(
                 "The 30-dimensional CMA-ES state oracle was captured on Windows x64; Linux's libm/OpenBLAS differ in its last bits.");
+        // openblas_get_corename(); null only without a loaded OpenBLAS, which OptunaSharp's module initializer rules out.
+        if (NumSharp.Interop.OpenBLAS.OpenBlasEngine.CoreName is not "Haswell")
+            Assert.Inconclusive(
+                "The CMA-ES state oracle was captured on OpenBLAS's Haswell kernels; this process runs " +
+                $"'{NumSharp.Interop.OpenBLAS.OpenBlasEngine.CoreName}' (OPENBLAS_CORETYPE=" +
+                $"{Environment.GetEnvironmentVariable("OPENBLAS_CORETYPE") ?? "unset"}), whose last bits differ.");
     }
 
     /// <summary>

@@ -113,6 +113,12 @@ public class EvolutionStrategyExtraCandidateTests
     ///     Pinned to Windows x64, where the digests were recorded. The samplers' updates call <c>Math.Exp</c> and
     ///     <c>Math.Log</c>, which .NET takes from the platform's C library, and xNES decomposes through OpenBLAS; both
     ///     can differ in the last bit on another OS or CPU, so elsewhere the case is inconclusive rather than red.
+    ///     <para>
+    ///         The xNES digest also needs OpenBLAS's Haswell kernels, the ones it was recorded on. CI pins them except on
+    ///         AMD CPUs with AVX-512, where OpenBLAS 0.3.34's forced Haswell kernels fault
+    ///         (<c>.github/scripts/openblas_coretype.sh</c>), and OpenBLAS's own kernels there (Zen 4/5, 2026-11-14)
+    ///         changed the xNES digest; the OpenAI-ES and SNES digests, which never reach OpenBLAS, held.
+    ///     </para>
     /// </remarks>
     [TestMethod]
     [DataRow("openaies", "015121A1E1D3C3FE7999286C8E9672EC4FEF4F89CC34029129D10412DF004B82")]
@@ -122,6 +128,12 @@ public class EvolutionStrategyExtraCandidateTests
     {
         if (!OperatingSystem.IsWindows() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
             Assert.Inconclusive("The recorded digests are for Windows x64; libm and OpenBLAS may differ in the last bit elsewhere.");
+        // Only xNES decomposes through OpenBLAS; openblas_get_corename() names the kernels this process runs.
+        if (name == "xnes" && NumSharp.Interop.OpenBLAS.OpenBlasEngine.CoreName is not "Haswell")
+            Assert.Inconclusive(
+                "The xNES digest was recorded on OpenBLAS's Haswell kernels; this process runs " +
+                $"'{NumSharp.Interop.OpenBLAS.OpenBlasEngine.CoreName}' (OPENBLAS_CORETYPE=" +
+                $"{Environment.GetEnvironmentVariable("OPENBLAS_CORETYPE") ?? "unset"}), whose last bits differ.");
 
         BaseSampler sampler = name switch
         {

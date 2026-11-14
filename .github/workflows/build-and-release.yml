@@ -161,15 +161,18 @@ jobs:
         # (SkylakeX/Zen on AVX-512 hosts), whose last bits differ from the committed linalg oracles (generated
         # on Haswell kernels — AgeMoea2OperatorParityTests' Normalize/Do failed by 1-2 ULP on such a runner)
         # and could differ between NumPy's and NumSharp's OpenBLAS copies. Every x64 runner has AVX2/FMA.
-        if [[ "$RUNNER_ARCH" == "X64" ]]; then export OPENBLAS_CORETYPE=Haswell; fi
+        # Except AMD CPUs with AVX-512 (Zen 4/5), where OpenBLAS 0.3.34's forced Haswell kernels fault: the script
+        # decides per runner and says which it chose, and why.
+        source "$GITHUB_WORKSPACE/.github/scripts/openblas_coretype.sh"
         FILTER="TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=RequiresPython&TestCategory!=Slow"
         if [[ "$RUNNER_OS" != "Windows" ]]; then
           FILTER="$FILTER&TestCategory!=WindowsOnly"
         fi
-        # Windows only: a test-host crash leaves a mini dump and the blame sequence (the tests that ran, the last
-        # one unfinished) under TestResults, which the upload below keeps. PR #6's CI hit one test-host crash on
-        # 8c31fb6 (2026-11-14, net10.0, near the JANUS suites) that logged nothing, and neither the release-matrix
-        # run of the same commit nor local stress runs reproduced it; the next one should at least name its test.
+        # Windows only: a test-host crash leaves the blame sequence (the tests that ran, the last one unfinished)
+        # and, when the runtime sees the crash, a mini dump under TestResults, which the upload below keeps. It
+        # earned its place on 2026-11-14: PR #6's test hosts died with nothing logged, and the sequence named
+        # JanusDeSamplerTests.Sampler_ScalarMode_Runs, which led to OpenBLAS 0.3.34's forced Haswell kernels
+        # faulting on AMD Zen 4/5 (see .github/scripts/openblas_coretype.sh; that access violation left no dump).
         # Linux and macOS keep the plain run: the flag was only tried on Windows.
         BLAME=()
         if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -195,7 +198,9 @@ jobs:
         # (SkylakeX/Zen on AVX-512 hosts), whose last bits differ from the committed linalg oracles (generated
         # on Haswell kernels — AgeMoea2OperatorParityTests' Normalize/Do failed by 1-2 ULP on such a runner)
         # and could differ between NumPy's and NumSharp's OpenBLAS copies. Every x64 runner has AVX2/FMA.
-        if [[ "$RUNNER_ARCH" == "X64" ]]; then export OPENBLAS_CORETYPE=Haswell; fi
+        # Except AMD CPUs with AVX-512 (Zen 4/5), where OpenBLAS 0.3.34's forced Haswell kernels fault: the script
+        # decides per runner and says which it chose, and why.
+        source "$GITHUB_WORKSPACE/.github/scripts/openblas_coretype.sh"
         for TFM in ${{ needs.setup.outputs.tfms_space }}; do
           echo "::group::Slow unit tests ($TFM)"
           dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj \
@@ -334,7 +339,8 @@ jobs:
       timeout-minutes: 45
       run: |
         set -uo pipefail
-        if [[ "$RUNNER_ARCH" == "X64" ]]; then export OPENBLAS_CORETYPE=Haswell; fi
+        # OpenBLAS's Haswell pin on x64, except AMD CPUs with AVX-512 (the script explains both halves).
+        source "$GITHUB_WORKSPACE/.github/scripts/openblas_coretype.sh"
         FILTER="TestCategory!=OpenBugs&TestCategory!=HighMemory&TestCategory!=Slow"
         if [[ "$RUNNER_OS" != "Windows" ]]; then FILTER="$FILTER&TestCategory!=WindowsOnly"; fi
         failed=()
@@ -602,7 +608,9 @@ jobs:
         # (SkylakeX/Zen on AVX-512 hosts), whose last bits differ from the committed linalg oracles (generated
         # on Haswell kernels — AgeMoea2OperatorParityTests' Normalize/Do failed by 1-2 ULP on such a runner)
         # and could differ between NumPy's and NumSharp's OpenBLAS copies. Every x64 runner has AVX2/FMA.
-        if [[ "$RUNNER_ARCH" == "X64" ]]; then export OPENBLAS_CORETYPE=Haswell; fi
+        # Except AMD CPUs with AVX-512 (Zen 4/5), where OpenBLAS 0.3.34's forced Haswell kernels fault: the script
+        # decides per runner and says which it chose, and why.
+        source "$GITHUB_WORKSPACE/.github/scripts/openblas_coretype.sh"
         for TFM in ${{ needs.setup.outputs.tfms_space }}; do
           echo "::group::Interop tests ($TFM)"
           dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
@@ -624,7 +632,9 @@ jobs:
         # (SkylakeX/Zen on AVX-512 hosts), whose last bits differ from the committed linalg oracles (generated
         # on Haswell kernels — AgeMoea2OperatorParityTests' Normalize/Do failed by 1-2 ULP on such a runner)
         # and could differ between NumPy's and NumSharp's OpenBLAS copies. Every x64 runner has AVX2/FMA.
-        if [[ "$RUNNER_ARCH" == "X64" ]]; then export OPENBLAS_CORETYPE=Haswell; fi
+        # Except AMD CPUs with AVX-512 (Zen 4/5), where OpenBLAS 0.3.34's forced Haswell kernels fault: the script
+        # decides per runner and says which it chose, and why.
+        source "$GITHUB_WORKSPACE/.github/scripts/openblas_coretype.sh"
         dotnet test test/OptunaSharp.Tests.Interop/OptunaSharp.Tests.Interop.csproj \
           --configuration Release --no-build --framework net10.0 \
           --filter "TestCategory=Slow" --logger "trx"
