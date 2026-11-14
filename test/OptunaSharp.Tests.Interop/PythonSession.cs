@@ -72,6 +72,15 @@ public static class PythonSession
                     scope.Exec("import os\nos.environ.setdefault('NPY_DISABLE_CPU_FEATURES', _npy_disabled)\n");
                 }
 
+                // pymoo 0.6.1.3, the oracle the native AGE-MOEA-2 reproduces generation by generation and the version the
+                // pymoo bridge tests pin, calls np.row_stack (NSGA-II's crowding distance), which NumPy 2.5 removed; the
+                // oracle NumPy is 2.5.4 since NumSharp 0.81.0 bundles its OpenBLAS. NumPy 2.0-2.4 defined row_stack as an
+                // alias of vstack, so restoring that alias changes no result (pymoo 0.6.2 no longer calls it, but it also
+                // changed AGE-MOEA-2's arithmetic, so it cannot be the oracle). Test environment only: the product's
+                // pythonnet runtime leaves the user's NumPy untouched.
+                using (PyModule scope = Py.CreateScope())
+                    scope.Exec("import numpy\nif not hasattr(numpy, 'row_stack'):\n    numpy.row_stack = numpy.vstack\n");
+
                 using PyObject optuna = Py.Import("optuna");
                 OptunaVersion = optuna.GetAttr("__version__").ToString();
             }
