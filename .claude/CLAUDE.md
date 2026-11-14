@@ -362,7 +362,9 @@ Rules every workflow follows:
   a `Test (slow)` step runs the `Slow` category on Linux for `v*` tags and manual dispatch (dispatch input
   `run_slow`, default on; off skips ~2 h of BoTorch parity when re-checking an OS leg). The `setup`
   job decides the matrix per trigger: push = ubuntu+windows × both TFMs, PR = net10.0 only,
-  tags/dispatch = +macOS.
+  tags/dispatch = +macOS. On Windows the unit tests run with `--blame-crash`, so a test host that crashes leaves
+  a mini dump and the test sequence (`Sequence_*.xml`) in the `test-results-windows-2025` artifact (added after
+  one unexplained crash on 2026-11-14 that logged nothing).
 - **`satellite-tests`** — ubuntu + windows on every trigger, never macOS: the arm64 runner has no ML.NET
   LightGBM native and cannot host the Linux service containers. It runs every other `test/OptunaSharp.Tests.*` suite (Storage,
   Artifacts, Cli, Hosting, Importance.*, Integration.*, Benchmark.VolleyEval); Interop and

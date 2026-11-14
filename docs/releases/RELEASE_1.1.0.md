@@ -13,7 +13,7 @@ It builds on NumSharp 0.81.0, whose OpenBLAS is NumPy 2.5.4's, so the bit-for-bi
 - **NumSharp 0.81.0** - the numeric backbone moves from 0.80.0: its OpenBLAS is NumPy 2.5.4's, so BLAS- and LAPACK-backed results (CMA-ES's eigendecomposition, UNDX, xNES, JANUS) match Optuna on NumPy 2.5.4 bit for bit; QA-85 is fixed upstream; Python's `OverflowError`, `ZeroDivisionError`, `FileExistsError` and `FileNotFoundError` are raised where Optuna raises them.
 - **New opt-ins** - compact finished trials (100,000 CMA-ES trials retain 257 MB instead of 1,287 MB), batch attribute writes, and CMA-ES's `reuseToldOptimizer`.
 - **Binary-compatible with 1.0.0** - ApiCompat against the nuget.org 1.0.0 packages finds no removed or changed API in any of the 20 packages; the behavior changes (Optuna's and Python's exception types, seeded results moving toward Optuna's, BLAS-backed results following NumPy 2.5.4) are listed under Breaking Changes.
-- **48 parity fixes, 18 measured speedups and 14 behavior changes** - every line traced to the 50 commits it cites, of the release's 140; 2,310 unit tests on net8.0 and net10.0, 751 live-Optuna interop tests against NumPy 2.5.4.
+- **48 parity fixes, 18 measured speedups and 14 behavior changes** - every line traced to the 50 commits it cites, of the release's 141; 2,310 unit tests on net8.0 and net10.0, 751 live-Optuna interop tests against NumPy 2.5.4.
 
 ## Detailed Breakdown
 <details>

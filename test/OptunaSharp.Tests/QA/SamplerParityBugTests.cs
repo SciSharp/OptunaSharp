@@ -424,10 +424,24 @@ public class SamplerParityBugTests
     ///     trials, <c>(x - 0.7) ** 2</c> over <c>[0.1, 1.0]</c> step <c>0.3</c>; the port matches every trial but the fourth.
     ///     (With <c>[0.1, 2.5]</c> the same run suggests <c>1.9000000000000004</c> in Optuna and <c>1.9000000000000001</c> in
     ///     the port.)
+    ///     <para>
+    ///         The expected trials are Optuna's on x64, so the test is pinned to x64, as the suite's other host-dependent
+    ///         bit-exact oracles are (AGE-MOEA-2's operators, the CMA-ES state oracle, sklearn, SHAP, the ES digests). CI's
+    ///         first macOS arm64 run of it (2026-11-14, net8.0) suggested <c>0.9999999999999998</c> for the fourth trial, the
+    ///         former grid's value, with the same choice in every trial: the stepped grid itself is NumPy's there too
+    ///         (<see cref="GpSearchSpace_SteppedFloatGrid_UsesNumpyArangeStep" /> passed), so the GP's last-bit arithmetic on
+    ///         arm64 reached that grid point by another route.
+    ///     </para>
     /// </remarks>
     [TestMethod]
     public void GpSampler_SteppedFloat_SuggestsNumpyGridValues()
     {
+        // x64 only: the expected values are an x64 Optuna run's last bits (see remarks).
+        if (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture != System.Runtime.InteropServices.Architecture.X64)
+            Assert.Inconclusive(
+                "The expected trials are Optuna 5.0.0's on x64; the GP's arithmetic differs in its last bits on " +
+                $"{System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}, which moves the fourth trial's value.");
+
         var study = Optuna.CreateStudy(sampler: new GPSampler(seed: 0, nStartupTrials: 2));
         study.Optimize(t => Math.Pow(t.SuggestFloat("x", 0.1, 1.0, step: 0.3) - 0.7, 2), nTrials: 8);
 

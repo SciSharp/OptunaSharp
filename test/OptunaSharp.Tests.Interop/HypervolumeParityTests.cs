@@ -16,6 +16,14 @@ namespace OptunaSharp.Tests.Interop;
 ///     random coordinates, so every product and sum rounds; duplicated and weakly dominated rows exercise the
 ///     zero-contribution ties of the three-objective subset selection.
 /// </summary>
+/// <remarks>
+///     Both tests need the live NumPy to run on the scipy-openblas NumSharp bundles, so they are pinned to the
+///     bit-exact host (<see cref="PythonSession.EnsureBitExactHostOrInconclusive" />, x64) like the suite's other
+///     bit-exact gates. On macOS arm64, pip installs NumPy's <c>macosx_14_0_arm64</c> wheel, which is built against
+///     Apple's Accelerate instead: CI's first macOS run of these tests (2026-11-14, NumSharp 0.81.0, NumPy 2.5.4) found
+///     54 of 240 volumes and 5 of 240 selections a last bit away from Optuna's, the products' rounding and not a port
+///     error.
+/// </remarks>
 [TestClass]
 public class HypervolumeParityTests : OptunaInteropTestBase
 {
@@ -29,7 +37,9 @@ public class HypervolumeParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void ComputeHypervolume_MatchesOptunaBitForBit_TwoToFiveObjectives()
     {
-        PythonSession.EnsureOrInconclusive();
+        // Bit-exact against NumPy's BLAS products: x64 only, where NumPy's wheel bundles NumSharp's OpenBLAS (the
+        // class remarks give the macOS numbers).
+        PythonSession.EnsureBitExactHostOrInconclusive();
         PyExec("import struct\nimport numpy as np\nfrom optuna._hypervolume import compute_hypervolume\n");
         // A seeded System.Random only generates test fronts; no sampler path reads it.
         var rng = new Random(20261111);
@@ -71,7 +81,8 @@ public class HypervolumeParityTests : OptunaInteropTestBase
     [TestCategory("RequiresPython")]
     public void SolveHssp_SelectsOptunasIndices_ThreeAndFourObjectives()
     {
-        PythonSession.EnsureOrInconclusive();
+        // The zero-contribution ties resolve by the products' last bits, so the same x64 pin as the volumes above.
+        PythonSession.EnsureBitExactHostOrInconclusive();
         PyExec("import numpy as np\nfrom optuna._hypervolume import _solve_hssp\n");
         var rng = new Random(424242);
         int mismatches = 0;

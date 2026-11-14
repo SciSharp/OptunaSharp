@@ -166,11 +166,20 @@ jobs:
         if [[ "$RUNNER_OS" != "Windows" ]]; then
           FILTER="$FILTER&TestCategory!=WindowsOnly"
         fi
+        # Windows only: a test-host crash leaves a mini dump and the blame sequence (the tests that ran, the last
+        # one unfinished) under TestResults, which the upload below keeps. PR #6's CI hit one test-host crash on
+        # 8c31fb6 (2026-11-14, net10.0, near the JANUS suites) that logged nothing, and neither the release-matrix
+        # run of the same commit nor local stress runs reproduced it; the next one should at least name its test.
+        # Linux and macOS keep the plain run: the flag was only tried on Windows.
+        BLAME=()
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          BLAME=(--blame-crash --blame-crash-dump-type mini)
+        fi
         for TFM in ${{ needs.setup.outputs.tfms_space }}; do
           echo "::group::Unit tests ($TFM)"
           dotnet test test/OptunaSharp.Tests/OptunaSharp.Tests.csproj \
             --configuration Release --no-build --framework "$TFM" \
-            --filter "$FILTER" --logger "trx"
+            --filter "$FILTER" --logger "trx" "${BLAME[@]}"
           echo "::endgroup::"
         done
 
@@ -195,12 +204,17 @@ jobs:
           echo "::endgroup::"
         done
 
+    # The TRX files, plus what --blame-crash leaves after a Windows test-host crash (the dump and the sequence of
+    # tests): a pattern with no match is skipped, so a clean run uploads the TRX files only.
     - name: Upload Test Results
       uses: actions/upload-artifact@v7
       if: always()
       with:
         name: test-results-${{ matrix.os }}
-        path: ${{ github.workspace }}/**/TestResults/**/*.trx
+        path: |
+          ${{ github.workspace }}/**/TestResults/**/*.trx
+          ${{ github.workspace }}/**/TestResults/**/*.dmp
+          ${{ github.workspace }}/**/TestResults/**/Sequence_*.xml
         retention-days: 5
 
   # ---------------------------------------------------------------------------------------------

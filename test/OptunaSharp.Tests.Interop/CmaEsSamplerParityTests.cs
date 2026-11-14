@@ -541,11 +541,18 @@ public class CmaEsSamplerParityTests : OptunaInteropTestBase
     }
 
     /// <summary>The separable variant over 30+ generations: its own state prefix (<c>sepcma:</c>) and diagonal state.</summary>
+    /// <remarks>
+    ///     Pinned to the bit-exact host (x64) like every other long run here. The short
+    ///     <see cref="SeparableCma_FullState_IsBitIdentical" /> still runs on every host, but 30 generations meet the
+    ///     last-bit math difference <see cref="PythonSession.BitExactHost" /> documents for arm64: in CI's first macOS run
+    ///     of this test (2026-11-14), trial 11's stored optimizer state already differed from Optuna's.
+    /// </remarks>
     [TestMethod]
     [TestCategory("RequiresPython")]
     public void SeparableCma_LongRun_FullState_IsBitIdentical()
     {
-        PythonSession.EnsureOrInconclusive();
+        // x64 only: the run is long enough to meet an arm64 last-bit difference (see remarks).
+        PythonSession.EnsureBitExactHostOrInconclusive();
 
         var csStudy = Optuna.CreateStudy(
             storage: new InMemoryStorage(), studyName: "cma",
