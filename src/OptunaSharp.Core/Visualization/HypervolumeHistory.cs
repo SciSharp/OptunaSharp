@@ -168,7 +168,10 @@ public static class HypervolumeHistory
         return false;
     }
 
-    /// <summary>NumPy <c>np.prod(ref - values)</c> — a sequential product (M ≤ 8, so no pairwise).</summary>
+    /// <summary>
+    ///     NumPy <c>np.prod(ref - values)</c>: a sequential <c>multiply.reduce</c>, which NumSharp 0.81.0's float
+    ///     <c>np.prod</c> also follows (pinned by <c>SequentialProductTests</c>); a loop because it runs once per trial.
+    /// </summary>
     /// <param name="reference">The hypervolume reference vector in minimization coordinates.</param>
     /// <param name="values">The ordered values to aggregate or format.</param>
     /// <returns>The product of distances between the objective vector and reference point.</returns>

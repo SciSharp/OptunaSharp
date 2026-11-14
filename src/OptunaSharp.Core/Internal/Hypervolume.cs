@@ -15,9 +15,10 @@ namespace OptunaSharp.Internal;
 ///     <para><b>Numeric strategy.</b> Optuna's NumPy <c>@</c>/<c>np.dot</c> products (the two- and
 ///     three-objective volumes) run through NumSharp's <c>np.dot</c> via <see cref="LinAlg.Dot(double[], double[])" />
 ///     and <see cref="LinAlg.Dot(double[,], double[])" />, i.e. the same OpenBLAS <c>ddot</c>/<c>dgemv</c> binary NumPy
-///     calls, so their sums round exactly as Optuna's do. <c>.prod(axis=-1)</c> stays a sequential product: NumPy
-///     multiplies along that axis in order, which a plain loop reproduces and NumSharp's <c>np.prod</c> does not promise
-///     for floats. Measured live against Optuna 5.0.0 (<c>HypervolumeParityTests</c>, 240 random 2- to 5-objective
+///     calls, so their sums round exactly as Optuna's do. <c>.prod(axis=-1)</c> stays a sequential loop: NumPy
+///     multiplies along that axis in order, and so does NumSharp's float <c>np.prod</c> since 0.81.0 (0.80.0's SIMD
+///     lanes did not), bit for bit (<c>SequentialProductTests</c>); the loop runs once per point inside the HSSP and
+///     box-decomposition loops, where a NumSharp call (about 2 µs) would cost more than the multiplications. Measured live against Optuna 5.0.0 (<c>HypervolumeParityTests</c>, 240 random 2- to 5-objective
 ///     fronts): every <see cref="ComputeHypervolume" /> result is bit-identical (the former sequential dot differed in 37
 ///     of them, by an ulp or two).</para>
 ///
@@ -449,7 +450,10 @@ internal static class Hypervolume
     // helpers
     // ===========================================================================================
 
-    /// <summary>Sequential <c>np.prod(reference_point - row)</c>.</summary>
+    /// <summary>
+    ///     Sequential <c>np.prod(reference_point - row)</c>: NumPy's <c>multiply.reduce</c> order, which NumSharp 0.81.0's
+    ///     float <c>np.prod</c> also follows (pinned by <c>SequentialProductTests</c>); a loop because it runs once per point.
+    /// </summary>
     /// <param name="referencePoint">The reference objective vector, in the same coordinate system and order as the supplied objective rows.</param>
     /// <param name="row">The objective or feature row used by the operation.</param>
     /// <returns>The product of coordinate distances from the solution to the reference point.</returns>

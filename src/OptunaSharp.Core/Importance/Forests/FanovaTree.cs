@@ -411,7 +411,11 @@ internal sealed class FanovaTree
     internal double[,] GetNodeRightChildSubspaces(int nodeIndex, double[,] searchSpaces)
         => GetSubspaces(searchSpaces, searchSpacesColumn: 0, nodeIndex);
 
-    /// <summary>Port of <c>_get_cardinality(search_spaces) = np.prod(hi - lo)</c>.</summary>
+    /// <summary>
+    ///     Port of <c>_get_cardinality(search_spaces) = np.prod(hi - lo)</c>: NumPy's sequential <c>multiply.reduce</c>,
+    ///     which NumSharp 0.81.0's float <c>np.prod</c> also follows (pinned by <c>SequentialProductTests</c>); a loop because
+    ///     it runs once per tree node.
+    /// </summary>
     /// <param name="searchSpaces">The lower and upper bound of each encoded feature, with shape (features, 2).</param>
     /// <returns>The product of interval widths, representing the subspace volume.</returns>
     private static double GetCardinality(double[,] searchSpaces)
