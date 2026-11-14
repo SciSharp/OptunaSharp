@@ -168,8 +168,9 @@ public class ErrorContractParityBugTests
     }
 
     /// <summary>
-    ///     QA-17: a CMA-ES <c>x0</c> that misses a parameter of the search space must fail with Python's
-    ///     message; the port throws a <see cref="KeyNotFoundException" /> naming the key.
+    ///     QA-17 (fixed 2026-11-12 by <c>1e8aba6</c>, with run 2's QA-83): a CMA-ES <c>x0</c> that misses a parameter of
+    ///     the search space must fail with Python's message; the port threw a <see cref="KeyNotFoundException" /> naming
+    ///     the key.
     /// </summary>
     /// <remarks>
     ///     Optuna 5.0.0 with <c>x0={"x": 1.0, "y": -1.0, "z": 1.0}</c> on a space that also has <c>li</c>
@@ -179,7 +180,6 @@ public class ErrorContractParityBugTests
     ///     the failure are identical. NIT: the C# text is arguably more helpful, but it is not Optuna's contract.
     /// </remarks>
     [TestMethod]
-    [OpenBugs]
     public void CmaEs_X0MissingParameter_FailsWithPythonsMessage()
     {
         var study = Optuna.CreateStudy(sampler: new CmaEsSampler(

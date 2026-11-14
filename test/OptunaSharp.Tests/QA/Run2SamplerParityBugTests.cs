@@ -343,7 +343,8 @@ public class Run2SamplerParityBugTests
     ///     all four. <c>popsize=2</c> is identical on both sides. The expected type follows the port's mapping of
     ///     cmaes assertions (<c>ArgumentException</c>, as for "invalid bounds" in <c>CmaWm</c>). <b>Fixed
     ///     2026-11-12:</b> <c>Cma</c> asserts its four learning rates as cmaes does, and <c>SepCma</c> raises
-    ///     <c>DivideByZeroException("division by zero")</c> where cmaes divides the int 0.
+    ///     <c>DivideByZeroException("division by zero")</c> where cmaes divides the int 0; since NumSharp 0.81.0 it is
+    ///     Python's own class, <c>NumSharp.ZeroDivisionError("division by zero")</c>.
     /// </remarks>
     /// <param name="variant"><c>plain</c>, <c>margin</c> (<c>with_margin=True</c>), <c>lr</c> (<c>lr_adapt=True</c>) or <c>separable</c>.</param>
     [TestMethod]
