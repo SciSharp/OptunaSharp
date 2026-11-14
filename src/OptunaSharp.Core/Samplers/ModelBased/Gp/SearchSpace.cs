@@ -310,7 +310,7 @@ internal sealed class GpSearchSpace
     ///     half of random ranges differ somewhere). The grid is built once per discrete dimension per
     ///     <c>GetChoicesOfDiscreteParams</c> call, so the NumSharp call's microseconds do not matter.
     /// </remarks>
-    /// <exception cref="DivideByZeroException"><paramref name="step" /> is zero (NumPy's <c>ZeroDivisionError</c>); the callers only pass discrete steps, which are positive.</exception>
+    /// <exception cref="ZeroDivisionError"><paramref name="step" /> is zero: NumPy's <c>ZeroDivisionError</c>, which NumSharp's <c>np.arange</c> raises as Python's class since 0.81.0 (it was .NET's <see cref="DivideByZeroException" /> before); the callers only pass discrete steps, which are positive.</exception>
     private static double[] Arange(double start, double stop, double step)
     {
         using NDArray grid = np.arange(start, stop, step);

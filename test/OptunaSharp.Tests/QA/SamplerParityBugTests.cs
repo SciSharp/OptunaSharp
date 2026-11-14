@@ -196,9 +196,10 @@ public class SamplerParityBugTests
         var study = Optuna.CreateStudy(sampler: new RandomSampler(seed: 0));
         var trial = study.Ask();
 
-        ((Action)(() => trial.SuggestFloat("x", 1e-3, double.PositiveInfinity))).Should().Throw<OverflowException>()
+        // NumPy's class: NumSharp.OverflowError since NumSharp 0.81.0 (it was .NET's OverflowException before).
+        ((Action)(() => trial.SuggestFloat("x", 1e-3, double.PositiveInfinity))).Should().ThrowExactly<NumSharp.OverflowError>()
             .WithMessage("Range exceeds valid bounds");
-        ((Action)(() => trial.SuggestFloat("w", -1e308, 1e308))).Should().Throw<OverflowException>()
+        ((Action)(() => trial.SuggestFloat("w", -1e308, 1e308))).Should().ThrowExactly<NumSharp.OverflowError>()
             .WithMessage("Range exceeds valid bounds");
         BitConverter.DoubleToInt64Bits(trial.SuggestFloat("y", 0, 1)).Should().Be(0x3fe18fe1565f12a8);
     }

@@ -22,14 +22,19 @@ namespace OptunaSharp.Internal;
 ///     computed in managed code — a plain forward/back substitution, exact to a rounding. NumSharp
 ///     surfaces no <em>public</em> triangular solve to route it through (no <c>np.linalg</c> entry,
 ///     no <c>IBlasBackend.TryTrsm</c>); its OpenBLAS interop does now bind <c>cblas_dtrsm</c> at the
-///     native layer (<c>OpenBlasNative.Dtrsm</c>), but that binding is <c>internal</c> and
-///     unreachable from OptunaSharp — so this awaits a public NumSharp triangular-solve op. It is one
+///     native layer (<c>OpenBlasNative.Dtrsm</c>, and <c>OpenBlasEngine</c>'s <c>Trsm</c> in 0.81.0), but behind
+///     <c>internal</c> types, unreachable from OptunaSharp — so this awaits a public NumSharp triangular-solve op
+///     (NumPy itself has none: it is SciPy's and torch's, outside a NumPy port). It is one
 ///     of the GP fit's documented tolerance sources (alongside the hand-derived MLL gradient and the
 ///     managed L-BFGS-B, both a different float-op sequence than torch/scipy), which is why the GP
 ///     oracle is tolerance-exact, not bit-exact — a boundary no linalg-backend switch can remove.
 ///     By contrast CMA-ES's <see cref="Eigh" /> and the GP's <see cref="Cholesky" /> already route
 ///     through OpenBLAS and are byte-identical to NumPy (the "5.5 byte-exactness switch," folded into
-///     Core when OpenBLAS became a Core dependency — verified bit-for-bit vs numpy 2.4.2).</para>
+///     Core when OpenBLAS became a Core dependency — verified bit-for-bit vs numpy 2.4.2 on NumSharp 0.80.0, and vs
+///     numpy 2.5.4 on NumSharp 0.81.0, which bundles numpy 2.5.4's scipy-openblas 0.3.34.106.0). Footgun: the match
+///     holds only against the NumPy whose OpenBLAS NumSharp bundles; against numpy 2.4.2, NumSharp 0.81.0 fails 14 of
+///     57 BLAS-backed live parity cases (CMA-ES long runs, UNDX) in the last bit (2026-11-14), so the CI NumPy pin
+///     moves with <c>$(NumSharpVersion)</c>.</para>
 /// </summary>
 internal static class LinAlg
 {

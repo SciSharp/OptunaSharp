@@ -166,7 +166,11 @@ public class NumPyDrawsTests
         }
     }
 
-    /// <summary>A non-finite range raises NumPy's OverflowError text before any draw, as NumSharp's call does, and the stream does not move.</summary>
+    /// <summary>
+    ///     A non-finite range raises NumPy's <c>OverflowError</c> (NumSharp's Python class since 0.81.0, which was .NET's
+    ///     <see cref="OverflowException" /> in 0.80.0) with NumPy's text before any draw, as NumSharp's call does, and the
+    ///     stream does not move.
+    /// </summary>
     /// <param name="low">The lower bound.</param>
     /// <param name="high">The upper bound.</param>
     [TestMethod]
@@ -177,9 +181,9 @@ public class NumPyDrawsTests
     {
         var (helper, reference) = Pair(3);
         Action numSharp = () => reference.uniform(low, high).Dispose();
-        numSharp.Should().Throw<OverflowException>().WithMessage("Range exceeds valid bounds");
+        numSharp.Should().ThrowExactly<OverflowError>().WithMessage("Range exceeds valid bounds");
         Action act = () => NumPyDraws.Uniform(helper, low, high);
-        act.Should().Throw<OverflowException>().WithMessage("Range exceeds valid bounds");
+        act.Should().ThrowExactly<OverflowError>().WithMessage("Range exceeds valid bounds");
         AssertInStep(helper, reference);
     }
 

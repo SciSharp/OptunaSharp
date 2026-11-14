@@ -19,8 +19,15 @@ the target written outside any frame.
 `protocol5_cases` are restored states re-pickled with protocol 5, the default from CPython 3.14, whose numpy
 arrays are `_frombuffer` + BYTEARRAY8 instead of `_reconstruct` + BUILD.
 
-Run in the repo's main Python env (the interpreter the interop suite uses; cmaes 0.13.1, numpy 2.4.2):
+Run in the repo's main Python env (the interpreter the interop suite uses; cmaes 0.13.1, numpy 2.5.4, the NumPy whose
+OpenBLAS NumSharp 0.81.0 bundles, so the eigendecompositions in the told states match C# bit for bit):
     python test/OptunaSharp.Tests/oracle/gen_cma_pickle_oracle.py
+
+Two runs never write the same file: cmaes keeps `_funhist_values` from `np.empty`, so every pickle carries whatever
+memory that buffer got, and the gzip headers of the codec cases carry a timestamp. CmaPickleOracleTests take the
+entries cmaes has not written yet from Python's state and compare the rest byte for byte, so a regeneration is a real
+change only where those tests' expectations move (NumSharp 0.81.0's OpenBLAS moved the 30-dimensional case's told
+state).
 """
 import base64
 import gzip
@@ -234,8 +241,7 @@ def main():
     oracle["protocol5_cases"] = protocol5_cases(oracle["variants"])
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cma_pickle_oracle.json")
     # LF on every OS, as the repository stores text (.gitattributes eol=lf).
-    with open(path, "w", newline="
-") as f:
+    with open(path, "w", newline="\n") as f:
         json.dump(oracle, f, indent=1)
     print("wrote", path)
 

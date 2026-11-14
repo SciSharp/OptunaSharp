@@ -92,7 +92,7 @@ OptunaSharp/
 │   │   ├── Version.cs               #   OptunaSharp.OptunaSharpVersion (the version constant)
 │   │   └── README.md                #   packed into the .nupkg
 │   └── OptunaSharp.*/               # optional satellite packages — Storage.{Sqlite,EFCore,Grpc,Redis,…}, Visualization.Plotly, Integration.{LightGbm,ML.NET}, Interop.{pythonnet,BoTorch,PyCma}, Artifacts.{S3,Gcs,AzureBlob,R2}, Cli
-├── refs/                            # reference-only pinned submodules (NOT built) — optuna @ v5.0.0 (01ddd17, the porting reference), NumSharp @ v0.80.0, optunahub @ v0.5.0, optuna-integration @ v5.0.0, shap, scikit-learn
+├── refs/                            # reference-only pinned submodules (NOT built) — optuna @ v5.0.0 (01ddd17, the porting reference), NumSharp @ v0.81.0, optunahub @ v0.5.0, optuna-integration @ v5.0.0, shap, scikit-learn
 ├── test/
 │   ├── OptunaSharp.Tests/           # unit tests — MSTest v3 + AwesomeAssertions
 │   ├── OptunaSharp.Tests.Interop/   # LIVE-Optuna parity harness (pythonnet)
@@ -133,18 +133,21 @@ package dependency** (see below), not a solution member.
 `OptunaSharp.Core` depends on **NumSharp** and its native LAPACK/CBLAS backend
 **NumSharp.Interop.OpenBLAS**, both consumed as **NuGet packages from nuget.org** (SciSharp STACK) —
 two plain `PackageReference`s in `OptunaSharp.Core.csproj`, versioned by the single-sourced
-`$(NumSharpVersion)` property in `Directory.Build.props` (currently `0.80.0`; bump that one value to
-move to a newer release). **Build and CI restore these from nuget.org, always** — there is no submodule
+`$(NumSharpVersion)` property in `Directory.Build.props` (currently `0.81.0`; bump that one value to
+move to a newer release, and move the CI NumPy pin with it, below). **Build and CI restore these from nuget.org, always** — there is no submodule
 init and no OpenBLAS-native staging step anymore.
 
 - **OpenBLAS ships the natives.** `NumSharp.Interop.OpenBLAS` carries the prebuilt scipy-openblas
   binaries NumPy itself bundles, under `runtimes/<rid>/native/`; the package's `buildTransitive`
   targets copy the right RID's natives to the consuming executable/test output automatically (no
   `fetch_openblas.py`). So `np.linalg` (cholesky / eigh / solve / matrix_rank / svd / qr) computes
-  through LAPACK and is **bit-identical to NumPy** (verified byte-for-byte vs numpy 2.4.2) — the basis
+  through LAPACK and is **bit-identical to NumPy** (0.81.0 bundles numpy 2.5.4's scipy-openblas 0.3.34.106.0;
+  0.80.0 bundled numpy 2.4.2's) — the basis
   for the byte-exact linalg-backed samplers (NSGA-III's hyperplane solve, CMA-ES's eigendecomposition,
   the GP stack's Cholesky). OpenBLAS depends on the same NumSharp version, so pack records both as
-  direct dependencies.
+  direct dependencies. **The CI NumPy pin follows the bundle:** `build-and-release.yml` and the package-parity
+  `Dockerfile` pin `numpy==2.5.4` for NumSharp 0.81.0; a NumPy whose OpenBLAS differs moves the seeded CMA-ES,
+  xNES, UNDX and JANUS results in their last bits and fails their byte-exact oracles.
 - **The backend is force-loaded.** OpenBLAS self-registers from its own `[ModuleInitializer]`, but the
   CLR runs a referenced assembly's initializer only when the assembly is first touched.
   `src/OptunaSharp.Core/Internal/OpenBlasActivation.cs` touches `OpenBlasEngine.LapackAvailable` from

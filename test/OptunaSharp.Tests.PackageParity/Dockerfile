@@ -17,14 +17,16 @@ RUN apt-get update \
 # Install the VENDORED optuna — the EXACT submodule commit (the v5.0.0 release @ 01ddd17) OptunaSharp's
 # samplers track. An older PyPI optuna (4.x) is a different TPE implementation and its trajectory diverges
 # wildly (the SvmSklearn_Tpe oracle went 0.034 -> 4.73), so the commit is pinned rather than left to
-# whatever PyPI resolves. numpy is pinned to 2.4.2 (the port's byte-exact target; the erf-tolerant TPE
-# parity then holds at 1e-9, exactly as the live interop suite does).
+# whatever PyPI resolves. numpy is pinned to 2.5.4, the port's byte-exact target since NumSharp 0.81.0
+# (its OpenBLAS natives are numpy 2.5.4's scipy-openblas build, so the BLAS-backed oracles stay
+# byte-identical); the erf-tolerant TPE parity then holds at 1e-9, exactly as the live interop suite does.
+# Move this pin with the repo's $(NumSharpVersion), like the interop job's.
 # The container has no access to src/ (isolation), so it fetches the commit from GitHub instead.
-RUN pip3 install --no-cache-dir --break-system-packages "numpy==2.4.2" \
+RUN pip3 install --no-cache-dir --break-system-packages "numpy==2.5.4" \
  && pip3 install --no-cache-dir --break-system-packages \
       "optuna @ git+https://github.com/optuna/optuna.git@01ddd17ab9f36c3d2817aed9afe376e1cb047d35" \
       xgboost lightgbm scikit-learn \
- && pip3 install --no-cache-dir --break-system-packages "numpy==2.4.2"
+ && pip3 install --no-cache-dir --break-system-packages "numpy==2.5.4"
 
 WORKDIR /work
 ARG OPTUNASHARP_VERSION=0.1.0

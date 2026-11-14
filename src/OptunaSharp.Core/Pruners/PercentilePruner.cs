@@ -194,11 +194,11 @@ public class PercentilePruner : BasePruner
     ///         This was a hand port of those statements over a full sort, equal to NumPy in value everywhere but not in the
     ///         sign of a zero result: NumPy's partition keeps a particular one of tied <c>-0.0</c>/<c>0.0</c> neighbours,
     ///         and a sort does not reproduce which (596 of 600 seeded cases bit-identical on 2026-11-11, the four others a
-    ///         zero of the other sign). NumSharp's partition follows NumPy's, 600 of 600 on the same cases; one tie pattern
-    ///         still differs in NumSharp 0.80.0 (the median of <c>[0.0, -0.0, -0.0, -1.0]</c>: NumPy <c>-0.0</c>, NumSharp
-    ///         and the former port <c>+0.0</c>), pinned by an <c>[OpenBugs]</c> test for when NumSharp catches up. No
-    ///         comparison observes a zero's sign, so prune decisions match either way. A call costs a few microseconds,
-    ///         once per pruning check.
+    ///         zero of the other sign). NumSharp's partition follows NumPy's, 600 of 600 on the same cases. The one tie
+    ///         pattern NumSharp 0.80.0 still resolved differently (the median of <c>[0.0, -0.0, -0.0, -1.0]</c>: NumPy
+    ///         <c>-0.0</c>, NumSharp 0.80.0 and the former port <c>+0.0</c>, QA-85) matches since NumSharp 0.81.0, whose
+    ///         several-kth partition runs NumPy's <c>introselect_</c> statement for statement. No comparison observes a
+    ///         zero's sign, so prune decisions matched either way. A call costs a few microseconds, once per pruning check.
     ///     </para>
     /// </remarks>
     /// <param name="values">Numerical observations consumed in their supplied order.</param>

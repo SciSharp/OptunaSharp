@@ -89,12 +89,18 @@ internal static class NumPyDraws
     ///     <c>rng.uniform(bounds[:, 0], bounds[:, 1])</c> bit for bit, as long as no range is infinite (the array form raises
     ///     before its first draw, a row-by-row loop only when it reaches the bad row).
     /// </remarks>
-    /// <exception cref="OverflowException"><c>high - low</c> is infinite or NaN (NumPy's <c>OverflowError('Range exceeds valid bounds')</c>); nothing is drawn.</exception>
+    /// <exception cref="OverflowError">
+    ///     <c>high - low</c> is infinite or NaN: NumPy's <c>OverflowError('Range exceeds valid bounds')</c>, the class
+    ///     NumSharp's <c>uniform</c> raises since 0.81.0; nothing is drawn. Footgun: it is not .NET's
+    ///     <see cref="OverflowException" />, so a <c>catch (OverflowException)</c> misses it; catch <see cref="OverflowError" />
+    ///     or <see cref="ArithmeticException" />.
+    /// </exception>
     internal static double Uniform(NumPyRandom rng, double low, double high)
     {
         double range = high - low;
+        // NumPy (and NumSharp) check the range before drawing, so a bad range leaves the stream where it was.
         if (!double.IsFinite(range))
-            throw new OverflowException("Range exceeds valid bounds");
+            throw new OverflowError("Range exceeds valid bounds");
         return low + range * Rand(rng);
     }
 

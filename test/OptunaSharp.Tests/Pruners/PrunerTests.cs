@@ -146,8 +146,9 @@ public class PrunerTests
     ///     infinite last element, and single or paired infinities; then the two branches that keep an infinite
     ///     neighbour infinite instead (<c>1 - inf * 0.25</c> and <c>1 + inf * 0.25</c>); last, two rows whose result is a
     ///     zero whose sign NumPy's partition decides among tied <c>-0.0</c>/<c>0.0</c> neighbours (NumSharp's
-    ///     <c>np.nanpercentile</c> partitions as NumPy does for these), and an all-NaN input. One tie pattern NumSharp 0.80.0
-    ///     still resolves differently is pinned by <see cref="NanPercentile_TiedSignedZeros_KeepNumpysZeroSign" />.
+    ///     <c>np.nanpercentile</c> partitions as NumPy does for these), and an all-NaN input. The one tie pattern NumSharp
+    ///     0.80.0 still resolved differently, fixed in NumSharp 0.81.0, is
+    ///     <see cref="NanPercentile_TiedSignedZeros_KeepNumpysZeroSign" />.
     /// </remarks>
     /// <param name="values">The completed trials' reports at one step, NaNs included.</param>
     /// <param name="percentile">The percentile asked for, in [0, 100].</param>
@@ -187,14 +188,14 @@ public class PrunerTests
     }
 
     /// <summary>
-    ///     QA-85: the median of <c>[0.0, -0.0, -0.0, -1.0]</c> is <c>-0.0</c> in NumPy 2.4.2: its partition leaves the two
-    ///     <c>-0.0</c> as the interpolated neighbours. NumSharp 0.80.0's <c>np.nanpercentile</c> and <c>np.percentile</c>
-    ///     return <c>+0.0</c> (they interpolate between <c>0.0</c> and <c>-0.0</c>, and <c>-0.0 - (-0.0 * 0.5)</c> is
-    ///     <c>+0.0</c>), as did the sort-based port before 2026-11-11. An upstream NumSharp partition tie; no comparison can
-    ///     observe the sign, so prune decisions are unaffected. Remove <c>[OpenBugs]</c> once NumSharp matches.
+    ///     QA-85, fixed by NumSharp 0.81.0: the median of <c>[0.0, -0.0, -0.0, -1.0]</c> is <c>-0.0</c> in NumPy (2.4.2 and
+    ///     2.5.4): its partition leaves the two <c>-0.0</c> as the interpolated neighbours. NumSharp 0.80.0's
+    ///     <c>np.nanpercentile</c> and <c>np.percentile</c> returned <c>+0.0</c> (they interpolated between <c>0.0</c> and
+    ///     <c>-0.0</c>, and <c>-0.0 - (-0.0 * 0.5)</c> is <c>+0.0</c>), as did the sort-based port before 2026-11-11.
+    ///     NumSharp 0.81.0 partitions at several kth with NumPy's <c>introselect_</c> statement for statement (its QB43
+    ///     fix), so the sign is NumPy's. No comparison can observe the sign, so prune decisions never differed.
     /// </summary>
     [TestMethod]
-    [OpenBugs]
     public void NanPercentile_TiedSignedZeros_KeepNumpysZeroSign()
     {
         double actual = PercentilePruner.NanPercentile(new[] { 0.0, -0.0, -0.0, -1.0 }, 50.0);

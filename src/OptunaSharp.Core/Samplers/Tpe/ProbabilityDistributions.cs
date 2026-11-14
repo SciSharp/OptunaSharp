@@ -597,7 +597,10 @@ internal sealed class MixtureOfProductDistribution
     ///         doubles, 1.9 MB at 24 candidates, 1,000 kernels and 10 dimensions. Both buffers are rented, the term array and
     ///         the <c>out=</c> target wrap them without a copy, and NumSharp's sum allocates about 2 KB per call. NumSharp's
     ///         own costs on this shape (its sum runs at 0.56–0.99 of NumPy's speed, and the fresh-result form allocates
-    ///         managed memory in proportion to its output) are filed as OpenBugs in NumSharp's journey5.
+    ///         managed memory in proportion to its output) are pinned as OpenBugs in NumSharp
+    ///         (<c>OpenBugs.Consumers.OptunaSharp</c>: <c>SumOverShortRows_CostsAFewLongRowSums</c>,
+    ///         <c>SumIntoOut_CostsAboutAFreshSum</c>), still open in NumSharp 0.81.0; QA-84's 27–66% TPE cost stays until
+    ///         they are fixed.
     ///     </para>
     /// </remarks>
     internal static void AddContinuousSums(
