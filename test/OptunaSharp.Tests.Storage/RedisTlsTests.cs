@@ -4,7 +4,7 @@ using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using AwesomeAssertions;
-using NumSharp;                          // TypeError
+using NumSharp;                          // TypeError, FileNotFoundError
 using OptunaSharp.Storages.Journal;      // RedisTls (friend access), RedisEndpoint
 
 namespace OptunaSharp.Tests.Storage;
@@ -152,7 +152,7 @@ public class RedisTlsTests
             Action noData = () => RedisTls.LoadAuthorities(new RedisEndpoint { Ssl = true, SslCaData = "x" });
             noData.Should().Throw<CryptographicException>().WithMessage("no start line: cadata does not contain a certificate");
             Action missing = () => RedisTls.LoadAuthorities(new RedisEndpoint { Ssl = true, SslCaCerts = Path.Combine(_dir, "none.pem") });
-            missing.Should().Throw<FileNotFoundException>();
+            missing.Should().ThrowExactly<FileNotFoundError>().WithMessage("[Errno 2] No such file or directory");
             Action empty = () => RedisTls.LoadAuthorities(new RedisEndpoint { Ssl = true, SslCaCerts = WriteFile("empty.pem", "hello") });
             empty.Should().Throw<CryptographicException>().WithMessage("[X509: NO_CERTIFICATE_OR_CRL_FOUND] no certificate or crl found");
 

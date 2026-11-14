@@ -440,7 +440,7 @@ internal static class PyValues
             ? new BigInteger(Math.Truncate(d))
             : throw (Exception)(double.IsNaN(d)
                 ? new ValueError("cannot convert float NaN to integer")
-                : new OverflowException("cannot convert float infinity to integer")),
+                : new OverflowError("cannot convert float infinity to integer")),
         _ => throw new TypeError(
             $"int() argument must be a string, a bytes-like object or a real number, not '{TypeName(value)}'"),
     };
@@ -698,7 +698,7 @@ internal static class StorageUrlTemplate
     /// <exception cref="AttributeError">A field reads an attribute an <c>int</c> lacks.</exception>
     /// <exception cref="TypeError">A field indexes the integer.</exception>
     /// <exception cref="NotSupportedException">A field reads one of <c>int</c>'s methods.</exception>
-    /// <exception cref="OverflowException">A format spec that CPython rejects with <c>OverflowError</c>.</exception>
+    /// <exception cref="OverflowError">A format spec that CPython rejects with <c>OverflowError</c>.</exception>
     /// <exception cref="OutOfMemoryException">
     ///     A field padded past the longest .NET string (a width above about 2<sup>30</sup>), which CPython would build
     ///     when memory allows.

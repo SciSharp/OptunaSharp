@@ -1,6 +1,6 @@
 using System;
 using AwesomeAssertions;
-using NumSharp;                          // ValueError, TypeError
+using NumSharp;                          // ValueError, TypeError, OverflowError
 using OptunaSharp.Storages.Journal;      // RedisUrl / RedisEndpoint (shared package)
 
 namespace OptunaSharp.Tests.Storage;
@@ -288,7 +288,7 @@ public class RedisUrlTests
     [DataRow("redis://[::1", typeof(ValueError), "Invalid IPv6 URL")]
     [DataRow("redis://h?socket_timeout=-1", typeof(ValueError), "Timeout value out of range")]
     [DataRow("redis://h?socket_connect_timeout=nan", typeof(ValueError), "Invalid value NaN (not a number)")]
-    [DataRow("redis://h?socket_timeout=inf", typeof(OverflowException), "timestamp out of range for platform time_t")]
+    [DataRow("redis://h?socket_timeout=inf", typeof(OverflowError), "timestamp out of range for platform time_t")]
     [DataRow("rediss://h?ssl_min_version=999", typeof(ValueError), "Unsupported TLS/SSL version 0x3e7")]
     [DataRow("rediss://h?ssl_min_version=-3", typeof(ValueError), "Unsupported TLS/SSL version 0xfffffffd")]
     [DataRow("rediss://h?ssl_validate_ocsp=1&ssl_validate_ocsp_stapled=1", typeof(ValueError), "Either an OCSP staple or pure OCSP connection must be validated - not both.")]

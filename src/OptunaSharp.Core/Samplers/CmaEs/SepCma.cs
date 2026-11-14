@@ -79,7 +79,7 @@ internal class SepCma : ICmaOptimizer
     ///     the type of the pickled <c>_tolx</c> (and of the untold <c>_sigma</c>). See <see cref="Cma" />.
     /// </param>
     /// <exception cref="System.ArgumentException">The scale is nonpositive, mean dimension is below two or exceeds the supported magnitude, population size is nonpositive, a learning rate fails cmaes' assertions, or the bounds are malformed or exclude the mean ("invalid bounds").</exception>
-    /// <exception cref="System.DivideByZeroException">The population size is 1, so <c>mu</c> is 0 and cmaes' <c>1 / sum(weights**2)</c> divides the int 0 (Python's <c>ZeroDivisionError</c>).</exception>
+    /// <exception cref="ZeroDivisionError">The population size is 1, so <c>mu</c> is 0 and cmaes' <c>1 / sum(weights**2)</c> divides the int 0 (Python's <c>ZeroDivisionError</c>).</exception>
     internal SepCma(
         double[] mean,
         double sigma,
@@ -114,8 +114,8 @@ internal class SepCma : ICmaOptimizer
         for (int i = 0; i < mu; i++) weights[i] = weightsPrime[i] / wpSum;
         // popsize 1 gives mu = 0: the builtin `sum` of an empty array is the int 0, so `1 / sum(weights**2)` is a Python
         // int division and raises ZeroDivisionError, which fails Optuna's first separable CMA-ES trial (QA-80). A double
-        // division here would give +inf and sample on. DivideByZeroException is this port's ZeroDivisionError.
-        if (mu == 0) throw new DivideByZeroException("division by zero");
+        // division here would give +inf and sample on. NumSharp's ZeroDivisionError (0.81.0) is Python's class.
+        if (mu == 0) throw new ZeroDivisionError("division by zero");
         double sumWSq = 0;
         foreach (double w in weights) sumWSq += w * w;  // sum(weights**2), sequential
         double muEff = 1 / sumWSq;

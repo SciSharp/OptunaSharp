@@ -91,9 +91,9 @@ public class NRedisStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSn
     ///   flag.</param>
     /// <exception cref="NumSharp.ValueError">A URL redis-py rejects, with redis-py's message (see <see cref="RedisUrl.Parse" />).</exception>
     /// <exception cref="NumSharp.TypeError">A query argument redis-py's connection class does not take, with redis-py's message.</exception>
-    /// <exception cref="OverflowException">A timeout or TLS version too large for Python, with Python's message.</exception>
+    /// <exception cref="NumSharp.OverflowError">A timeout or TLS version too large for Python, with Python's class and message.</exception>
     /// <exception cref="NotSupportedException">A query argument no .NET client can honor, or white-space-only credentials.</exception>
-    /// <exception cref="System.IO.FileNotFoundException">A TLS certificate, key or authority file that does not exist.</exception>
+    /// <exception cref="NumSharp.FileNotFoundError">A TLS certificate, key or authority file that does not exist (<c>[Errno 2] No such file or directory</c>).</exception>
     /// <exception cref="System.Security.Cryptography.CryptographicException">A malformed TLS certificate, key or authority file.</exception>
     /// <remarks>The backend owns the connection it opens here: <see cref="Dispose" /> closes it.</remarks>
     public NRedisStackJournalRedisBackend(string url, bool useCluster = false, string prefix = "", bool dedicatedThreads = true)
@@ -510,7 +510,7 @@ public class NRedisStackJournalRedisBackend : BaseJournalBackend, IBaseJournalSn
     ///     redis-py sends it as it is.
     /// </exception>
     /// <exception cref="NumSharp.TypeError">An <c>ssl_keyfile</c> without an <c>ssl_certfile</c>; Python's message.</exception>
-    /// <exception cref="System.IO.FileNotFoundException">A certificate, key or certificate-authority file that does not exist.</exception>
+    /// <exception cref="NumSharp.FileNotFoundError">A certificate, key or certificate-authority file that does not exist (<c>[Errno 2] No such file or directory</c>).</exception>
     /// <exception cref="System.Security.Cryptography.CryptographicException">A malformed certificate, key or authority file, a key that does not match, or a wrong key password.</exception>
     internal static ConfigurationOptions ToConfiguration(RedisEndpoint ep)
     {

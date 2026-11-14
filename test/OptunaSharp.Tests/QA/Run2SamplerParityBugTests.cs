@@ -362,7 +362,7 @@ public class Run2SamplerParityBugTests
         System.Action optimize = () => study.Optimize(t => t.SuggestFloat("x", 0, 10) + t.SuggestInt("y", 0, 5), nTrials: 8);
 
         if (variant == "separable")
-            optimize.Should().Throw<System.DivideByZeroException>().Which.Message.Should().Be("division by zero");
+            optimize.Should().ThrowExactly<NumSharp.ZeroDivisionError>().Which.Message.Should().Be("division by zero");
         else
             optimize.Should().Throw<System.ArgumentException>().Which.Message.Should()
                 .Be("invalid learning rate for the rank-one update");

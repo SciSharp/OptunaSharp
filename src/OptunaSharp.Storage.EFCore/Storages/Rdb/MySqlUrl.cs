@@ -219,7 +219,7 @@ internal static class MySqlUrl
     ///     attribute 'get'</c>), an unknown <c>charset</c> (<c>'NoneType' object has no attribute 'encoding'</c>) and
     ///     <c>?conv=</c> (<c>'str' object has no attribute 'items'</c>).
     /// </exception>
-    /// <exception cref="FileNotFoundException">The <c>ssl_ca</c> or <c>ssl_cert</c> file is missing (<c>[Errno 2] No such file or directory</c>).</exception>
+    /// <exception cref="FileNotFoundError">The <c>ssl_ca</c> or <c>ssl_cert</c> file is missing (<c>[Errno 2] No such file or directory</c>).</exception>
     /// <exception cref="NotSupportedException">An argument MySqlConnector cannot express, refused once PyMySQL's own checks have passed.</exception>
     /// <remarks>
     ///     The checks run in <c>Connection.__init__</c>'s order. A refusal of what MySqlConnector cannot express waits
@@ -367,7 +367,7 @@ internal static class MySqlUrl
     /// <param name="b">The builder to configure.</param>
     /// <param name="ssl">PyMySQL's SSL dictionary.</param>
     /// <param name="refuse">Records a refusal to raise once PyMySQL's own checks have passed.</param>
-    /// <exception cref="FileNotFoundException">
+    /// <exception cref="FileNotFoundError">
     ///     The CA file (<c>create_default_context(cafile=…)</c>), the certificate or its key
     ///     (<c>load_cert_chain</c>) is missing: <c>[Errno 2] No such file or directory</c>. Python loads them here,
     ///     before connecting; a file that exists but is not valid PEM fails in MySqlConnector at connect time instead
@@ -419,11 +419,11 @@ internal static class MySqlUrl
 
     /// <summary>The <c>FileNotFoundError</c> Python's <c>ssl</c> module raises for a certificate file that is not there.</summary>
     /// <param name="path">The path, relative to the working directory as in Python.</param>
-    /// <exception cref="FileNotFoundException">The file does not exist: <c>[Errno 2] No such file or directory</c>.</exception>
+    /// <exception cref="FileNotFoundError">The file does not exist: <c>[Errno 2] No such file or directory</c> (Python's class, NumSharp's since 0.81.0; the <c>ssl</c> module names no file, so neither does this one).</exception>
     private static void RequireFile(string path)
     {
         if (!File.Exists(path))
-            throw new FileNotFoundException("[Errno 2] No such file or directory", path);
+            throw new FileNotFoundError(2, "No such file or directory");
     }
 
     /// <summary>
@@ -530,7 +530,7 @@ internal static class MySqlUrl
     ///     argument (<c>'…' is an invalid keyword argument for connect()</c>).
     /// </exception>
     /// <exception cref="ValueError">A NUL in a text argument (<c>embedded null character</c>), or a port outside 0–65535.</exception>
-    /// <exception cref="OverflowException">
+    /// <exception cref="OverflowError">
     ///     An integer argument outside the C <c>int</c> range. The message is the platform's, as in CPython: C <c>long</c>
     ///     is 32-bit on Windows (<c>Python int too large to convert to C long</c>) and 64-bit elsewhere
     ///     (<c>signed integer is greater than maximum</c> until the value leaves the 64-bit range).
@@ -714,7 +714,7 @@ internal static class MySqlUrl
     /// </summary>
     /// <param name="value">The argument.</param>
     /// <exception cref="TypeError">Not an integer: <c>'str' object cannot be interpreted as an integer</c>.</exception>
-    /// <exception cref="OverflowException">Outside the C <c>long</c> range (<c>Python int too large to convert to C long</c>), or outside the C <c>int</c> range (<c>signed integer is greater than maximum</c> / <c>less than minimum</c>).</exception>
+    /// <exception cref="OverflowError">Outside the C <c>long</c> range (<c>Python int too large to convert to C long</c>), or outside the C <c>int</c> range (<c>signed integer is greater than maximum</c> / <c>less than minimum</c>).</exception>
     private static void CheckCInt(object? value)
     {
         if (value is bool)
@@ -724,11 +724,11 @@ internal static class MySqlUrl
         BigInteger longMin = OperatingSystem.IsWindows() ? int.MinValue : long.MinValue;
         BigInteger longMax = OperatingSystem.IsWindows() ? int.MaxValue : long.MaxValue;
         if (number < longMin || number > longMax)
-            throw new OverflowException("Python int too large to convert to C long");
+            throw new OverflowError("Python int too large to convert to C long");
         if (number > int.MaxValue)
-            throw new OverflowException("signed integer is greater than maximum");
+            throw new OverflowError("signed integer is greater than maximum");
         if (number < int.MinValue)
-            throw new OverflowException("signed integer is less than minimum");
+            throw new OverflowError("signed integer is less than minimum");
     }
 
     // ------------------------------------------------------------------ mysql-connector, MariaDB Connector, cymysql

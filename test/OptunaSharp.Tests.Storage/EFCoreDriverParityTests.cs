@@ -311,11 +311,11 @@ public class EFCoreDriverParityTests
     public void MySqlDb_IntegerOverflow_UsesThePlatformsMessage()
     {
         string large = OperatingSystem.IsWindows() ? "Python int too large to convert to C long" : "signed integer is greater than maximum";
-        Fails("mysql://u:p@h/db?connect_timeout=99999999999", typeof(OverflowException), large);
-        Fails("mysql://u:p@h/db?client_flag=99999999999", typeof(OverflowException), large);
-        Fails("mysql://u:p@h:99999999999/db", typeof(OverflowException), large);
+        Fails("mysql://u:p@h/db?connect_timeout=99999999999", typeof(OverflowError), large);
+        Fails("mysql://u:p@h/db?client_flag=99999999999", typeof(OverflowError), large);
+        Fails("mysql://u:p@h:99999999999/db", typeof(OverflowError), large);
         string small = OperatingSystem.IsWindows() ? "Python int too large to convert to C long" : "signed integer is less than minimum";
-        Fails("mysql://u:p@h/db?client_flag=-2147483649", typeof(OverflowException), small);
+        Fails("mysql://u:p@h/db?client_flag=-2147483649", typeof(OverflowError), small);
     }
 
     /// <summary>
@@ -389,9 +389,9 @@ public class EFCoreDriverParityTests
     [TestMethod]
     public void PyMySql_SslFiles_LoadLikePython()
     {
-        Fails("mysql+pymysql://u:p@h/db?ssl_ca=nonexistent", typeof(FileNotFoundException), "[Errno 2] No such file or directory");
-        Fails("mysql+pymysql://u:p@h/db?ssl_cert=nonexistent", typeof(FileNotFoundException), "[Errno 2] No such file or directory");
-        Fails("mysql+pymysql://u:p@h/db?ssl_capath=x&ssl_ca=nonexistent", typeof(FileNotFoundException), "[Errno 2] No such file or directory");
+        Fails("mysql+pymysql://u:p@h/db?ssl_ca=nonexistent", typeof(FileNotFoundError), "[Errno 2] No such file or directory");
+        Fails("mysql+pymysql://u:p@h/db?ssl_cert=nonexistent", typeof(FileNotFoundError), "[Errno 2] No such file or directory");
+        Fails("mysql+pymysql://u:p@h/db?ssl_capath=x&ssl_ca=nonexistent", typeof(FileNotFoundError), "[Errno 2] No such file or directory");
         My("mysql+pymysql://u:p@h/db?ssl_key_password=x").Server.Should().Be("h");
         My("mysql+pymysql://u:p@h/db?ssl_key_password=x&ssl_verify_cert=1").SslMode.Should().Be(MySqlSslMode.VerifyCA);
     }

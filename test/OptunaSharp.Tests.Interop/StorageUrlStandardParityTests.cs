@@ -140,7 +140,7 @@ public class StorageUrlStandardParityTests : OptunaInteropTestBase
         UnicodeEncodeError => $"UnicodeEncodeError|{e.Message}",
         ValueError => $"ValueError|{e.Message}",
         TypeError => $"TypeError|{e.Message}",
-        OverflowException => $"OverflowError|{e.Message}",
+        OverflowError => $"OverflowError|{e.Message}",
         FormatException => $"ProgrammingError|{e.Message}",
         NotSupportedException when e.Message.StartsWith(StorageUrlResolver.ImportErrorMessage, StringComparison.Ordinal)
             => $"ImportError|{StorageUrlResolver.ImportErrorMessage}",

@@ -6,7 +6,7 @@ using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.RegularExpressions;
-using NumSharp;                 // TypeError
+using NumSharp;                 // TypeError, FileNotFoundError
 
 namespace OptunaSharp.Storages.Journal;
 
@@ -63,7 +63,7 @@ internal static class RedisTls
     /// </summary>
     /// <param name="ep">The endpoint.</param>
     /// <returns>The callback, or <see langword="null" />.</returns>
-    /// <exception cref="FileNotFoundException"><c>ssl_ca_certs</c> names a missing file.</exception>
+    /// <exception cref="FileNotFoundError"><c>ssl_ca_certs</c> names a missing file.</exception>
     /// <exception cref="CryptographicException"><c>ssl_ca_certs</c> or <c>ssl_ca_data</c> holds no certificate, or a malformed one.</exception>
     internal static RemoteCertificateValidationCallback? Validation(RedisEndpoint ep)
     {
@@ -83,7 +83,7 @@ internal static class RedisTls
     /// <param name="ep">The endpoint.</param>
     /// <returns>A certificate with its private key, or <see langword="null" />.</returns>
     /// <exception cref="TypeError">A key file without a certificate file; Python's message.</exception>
-    /// <exception cref="FileNotFoundException">A missing file.</exception>
+    /// <exception cref="FileNotFoundError">A missing certificate or key file: <c>[Errno 2] No such file or directory</c>, Python's class (NumSharp's since 0.81.0).</exception>
     /// <exception cref="CryptographicException">A malformed file, a key that does not match, or an encrypted key with a wrong or missing password.</exception>
     internal static X509Certificate2? ClientCertificate(RedisEndpoint ep)
     {
@@ -91,6 +91,10 @@ internal static class RedisTls
             return null;
         if (ep.SslCertFile is null)
             throw new TypeError("certfile should be a valid filesystem path");
+        // Python's load_cert_chain opens the certificate, then the key, and a missing one raises FileNotFoundError
+        // with errno 2 and no file name; .NET's PEM loaders would throw FileNotFoundException with their own text.
+        if (!File.Exists(ep.SslCertFile) || (ep.SslKeyFile is { } keyFile && !File.Exists(keyFile)))
+            throw new FileNotFoundError(2, "No such file or directory");
         X509Certificate2 loaded;
         if (ep.SslPassword is { } password)
         {
@@ -134,7 +138,7 @@ internal static class RedisTls
     /// </summary>
     /// <param name="ep">The endpoint.</param>
     /// <returns>The authorities; empty when the URL adds none.</returns>
-    /// <exception cref="FileNotFoundException"><c>ssl_ca_certs</c> names a missing file.</exception>
+    /// <exception cref="FileNotFoundError"><c>ssl_ca_certs</c> names a missing file.</exception>
     /// <exception cref="CryptographicException"><c>ssl_ca_data</c> or <c>ssl_ca_certs</c> holds no certificate, or a malformed one.</exception>
     internal static X509Certificate2Collection LoadAuthorities(RedisEndpoint ep)
     {
@@ -149,7 +153,7 @@ internal static class RedisTls
         if (ep.SslCaCerts is { } file)
         {
             if (!File.Exists(file))
-                throw new FileNotFoundException("[Errno 2] No such file or directory", file);
+                throw new FileNotFoundError(2, "No such file or directory");
             int before = authorities.Count;
             authorities.ImportFromPemFile(file);
             if (authorities.Count == before)

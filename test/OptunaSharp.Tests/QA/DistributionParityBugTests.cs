@@ -272,7 +272,9 @@ public class DistributionParityBugTests
     public void IntToExternalRepr_NonFinite_RaisesLikePython()
     {
         var dist = new IntDistribution(0, 10);
-        ((Action)(() => dist.ToExternalRepr(double.PositiveInfinity))).Should().Throw<OverflowException>();
+        // Python's class, which NumSharp provides since 0.81.0: the fix must raise OverflowError with CPython's text.
+        ((Action)(() => dist.ToExternalRepr(double.PositiveInfinity))).Should().ThrowExactly<OverflowError>()
+            .WithMessage("cannot convert float infinity to integer");
         ((Action)(() => dist.ToExternalRepr(double.NaN))).Should().Throw<ValueError>()
             .WithMessage("cannot convert float NaN to integer");
     }
@@ -296,7 +298,9 @@ public class DistributionParityBugTests
         study.EnqueueTrial(new Collections.OrderedDict<string, object?> { ["i"] = double.PositiveInfinity });
         var trial = study.Ask();
 
-        ((Action)(() => trial.SuggestInt("i", 0, 10))).Should().Throw<OverflowException>();
+        // Python's class, which NumSharp provides since 0.81.0: the fix must raise OverflowError with CPython's text.
+        ((Action)(() => trial.SuggestInt("i", 0, 10))).Should().ThrowExactly<OverflowError>()
+            .WithMessage("cannot convert float infinity to integer");
     }
 
     /// <summary>

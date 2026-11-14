@@ -86,7 +86,7 @@ internal static class SqliteUrl
     /// <exception cref="TypeError">A template index; a repeated query key <c>int</c>/<c>float</c> cannot take; <c>?uri=true</c> without a path.</exception>
     /// <exception cref="ArgumentException">Not a SQLAlchemy URL; an unknown dialect, driver or plugin; or a SQLite URL with a host, user, password or port.</exception>
     /// <exception cref="NotSupportedException">A driver with no OptunaSharp counterpart (<c>sqlite+pysqlcipher</c>).</exception>
-    /// <exception cref="OverflowException">A <c>detect_types</c> or <c>cached_statements</c> outside the C <c>int</c> range.</exception>
+    /// <exception cref="OverflowError">A <c>detect_types</c> or <c>cached_statements</c> outside the C <c>int</c> range (Python's class, NumSharp's since 0.81.0).</exception>
     /// <exception cref="InvalidOperationException">An asyncio driver (<c>sqlite+aiosqlite</c>); SQLAlchemy's synchronous-engine error.</exception>
     internal static (string Filled, SqliteConnectArgs Args) Resolve(string url, Action? validateOptions = null)
     {
@@ -166,7 +166,7 @@ internal static class SqliteUrl
     /// <returns>What to open.</returns>
     /// <exception cref="TypeError">No filename (<c>sqlite://?uri=true</c>).</exception>
     /// <exception cref="ValueError">A NUL in the path, or an invalid repeated <c>isolation_level</c>.</exception>
-    /// <exception cref="OverflowException">A <c>detect_types</c> or <c>cached_statements</c> outside the C <c>int</c> range.</exception>
+    /// <exception cref="OverflowError">A <c>detect_types</c> or <c>cached_statements</c> outside the C <c>int</c> range (Python's class, NumSharp's since 0.81.0).</exception>
     internal static SqliteConnectArgs Connect(string? filename, OrderedDict<string, object?> opts)
     {
         // sqlite3.connect(database, timeout, detect_types, isolation_level, check_same_thread, factory,
@@ -193,10 +193,10 @@ internal static class SqliteUrl
     /// <summary>Argument Clinic's C <c>int</c> conversion of an integer argument.</summary>
     /// <param name="opts">The coerced arguments.</param>
     /// <param name="key">The argument to check, if present.</param>
-    /// <exception cref="OverflowException">The value is outside the 32-bit range: <c>Python int too large to convert to C int</c>.</exception>
+    /// <exception cref="OverflowError">The value is outside the 32-bit range: <c>Python int too large to convert to C int</c>.</exception>
     private static void CheckCInt(OrderedDict<string, object?> opts, string key)
     {
         if (opts.TryGetValue(key, out object? value) && value is BigInteger i && (i < int.MinValue || i > int.MaxValue))
-            throw new OverflowException("Python int too large to convert to C int");
+            throw new OverflowError("Python int too large to convert to C int");
     }
 }

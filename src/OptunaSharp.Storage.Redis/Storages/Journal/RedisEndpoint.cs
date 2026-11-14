@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Numerics;
-using NumSharp;                 // ValueError, TypeError
+using NumSharp;                 // ValueError, TypeError, OverflowError
 using OptunaSharp.Internal;
 using OptunaSharp.Storages.SqlAlchemy;
 
@@ -248,7 +248,7 @@ public static class RedisUrl
     ///     (<c>connection_class</c> on <c>redis://</c>, <c>parser_class</c>) or needs a <c>DriverInfo</c>, or an
     ///     <c>ssl_keyfile</c> without an <c>ssl_certfile</c> (<c>certfile should be a valid filesystem path</c>).
     /// </exception>
-    /// <exception cref="OverflowException">An infinite or astronomically large timeout, or a TLS version beyond a C long; Python's messages.</exception>
+    /// <exception cref="OverflowError">An infinite or astronomically large timeout, or a TLS version beyond a C long; Python's messages.</exception>
     /// <exception cref="NotSupportedException">An argument that takes a Python object, a non-UTF-8 encoding, or a TLS setting no .NET client offers.</exception>
     public static RedisEndpoint Parse(string url)
     {
@@ -415,7 +415,7 @@ public static class RedisUrl
     /// <param name="ssl">Whether the URL is <c>rediss://</c>.</param>
     /// <returns>The endpoint.</returns>
     /// <exception cref="ValueError">A port outside 1–65535 from <c>?port=</c>, a NaN or negative timeout, an unknown TLS version, both OCSP modes, a client name the server refuses, or a database index outside 0–2147483647.</exception>
-    /// <exception cref="OverflowException">A timeout of 2⁶³ nanoseconds or more, or a TLS version beyond a C long.</exception>
+    /// <exception cref="OverflowError">A timeout of 2⁶³ nanoseconds or more, or a TLS version beyond a C long.</exception>
     /// <exception cref="NotSupportedException">A zero timeout, which makes a Python socket non-blocking.</exception>
     /// <exception cref="TypeError">
     ///     <c>rediss://</c> with an <c>ssl_keyfile</c> but no <c>ssl_certfile</c>: redis-py calls
@@ -445,7 +445,7 @@ public static class RedisUrl
         if (ssl && kwargs.Get("ssl_min_version") is BigInteger version)
         {
             if (version < int.MinValue || version > int.MaxValue)
-                throw new OverflowException("Python int too large to convert to C long");
+                throw new OverflowError("Python int too large to convert to C long");
             int v = (int)version;
             // _ssl.c formats the rejected value with %x, i.e. as an unsigned 32-bit pattern.
             if (v is not (-2 or -1 or 768 or 769 or 770 or 771 or 772))
@@ -505,7 +505,7 @@ public static class RedisUrl
     /// <param name="value">The parsed float, or <see langword="null" /> when the URL has none.</param>
     /// <returns>The timeout in seconds.</returns>
     /// <exception cref="ValueError">NaN or a negative value; Python's messages.</exception>
-    /// <exception cref="OverflowException">2⁶³ nanoseconds or more (infinity included), which Python's time type cannot hold.</exception>
+    /// <exception cref="OverflowError">2⁶³ nanoseconds or more (infinity included), which Python's time type cannot hold.</exception>
     /// <exception cref="NotSupportedException">Zero, which makes a Python socket non-blocking.</exception>
     private static double Timeout(string key, object? value)
     {
@@ -516,7 +516,7 @@ public static class RedisUrl
         // Python rounds a timeout away from zero to whole nanoseconds, then requires it to fit a signed 64-bit count.
         double nanoseconds = seconds >= 0 ? Math.Ceiling(seconds * 1e9) : Math.Floor(seconds * 1e9);
         if (!(nanoseconds >= -9223372036854775808.0 && nanoseconds < 9223372036854775808.0))
-            throw new OverflowException("timestamp out of range for platform time_t");
+            throw new OverflowError("timestamp out of range for platform time_t");
         if (nanoseconds < 0)
             throw new ValueError("Timeout value out of range");
         if (nanoseconds == 0)

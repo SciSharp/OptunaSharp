@@ -122,7 +122,8 @@ public static class ArtifactFunctions
     /// <param name="artifactStore">An artifact store.</param>
     /// <param name="filePath">A path to save the downloaded artifact.</param>
     /// <param name="artifactId">The identifier of the artifact to download.</param>
-    /// <exception cref="System.IO.IOException">The destination already exists, as a file or a directory ("File already exists: …", Python's <c>FileExistsError</c>), or file copying fails.</exception>
+    /// <exception cref="FileExistsError">The destination already exists, as a file or a directory: Python's <c>FileExistsError("File already exists: …")</c>, NumSharp's class since 0.81.0 (an <see cref="System.IO.IOException" />, so a <c>catch (IOException)</c> still sees it).</exception>
+    /// <exception cref="System.IO.IOException">File copying fails.</exception>
     /// <exception cref="OptunaSharp.Artifacts.ArtifactNotFound">The requested artifact does not exist.</exception>
     /// <exception cref="System.UnauthorizedAccessException">The destination cannot be written.</exception>
     /// <remarks>Both streams are disposed on failure, but a partially written destination file is retained.</remarks>
@@ -131,7 +132,7 @@ public static class ArtifactFunctions
         // Python's os.path.exists is true for a directory too; File.Exists alone let a directory through, and opening it
         // as a file then failed with UnauthorizedAccessException instead of Optuna's FileExistsError (QA-78).
         if (File.Exists(filePath) || Directory.Exists(filePath))
-            throw new IOException($"File already exists: {filePath}");
+            throw new FileExistsError($"File already exists: {filePath}");
 
         using var reader = artifactStore.OpenReader(artifactId);
         using var writer = new FileStream(filePath, FileMode.CreateNew, FileAccess.Write);

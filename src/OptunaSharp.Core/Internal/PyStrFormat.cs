@@ -65,7 +65,7 @@ internal static class PyStrFormat
     /// <exception cref="AttributeError">A field reads an attribute Python's <c>int</c> does not have.</exception>
     /// <exception cref="TypeError">A field indexes the integer (<c>{SCHEMA_VERSION[0]}</c>).</exception>
     /// <exception cref="NotSupportedException">A field reads one of <c>int</c>'s methods (see the remarks).</exception>
-    /// <exception cref="OverflowException">A <c>c</c> format of a value outside <c>range(0x110000)</c>, or a float format of an integer too large for a double.</exception>
+    /// <exception cref="OverflowError">A <c>c</c> format of a value outside <c>range(0x110000)</c>, or a float format of an integer too large for a double.</exception>
     /// <exception cref="OutOfMemoryException">
     ///     A width pads a field past the longest string .NET allocates (about 2<sup>30</sup> characters). CPython
     ///     builds such a string when the memory is there, so this is the one place the port stops short of it.
@@ -87,7 +87,7 @@ internal static class PyStrFormat
     /// <exception cref="AttributeError">A field reads an attribute Python's <c>int</c> does not have.</exception>
     /// <exception cref="TypeError">A field indexes the integer.</exception>
     /// <exception cref="NotSupportedException">A field reads one of <c>int</c>'s methods.</exception>
-    /// <exception cref="OverflowException">A <c>c</c> format out of range, or a float format of an integer too large for a double.</exception>
+    /// <exception cref="OverflowError">A <c>c</c> format out of range, or a float format of an integer too large for a double.</exception>
     /// <exception cref="OutOfMemoryException">A width beyond the longest .NET string.</exception>
     private static string BuildString(string s, int start, int end, string name, BigInteger value, int depth)
     {
@@ -651,7 +651,7 @@ internal static class PyStrFormat
     /// <param name="specText">The format spec.</param>
     /// <returns>The formatted string.</returns>
     /// <exception cref="ValueError">The spec does not apply to integers; CPython's messages.</exception>
-    /// <exception cref="OverflowException">A <c>c</c> format out of range, or a float format of an integer too large for a double.</exception>
+    /// <exception cref="OverflowError">A <c>c</c> format out of range, or a float format of an integer too large for a double.</exception>
     /// <exception cref="OutOfMemoryException">The width is beyond what a .NET string holds (see <see cref="AppendFill" />).</exception>
     private static string FormatInteger(BigInteger value, string specText)
     {
@@ -674,7 +674,7 @@ internal static class PyStrFormat
     /// <param name="f">The parsed spec.</param>
     /// <returns>The formatted string.</returns>
     /// <exception cref="ValueError">Precision, <c>z</c>, or a sign/<c>#</c> with <c>c</c>; CPython's messages.</exception>
-    /// <exception cref="OverflowException">A <c>c</c> format of a value outside <c>range(0x110000)</c>.</exception>
+    /// <exception cref="OverflowError">A <c>c</c> format of a value outside <c>range(0x110000)</c>.</exception>
     /// <exception cref="OutOfMemoryException">The width is beyond what a .NET string holds (see <see cref="AppendFill" />).</exception>
     private static string FormatLong(BigInteger value, Spec f)
     {
@@ -689,7 +689,7 @@ internal static class PyStrFormat
             if (f.Alternate)
                 throw new ValueError("Alternate form (#) not allowed with integer format specifier 'c'");
             if (value < 0 || value > 0x10ffff)
-                throw new OverflowException("%c arg not in range(0x110000)");
+                throw new OverflowError("%c arg not in range(0x110000)");
             // 'c' content counts as "remainder": it is copied, never grouped or zero-extended.
             return LayoutNumber(sign: '\0', prefix: "", digits: "", decimalPoint: "", remainder: char.ConvertFromUtf32((int)value), f);
         }
@@ -713,7 +713,7 @@ internal static class PyStrFormat
     /// <param name="f">The parsed spec.</param>
     /// <returns>The formatted string.</returns>
     /// <exception cref="ValueError">The precision is above <see cref="int.MaxValue" />.</exception>
-    /// <exception cref="OverflowException">The integer does not fit a double (<c>int too large to convert to float</c>).</exception>
+    /// <exception cref="OverflowError">The integer does not fit a double (<c>int too large to convert to float</c>).</exception>
     /// <exception cref="OutOfMemoryException">The width is beyond what a .NET string holds (see <see cref="AppendFill" />).</exception>
     private static string FormatFloat(BigInteger value, Spec f)
     {
@@ -721,7 +721,7 @@ internal static class PyStrFormat
             throw new ValueError("precision too big");
         double d = (double)value;
         if (double.IsInfinity(d))
-            throw new OverflowException("int too large to convert to float");
+            throw new OverflowError("int too large to convert to float");
 
         int type = f.Type;
         bool percent = type == '%';

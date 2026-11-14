@@ -73,7 +73,7 @@ public class ServiceStackJournalRedisBackend : BaseJournalBackend, IBaseJournalS
     /// <param name="prefix">Prefix of the preserved keys.</param>
     /// <exception cref="ValueError">A URL redis-py rejects, with redis-py's message (see <see cref="RedisUrl.Parse" />), or a <c>unix://</c> URL.</exception>
     /// <exception cref="TypeError">A query argument redis-py's connection class does not take, with redis-py's message.</exception>
-    /// <exception cref="OverflowException">A timeout or TLS version too large for Python, with Python's message.</exception>
+    /// <exception cref="NumSharp.OverflowError">A timeout or TLS version too large for Python, with Python's class and message.</exception>
     /// <exception cref="NotSupportedException">A query argument no .NET client can honor, or one ServiceStack.Redis cannot (see the type-level remarks).</exception>
     /// <remarks>The backend owns the client pool it builds here: <see cref="Dispose" /> closes it.</remarks>
     public ServiceStackJournalRedisBackend(string url, bool useCluster = false, string prefix = "")

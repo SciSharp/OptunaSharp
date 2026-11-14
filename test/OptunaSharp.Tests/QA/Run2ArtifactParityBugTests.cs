@@ -35,7 +35,7 @@ public class Run2ArtifactParityBugTests
 
             Action download = () => ArtifactFunctions.DownloadArtifact(store, target, artifactId);
 
-            download.Should().Throw<IOException>().WithMessage("File already exists: " + target);
+            download.Should().ThrowExactly<NumSharp.FileExistsError>().WithMessage("File already exists: " + target);
         }
         finally
         {
