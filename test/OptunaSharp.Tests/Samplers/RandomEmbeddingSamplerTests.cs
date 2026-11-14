@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Linq;
 using AwesomeAssertions;
 using NumSharp;
@@ -245,5 +246,68 @@ public class RandomEmbeddingSamplerTests
         Action badK = () => new RandomEmbeddingSampler(nEmbeddingDims: 3, nEmbeddings: 0);
         badDim.Should().Throw<ArgumentException>("the embedding dimension must be at least 1");
         badK.Should().Throw<ArgumentException>("the number of embeddings must be at least 1");
+    }
+
+    /// <summary>
+    ///     One worker and a deterministic objective: REMBO must not evaluate a point twice, since the value is already
+    ///     known and a repeat is a lost trial. Its paper-faithful optimizer does repeat, by two routes. With seed 95 on the
+    ///     16-worker test's objective it evaluates the parameter box's corner (10, 10, 0) at #7, #18 and #34 and the
+    ///     corner (−10, −10, 1) at #19 and #45, each time from another latent point, and it proposes trial #35's latent
+    ///     point again at #36 and #37, #40's at #41 to #44, and #46's at #47.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>How often.</b> Over seeds 1 to 120 (60 trials each, measured 2026-11-14 on .NET 10), 82 runs evaluated a
+    ///         point twice. Counting exact latent repeats only, 67 runs repeated 149 latent points, often over several
+    ///         trials in a row: 138 of them at values of 2 or less (the objective's minimum is 0), near the best point
+    ///         found, and 11 from 2.05 up, among them three corners of the latent box in seed 48 (values 67 and 122), the
+    ///         kind of point the 16-worker failures repeated. Seed 1 repeats nothing with one worker; 16 workers reach
+    ///         the same states through their interleavings
+    ///         (<c>SamplerParallelReadTests.Optimize_SixteenWorkers_Rembo_EvaluatesNoPointTwice</c>, the row that
+    ///         failed in CI).
+    ///     </para>
+    ///     <para>
+    ///         <b>Route 1, clipping.</b> The projection <c>x = p_X(A·y)</c> clips onto the parameter box, so a whole region
+    ///         of the latent box lands on one corner or edge of it. The low-dimensional kernel (the default) measures
+    ///         distances between latent points, sees those points as far apart, and keeps proposing them: the waste
+    ///         Wang et al. (2016, §3.2) name as the low-dimensional kernel's weakness, which their high-dimensional
+    ///         kernel avoids by measuring distances in the parameter box.
+    ///     </para>
+    ///     <para>
+    ///         <b>Route 2, the incumbent.</b> In seed 95 the GP interpolates: the Cholesky never needs more than its first
+    ///         nugget (1e-6), and the posterior standard deviation at an evaluated point is 2e-4 to 5e-4 of the profiled
+    ///         amplitude from trial 29 on. Expected improvement at the incumbent is therefore small but not zero (the mean
+    ///         equals the incumbent, so it is that standard deviation times φ(0)), and once the GP is confident across
+    ///         the box, DIRECT and CMA-ES find nothing larger and hand back the incumbent's own coordinates.
+    ///     </para>
+    ///     <para>
+    ///         A fix keeps the acquisition's maximizer off points already evaluated or running, compared where the
+    ///         objective sees them (the projected parameters), for example by taking the best candidate that lies farther
+    ///         than a small distance from all of them. Then remove <c>[OpenBugs]</c> here and in the 16-worker test.
+    ///         REMBO reproduces on one platform, not bit for bit across platforms (its Cholesky runs on OpenBLAS), so
+    ///         another platform may repeat at other trials; the assertion holds on any platform once fixed.
+    ///     </para>
+    /// </remarks>
+    /// <exception cref="AssertFailedException">A point was evaluated more than once (today, the repeats listed above).</exception>
+    [TestMethod]
+    [OpenBugs]
+    public void Optimize_OneWorker_EvaluatesNoPointTwice()
+    {
+        var study = Optuna.CreateStudy(sampler: new RandomEmbeddingSampler(2, seed: 95));
+        study.Optimize(t =>
+        {
+            double x = t.SuggestFloat("x", -10, 10), y = t.SuggestFloat("y", -10, 10), z = t.SuggestFloat("z", 0, 1);
+            return (x - 2) * (x - 2) + (y + 1) * (y + 1) + z;
+        }, nTrials: 60);
+
+        // Points are compared by their exact coordinates, as the 16-worker test compares them: a repeat is
+        // bit-identical, because DIRECT and CMA-ES hand back the evaluated point itself.
+        string[] repeated = study.Trials
+            .GroupBy(t => string.Join("|", t.Params.OrderBy(p => p.Key, StringComparer.Ordinal)
+                .Select(p => p.Key + "=" + Convert.ToString(p.Value, CultureInfo.InvariantCulture))), StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => $"{g.Key} at #{string.Join(",#", g.Select(t => t.Number))}")
+            .ToArray();
+        repeated.Should().BeEmpty("a deterministic objective gains nothing from evaluating a point again");
     }
 }

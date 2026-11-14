@@ -699,7 +699,7 @@ and ends, around one native call to OpenBLAS).
     per-worker instances too; with populations larger than a round, so a generation's trials finish before the
     generation is complete; and in whole `Optimize(nJobs: 16)` runs, where no sampler that never re-proposes a
     finished point evaluated a point twice in 120 trials (xNES aside: its distribution can degenerate one trial at
-    a time too, plan 12 §8). The rounds alone were not enough: a first JANUS fix,
+    a time too, plan 12 §8; REMBO aside since 2026-11-14, below). The rounds alone were not enough: a first JANUS fix,
     which freed a slot once its trial finished, passed every volley and still repeated 41–65 points in 120 trials
     of `Optimize(nJobs: 16)`, because rounds release a population of 7 together.
   - **History repeats are not collisions.** The genetic samplers, DE, JANUS-DE, PSO and LM-CMA re-propose finished
@@ -707,6 +707,14 @@ and ends, around one native call to OpenBLAS).
     point of an earlier generation), one trial at a time as well; every other Core sampler repeats no told trial
     under parallel reads either, except that CMA-ES and VkD-CMA seed each trial with `randint(1, 65536) +
     trial.number`, as Optuna does, so two trials of a generation share a point about once in 65,535 pairs.
+    REMBO is the open exception (found 2026-11-14): its paper-faithful optimizer repeats told trials one trial at a
+    time too, in 82 of 120 seeds of the whole-run objective. It reaches the same parameters from latent points that
+    the projection clips onto one corner of the box, and it proposes the incumbent's latent point again once its GP is
+    confident. That is a bug, not a design choice: `RandomEmbeddingSamplerTests.Optimize_OneWorker_EvaluatesNoPointTwice`
+    reproduces it, and REMBO's whole-run case, which failed 2 of about 45 CI runs of the 1.1.0 branch, is
+    `[OpenBugs]` (`Optimize_SixteenWorkers_Rembo_EvaluatesNoPointTwice`). A trace of 13,200 concurrent proposals
+    found no read that missed a running trial's latent point, so the cause is not the concurrency; its volleys still
+    repeat nothing and stay asserted.
   - **One process.** PSO's particles, DE's targets and TuRBO's and SAASBO's design rows are stamped in the storage,
     so they steer apart asks from different processes too. JANUS's slots, the redraws and BruteForce's record of
     handed-out values live in the sampler instance, guarded by its monitor: two processes on one storage can still
@@ -1288,7 +1296,7 @@ table above repeats the measurement on 2026-11-07, after the flag became the bac
 | `JournalConcurrencyTests` | both lock protocols under contention; stale-lock takeover after the grace period; mixed protocols on one journal; separate storages on one study; a shared backend's offset cache; many studies on one journal; enqueued trials popped once; one trial's concurrent reports, suggestions and constraints; the create race |
 | `HeartbeatTests` | heartbeat threads beat and stop; a failed write ends only its thread, reported like `threading.excepthook`; trials complete when every heartbeat write fails; `FailStaleTrials` and the retry callback; `Ask`'s warning outside `Optimize` |
 | `SamplerNJobsSweepTests`, `PrunerNJobsSweepTests` | every Core sampler and pruner under `nJobs` on a journal: contiguous numbers, every trial ends as its rule dictates |
-| `SamplerParallelReadTests` | §6.3, plan 12: every Core sampler, read by eight trials at once on eight threads and in lockstep, hands no point to two of them, and the samplers that never re-propose a finished point repeat none (CMA-ES and VkD-CMA one, through Optuna's seeding); per-worker instances; populations larger than a round; whole `Optimize(nJobs: 16)` runs evaluating no point twice; Grid and BruteForce (both modes, `[Misaligned]`) over 88 of 90 points; DE and PSO with more trials than members, the rest sampled independently without warnings; the sequential repeats of the samplers allowed them |
+| `SamplerParallelReadTests` | §6.3, plan 12: every Core sampler, read by eight trials at once on eight threads and in lockstep, hands no point to two of them, and the samplers that never re-propose a finished point repeat none (CMA-ES and VkD-CMA one, through Optuna's seeding); per-worker instances; populations larger than a round; whole `Optimize(nJobs: 16)` runs evaluating no point twice (REMBO's held out as `[OpenBugs]`, with its one-worker reproduction in `RandomEmbeddingSamplerTests`); Grid and BruteForce (both modes, `[Misaligned]`) over 88 of 90 points; DE and PSO with more trials than members, the rest sampled independently without warnings; the sequential repeats of the samplers allowed them |
 | `BridgeSamplerParallelReadTests` (interop) | §6.3, plan 12: each Python bridge's repeats under parallel reads, exact in lockstep (PyCma's compared bit for bit with `optuna_integration.PyCmaSampler`) and bounded on threads; BoTorch in the slow category |
 | `LazyRandomStateSeedingTests` | unseeded samplers created together never share a stream; seeded ones stay reproducible |
 | `OsEntropySeedTests` | numpy's OS-entropy seeding: the constructor's key, position 623 and draws, and a reseed's kept position and dropped Gaussian, against numpy 2.4.2 output for injected entropy; no repeated draw in 300,000 reseeds |
