@@ -113,16 +113,17 @@ live-Optuna parity tests pass on it bit for bit.
 
 | Study (40 parameters, seed 0) | Retained by the finished study | Peak working set | Time |
 |---|---|---|---|
-| CMA-ES, 100,000 trials | 1,287 MB to 257 MB | 1,846 MB to 458 MB | 23.2 s to 22.1 s |
-| NSGA-II, 100,000 trials | 671 MB to 88 MB | 751 MB to 167 MB | 15.7 s to 14.6 s |
-| CMA-ES, 10,000 trials | 130 MB to 27 MB | 372 MB to 137 MB | 2.28 s to 2.31 s |
-| TPE, 1,000 trials | 13.4 MB to 6.9 MB | 109 MB to 92 MB | 3.8 s to 3.4 s |
-| Random, 10,000 trials | 64 MB to 6.7 MB | 200 MB to 91 MB | 3.5 s to 3.5 s |
+| CMA-ES, 100,000 trials | 1,288 MB to 257 MB | 1,860 MB to 446 MB | 16.4 s to 16.3 s |
+| NSGA-II, 100,000 trials | 668 MB to 87 MB | 738 MB to 163 MB | 8.0 s to 6.3 s |
+| CMA-ES, 10,000 trials | 130 MB to 27 MB | 375 MB to 136 MB | 1.54 s to 1.68 s |
+| TPE, 1,000 trials | 31.0 MB to 24.2 MB | 210 MB to 193 MB | 2.8 s to 2.8 s |
+| Random, 10,000 trials | 64 MB to 6.2 MB | 190 MB to 83 MB | 0.50 s to 0.36 s |
 
-The times are the same within the machine's noise: CMA-ES over 10,000 trials averaged 2.28 s against 2.31 s over
-six steady runs each, and the large studies spend less time in the garbage collector (CMA-ES over 100,000 trials:
-2.7 s of pauses against 1.4 s). Allocation stays within 6 %. It is a switch rather than the default because a
-finished trial no longer holds dictionaries:
+Times stay close: CMA-ES over 100,000 trials took 16.4 s plain and 16.3 s compact and spends less time in the
+garbage collector (2.1 s of pauses against 0.9 s), and NSGA-II and random sampling run faster compact. The
+exception is CMA-ES over 10,000 trials, which averaged 1.68 s compact against 1.54 s plain over six steady runs
+each, about 9 % slower. Compact allocates 2-8 % more. It is a switch rather than the default because a finished
+trial no longer holds dictionaries:
 
 - `Params`, `Distributions`, `UserAttrs` and `SystemAttrs` of a finished trial are read-only views, with the same
   entries in the same order. A cast to `OrderedDict` fails, and a write through `IDictionary` throws.

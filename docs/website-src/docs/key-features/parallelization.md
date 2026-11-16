@@ -124,8 +124,8 @@ study.Optimize(Objective, nTrials: 600, nJobs: 8, executorOptions: parallel);
 - Taking part: `RandomSampler`, `TPESampler`, `CmaEsSampler`, `VkdCmaSampler`, `GridSampler`, and
   `PartialFixedSampler` over one of them, the samplers whose instances never propose the same point twice this
   way. Every other sampler, and any sampler of your own, stays shared.
-- At `nJobs: 8`, a multivariate TPE over 10 parameters ran 600 trials in 1.15 s instead of 1.39 s, and a
-  40-dimensional CMA-ES 2,000 trials in 0.82 s instead of 2.17 s. A TPE study limited by its objective did not
+- At `nJobs: 8`, a multivariate TPE over 10 parameters ran 600 trials in 1.16 s instead of 1.18 s, and a
+  40-dimensional CMA-ES 2,000 trials in 0.38 s instead of 0.61 s. A TPE study limited by its objective did not
   change.
 - Functions you hand to such a sampler (TPE's `gamma`, `weights`, `constraintsFunc`) then run on several workers
   at once, so they must be thread-safe.

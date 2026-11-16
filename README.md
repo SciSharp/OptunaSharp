@@ -70,8 +70,8 @@ OptunaSharp is a complete 100% port of **Optuna 5.x** with full and backwards co
   
 - **Parallel and thread-safe** - [`Optimize(nJobs: n)`][parallel-threads] runs n trials at once, with no
   GIL in the way.
-  Measured on 32 logical CPUs, 64 trials of a ~50 ms CPU-bound objective finished 6.7× faster at
-  `nJobs: 8` and 9.2× faster at `nJobs: 16` than at `nJobs: 1`, while Python Optuna's time stays flat
+  Measured on 32 logical CPUs, 64 trials of a ~50 ms CPU-bound objective finished 7.4× faster at
+  `nJobs: 8` and 10.2× faster at `nJobs: 16` than at `nJobs: 1`, while Python Optuna's time stays flat
   because the GIL runs one Python thread at a time ([Performance](#performance)).
   - Trials run on OptunaSharp's own dedicated threads by default, or on the .NET ThreadPool.
   - Sampling is serial per sampler, as in Optuna, unless `SamplerConcurrency.PerWorker` gives each
@@ -166,29 +166,31 @@ The documentation site, [scisharp.github.io/OptunaSharp](https://scisharp.github
 
 ## Performance
 
-Measured on an Intel Core i9-13900K (8 performance and 16 efficiency
+Measured on 2026-11-16 on an Intel Core i9-13900K (8 performance and 16 efficiency
 cores, 32 logical CPUs) under Windows 11: OptunaSharp in .NET 10 Release builds, and Python 3.12.12 with
-Optuna 5.0.0 on the same machine. Each configuration ran in its own process, and times are medians of
-three runs unless a table says otherwise. Every benchmark process opted out of Windows power throttling,
-which otherwise moves a busy console process onto the efficiency cores after a few seconds. Absolute
-times depend on the hardware, so compare within a row.
+Optuna 5.0.0 on the same machine, otherwise idle (every round started only once it was under 20 % busy). Each
+configuration ran in its own process, the libraries taking turns on each workload, and times are the best of
+three runs unless a table says otherwise. Every benchmark process opted out of Windows power throttling, which
+otherwise moves a busy console process onto the efficiency cores after a few seconds. Absolute times depend on
+the hardware, so compare within a row.
 
 ### Parallel trials
 
 64 trials of a CPU-bound objective that takes about 50 ms on one core, with `RandomSampler`. Each
-language's loop was calibrated to ~50 ms on its own; OptunaSharp ran the sweep twice.
+language's loop was calibrated to ~50 ms on its own. The ranges cover three OptunaSharp sweeps and two Python
+sweeps, each the best of three runs.
 
 | `nJobs` | OptunaSharp | Speedup | Python Optuna 5.0 |
 |---|---|---|---|
-| 1 | 3.21-3.24 s | 1.0× | 3.05 s |
-| 2 | 1.60-1.61 s | 2.0× | 3.08 s |
-| 4 | 0.82 s | 3.9× | 3.09 s |
-| 8 | 0.47-0.49 s | 6.6-6.9× | 3.12 s |
-| 16 | 0.34-0.36 s | 9.0-9.4× | 3.09 s |
+| 1 | 3.14-3.19 s | 1.0× | 3.16-3.29 s |
+| 2 | 1.57-1.59 s | 2.0× | 3.23-3.36 s |
+| 4 | 0.79 s | 4.0× | 3.19-3.37 s |
+| 8 | 0.42-0.43 s | 7.3-7.5× | 3.22-3.36 s |
+| 16 | 0.31 s | 10.1-10.3× | 3.23-3.34 s |
 
 Python's time stays flat because the GIL runs one Python thread at a time. Trials that wait rather than
-compute run all at once in both: 640 trials sleeping 100 ms took 1.26 s at `nJobs: 64`, and 1,280 took
-1.27 s at `nJobs: 128` (Python: 1.06 s and 1.13 s; ideal 1.0 s).
+compute run all at once in both: 640 trials sleeping 100 ms took 1.12 s at `nJobs: 64`, and 1,280 took
+1.14 s at `nJobs: 128` (Python: 1.05 s and 1.11 s; ideal 1.0 s).
 
 ### Samplers
 
@@ -197,40 +199,38 @@ sampler's own work dominates. OptunaSharp's times include the .NET JIT warming u
 
 | Study | OptunaSharp | Python Optuna 5.0 |
 |---|---|---|
-| TPE, 6 parameters, 500 trials | 0.61 s | 2.52 s |
-| TPE multivariate, 6 parameters, 500 trials | 0.66 s | 2.42 s |
-| TPE, 100 parameters, 150 trials | 1.6 s | 19.1 s |
-| GP, 6 parameters, 100 trials | 3.47 s | 17.55 s |
-| CMA-ES, 6 parameters, 3,000 trials | 0.74 s | 5.21 s |
-| CMA-ES, 200 parameters, 100 trials | 1.0 s | 3.3 s |
-| NSGA-II, 6 parameters, 3,000 trials | 0.31 s | 3.39 s |
-| QMC, 6 parameters, 3,000 trials | 0.13 s | 3.49 s |
-| Random, 6 parameters, 5,000 trials | 0.15 s | 1.36 s |
-| Random, 1,000 parameters, 200 trials | 0.6 s | 8.4 s |
-| Random, 4 parameters, 50,000 trials: each block of 10,000 | 0.08-0.25 s | 1.9-2.1 s |
+| TPE, 6 parameters, 500 trials | 0.84 s | 2.43 s |
+| TPE multivariate, 6 parameters, 500 trials | 0.83 s | 2.43 s |
+| TPE, 100 parameters, 150 trials | 2.1 s | 18.8 s |
+| GP, 6 parameters, 100 trials | 2.43 s | 15.19 s |
+| CMA-ES, 6 parameters, 3,000 trials | 0.74 s | 5.01 s |
+| CMA-ES, 200 parameters, 100 trials | 1.0 s | 2.8 s |
+| NSGA-II, 6 parameters, 3,000 trials | 0.32 s | 3.40 s |
+| QMC, 6 parameters, 3,000 trials | 0.14 s | 3.43 s |
+| Random, 6 parameters, 5,000 trials | 0.16 s | 1.34 s |
+| Random, 1,000 parameters, 200 trials | 0.6 s | 8.6 s |
+| Random, 4 parameters, 50,000 trials: each block of 10,000 | 0.09-0.24 s | 1.93-2.05 s |
 
-Every OptunaSharp row except GP was measured again on 2026-11-09 after the Rustuna-derived speedups of
-[plan 13](docs/plans/13-rustuna-derived-performance.md) and [plan 14](docs/plans/14-rustuna-second-pass.md), which
-keep every seeded result: the same probes built before and after plan 14, run back to back. GP moved less than the
-noise of a machine that was also running other work, so it keeps its earlier number.
+Both columns come from the same run, the two languages taking turns on each row. The Rustuna-derived speedups
+of [plan 13](docs/plans/13-rustuna-derived-performance.md) and [plan 14](docs/plans/14-rustuna-second-pass.md)
+behind these times keep every seeded result.
 
 ### Large studies
 
 40 float parameters in [-10, 10], seed 0, each sampler's defaults (TPE multivariate for one objective, independent
 for two), the workloads of [Rustuna's announcement](https://medium.com/optuna/announcing-rustuna-cc82a6815bf7).
-[Rustuna](https://github.com/optuna/rustuna) is the Optuna team's Rust port. OptunaSharp ran on 2026-11-09 after
-plan 14, on a machine also running other work (about 30 % CPU load), the other
-two on 2026-11-08 on a quieter one, so OptunaSharp's column errs on the slow side. OptunaSharp's times include the .NET
-JIT warming up.
+[Rustuna](https://github.com/optuna/rustuna) is the Optuna team's Rust port. The three libraries took turns on each
+workload in the same run, and each time is the best of two fresh processes (Python's two-objective TPE takes about
+two and a half minutes a run). OptunaSharp's times include the .NET JIT warming up.
 
 | Study | OptunaSharp | Python Optuna 5.0 | Rustuna 0.2.1 |
 |---|---|---|---|
-| TPE, 1,000 trials | 3.2 s | 35.2 s | 1.36 s |
-| TPE, two objectives, 1,000 trials | 10.5 s | 163 s | 6.30 s |
-| CMA-ES, 10,000 trials | 3.6 s | 56.9 s | 1.59 s |
-| CMA-ES, 100,000 trials | 22.1 s | not run | 13.6 s |
-| NSGA-II, 10,000 trials | 1.4 s | 44.2 s | 0.82 s |
-| NSGA-II, 100,000 trials | 8.6 s | not run | 19.4 s |
+| TPE, 1,000 trials | 3.8 s | 34.6 s | 1.38 s |
+| TPE, two objectives, 1,000 trials | 11.4 s | 157 s | 6.29 s |
+| CMA-ES, 10,000 trials | 3.0 s | 57.4 s | 1.46 s |
+| CMA-ES, 100,000 trials | 16.9 s | not run | 13.4 s |
+| NSGA-II, 10,000 trials | 1.4 s | 44.3 s | 0.81 s |
+| NSGA-II, 100,000 trials | 8.1 s | not run | 18.7 s |
 
 OptunaSharp's seeded trials are Optuna's; Rustuna's differ from the first trial (its own random generator). Where
 OptunaSharp is still behind Rustuna, part of the gap is the protocol it keeps so Python workers can share a study:
@@ -239,22 +239,23 @@ CMA-ES pickles its state into the storage every generation, and TPE scores candi
 that compatibility for speed.
 
 For memory, `new InMemoryStorage(compactFinishedTrials: true)` keeps finished trials compactly and gives the same
-trials: the 100,000-trial CMA-ES study above keeps 257 MB instead of 1,287 MB once finished, and NSGA-II's 88 MB
-instead of 671 MB, in the same time. Finished trials then hand out read-only views instead of dictionaries; the
+trials: the 100,000-trial CMA-ES study above keeps 257 MB instead of 1,288 MB once finished, and NSGA-II's 87 MB
+instead of 668 MB, in no more time. Finished trials then hand out read-only views instead of dictionaries; the
 guide lists what that changes.
 
 ### Executors
 
 Trials run on [OptunaSharp's own dedicated threads by default, or on the .NET ThreadPool][parallel-executor]
-(`TrialExecutorKind.DedicatedThreads` or `TrialExecutorKind.ThreadPool`). Three runs of each:
+(`TrialExecutorKind.DedicatedThreads` or `TrialExecutorKind.ThreadPool`). Three runs of each throughput row
+and two of each blocking row, as ranges:
 
 | Workload | Dedicated threads | ThreadPool |
 |---|---|---|
-| 5,000 cheap Random trials, `nJobs: 8` | 9.5k-10.2k trials/s | 9.2k-10.0k trials/s |
-| 2,000 TPE trials, `nJobs: 8` | 512-570 trials/s | 499-526 trials/s |
-| 200 calls of `Optimize(nTrials: 8, nJobs: 8)` | 1,035-1,115 calls/s | 973-1,131 calls/s |
-| 128 trials blocking 1.5 s, `nJobs: 64` (ideal 3.0 s) | 3.2 s | 6.2 s |
-| Longest delay before other `Task.Run` work started, `nJobs: 64` / `32` | 2.2 ms / 2.4 ms | 1.6 s / 0.74 s |
+| 5,000 cheap Random trials, `nJobs: 8` | 21.4k-23.0k trials/s | 20.7k-21.7k trials/s |
+| 2,000 TPE trials, `nJobs: 8` | 644-688 trials/s | 619-653 trials/s |
+| 200 calls of `Optimize(nTrials: 8, nJobs: 8)` | 1,724-1,861 calls/s | 1,647-1,885 calls/s |
+| 128 trials blocking 1.5 s, `nJobs: 64` (ideal 3.0 s) | 3.1 s | 6.1 s |
+| Longest delay before other `Task.Run` work started, `nJobs: 64` / `32` | 2.1 ms / 2.2-2.3 ms | 1.5 s / 0.69 s |
 
 The two match on throughput. Once `nJobs` reaches the pool's ready threads (32 on this machine), the
 ThreadPool runs fewer trials at once and delays the rest of the application, so it suits an `nJobs` well
@@ -268,13 +269,13 @@ below the core count.
 
 | Study | Shared | PerWorker |
 |---|---|---|
-| TPE multivariate, 10 parameters, 600 trials, 5 ms objective | 1.39 s | 1.15 s |
-| CMA-ES, 40 parameters, 2,000 trials, cheap objective | 2.17 s | 0.82 s |
-| TPE, 3 parameters, 400 trials, 20 ms objective | 1.54 s | 1.54 s |
+| TPE multivariate, 10 parameters, 600 trials, 5 ms objective | 1.18 s | 1.16 s |
+| CMA-ES, 40 parameters, 2,000 trials, cheap objective | 0.61 s | 0.38 s |
+| TPE, 3 parameters, 400 trials, 20 ms objective | 1.55 s | 1.55 s |
 
 A sampler per worker pays where sampling dominates and changes nothing when the objective does. Slow
-model-based samplers stay shared: a `GPSampler` study of 120 trials with a 20 ms objective took 7.53 s at
-`nJobs: 1` and 9.30 s at `nJobs: 8`.
+model-based samplers stay shared: a `GPSampler` study of 120 trials with a 20 ms objective took 5.10 s at
+`nJobs: 1` and 6.75 s at `nJobs: 8`.
 
 ## Install
 
