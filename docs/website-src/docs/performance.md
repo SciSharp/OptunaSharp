@@ -111,19 +111,23 @@ CMA-ES's optimizer state, a hexadecimal string, takes two digits per byte. Empty
 Results do not change: each pair below gave the same trials (equal hashes of every parameter and value), and the
 live-Optuna parity tests pass on it bit for bit.
 
+Measured with the [README's benchmarks](https://github.com/SciSharp/OptunaSharp#performance) on 2026-11-22 (an
+Intel Xeon E5-2690 v2 under Linux, each process pinned to two dedicated cores, the mean of the middle three of
+five runs). The 100,000-trial rows are each process's only run, so they include the JIT; the other rows take the
+retained memory from a first run and the peak and the time from a second one in the same process.
+
 | Study (40 parameters, seed 0) | Retained by the finished study | Peak working set | Time |
 |---|---|---|---|
-| CMA-ES, 100,000 trials | 1,288 MB to 257 MB | 1,860 MB to 446 MB | 16.4 s to 16.3 s |
-| NSGA-II, 100,000 trials | 668 MB to 87 MB | 738 MB to 163 MB | 8.0 s to 6.3 s |
-| CMA-ES, 10,000 trials | 130 MB to 27 MB | 375 MB to 136 MB | 1.54 s to 1.68 s |
-| TPE, 1,000 trials | 31.0 MB to 24.2 MB | 210 MB to 193 MB | 2.8 s to 2.8 s |
-| Random, 10,000 trials | 64 MB to 6.2 MB | 190 MB to 83 MB | 0.50 s to 0.36 s |
+| CMA-ES, 100,000 trials | 1,287 MB to 257 MB | 1,942 MB to 496 MB | 24.9 s to 23.9 s |
+| NSGA-II, 100,000 trials | 668 MB to 87 MB | 766 MB to 185 MB | 11.7 s to 9.8 s |
+| CMA-ES, 10,000 trials | 130 MB to 27 MB | 388 MB to 149 MB | 2.31 s to 2.24 s |
+| TPE, 1,000 trials | 30.7 MB to 23.9 MB | 223 MB to 209 MB | 5.3 s to 5.3 s |
+| Random, 10,000 trials | 64 MB to 6.2 MB | 209 MB to 101 MB | 0.71 s to 0.51 s |
 
-Times stay close: CMA-ES over 100,000 trials took 16.4 s plain and 16.3 s compact and spends less time in the
-garbage collector (2.1 s of pauses against 0.9 s), and NSGA-II and random sampling run faster compact. The
-exception is CMA-ES over 10,000 trials, which averaged 1.68 s compact against 1.54 s plain over six steady runs
-each, about 9 % slower. Compact allocates 2-8 % more. It is a switch rather than the default because a finished
-trial no longer holds dictionaries:
+No study runs slower compact: CMA-ES over 100,000 trials took 24.9 s plain and 23.9 s compact and spends less
+time in the garbage collector (2.2 s of pauses against 1.0 s), NSGA-II and random sampling run faster compact,
+and CMA-ES over 10,000 trials and TPE take the same time within a few per cent. Compact allocates 2-8 % more.
+It is a switch rather than the default because a finished trial no longer holds dictionaries:
 
 - `Params`, `Distributions`, `UserAttrs` and `SystemAttrs` of a finished trial are read-only views, with the same
   entries in the same order. A cast to `OrderedDict` fails, and a write through `IDictionary` throws.
