@@ -62,6 +62,8 @@ MAX_JIT_SHARE = 0.01
 MAX_REL_HALF_WIDTH = 0.05
 # The guard's limits when results.txt has no "## guard" line (runs before 2026-11-23 10:30): the runner's defaults.
 DEFAULT_GUARD = {"guests": 50.0, "services": 50.0, "others": 50.0, "interval": 2.0}
+# Fields a probe prints as the process's running maximum rather than the run's own value (Cell.per_study says why).
+CUMULATIVE_FIELDS = {"peakWS"}
 
 
 def fields(text):
@@ -134,6 +136,28 @@ class Cell:
         self.warm = defaultdict(list)
         self.stops = {}
         self._stats = None
+
+    def per_study(self, field):
+        """``values(field)``, except that a process-cumulative field keeps only each process's first measured run.
+
+        Args:
+            field: The field's name.
+
+        Returns:
+            ``{process: [value, ...]}``; for a field in ``CUMULATIVE_FIELDS`` one value per process, its first measured
+            run's.
+
+        ``peakWS`` is the process's peak working set so far (``Process.PeakWorkingSet64``), so a process's second and
+        third full-size studies report the higher of their own peak and every earlier study's, with whatever heap the
+        earlier studies left committed: on 2026-11-23 a 100,000-trial CMA-ES study peaked at 1,948 MB as each process's
+        first measured run and read 2,292 MB from the second on, which the docs printed until 2026-11-23 20:30 as if one
+        study needed it. The first measured run follows only the warm-up's smaller studies, so its value is one
+        full-size study's own peak (in a warmed process: about 10 MB above a fresh process's single study).
+        """
+        vals = self.values(field)
+        if field in CUMULATIVE_FIELDS:
+            return {p: v[:1] for p, v in vals.items()}
+        return vals
 
     def values(self, field=None):
         """The measured values per process.
@@ -635,7 +659,7 @@ def main():
         c = cells.get(("C", "cs", "proof", cfg, f"{base}-plain-{trials}"))
         if c:
             for field, unit in (("retained", " MB"), ("peakWS", " MB")):
-                fs = summarize(c.values(field), rng, boot)
+                fs = summarize(c.per_study(field), rng, boot)
                 summary["cells"][f"C|cs|{cfg}|{field}"] = {k: v for k, v in fs.items() if k != "reps"}
                 print(f"    OptunaSharp {field}: {fmt(fs, unit, 1)}")
 
@@ -651,7 +675,7 @@ def main():
         same = "== plain" if sc["fingerprints"] == sp_["fingerprints"] else f"DIFFERS {sc['fingerprints']} vs {sp_['fingerprints']}"
         print(f"  {cfg}: time {fmt(sc)}\n    vs plain {fmt(sp_)}; hash {same}")
         for field, unit, digits in (("retained", " MB", 1), ("peakWS", " MB", 0), ("paused", " s", 2), ("opt_alloc", " MB", 0)):
-            a, b = summarize(c.values(field), rng, boot), summarize(p.values(field), rng, boot)
+            a, b = summarize(c.per_study(field), rng, boot), summarize(p.per_study(field), rng, boot)
             summary["cells"][f"D|cs|{cfg}|{field}"] = {k: v for k, v in a.items() if k != "reps"}
             summary["cells"][f"D|cs|{plain}|{field}"] = {k: v for k, v in b.items() if k != "reps"}
             print(f"    {field}: compact {fmt(a, unit, digits)} | plain {fmt(b, unit, digits)}")
@@ -699,7 +723,7 @@ def main():
             record(f"G|{spec}|{mode}", s)
             extra = []
             for field, unit, digits in (("retained", " MB", 1), ("peakWS", " MB", 0), ("opt_alloc", " MB", 0)):
-                fs = summarize(c.values(field), rng, boot)
+                fs = summarize(c.per_study(field), rng, boot)
                 summary["cells"][f"G|{spec}|{mode}|{field}"] = {k: v for k, v in fs.items() if k != "reps"}
                 extra.append(f"{field} {fs['est']:.{digits}f}{unit}" if fs["est"] is not None else f"{field} -")
             print(f"  {spec} {mode}: time {fmt(s)}; " + "; ".join(extra) + f"; hash {s['fingerprints']}")

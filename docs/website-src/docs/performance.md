@@ -114,16 +114,16 @@ live-Optuna parity tests pass on it bit for bit.
 Measured with the [README's benchmarks](https://github.com/SciSharp/OptunaSharp#performance) on 2026-11-23 (an
 Intel Xeon E5-2690 v2 under Linux, each process pinned to two dedicated cores). The figures are steady-state:
 each process warmed up before it measured, and a figure is the mean of the middle three of five processes'
-medians. The retained memory is what the finished study holds after a full collection; the peak working set is
-the process's highest over its warm-up and measured runs.
+medians. The retained memory is what the finished study holds after a full collection; the peak working set is the
+process's highest while it ran its first full-size study, after the warm-up's smaller ones.
 
 | Study (40 parameters, seed 0) | Retained by the finished study | Peak working set | Time |
 |---|---|---|---|
-| CMA-ES, 100,000 trials | 1,286 MB to 256 MB | 2,292 MB to 515 MB | 22.4 s to 21.8 s |
-| NSGA-II, 100,000 trials | 667 MB to 87 MB | 782 MB to 196 MB | 10.4 s to 8.7 s |
-| CMA-ES, 10,000 trials | 129 MB to 26 MB | 306 MB to 150 MB | 2.26 s to 2.21 s |
-| TPE, 1,000 trials | 9.0 MB to 2.2 MB | 208 MB to 200 MB | 5.22 s to 5.25 s |
-| Random, 10,000 trials | 64 MB to 5.9 MB | 156 MB to 99 MB | 0.68 s to 0.51 s |
+| CMA-ES, 100,000 trials | 1,286 MB to 256 MB | 1,948 MB to 501 MB | 22.4 s to 21.8 s |
+| NSGA-II, 100,000 trials | 667 MB to 87 MB | 776 MB to 196 MB | 10.4 s to 8.7 s |
+| CMA-ES, 10,000 trials | 129 MB to 26 MB | 278 MB to 150 MB | 2.26 s to 2.21 s |
+| TPE, 1,000 trials | 9.0 MB to 2.2 MB | 207 MB to 200 MB | 5.22 s to 5.25 s |
+| Random, 10,000 trials | 64 MB to 5.9 MB | 156 MB to 100 MB | 0.68 s to 0.51 s |
 
 No study runs measurably slower compact: CMA-ES over 100,000 trials took 22.4 s plain and 21.8 s compact and
 spends less time in the garbage collector (2.3 s of pauses against 1.0 s), NSGA-II and random sampling run faster
