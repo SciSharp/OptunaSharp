@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- README "Samplers" table, the 6-parameter rows (Random, TPE, TPE multivariate, GP, CMA-ES, NSGA-II, QMC): the perf probe
+       first measured 2026-10-19 (benchmark 14), under bench/common/Bench.cs's warm-up-then-measure protocol since 2026-11-23.
+       Release, against this checkout's src/, so the numbers describe the commit the probe was built from. The SQLite storage
+       package is referenced only for the storage_* configurations. Not in SciSharp.OptunaSharp.sln: bench/publish.sh builds
+       every probe. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CS0618;CS8632</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../src/OptunaSharp.Core/OptunaSharp.Core.csproj" />
+    <ProjectReference Include="../../../src/OptunaSharp.Storage.Sqlite/OptunaSharp.Storage.Sqlite.csproj" />
+    <Compile Include="../../common/ProbeEnv.cs" />
+    <Compile Include="../../common/Bench.cs" />
+  </ItemGroup>
+
+</Project>

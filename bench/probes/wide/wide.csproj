@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- README "Samplers" table, the high-dimensional rows (TPE 100-D, CMA-ES 200-D, Random 1000-D), under
+       bench/common/Bench.cs's warm-up-then-measure protocol. Release, against this checkout's src/. Not in the solution:
+       bench/publish.sh builds every probe. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CS0618;CS8632</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../src/OptunaSharp.Core/OptunaSharp.Core.csproj" />
+    <Compile Include="../../common/ProbeEnv.cs" />
+    <Compile Include="../../common/Bench.cs" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- README "Executors" table: benchmark 3's table-B probe (the 2026-10-29 execprobe of session 6c824873, as rerun by session
+       5417a82e), "reused" (TrialExecutorKind.DedicatedThreads) and "pool" (TrialExecutorKind.ThreadPool) columns only; the
+       executor comes from OPTUNASHARP_NJOBS_EXECUTOR. The HEAD symbol compiles in the TrialExecutorOptions switch, which only
+       post-9cfcb12 code has. Under bench/common/Bench.cs's warm-up-then-measure protocol, except "starve", which measures a
+       thread pool that has not grown yet and so runs once per process after a JIT warm-up. Release, against this checkout's
+       src/. Not in the solution: bench/publish.sh builds every probe. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <DefineConstants>$(DefineConstants);HEAD</DefineConstants>
+    <NoWarn>$(NoWarn);CS0618;CS8632</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../src/OptunaSharp.Core/OptunaSharp.Core.csproj" />
+    <Compile Include="../../common/ProbeEnv.cs" />
+    <Compile Include="../../common/Bench.cs" />
+  </ItemGroup>
+
+</Project>

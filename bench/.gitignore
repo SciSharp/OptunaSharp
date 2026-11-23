@@ -1,0 +1,3 @@
+# bench/publish.sh's output: the staged harness and its tar, rebuilt from the sources on every publish.
+stage/
+harness-stage.tar
