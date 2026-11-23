@@ -60,7 +60,7 @@ Validity checks, each printed as a flag on the cell and listed at the end of the
 
 | Flag | Fails when | It means |
 |---|---|---|
-| `drift` | The median over processes of (later measured runs / earlier ones) is more than 3 % from 1 | The process was still getting faster (not warm) or slower (memory growth) |
+| `drift` | The median over processes of each process's change across its measured runs, along their Theil-Sen trend line (the median pairwise slope), is more than 3 % | The process was still getting faster (not warm) or slower (memory growth); a workload that alternates between two times run by run (a collection cycle) does not trip it |
 | `jit` | JIT compilation took over 1 % of OptunaSharp's measured time | A measured run was not warm |
 | `imports` | A Python measured run imported a module | A measured run was not warm |
 | `fingerprint` | Measured runs of a seeded workload printed different fingerprints (best value or trial hash) | The runs did different work |

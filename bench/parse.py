@@ -19,8 +19,9 @@ workload (a "cell": block, library, probe, configuration and label):
   (independent samples). nJobs speedups pair each process's 1-worker and n-worker medians.
 
 Validity checks, per cell (a failed check is printed as a flag and listed at the end):
-- steady: the process was warm. For each process, the median of its later measured runs over its earlier ones (last over
-  first with fewer than four runs); the median of that ratio over processes must lie within 3 % of 1 ("drift" otherwise).
+- steady: the process was warm. For each process, the change across its measured runs along their Theil-Sen trend line
+  (the median pairwise slope, over the span, relative to the median run); the median of that over processes must lie
+  within 3 % ("drift" otherwise).
 - jit (.NET): compilation time during measured runs over their run time must stay under 1 % ("jit"); mods (Python): a
   measured run must import nothing ("imports").
 - fingerprint: every measured run of a seeded workload printed the same fingerprint (best value or trial hash), so every run
@@ -78,6 +79,23 @@ def fields(text):
 def median(values):
     """The median of a non-empty list."""
     return statistics.median(values)
+
+
+def trend(values):
+    """The relative change across a sequence of measured runs along its Theil-Sen trend line.
+
+    Args:
+        values: One process's measured run times, in run order; at least two, all positive.
+
+    Returns:
+        The median of the pairwise slopes, times the span of the sequence, over the median value: about -0.05 for runs
+        that got 5 % faster from first to last, 0 for steady ones. Robust to a minority of outliers (a slow first run of
+        three still shows; one slow run in the middle of ten does not) and to alternation between two levels, whose
+        pairwise slopes cancel (Sen 1968, "Estimates of the regression coefficient based on Kendall's tau").
+    """
+    n = len(values)
+    slopes = [(values[j] - values[i]) / (j - i) for i in range(n) for j in range(i + 1, n)]
+    return median(slopes) * (n - 1) / median(values)
 
 
 def estimator(process_medians):
@@ -151,15 +169,11 @@ class Cell:
         if self._stats is None:
             self._stats = summarize(self.values(), rng, boot)
             s = self._stats
-            # Steady state: later measured runs against earlier ones, per process, then the median over processes.
-            ratios = []
-            for runs in self.procs.values():
-                t = [x for x, _ in runs]
-                if len(t) >= 4:
-                    h = len(t) // 2
-                    ratios.append(median(t[h:]) / median(t[:h]))
-                elif len(t) >= 2:
-                    ratios.append(t[-1] / t[0])
+            # Steady state: each process's change across its measured runs along their robust trend line, then the median
+            # over processes. Until 2026-11-23 13:40 this compared the medians of the later and the earlier half, which a
+            # workload alternating between two times (OptunaSharp's QMC: 0.037 s and 0.0395 s, run by run, a collection
+            # cycle) flags as a 5 % drift whenever the halves hold different counts of fast runs.
+            ratios = [1 + trend([x for x, _ in runs]) for runs in self.procs.values() if len(runs) >= 2]
             s["steady"] = median(ratios) if ratios else None
             jit_ms = sum(_number(f.get("jit", "").split("/")[-1]) or 0 for runs in self.procs.values() for _, f in runs)
             run_ms = sum(x for runs in self.procs.values() for x, _ in runs) * 1000
