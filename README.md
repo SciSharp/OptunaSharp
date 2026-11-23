@@ -89,13 +89,15 @@ OptunaSharp is a complete 100% port of **Optuna 5.x** with full and backwards co
 
 ## Scientific Lead and Contributions
 OptunaSharp has reimplemented byte-for-byte [many cutting-edge papers and state of the art algorithms][methods] and will continue to doing so.<br>
-Found an <strong>incredible</strong> paper? You <strong>believe</strong> an optimizer/sampler/technique has achieved a breakthrough or has been referenced more than 50 times?
+Found an <strong>incredible</strong> paper? You <strong>believe</strong> a method/optimizer/sampler/technique has achieved a significant breakthrough or has been referenced by a bunch of papers?
 <h3>
 <p align="center">
 Open an <a href="https://github.com/SciSharp/OptunaSharp/issues/new/choose">issue</a> or <a href="https://github.com/SciSharp/OptunaSharp/compare">merge request</a>!
 </p>
 </h3>
 
+<br/>
+OptunaSharp implements these methods based on papers and their original implementation (if there is one):
 
 > [AGE-MOEA-2][m-age-moea-2], [SMS-EMOA][m-sms-emoa], [MOEA/D][m-moea-d], [RVEA][m-rvea], [LM-CMA][m-lm-cma],
 > [VkD-CMA][m-vkd-cma], [differential evolution][m-de], [PSO][m-pso], the natural evolution strategies
