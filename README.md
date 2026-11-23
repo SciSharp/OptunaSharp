@@ -71,8 +71,8 @@ OptunaSharp is a complete 100% port of **Optuna 5.x** with full and backwards co
 - **Parallel and thread-safe** - [`Optimize(nJobs: n)`][parallel-threads] runs n trials at once, with no
   GIL in the way.
   Measured on 10 cores (20 logical CPUs), 64 trials of a ~50 ms CPU-bound objective finished 8.0× faster
-  at `nJobs: 8` and 10.3× faster at `nJobs: 16` than at `nJobs: 1`, while the times of Python Optuna and
-  Rustuna stay flat because the GIL runs one Python thread at a time ([Performance](#performance)).
+  at `nJobs: 8` and 10.3× faster at `nJobs: 16` than at `nJobs: 1`, while Python Optuna's time stays
+  flat because the GIL runs one Python thread at a time ([Performance](#performance)).
   - Trials run on OptunaSharp's own dedicated threads by default, or on the .NET ThreadPool.
   - Sampling is serial per sampler, as in Optuna, unless `SamplerConcurrency.PerWorker` gives each
     worker its own Random, TPE, CMA-ES, VkD-CMA or Grid sampler.
@@ -171,7 +171,7 @@ The documentation site, [scisharp.github.io/OptunaSharp](https://scisharp.github
 Measured on 2026-11-22 on an Intel Xeon E5-2690 v2 server (Ivy Bridge: 10 cores, 20 logical CPUs, 3.0 GHz
 with turbo to 3.6 GHz, AVX without AVX2) under Linux, otherwise idle: every block of runs started only once the
 machine was under 5 % busy. OptunaSharp ran as .NET 10.0.15 Release builds, and Python 3.12.16 ran Optuna 5.0.0
-and Rustuna 0.3.1 on the same NumPy. Each configuration ran five times, each time in a fresh process, with the
+with NumPy 2.5.4. Each configuration ran five times, each time in a fresh process, with the
 libraries taking turns on each workload in an order reversed every round. A time is the mean of the middle
 three runs: the fastest and the slowest are dropped, so turbo's run-to-run wobble stays out. Studies that run
 one trial at a time were pinned with `taskset` to two dedicated cores whose hyperthread siblings stayed idle:
@@ -181,71 +181,69 @@ Parallel runs had all 20 logical CPUs. Absolute times depend on the hardware, so
 ### Parallel trials
 
 64 trials of a CPU-bound objective that takes about 50 ms on one core, with `RandomSampler`. Each
-language's loop was calibrated to ~50 ms on its own, and each run keeps the median of three per row. Rustuna
-has no `n_jobs`, so its workers are Python threads calling `optimize` on the same study.
+language's loop was calibrated to ~50 ms on its own, and each run keeps the median of three per row.
 
-| `nJobs` | OptunaSharp | Speedup | Python Optuna 5.0 | Rustuna 0.3.1 |
-|---|---|---|---|---|
-| 1 | 3.28 s | 1.0× | 3.20 s | 3.19 s |
-| 2 | 1.62 s | 2.0× | 3.20 s | 3.20 s |
-| 4 | 0.81 s | 4.0× | 3.18 s | 3.20 s |
-| 8 | 0.41 s | 8.0× | 3.19 s | 3.20 s |
-| 16 | 0.32 s | 10.3× | 3.18 s | 3.21 s |
+| `nJobs` | OptunaSharp | Speedup | Python Optuna 5.0 |
+|---|---|---|---|
+| 1 | 3.28 s | 1.0× | 3.20 s |
+| 2 | 1.62 s | 2.0× | 3.20 s |
+| 4 | 0.81 s | 4.0× | 3.18 s |
+| 8 | 0.41 s | 8.0× | 3.19 s |
+| 16 | 0.32 s | 10.3× | 3.18 s |
 
-Python Optuna's time stays flat because the GIL runs one Python thread at a time, and so does Rustuna's: it
-samples without the GIL, but the objective is Python. Trials that wait rather than compute run all at once in
-all three: 640 trials sleeping 100 ms took 1.09 s at `nJobs: 64`, and 1,280 took 1.10 s at `nJobs: 128`
-(Python Optuna: 1.04 s and 1.09 s; Rustuna: 1.01 s and 1.01 s; ideal 1.0 s).
+Python Optuna's time stays flat because the GIL runs one Python thread at a time. Trials that wait rather than
+compute run all at once in both: 640 trials sleeping 100 ms took 1.09 s at `nJobs: 64`, and 1,280 took 1.10 s
+at `nJobs: 128` (Python Optuna: 1.04 s and 1.09 s; ideal 1.0 s).
 
 ### Samplers
 
-One trial at a time, the same seeded study in every library, on a cheap sphere objective so that the
-sampler's own work dominates. OptunaSharp's times include the .NET JIT warming up. Rustuna 0.3.1 has no GP
-or QMC sampler.
+One trial at a time, the same seeded study in both libraries, on a cheap sphere objective so that the
+sampler's own work dominates. OptunaSharp's times include the .NET JIT warming up.
 
-| Study | OptunaSharp | Python Optuna 5.0 | Rustuna 0.3.1 |
+| Study | OptunaSharp | Python Optuna 5.0 | Speedup vs Optuna |
 |---|---|---|---|
-| TPE, 6 parameters, 500 trials | 1.73 s | 3.21 s | 0.15 s |
-| TPE multivariate, 6 parameters, 500 trials | 1.75 s | 3.20 s | 0.15 s |
-| TPE, 100 parameters, 150 trials | 3.2 s | 27.7 s | 0.76 s |
-| GP, 6 parameters, 100 trials | 5.09 s | 12.24 s | not available |
-| CMA-ES, 6 parameters, 3,000 trials | 1.07 s | 4.96 s | 0.93 s |
-| CMA-ES, 200 parameters, 100 trials | 1.4 s | 2.3 s | 0.94 s |
-| NSGA-II, 6 parameters, 3,000 trials | 0.63 s | 4.13 s | 0.09 s |
-| QMC, 6 parameters, 3,000 trials | 0.24 s | 3.44 s | not available |
-| Random, 6 parameters, 5,000 trials | 0.33 s | 2.62 s | 0.05 s |
-| Random, 1,000 parameters, 200 trials | 0.8 s | 18.7 s | 0.22 s |
-| Random, 4 parameters, 50,000 trials: each block of 10,000 | 0.12-0.50 s | 3.66-3.76 s | 0.08 s |
+| TPE, 6 parameters, 500 trials | 1.73 s | 3.21 s | 1.9× |
+| TPE multivariate, 6 parameters, 500 trials | 1.75 s | 3.20 s | 1.8× |
+| TPE, 100 parameters, 150 trials | 3.2 s | 27.7 s | 8.7× |
+| GP, 6 parameters, 100 trials | 5.09 s | 12.24 s | 2.4× |
+| CMA-ES, 6 parameters, 3,000 trials | 1.07 s | 4.96 s | 4.6× |
+| CMA-ES, 200 parameters, 100 trials | 1.4 s | 2.3 s | 1.6× |
+| NSGA-II, 6 parameters, 3,000 trials | 0.63 s | 4.13 s | 6.5× |
+| QMC, 6 parameters, 3,000 trials | 0.24 s | 3.44 s | 14.3× |
+| Random, 6 parameters, 5,000 trials | 0.33 s | 2.62 s | 8.0× |
+| Random, 1,000 parameters, 200 trials | 0.8 s | 18.7 s | 23.5× |
+| Random, 4 parameters, 50,000 trials: each block of 10,000 | 0.12-0.50 s | 3.66-3.76 s | 7.3-30.3× |
 
-All three columns come from the same run, the libraries taking turns on each row. The Rustuna-derived speedups
-of [plan 13](docs/plans/13-rustuna-derived-performance.md) and [plan 14](docs/plans/14-rustuna-second-pass.md)
-behind these times keep every seeded result. On this machine the JIT is a large share of OptunaSharp's short
-rows: a second 1,000-trial TPE study in the same process took 5.3 s against the first one's 6.7 s.
+The two libraries took turns on each row in the same run. The speedup is Python Optuna's time divided by
+OptunaSharp's, from the times before rounding (block by block for the 50,000-trial study). The Rustuna-derived
+optimizations of [plan 13](docs/plans/13-rustuna-derived-performance.md) and
+[plan 14](docs/plans/14-rustuna-second-pass.md) behind these times keep every seeded result. On this machine the
+JIT is a large share of OptunaSharp's short rows: a second 1,000-trial TPE study in the same process took 5.3 s
+against the first one's 6.7 s.
 
 ### Large studies
 
 40 float parameters in [-10, 10], seed 0, each sampler's defaults (TPE multivariate for one objective, independent
 for two), the workloads of [Rustuna's announcement](https://medium.com/optuna/announcing-rustuna-cc82a6815bf7).
-[Rustuna](https://github.com/optuna/rustuna) is the Optuna team's Rust port. The three libraries took turns on each
-workload in the same run; Python's 100,000-trial studies were not run, as they take hours. OptunaSharp's times
-include the .NET JIT warming up.
+[Rustuna](https://github.com/optuna/rustuna) is the Optuna team's Rust port. OptunaSharp and Python Optuna took
+turns on each workload in the same run; Python's 100,000-trial studies were not run, as they take hours.
+OptunaSharp's times include the .NET JIT warming up.
 
-| Study | OptunaSharp | Python Optuna 5.0 | Rustuna 0.3.1 |
+| Study | OptunaSharp | Python Optuna 5.0 | Speedup vs Optuna |
 |---|---|---|---|
-| TPE, 1,000 trials | 6.7 s | 37.8 s | 2.63 s |
-| TPE, two objectives, 1,000 trials | 18.1 s | 197 s | 10.4 s |
-| CMA-ES, 10,000 trials | 4.0 s | 47.1 s | 2.78 s |
-| CMA-ES, 100,000 trials | 24.9 s | not run | 22.6 s |
-| NSGA-II, 10,000 trials | 2.0 s | 49.1 s | 1.13 s |
-| NSGA-II, 100,000 trials | 11.7 s | not run | 23.1 s |
+| TPE, 1,000 trials | 6.7 s | 37.8 s | 5.7× |
+| TPE, two objectives, 1,000 trials | 18.1 s | 197 s | 10.9× |
+| CMA-ES, 10,000 trials | 4.0 s | 47.1 s | 11.8× |
+| CMA-ES, 100,000 trials | 24.9 s | not run | - |
+| NSGA-II, 10,000 trials | 2.0 s | 49.1 s | 24.1× |
+| NSGA-II, 100,000 trials | 11.7 s | not run | - |
 
 OptunaSharp's seeded trials are Optuna's: its CMA-ES and NSGA-II studies gave the same trials bit for bit (equal
 hashes of every parameter and value), and its TPE trials agree to about 15 significant digits, since TPE's
-truncated-normal sampling rounds differently in the last bits. Rustuna's trials differ from the first one (its own
-random generator). Where OptunaSharp is still behind Rustuna, part of the gap is the protocol it keeps so Python
-workers can share a study: CMA-ES pickles its state into the storage every generation, and TPE scores candidates
-in NumPy's order. The [Performance and Compatibility](docs/website-src/docs/performance.md) guide lists the opt-in
-switches that trade that compatibility for speed.
+truncated-normal sampling rounds differently in the last bits. Part of OptunaSharp's time is the protocol it keeps
+so Python workers can share a study: CMA-ES pickles its state into the storage every generation, and TPE scores
+candidates in NumPy's order. The [Performance and Compatibility](docs/website-src/docs/performance.md) guide lists
+the opt-in switches that trade that compatibility for speed.
 
 For memory, `new InMemoryStorage(compactFinishedTrials: true)` keeps finished trials compactly and gives the same
 trials: the 100,000-trial CMA-ES study above keeps 257 MB instead of 1,287 MB once finished, and NSGA-II's 87 MB

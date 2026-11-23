@@ -50,7 +50,7 @@ That depends on what limits your trials:
 
 | A trial spends its time | `nJobs` |
 |---|---|
-| Computing: a CPU-bound objective | Scales with the cores. 64 trials of 50 ms took 3.28 s at `nJobs: 1`, 0.41 s at 8 and 0.32 s at 16. Python Optuna and Rustuna stay at about 3.2 s, held by the GIL. |
+| Computing: a CPU-bound objective | Scales with the cores. 64 trials of 50 ms took 3.28 s at `nJobs: 1`, 0.41 s at 8 and 0.32 s at 16. Python Optuna stays at about 3.2 s, held by the GIL. |
 | Waiting: a remote service, a subprocess, a file | Scales past the cores, because a waiting thread uses no CPU. 640 trials sleeping 100 ms took 1.09 s at `nJobs: 64` (Python: 1.04 s; ideal 1.0 s). Each trial in flight holds a thread for its whole life. |
 | Sampling: a fast objective, a multivariate TPE over many parameters, a high-dimensional CMA-ES | Limited: the workers share the study's sampler, which proposes for one trial at a time. A [sampler per worker](#sampling-in-parallel-and-openblas-threads) lifts the limit for the samplers that support it. Slow model-based samplers gain nothing: a GP study took 7.73 s at `nJobs: 1` and 11.80 s at 8. |
 | Storing: a fast objective on a remote or disk-backed storage | Limited by the storage: a file journal flushes every write to disk, and a remote storage pays a network round trip for each operation. See [Storage › Concurrency](../storage.md#concurrency-workers-studies-and-languages-on-one-journal). |
