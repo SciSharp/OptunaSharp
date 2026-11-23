@@ -283,8 +283,8 @@ def summarize(per_process, rng, boot):
         boot: Bootstrap replicates.
 
     Returns:
-        A dict: est, lo, hi, rel, cv, P, N (min, max), reps (the replicates, for ratio intervals); est is None when there are
-        no processes.
+        A dict: est, lo, hi, rel, cv, P, N (min, max), reps (the replicates in the order they were drawn, for ratio
+        intervals); est is None when there are no processes.
     """
     procs = [v for v in per_process.values() if v]
     if not procs:
@@ -295,8 +295,12 @@ def summarize(per_process, rng, boot):
     for _ in range(boot):
         pick = [procs[rng.randrange(len(procs))] for _ in procs]
         reps.append(estimator([median([v[rng.randrange(len(v))] for _ in v]) for v in pick]))
-    reps.sort()
-    lo, hi = reps[int(0.025 * boot)], reps[min(boot - 1, int(0.975 * boot))]
+    # The percentiles come from a sorted copy; the replicates stay in draw order. ratio() pairs two cells' replicates by
+    # index, which is an independent pairing only in draw order: until 2026-11-23 20:00 the stored replicates were
+    # sorted, so ratio() paired the i-th smallest of one cell with the i-th smallest of the other (comonotonic), and the
+    # speedup intervals came out too narrow and shifted (Optuna / OptunaSharp TPE 1k: 6.56x [6.58-6.89]).
+    ordered = sorted(reps)
+    lo, hi = ordered[int(0.025 * boot)], ordered[min(boot - 1, int(0.975 * boot))]
     # A coefficient of variation needs a non-zero mean: a latency that rounds to 0.0 ms everywhere (starve's p50) has none.
     mean = statistics.fmean(meds)
     cv = statistics.stdev(meds) / mean if len(meds) > 1 and mean else None
@@ -313,6 +317,9 @@ def ratio(num, den):
 
     Returns:
         ``{"est", "lo", "hi"}``, or None when either side has no estimate.
+
+    The two cells ran in different processes, so their replicates are independent draws; pairing them by draw index (the
+    order ``summarize`` keeps them in) gives replicates of the ratio. Pairing sorted replicates would not.
     """
     if not num or not den or num["est"] is None or den["est"] is None:
         return None
