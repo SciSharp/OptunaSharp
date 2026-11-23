@@ -78,12 +78,22 @@ GUARD_OTHERS=${GUARD_OTHERS:-50}
 ATTEMPTS=${ATTEMPTS:-6}
 LOAD_INTERVAL=${LOAD_INTERVAL:-2}
 NAME=${RUN_NAME:-run-$(date +%Y%m%d-%H%M)}
+# RESUME=1 continues an earlier run of the same RUN_NAME that ABORTED (its gate timed out) or was stopped: its results,
+# progress log and load log are kept and appended to, a process with a clean verdict ("@@ load <key> clean:") is not run
+# again, and any other process of it runs again in its place (an attempt that never reached a clean verdict is voided
+# first, so the parser forgets its lines).
+RESUME=${RESUME:-0}
 R=$BENCH/results/$NAME
 mkdir -p "$R"
 RES=$R/results.txt
 LOG=$R/run.log
-: > "$RES"
-: > "$LOG"
+if [ "$RESUME" = 1 ] && [ -s "$RES" ]; then
+    echo "## resume | $(date +%H:%M:%S) | earlier results kept; processes with a clean verdict are not run again" >> "$RES"
+else
+    RESUME=0
+    : > "$RES"
+    : > "$LOG"
+fi
 
 # log <text>: a progress line with the time.
 log() { echo "$(date +%H:%M:%S) $*" >> "$LOG"; }
@@ -129,6 +139,13 @@ run() {
     local block=$1 lang=$2 probe=$3 cfg=$4 cpus=$5
     shift 5
     local key="$block $lang $probe $cfg run$RUN" attempt=1 windows=$GATE_WINDOWS t0 t1 rc verdict
+    if [ "$RESUME" = 1 ]; then
+        # Kept from before the resume: the same key with a clean verdict is already a counted process.
+        grep -qF "@@ load $key clean:" "$RES" && return
+        # Started before the resume but never judged clean (cut off, failed, or kept loaded): forget it, run it again.
+        grep -qF "@@ start $key " "$RES" &&
+            echo "@@ void $key resumed: no clean verdict before the resume" >> "$RES"
+    fi
     while :; do
         kill -0 "$MON" 2>/dev/null || { log "load logger restarted (it had exited)"; monitor_start; }
         gate "$key attempt $attempt" "$windows"
@@ -285,7 +302,11 @@ RUN=0
     echo "## env | scripts $(cd "$HARNESS" && sha256sum run_worker.sh monitor.py parse.py py/*.py | awk '{printf "%s:%s ", $2, substr($1, 1, 12)}')"
     echo "## guests at start | $(pct list 2>/dev/null | awk 'NR>1 {printf "CT%s:%s ", $1, $2}')$(qm list 2>/dev/null | awk 'NR>1 {printf "VM%s:%s ", $1, $3}')"
 } >> "$RES"
-log "start $NAME (rounds $ROUNDS, blocks $BLOCKS)"
+if [ "$RESUME" = 1 ]; then
+    log "resume $NAME (rounds $ROUNDS, blocks $BLOCKS)"
+else
+    log "start $NAME (rounds $ROUNDS, blocks $BLOCKS)"
+fi
 
 # No uncounted round 0 any more: each process warms itself up before it measures, and a cold page cache only slows the
 # process's start, which is never timed.

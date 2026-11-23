@@ -489,8 +489,14 @@ def main():
               f"the runner: {len(voided)}")
     else:
         print("## no load.log given: the load guard was not applied")
-    if any("ABORTED" in h for h in header):
-        print("## THE RUN ABORTED: " + next(h for h in header if "ABORTED" in h))
+    # An abort (a gate timed out) is final unless a RESUME=1 start of the same run followed it ("## resume" after it in
+    # the header lines, which keep the file's order).
+    last_abort = max((i for i, h in enumerate(header) if "ABORTED" in h), default=None)
+    if last_abort is not None:
+        if any(h.startswith("## resume") for h in header[last_abort + 1:]):
+            print("## the run aborted and was resumed (RESUME=1): its clean processes were kept, the rest ran again")
+        else:
+            print("## THE RUN ABORTED and was not resumed, so cells may lack processes: " + header[last_abort])
     if voided:
         print("## voided attempts (redone by the runner; their output is not counted):")
         for v in voided:

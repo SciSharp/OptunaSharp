@@ -101,6 +101,11 @@ where the README's numbers come from; any Linux machine with a quiet second core
    `BLOCKS` (default `ABPCDEFG`), `ROUNDS`, the `BENCH_*` budgets and the gate's and guard's limits are environment
    variables. Progress is in `results/<name>/run.log` (voided attempts and long gate waits included), which ends with
    `ALL DONE` or `ABORTED`. To stop a run, signal the runner's process group: `kill -- -<pgid of bash v2/run_worker.sh>`.
+   A run that aborted or was stopped continues with `RESUME=1` and the same `RUN_NAME`: every process with a clean verdict
+   is kept, and every other one runs again in its place.
+   While it runs, keep the host itself quiet too: the guard counts other host sessions, so reading `run.log` with `tail`
+   over ssh is fine (a few % of a CPU for a moment), but one call of Proxmox's Perl tools (`pct exec`, `pct list`, `qm`)
+   takes about a CPU-second and voids the process it lands beside (seen on 2026-11-23: 57 % of a CPU in one window).
 4. `python -I $BENCH/v2/parse.py results/<name>/results.txt results/<name>/load.log --json summary.json` prints the report
    and writes every cell to JSON.
 
