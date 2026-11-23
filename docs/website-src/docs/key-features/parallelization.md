@@ -50,9 +50,9 @@ That depends on what limits your trials:
 
 | A trial spends its time | `nJobs` |
 |---|---|
-| Computing: a CPU-bound objective | Scales with the cores. 64 trials of 50 ms took 3.28 s at `nJobs: 1`, 0.41 s at 8 and 0.32 s at 16. Python Optuna stays at about 3.2 s, held by the GIL. |
-| Waiting: a remote service, a subprocess, a file | Scales past the cores, because a waiting thread uses no CPU. 640 trials sleeping 100 ms took 1.09 s at `nJobs: 64` (Python: 1.04 s; ideal 1.0 s). Each trial in flight holds a thread for its whole life. |
-| Sampling: a fast objective, a multivariate TPE over many parameters, a high-dimensional CMA-ES | Limited: the workers share the study's sampler, which proposes for one trial at a time. A [sampler per worker](#sampling-in-parallel-and-openblas-threads) lifts the limit for the samplers that support it. Slow model-based samplers gain nothing: a GP study took 7.73 s at `nJobs: 1` and 11.80 s at 8. |
+| Computing: a CPU-bound objective | Scales with the cores. 64 trials of 50 ms took 3.22 s at `nJobs: 1`, 0.40 s at 8 and 0.31 s at 16. Python Optuna stays at about 3.1-3.2 s, held by the GIL. |
+| Waiting: a remote service, a subprocess, a file | Scales past the cores, because a waiting thread uses no CPU. 640 trials sleeping 100 ms took 1.00 s at `nJobs: 64` (Python: 1.04 s; ideal 1.0 s). Each trial in flight holds a thread for its whole life. |
+| Sampling: a fast objective, a multivariate TPE over many parameters, a high-dimensional CMA-ES | Limited: the workers share the study's sampler, which proposes for one trial at a time. A [sampler per worker](#sampling-in-parallel-and-openblas-threads) lifts the limit for the samplers that support it. Slow model-based samplers gain nothing: a GP study took 7.66 s at `nJobs: 1` and 11.8 s at 8. |
 | Storing: a fast objective on a remote or disk-backed storage | Limited by the storage: a file journal flushes every write to disk, and a remote storage pays a network round trip for each operation. See [Storage › Concurrency](../storage.md#concurrency-workers-studies-and-languages-on-one-journal). |
 
 The figures come from the [README's benchmarks](https://github.com/SciSharp/OptunaSharp#performance), on a
@@ -104,7 +104,7 @@ TrialExecutorOptions.Default = pool;
 
 > **The thread pool suits an `nJobs` well below the core count.** A trial blocks its pool thread for its whole
 > life, and past the pool's minimum (the processor count by default) the pool adds about one thread a second. On
-> 20 logical CPUs, 80 trials blocking 1.5 s at `nJobs: 40` took 3.1 s on dedicated threads and 6.1 s on the pool,
+> 20 logical CPUs, 80 trials blocking 1.5 s at `nJobs: 40` took 3.0 s on dedicated threads and 6.0 s on the pool,
 > and the application's other pool work waited up to 1.5 s for a thread. Redis and gRPC calls can stall or time out
 > there too. OptunaSharp does not guard against this: keep the default, or raise the pool's minimum with
 > `ThreadPool.SetMinThreads`.
@@ -124,8 +124,8 @@ study.Optimize(Objective, nTrials: 600, nJobs: 8, executorOptions: parallel);
 - Taking part: `RandomSampler`, `TPESampler`, `CmaEsSampler`, `VkdCmaSampler`, `GridSampler`, and
   `PartialFixedSampler` over one of them, the samplers whose instances never propose the same point twice this
   way. Every other sampler, and any sampler of your own, stays shared.
-- At `nJobs: 8`, a multivariate TPE over 10 parameters ran 600 trials in 0.50 s instead of 0.80 s, and a
-  40-dimensional CMA-ES 2,000 trials in 0.53 s instead of 0.92 s. A TPE study limited by its objective did not
+- At `nJobs: 8`, a multivariate TPE over 10 parameters ran 600 trials in 0.50 s instead of 0.79 s, and a
+  40-dimensional CMA-ES 2,000 trials in 0.52 s instead of 0.92 s. A TPE study limited by its objective did not
   change.
 - Functions you hand to such a sampler (TPE's `gamma`, `weights`, `constraintsFunc`) then run on several workers
   at once, so they must be thread-safe.

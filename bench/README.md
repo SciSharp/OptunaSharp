@@ -99,8 +99,9 @@ where the README's numbers come from; any Linux machine with a quiet second core
    `bash setup.sh`. It builds the runtime and the venv once and unpacks the harness into `$BENCH/v2`.
 3. Start the run detached: `RUN_NAME=<name> nohup setsid bash $BENCH/v2/run_worker.sh </dev/null >run.out 2>&1 &`.
    `BLOCKS` (default `ABPCDEFG`), `ROUNDS`, the `BENCH_*` budgets and the gate's and guard's limits are environment
-   variables. Progress is in `results/<name>/run.log` (voided attempts and long gate waits included), which ends with
-   `ALL DONE` or `ABORTED`. To stop a run, signal the runner's process group: `kill -- -<pgid of bash v2/run_worker.sh>`.
+   variables. Five rounds of every block take about 8 hours on the worker (each round 1.5-1.7 hours, 370 processes in
+   all; 2026-11-23), plus any time the gate waits. Progress is in `results/<name>/run.log` (voided attempts and long
+   gate waits included), which ends with `ALL DONE` or `ABORTED`. To stop a run, signal the runner's process group: `kill -- -<pgid of bash v2/run_worker.sh>`.
    A run that aborted or was stopped continues with `RESUME=1` and the same `RUN_NAME`: every process with a clean verdict
    is kept, and every other one runs again in its place.
    While it runs, keep the host itself quiet too: the guard counts other host sessions, so reading `run.log` with `tail`
